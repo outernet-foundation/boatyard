@@ -53,6 +53,21 @@ def _write_config(root: Path, sections: dict[str, object] | None = None) -> None
     )
 
 
+def _write_ref_tree(root: Path) -> None:
+    # The minimal services-declaring repo: one bare riding remote include, nothing else.
+    _write_config(
+        root,
+        {
+            "project_name": "demo",
+            "services": {"tunnel": {"ref": LIVEKIT_REF}},
+        },
+    )
+
+
+def _normalize(command: str, root: Path) -> str:
+    return re.sub(r"\S*devkit-assembly-\S+\.yaml", "ASSEMBLY", command).replace(str(root), "ROOT")
+
+
 def _write_lock(root: Path, entries: dict[str, str] | None = None) -> None:
     declared = entries or {
         "CADDY_IMAGE": MIRROR_PREFIX + "/docker.io/library/caddy:2.8.4-alpine@" + FAKE_DIGEST,
@@ -181,6 +196,7 @@ class PresentProbeAndServices:
 
 class TestProfileForwarding:
     def _invoke_up(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> HandoffRecorder:
+        _write_ref_tree(tmp_path)
         recorder = HandoffRecorder()
         monkeypatch.setattr(compose, "bash_output", _defined_profiles)
         monkeypatch.setattr(compose, "bash_handoff", recorder.run)
@@ -195,9 +211,9 @@ class TestProfileForwarding:
         result = runner.invoke(compose.up_app, [])
 
         assert result.exit_code == 0, result.output
-        assert recorder.commands == [
+        assert [_normalize(command, tmp_path) for command in recorder.commands] == [
             (
-                f"docker compose -f compose.yml --project-directory {tmp_path} --env-file .env "
+                "docker compose -f ASSEMBLY --project-directory ROOT --env-file .env "
                 "--profile tunnel-ngrok up --pull missing -d"
             )
         ]
@@ -210,14 +226,15 @@ class TestProfileForwarding:
         result = runner.invoke(compose.up_app, [])
 
         assert result.exit_code == 0, result.output
-        assert recorder.commands == [
+        assert [_normalize(command, tmp_path) for command in recorder.commands] == [
             (
-                f"docker compose -f compose.yml --project-directory {tmp_path} --env-file .env "
+                "docker compose -f ASSEMBLY --project-directory ROOT --env-file .env "
                 "--profile keycloak --profile tunnel-ngrok up --pull missing -d"
             )
         ]
 
     def test_shell_environment_overrides_the_env_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        _write_ref_tree(tmp_path)
         (tmp_path / ".env").write_text("COMPOSE_PROFILES=tunnel-ngrok\n", encoding="utf-8")
         monkeypatch.setenv("COMPOSE_PROFILES", "tunnel-rathole")
         recorder = HandoffRecorder()
@@ -228,9 +245,9 @@ class TestProfileForwarding:
         result = runner.invoke(compose.up_app, [])
 
         assert result.exit_code == 0, result.output
-        assert recorder.commands == [
+        assert [_normalize(command, tmp_path) for command in recorder.commands] == [
             (
-                f"docker compose -f compose.yml --project-directory {tmp_path} --env-file .env "
+                "docker compose -f ASSEMBLY --project-directory ROOT --env-file .env "
                 "--profile tunnel-rathole up --pull missing -d"
             )
         ]
@@ -243,8 +260,8 @@ class TestProfileForwarding:
         result = runner.invoke(compose.up_app, [])
 
         assert result.exit_code == 0, result.output
-        assert recorder.commands == [
-            f"docker compose -f compose.yml --project-directory {tmp_path} --env-file .env up --pull missing -d"
+        assert [_normalize(command, tmp_path) for command in recorder.commands] == [
+            "docker compose -f ASSEMBLY --project-directory ROOT --env-file .env up --pull missing -d"
         ]
 
     def test_unknown_profile_fails_loudly(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -266,8 +283,8 @@ class TestProfileForwarding:
         result = runner.invoke(compose.up_app, [])
 
         assert result.exit_code == 0, result.output
-        assert recorder.commands == [
-            f"docker compose -f compose.yml --project-directory {tmp_path} --env-file .env up --pull missing -d"
+        assert [_normalize(command, tmp_path) for command in recorder.commands] == [
+            "docker compose -f ASSEMBLY --project-directory ROOT --env-file .env up --pull missing -d"
         ]
 
 
@@ -458,6 +475,29 @@ class TestSelectionLaw:
         assert result.exit_code != 0
         assert isinstance(result.exception, RuntimeError)
         assert "declares no services" in str(result.exception)
+
+    def test_up_without_config_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        (tmp_path / ".env").write_text("PUBLIC_URL=https://example.dev\n", encoding="utf-8")
+        monkeypatch.delenv("BUNDLES", raising=False)
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(compose.up_app, [])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, RuntimeError)
+        assert "no compose stack" in str(result.exception)
+
+    def test_up_in_a_services_less_repo_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        _write_config(tmp_path)
+        (tmp_path / ".env").write_text("PUBLIC_URL=https://example.dev\n", encoding="utf-8")
+        monkeypatch.delenv("BUNDLES", raising=False)
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(compose.up_app, [])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, RuntimeError)
+        assert "no compose stack" in str(result.exception)
 
     def test_missing_local_output_refuses_naming_generate_score(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_consumer_tree(tmp_path)
@@ -718,19 +758,28 @@ class TestDownTeardown:
         assert result.exit_code == 0, result.output
         assert recorder.commands[0].endswith("down --remove-orphans -v")
 
-    def test_down_without_config_uses_the_default_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_down_without_config_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         (tmp_path / ".env").write_text("PUBLIC_URL=https://example.dev\n", encoding="utf-8")
         monkeypatch.delenv("BUNDLES", raising=False)
-        recorder = HandoffRecorder()
-        monkeypatch.setattr(compose, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(compose.down_app, [])
 
-        assert result.exit_code == 0, result.output
-        assert recorder.commands == [
-            f"docker compose -f compose.yml --project-directory {tmp_path} --env-file .env down --remove-orphans"
-        ]
+        assert result.exit_code != 0
+        assert isinstance(result.exception, RuntimeError)
+        assert "no compose stack" in str(result.exception)
+
+    def test_down_in_a_services_less_repo_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        _write_config(tmp_path)
+        (tmp_path / ".env").write_text("PUBLIC_URL=https://example.dev\n", encoding="utf-8")
+        monkeypatch.delenv("BUNDLES", raising=False)
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(compose.down_app, [])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, RuntimeError)
+        assert "no compose stack" in str(result.exception)
 
 
 def _write_dev_tree(
@@ -891,10 +940,9 @@ class TestDevOverlay:
 
 
 class TestLockRequirement:
-    def _write_lock_free_tree(self, tmp_path: Path, sections: dict[str, object] | None = None) -> None:
-        _write_config(tmp_path, sections)
+    def _write_lock_free_tree(self, tmp_path: Path) -> None:
+        _write_ref_tree(tmp_path)
         (tmp_path / ".env").write_text("PUBLIC_URL=https://example.dev\n", encoding="utf-8")
-        (tmp_path / "compose.yml").write_text("services:\n  api:\n    image: example:1\n", encoding="utf-8")
 
     def test_leftover_manifest_refuses_at_load(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._write_lock_free_tree(tmp_path)
@@ -917,13 +965,12 @@ class TestLockRequirement:
         result = runner.invoke(compose.down_app, [])
 
         assert result.exit_code == 0, result.output
-        assert recorder.commands == [
-            f"docker compose -f compose.yml --project-directory {tmp_path} --env-file .env down --remove-orphans"
+        assert [_normalize(command, tmp_path) for command in recorder.commands] == [
+            "docker compose -f ASSEMBLY --project-directory ROOT --env-file .env down --remove-orphans"
         ]
 
     def test_present_lock_still_rides_the_prefix(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._write_lock_free_tree(tmp_path)
-        (tmp_path / "workloads").mkdir()
         (tmp_path / LOCK_PATH).write_text("ALPINE_IMAGE=alpine:3.20\n", encoding="utf-8")
         recorder = HandoffRecorder()
         monkeypatch.chdir(tmp_path)
@@ -932,10 +979,10 @@ class TestLockRequirement:
         result = runner.invoke(compose.down_app, [])
 
         assert result.exit_code == 0, result.output
-        assert recorder.commands == [
+        assert [_normalize(command, tmp_path) for command in recorder.commands] == [
             (
-                f"docker compose -f compose.yml --project-directory {tmp_path} "
-                f"--env-file .env --env-file {tmp_path / LOCK_PATH} down --remove-orphans"
+                "docker compose -f ASSEMBLY --project-directory ROOT "
+                f"--env-file .env --env-file ROOT/{LOCK_PATH} down --remove-orphans"
             )
         ]
 
@@ -949,16 +996,15 @@ class TestLockRequirement:
         result = runner.invoke(compose.up_app, [])
 
         assert result.exit_code == 0, result.output
-        assert recorder.commands == [
-            f"docker compose -f compose.yml --project-directory {tmp_path} --env-file .env up --pull missing -d"
+        assert [_normalize(command, tmp_path) for command in recorder.commands] == [
+            "docker compose -f ASSEMBLY --project-directory ROOT --env-file .env up --pull missing -d"
         ]
 
 
 class TestMirroredLockEnforcement:
     def _write_mirrored_tree(self, tmp_path: Path, lock_text: str) -> None:
-        _write_config(tmp_path)
+        _write_ref_tree(tmp_path)
         (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
-        (tmp_path / "workloads").mkdir()
         (tmp_path / LOCK_PATH).write_text(lock_text, encoding="utf-8")
 
     def test_missing_entry_fails_closed_with_the_locked_message(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -1006,10 +1052,10 @@ class TestMirroredLockEnforcement:
         result = runner.invoke(compose.up_app, [])
 
         assert result.exit_code == 0, result.output
-        assert recorder.commands == [
+        assert [_normalize(command, tmp_path) for command in recorder.commands] == [
             (
-                f"docker compose -f compose.yml --project-directory {tmp_path} "
-                f"--env-file .env --env-file {tmp_path / LOCK_PATH} up --pull missing -d"
+                "docker compose -f ASSEMBLY --project-directory ROOT "
+                f"--env-file .env --env-file ROOT/{LOCK_PATH} up --pull missing -d"
             )
         ]
 
