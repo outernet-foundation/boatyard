@@ -16,7 +16,6 @@ from docker_devkit.lock import env_entries
 from docker_devkit.publish import (
     STUB_VALUE,
     VAR_PATTERN,
-    PublishEntry,
     PublishedEntry,
     bake_sources,
     finalize_baked,
@@ -63,9 +62,6 @@ def publish_compose(
     names = [entry.name for entry in bundles]
     if bundle is not None and bundle not in names:
         raise typer.BadParameter(f"unknown --bundle {bundle!r}; declared bundles: {names}")
-    selected = [
-        PublishEntry(entry.name, [entry.output.as_posix()]) for entry in bundles if bundle is None or entry.name == bundle
-    ]
 
     username = os.environ.get("REGISTRY_USERNAME", "")
     token = os.environ.get("REGISTRY_TOKEN", "")
@@ -87,39 +83,38 @@ def publish_compose(
     }
 
     published: list[PublishedEntry] = []
-    for publish_entry in selected:
+    for entry in bundles:
+        if bundle is not None and entry.name != bundle:
+            continue
         with TemporaryDirectory(prefix="compose-bundle-") as baked_directory_string:
             baked_directory = Path(baked_directory_string)
-            baked_paths = bake_sources(baked_directory, publish_entry.files, substitutions)
+            baked_path = bake_sources(baked_directory, entry.output.as_posix(), substitutions)
 
             # Publish validates ${VAR} holes against the environment but embeds the file
             # uninterpolated (verified against a live registry — no env value enters the
             # artifact), so stubs exist only to satisfy that validation; they must be
             # non-empty because compose's ${VAR:?err} rejects unset OR empty.
             unresolved = {
-                match.group(1)
-                for baked_path in baked_paths
-                for match in VAR_PATTERN.finditer(baked_path.read_text(encoding="utf-8"))
+                match.group(1) for match in VAR_PATTERN.finditer(baked_path.read_text(encoding="utf-8"))
             } - substitutions.keys()
             for name in unresolved:
                 os.environ.setdefault(name, STUB_VALUE)
 
-            finalize_baked(baked_paths, config.repository)
+            finalize_baked(baked_path, config.repository)
 
-            compose_files = " ".join(f"-f {shlex.quote(str(baked_path))}" for baked_path in baked_paths)
             # One publish per entry: compose stamps wall-clock created per invocation, so a
             # second publish of identical files yields a different digest — the branch tag
             # aliases the published manifest instead of re-publishing it.
-            sha_reference = f"{config.repository}/{publish_entry.artifact}:{sha}"
+            sha_reference = f"{config.repository}/{entry.name}:{sha}"
             print(f"Publish {sha_reference}")
-            bash(f"docker compose {compose_files} publish {shlex.quote(sha_reference)} --yes")
-            branch_reference = f"{config.repository}/{publish_entry.artifact}:{branch_tag}"
+            bash(f"docker compose -f {shlex.quote(str(baked_path))} publish {shlex.quote(sha_reference)} --yes")
+            branch_reference = f"{config.repository}/{entry.name}:{branch_tag}"
             print(f"Tag {branch_reference}")
             bash(f"crane tag {shlex.quote(sha_reference)} {shlex.quote(branch_tag)}")
             digest = bash_output(f"crane digest {shlex.quote(sha_reference)}").strip()
             print(f"Digest {sha_reference} {digest}")
             print(f"Digest {branch_reference} {digest}")
-            published.append(PublishedEntry(publish_entry.artifact, sha_reference, branch_reference, digest))
+            published.append(PublishedEntry(entry.name, sha_reference, branch_reference, digest))
 
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path is not None and published:

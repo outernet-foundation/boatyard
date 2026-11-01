@@ -129,10 +129,10 @@ class TestBakeSources:
             encoding="utf-8",
         )
 
-        baked_paths = publish_compose.bake_sources(tmp_path / "baked", ["nested/compose.yml"], {"API_SHA": "tree-abc"})
+        baked_path = publish_compose.bake_sources(tmp_path / "baked", "nested/compose.yml", {"API_SHA": "tree-abc"})
 
-        assert baked_paths == [tmp_path / "baked" / "nested" / "compose.yml"]
-        assert baked_paths[0].read_text(encoding="utf-8") == (
+        assert baked_path == tmp_path / "baked" / "nested" / "compose.yml"
+        assert baked_path.read_text(encoding="utf-8") == (
             "services:\n"
             "  api:\n"
             '    image: "registry/api:tree-abc"\n'
@@ -165,7 +165,7 @@ class TestFinalizeBaked:
         monkeypatch.setattr(publish_compose, "resolve_remote_digest", resolver.resolve)
         monkeypatch.chdir(tmp_path)
 
-        publish_compose.finalize_baked([baked], REPOSITORY)
+        publish_compose.finalize_baked(baked, REPOSITORY)
 
         document = yaml.safe_load(baked.read_text(encoding="utf-8"))
         assert document["services"]["token"]["image"] == f"{REPOSITORY}/livekit-token@{FAKE_DIGEST}"
@@ -188,26 +188,23 @@ class TestFinalizeBaked:
         )
         monkeypatch.chdir(tmp_path)
 
-        publish_compose.finalize_baked([baked], REPOSITORY)
+        publish_compose.finalize_baked(baked, REPOSITORY)
 
         document = yaml.safe_load(baked.read_text(encoding="utf-8"))
         assert document["configs"]["client-toml"] == {"content": 'remote_addr = "${TUNNEL_CONTROL_ENDPOINT:?err}"\n'}
 
     def test_pins_repeated_references_through_one_resolution(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         reference = f"{REPOSITORY}/livekit-token:tree-abc"
-        first = tmp_path / "one.yml"
-        first.write_text(f"services:\n  a:\n    image: {reference}\n", encoding="utf-8")
-        second = tmp_path / "two.yml"
-        second.write_text(f"services:\n  b:\n    image: {reference}\n", encoding="utf-8")
+        baked = tmp_path / "compose.yml"
+        baked.write_text(f"services:\n  a:\n    image: {reference}\n  b:\n    image: {reference}\n", encoding="utf-8")
         resolver = DigestResolver()
         monkeypatch.setattr(publish_compose, "resolve_remote_digest", resolver.resolve)
 
-        publish_compose.finalize_baked([first, second], REPOSITORY)
+        publish_compose.finalize_baked(baked, REPOSITORY)
 
         pinned = f"{REPOSITORY}/livekit-token@{FAKE_DIGEST}"
         assert resolver.calls == [reference]
-        assert first.read_text(encoding="utf-8") == f"services:\n  a:\n    image: {pinned}\n"
-        assert second.read_text(encoding="utf-8") == f"services:\n  b:\n    image: {pinned}\n"
+        assert baked.read_text(encoding="utf-8") == f"services:\n  a:\n    image: {pinned}\n  b:\n    image: {pinned}\n"
 
 
 class TestPublishComposeVerb:
