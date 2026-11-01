@@ -293,8 +293,6 @@ def up(
             for name, service in config.service_builds.items():
                 if not service.dev_stage or name not in declared:
                     continue
-                if config.repository is None:
-                    raise RuntimeError("repository is required; dev image tags derive from it")
                 overlay_services[name] = {
                     "image": f"{config.repository}/{name}:dev",
                     "volumes": [
