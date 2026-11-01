@@ -15,7 +15,7 @@ from docker_devkit.score import (
     generate_k8s,
     write_generated_file,
 )
-from docker_devkit.provisioners import compiled_provisioners
+from docker_devkit.score import compiled_provisioners
 
 DIGEST = "sha256:" + "a" * 64
 

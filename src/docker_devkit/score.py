@@ -10,7 +10,7 @@ from hashlib import sha256
 from importlib.resources import as_file, files
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Self
+from typing import Any, NamedTuple, Self
 
 import yaml
 from bashrun.bash import bash, bash_output
@@ -42,8 +42,6 @@ from docker_devkit.config import (
 from docker_devkit.documents import BindVolume, ComposeDocument, WorkloadDocument
 from docker_devkit.assembly import merged_environment
 from docker_devkit.lock import compose_env_entries, env_entries
-from docker_devkit.markers import contains_marker, resolve_includes, resolve_lock_refs
-from docker_devkit.provisioners import compiled_provisioners, dump_compose
 
 # Match only ALL-CAPS placeholders so Score's lowercase dotted references never collide.
 PLACEHOLDER = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
@@ -86,6 +84,25 @@ LOCAL_STORAGE_CLASS = "local-path"
 
 SECRETS_FILE = Path("stack/secrets.yaml")
 SECRETS_OUTPUT = Path("stack/generated/secrets.txt")
+
+# Compile these fields from authored mappings into the YAML strings score's Go templates
+# consume; authored manifests stay a real list.
+STRING_FORM_FIELDS = ("state", "outputs", "volumes", "services", "manifests")
+
+# Authoring markers are single-key mappings so authored sources stay plain-YAML-parseable.
+# Include markers insert a repo-root-relative file's bytes or parsed structure; lock markers
+# substitute image-lock entries. Include resolution runs before lock resolution, and text
+# content is never scanned for markers.
+TEXT_MARKER = "include"
+YAML_MARKER = "include-yaml"
+LOCK_MARKER = "lock"
+LOCK_IMAGE_MARKER = "lock-image"
+INCLUDE_MARKERS = (TEXT_MARKER, YAML_MARKER)
+LOCK_MARKERS = (LOCK_MARKER, LOCK_IMAGE_MARKER)
+MARKERS = INCLUDE_MARKERS + LOCK_MARKERS
+DIGEST_FIELDS = ("digest", "sha")
+IMAGE_FIELD = "image"
+IMAGE_HOLE_PATTERN = re.compile(r"\$\{|{{")
 
 
 class ManifestMetadata(BaseModel):
@@ -154,6 +171,66 @@ class SecretsDeclaration(RootModel[dict[str, SecretKey]]):
                 f"{source}: the {rendering} rendering consumes keys missing from the secrets declaration: "
                 + ", ".join(undeclared)
             )
+
+
+class ComposeDumper(yaml.SafeDumper):
+    pass
+
+
+def _represent_multiline(dumper: yaml.SafeDumper, value: str) -> yaml.ScalarNode:
+    # Force literal block style for multiline strings, building the node directly to satisfy strict typing.
+    return yaml.ScalarNode("tag:yaml.org,2002:str", value, style="|" if "\n" in value else None)
+
+
+ComposeDumper.add_representer(str, _represent_multiline)
+
+
+class LockImageSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    digest_field: str = "digest"
+
+    @field_validator("digest_field")
+    @classmethod
+    def _require_known_digest_field(cls, value: str) -> str:
+        if value not in DIGEST_FIELDS:
+            raise ValueError(f"digest_field must be one of {DIGEST_FIELDS}")
+        return value
+
+
+class AuthoredProvisioner(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    uri: str
+    type: str
+    description: str = ""
+    state: dict[str, object] | None = None
+    outputs: dict[str, object] | None = None
+    volumes: dict[str, object] | None = None
+    services: dict[str, object] | None = None
+    manifests: list[object] | None = None
+
+    @field_validator(*STRING_FORM_FIELDS, mode="before")
+    @classmethod
+    def _reject_string_form(cls, value: object, info: ValidationInfo) -> object:
+        if not isinstance(value, str):
+            return value
+
+        shape = "list" if info.field_name == "manifests" else "mapping"
+        context: dict[str, object] = info.context or {}
+        raise ValueError(
+            f"{context.get('name', 'the provisioner file')}: "
+            f"{info.field_name} is already in score's compiled string form; author it as a {shape}"
+        )
+
+
+class CompiledProvisioners(NamedTuple):
+    # declares_services is the phantom-service condition: score-compose synthesizes its
+    # wait-for-resources gate exactly when provisioner-added services exist, and the
+    # devkit's built-in gate-pin template registers on it.
+    paths: list[Path]
+    declares_services: bool
 
 
 def generate_artifacts(config: DockerDevkitConfig, target: Target, local: bool) -> None:
@@ -433,6 +510,53 @@ def closure_provisioners(score_dir: Path, rendering: str, workloads: list[str]) 
     return selected
 
 
+@contextmanager
+def compiled_provisioners(
+    source_dir: Path, names: list[str], root: Path, images: dict[str, str]
+) -> Generator[CompiledProvisioners]:
+    # Compile into a per-run tempdir under source_dir: the string form never touches the
+    # committed tree, and --provisioners paths stay repo-relative.
+    if not names:
+        yield CompiledProvisioners(paths=[], declares_services=False)
+        return
+
+    with TemporaryDirectory(prefix="compiled-provisioners-", dir=source_dir) as temporary_directory:
+        directory = Path(temporary_directory)
+        paths: list[Path] = []
+        declares_services = False
+        for name in names:
+            document = resolve_lock_refs(
+                resolve_includes(yaml.safe_load((source_dir / name).read_text(encoding="utf-8")), root, name),
+                images,
+                name,
+            )
+            if not is_list(document) or not document:
+                raise RuntimeError(
+                    f"{name}: an authored provisioner file is a non-empty YAML list of provisioner entries"
+                )
+            compiled_entries: list[dict[str, object]] = []
+            for entry in document:
+                AuthoredProvisioner.model_validate(entry, context={"name": name})
+                assert is_mapping(entry)
+                if entry.get("services"):
+                    declares_services = True
+
+                # Compile from the raw authored dicts so authored key order controls dump order.
+                compiled: dict[str, object] = {}
+                for key, value in entry.items():
+                    if key in STRING_FORM_FIELDS:
+                        if value is not None:
+                            compiled[key] = dump_compose(value)
+                    else:
+                        compiled[key] = value
+                compiled_entries.append(compiled)
+            target = directory / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(dump_compose(compiled_entries), encoding="utf-8", newline="")
+            paths.append(target)
+        yield CompiledProvisioners(paths=paths, declares_services=declares_services)
+
+
 def generate_k8s(config: DockerDevkitConfig, k8s: K8sConfig, output: Path, lock: ImageLock) -> None:
     # Run score-k8s in the output's directory; it writes its .score-k8s state under its cwd.
     # The output arrives root-absolute (config.k8s_output_path).
@@ -539,6 +663,121 @@ def generate_k8s(config: DockerDevkitConfig, k8s: K8sConfig, output: Path, lock:
     write_generated_file(output_path, manifest_text)
 
     shutil.rmtree(state_dir, ignore_errors=True)
+
+
+def contains_marker(node: Any) -> bool:
+    if _marker_entry(node, MARKERS) is not None:
+        return True
+
+    if is_mapping(node):
+        return any(contains_marker(value) for value in node.values())
+
+    if is_list(node):
+        return any(contains_marker(item) for item in node)
+
+    return False
+
+
+def resolve_includes(node: Any, root: Path, source: str, ancestors: tuple[Path, ...] = ()) -> Any:
+    entry = _marker_entry(node, INCLUDE_MARKERS)
+    if entry is not None:
+        key, value = entry
+        if not isinstance(value, str):
+            raise RuntimeError(f"{source}: {key} takes a repo-root-relative path string, not {type(value).__name__}")
+        relative = Path(value)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise RuntimeError(f"{source}: include path {value!r} must anchor at the repo root")
+        path = root / relative
+        if path in ancestors:
+            raise RuntimeError(f"{source}: include {value!r} participates in a cycle")
+        if not path.is_file():
+            raise RuntimeError(f"{source}: include {value!r} does not exist at the repo root")
+        text = path.read_text(encoding="utf-8")
+        if key == TEXT_MARKER:
+            return text
+        parsed = yaml.safe_load(text)
+        if parsed is None:
+            raise RuntimeError(f"{source}: include {value!r} is empty")
+        return resolve_includes(parsed, root, source, (*ancestors, path))
+
+    if is_mapping(node):
+        return {key: resolve_includes(value, root, source, ancestors) for key, value in node.items()}
+
+    if is_list(node):
+        return [resolve_includes(item, root, source, ancestors) for item in node]
+
+    return node
+
+
+def resolve_lock_refs(node: Any, images: dict[str, str], source: str) -> Any:
+    entry = _marker_entry(node, LOCK_MARKERS)
+    if entry is not None:
+        marker, value = entry
+        if marker == LOCK_MARKER:
+            if not isinstance(value, str):
+                raise RuntimeError(f"{source}: lock takes a lock-entry name string, not {type(value).__name__}")
+            if value not in images:
+                raise RuntimeError(f"{source}: lock entry {value!r} does not exist in the image lock")
+            return images[value]
+
+        if isinstance(value, str):
+            image_spec = LockImageSpec(key=value)
+        elif is_mapping(value):
+            image_spec = LockImageSpec.model_validate(value)
+        else:
+            raise RuntimeError(
+                f"{source}: lock-image takes a lock-entry name or a key/digest_field mapping, not {type(value).__name__}"
+            )
+        if image_spec.key not in images:
+            raise RuntimeError(f"{source}: lock entry {image_spec.key!r} does not exist in the image lock")
+        reference = images[image_spec.key]
+        # Every lock entry is digest-pinned at load (ImageLock), so the split always yields a digest.
+        path_part, _, digest = reference.rpartition("@")
+
+        fields: dict[str, str] = {}
+        tagged = path_part.rpartition(":")
+        if tagged[1] and "/" not in tagged[2]:
+            fields["registry"], fields["repository"] = _split_path(tagged[0], reference, source)
+            fields["tag"] = tagged[2]
+        else:
+            fields["registry"], fields["repository"] = _split_path(path_part, reference, source)
+
+        if image_spec.digest_field == "sha":
+            # Spell the digest bare; the grafana chart template re-adds the sha256: prefix.
+            fields["sha"] = digest.removeprefix("sha256:")
+        else:
+            fields["digest"] = digest
+        return fields
+
+    if is_mapping(node):
+        image = node.get(IMAGE_FIELD)
+        if isinstance(image, str) and IMAGE_HOLE_PATTERN.search(image) is None:
+            raise RuntimeError(
+                f"{source}: image {image!r} is a hand-written image reference; "
+                "write the field as image: {lock: NAME} to consume the lock"
+            )
+        return {key: resolve_lock_refs(value, images, source) for key, value in node.items()}
+
+    if is_list(node):
+        return [resolve_lock_refs(item, images, source) for item in node]
+
+    return node
+
+
+def _split_path(path: str, reference: str, source: str) -> tuple[str, str]:
+    registry, separator, repository = path.rpartition("/")
+    if not separator or not registry or not repository:
+        raise RuntimeError(f"{source}: lock reference {reference!r} has no registry/repository split")
+    return registry, repository
+
+
+def _marker_entry(node: Any, markers: tuple[str, ...]) -> tuple[str, Any] | None:
+    if is_mapping(node) and len(node) == 1:
+        key, value = next(iter(node.items()))
+        if key in markers:
+            return (key, value)
+
+    return None
 
 
 def enforce_secret_contract(config: DockerDevkitConfig, target: Target, k8s_output: Path) -> None:
@@ -662,6 +901,17 @@ def _rendered_workloads(
             (directory / name).write_text("".join(parts), "utf-8")
 
         yield " ".join((directory / name).as_posix() for name in workloads)
+
+
+def dump_compose(value: object) -> str:
+    return yaml.dump(
+        value,
+        Dumper=ComposeDumper,
+        default_flow_style=False,
+        sort_keys=False,
+        width=1_000_000,
+        allow_unicode=True,
+    )
 
 
 def write_generated_file(path: Path, text: str) -> None:

@@ -6,7 +6,7 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from docker_devkit.provisioners import (
+from docker_devkit.score import (
     AuthoredProvisioner,
     compiled_provisioners,
 )
@@ -225,17 +225,17 @@ def test_none_valued_fields_are_dropped(tmp_path: Path) -> None:
 
 
 def test_non_list_document_is_rejected(tmp_path: Path) -> None:
-    with pytest.raises(ValidationError, match=r"Input should be a valid list"):
+    with pytest.raises(RuntimeError, match="non-empty YAML list"):
         compile_entry("uri: template://example/x\ntype: example-x\n", "x.yaml", tmp_path)
 
 
 def test_empty_file_is_rejected(tmp_path: Path) -> None:
-    with pytest.raises(ValidationError, match=r"Input should be a valid list"):
+    with pytest.raises(RuntimeError, match="non-empty YAML list"):
         compile_entry("", "x.yaml", tmp_path)
 
 
 def test_empty_document_list_is_rejected(tmp_path: Path) -> None:
-    with pytest.raises(ValidationError, match="non-empty YAML list"):
+    with pytest.raises(RuntimeError, match="non-empty YAML list"):
         compile_entry("[]\n", "x.yaml", tmp_path)
 
 
