@@ -383,34 +383,38 @@ class DockerDevkitConfig(BaseModel):
         return services
 
     @model_validator(mode="after")
-    def _service_laws(self) -> Self:
-        # The flat vocabulary (entry and option names share one namespace), the auth shape,
-        # door-wide path uniqueness, the gateway pairing, and the identity pairings.
+    def _require_flat_vocabulary(self) -> Self:
+        # Entry and option names share one flat vocabulary.
         entry_names = set(self.services)
-        option_owner: dict[str, str] = {}
-        route_owner: dict[str, str] = {}
-        any_route = False
-        any_local = False
-
+        claimed: set[str] = set()
         for name, entry in self.services.items():
             if isinstance(entry, ServiceGroup):
-                for option_name, option in entry.options.items():
-                    if option_name in entry_names or option_name in option_owner:
+                for option_name in entry.options:
+                    if option_name in entry_names or option_name in claimed:
                         raise ValueError(
                             f"services.{name}.options.{option_name}: entry and option names share one vocabulary; "
                             f"{option_name} is already taken"
                         )
-                    option_owner[option_name] = name
-                    any_local = any_local or not option.remote
-                    if _collect_route_owners(option.routes, f"services.{name}.options.{option_name}", route_owner):
-                        any_route = True
-                if _collect_route_owners(entry.routes, f"services.{name}", route_owner):
-                    any_route = True
-            else:
-                any_local = any_local or not entry.remote
-                if _collect_route_owners(entry.routes, f"services.{name}", route_owner):
-                    any_route = True
+                    claimed.add(option_name)
+        return self
 
+    @model_validator(mode="after")
+    def _require_unique_route_paths(self) -> Self:
+        # Route paths are door-wide unique.
+        owner: dict[str, str] = {}
+        for where, route in _route_sites(self.services):
+            if route.path in owner:
+                raise ValueError(
+                    f"{where}: route path {route.path} is already declared at {owner[route.path]}; "
+                    "paths are door-wide unique"
+                )
+            owner[route.path] = where
+        return self
+
+    @model_validator(mode="after")
+    def _require_auth_shape(self) -> Self:
+        # Auth is a reserved group name; an auth option declares exactly one route — its
+        # upstream is the auth entry point the door forwards headers for.
         if AUTH_GROUP_NAME in self.services:
             auth = self.services[AUTH_GROUP_NAME]
             if not isinstance(auth, ServiceGroup):
@@ -421,16 +425,24 @@ class DockerDevkitConfig(BaseModel):
                         f"services.{AUTH_GROUP_NAME}.options.{option_name}: an auth option declares exactly one "
                         "route; its upstream is the auth entry point the door forwards headers for"
                     )
+        return self
 
+    @model_validator(mode="after")
+    def _require_gateway_pairing(self) -> Self:
+        # The door emits iff any route rides anywhere.
+        any_route = any(_route_sites(self.services))
         if any_route and self.gateway is None:
             raise ValueError("routes are declared; gateway (the door's host port) is required")
         if not any_route and self.gateway is not None:
             raise ValueError("gateway is declared but no route exists anywhere; the door would never emit")
+        return self
 
+    @model_validator(mode="after")
+    def _require_project_pairings(self) -> Self:
         if self.services:
             if not self.project_name:
                 raise ValueError("services are declared; project_name is required (the compose project name)")
-            if any_local and not self.repository:
+            if _any_local_entries(self.services) and not self.repository:
                 raise ValueError(
                     "local entries (workloads:) are declared; repository is required — published artifacts "
                     "derive their names from it"
@@ -465,17 +477,29 @@ def _coerce_port_strings(where: str, entry: dict[str, object], owning_name: str,
     entry["ports"] = coerced
 
 
-def _collect_route_owners(routes: list[RouteConfig], where: str, route_owner: dict[str, str]) -> bool:
-    any_route = False
-    for route in routes:
-        any_route = True
-        if route.path in route_owner:
-            raise ValueError(
-                f"{where}: route path {route.path} is already declared at {route_owner[route.path]}; "
-                "paths are door-wide unique"
-            )
-        route_owner[route.path] = where
-    return any_route
+def _route_sites(services: dict[str, ServiceGroup | ServiceEntry]) -> list[tuple[str, RouteConfig]]:
+    # Every route with its declaration site, in services declaration order — a group's
+    # options first, then its own riding routes.
+    return [
+        (where, route)
+        for name, entry in services.items()
+        for where, entry_routes in (
+            [(f"services.{name}", entry.routes)]
+            if not isinstance(entry, ServiceGroup)
+            else [(f"services.{name}.options.{option_name}", option.routes) for option_name, option in entry.options.items()]
+            + [(f"services.{name}", entry.routes)]
+        )
+        for route in entry_routes
+    ]
+
+
+def _any_local_entries(services: dict[str, ServiceGroup | ServiceEntry]) -> bool:
+    return any(
+        not option.remote
+        for entry in services.values()
+        if isinstance(entry, ServiceGroup)
+        for option in entry.options.values()
+    ) or any(not entry.remote for entry in services.values() if not isinstance(entry, ServiceGroup))
 
 
 def is_mapping(value: object) -> TypeIs[dict[str, object]]:
