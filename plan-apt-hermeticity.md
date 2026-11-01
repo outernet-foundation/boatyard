@@ -35,9 +35,9 @@ runtime path reads the system CA bundle.
 The rest of the pipeline is closed:
 
 - base images: per-arch arm64 **manifest digests** in `docker-devkit.lock`, resolved by
-  `build --lock-only` (never index digests, never attestations)
-- hand-written image references: policed by `image_refs.unpinned_references` — consumer
-  CIs fail on an unpinned ref
+  the `lock` verb (never index digests, never attestations)
+- hand-written image references: refused outright at the devkit's parse boundaries
+  (`FROM`/`COPY --from=` in `derive_services`, yaml `image:` in lock-marker resolution)
 - first-party image identity: tree-SHA tags from `compute_service_shas`
 - Python deps: `pylock.toml` per workload, installed by uv
 - libusb source: `LIBUSB_COMMIT` git SHA (content-addressed — the clone-then-checkout
@@ -46,8 +46,9 @@ The rest of the pipeline is closed:
 - score-compose / score-k8s / helm: version-pinned constants in `config.py`
 - devkits/toolkit: `uv.lock` + full-SHA `uses:` refs
 
-Nothing in docker-devkit parses `RUN apt-get …` lines. `image_refs.py` scans FROM,
-`COPY --from=`, and `image:` — apt is invisible to every existing gate. The lock has no
+Nothing in docker-devkit parses `RUN apt-get …` lines. The literal-reference refusals
+read `FROM`, `COPY --from=`, and `image:` at their parse boundaries — apt is invisible
+to every existing gate. The lock has no
 vocabulary for "which archive state the apt layer resolved against".
 
 ## Where it bites vs. where it's masked
