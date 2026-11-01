@@ -140,9 +140,7 @@ def up(
     root = Path.cwd()
     config = load_config(root)
 
-    # Every environment read happens here: the merged view, the selection, the profiles,
-    # and the auth-gated forwarded pair (its PUBLIC_URL refusal fires only under a
-    # selected auth option).
+    # Read every environment fact once, at the top.
     environment = merged_environment(root)
     selected = selection(config, environment)
     profiles = selected_profiles(environment)
@@ -157,12 +155,11 @@ def up(
     ports: list[PortDeclaration] = []
 
     if selected is None:
+        # Fall back to the repo's own compose.yml when no services are declared.
         context = ComposeContext(root, config, [DEFAULT_COMPOSE_FILE], environment)
     else:
         assert config is not None
-        # The include list in services declaration order: every riding entry plus each
-        # group's selected option, as an OCI ref (remote) or an absolute bundle-output
-        # path (local).
+        # Collect the include list in services declaration order.
         sources: list[str] = []
         local_outputs: list[Path] = []
         for name, entry in selected.entries:
@@ -179,6 +176,7 @@ def up(
             sources.append(output.resolve().as_posix())
             local_outputs.append(output)
 
+        # Refuse selected outputs that define the same service name.
         file_services = [(path, _service_names(root, path)) for path in local_outputs]
         for index, (path, service_names) in enumerate(file_services):
             for other_path, other_service_names in file_services[index + 1 :]:
@@ -189,6 +187,7 @@ def up(
                         f"which both define service(s) {shared}; select one"
                     )
 
+        # Gather the riding routes, ports, and the selected auth route.
         routes = [route for _, entry in selected.entries for route in entry.routes]
         ports = [port for _, entry in selected.entries for port in entry.ports]
         auth = config.services.get(AUTH_GROUP_NAME)
@@ -197,10 +196,9 @@ def up(
             if option_name is not None:
                 auth_route = auth.options[option_name].routes[0]
 
+        # Generate the dev overlay from the assembly's dev shapes.
         dev_overlay: Path | None = None
         if dev:
-            # Overlay keys ride only for services the selected local outputs define (a
-            # stray key would add a half-defined service).
             declared = {service_name for _path, names in file_services for service_name in names}
             overlay_services: dict[str, OverlayService] = {}
             for name, service in config.service_builds.items():
@@ -250,6 +248,7 @@ def up(
                 handle.write(yaml.safe_dump({"services": overlay_services}, sort_keys=False, default_flow_style=False))
                 dev_overlay = Path(handle.name)
 
+        # Assemble the root document: name, includes, door, port stanzas, Caddyfile.
         document: AssemblyRoot = {}
         if config.project_name:
             document["name"] = config.project_name
@@ -279,10 +278,6 @@ def up(
         if services:
             document["services"] = services
         if routes:
-            # The Caddyfile rides as inline content with every $ doubled, so compose
-            # interpolation leaves caddy's {$ENV} runtime placeholders for the caddy runtime.
-            # handle blocks are mutually exclusive and caddy sorts them longest-path-first,
-            # so declaration order cannot shadow; the catch-all /* rides as a bare handle.
             caddyfile_lines = [f":{DOOR_LISTEN_PORT} {{"]
             for route in routes:
                 matcher = "" if route.path == "/*" else f" {route.path}"
@@ -304,6 +299,7 @@ def up(
                 DOOR_CONFIG_NAME: {"content": ("\n".join(caddyfile_lines) + "\n").replace("$", "$$")}
             }
 
+        # Write the per-run root and build the context over the final file list.
         assembly_root = _write_temp_root(document)
         compose_files = [assembly_root, dev_overlay] if dev_overlay is not None else [assembly_root]
         context = ComposeContext(
@@ -317,9 +313,7 @@ def up(
 
     try:
         if routes or ports:
-            # The drift-impossible teeth, against the assembly compose itself resolves
-            # (includes included): every route upstream and every port's owning service
-            # must exist.
+            # Validate every upstream and port owner against compose's own resolution.
             resolved = {line.strip() for line in bash_output(f"{context.command('config', '--services')}").splitlines()}
             resolved.discard("")
             for route in routes:
@@ -336,6 +330,7 @@ def up(
                 if port.service not in resolved:
                     raise RuntimeError(f"ports for service {port.service!r} — absent from the selected assembly")
 
+        # Print the resolved assembly so nothing implicit rides hidden.
         if selected is not None and config is not None:
             if selected.riding:
                 print(f"riding: {', '.join(selected.riding)}")
@@ -346,6 +341,7 @@ def up(
             if routes:
                 print(f"door: {' '.join(route.path for route in routes)}")
 
+        # Refuse profile names the compose files do not define.
         if profiles:
             defined = [
                 line.strip()
@@ -354,25 +350,25 @@ def up(
             ]
             assert_known_profiles(profiles, defined)
 
+        # Refuse --build in a repo with no build declarations.
         if build and (config is None or not (config.repository or config.base_images)):
             raise typer.BadParameter(
                 "--build requires build declarations (repository or base_images) in docker-devkit.yaml"
             )
 
+        # Fail closed over every lock entry before bring-up.
         if config is not None and context.lock_file.exists():
             _probe_lock_entries(context)
 
+        # Build local images; --dev builds both shapes.
         if build:
             run_build()
             if dev:
-                # The overlay rides :dev images, so a dev bring-up builds both shapes.
                 run_build(dev=True)
 
-        # compose ignores COMPOSE_PROFILES whenever a --profile flag is present, so forward the
-        # selection explicitly; shell env wins over .env, comma-split and deduplicated.
+        # Hand off to docker compose up.
         up_command = context.command(*(f"--profile {profile}" for profile in profiles), "up")
         if not build:
-            # tree-<sha> tags are content-addressed and may not be pushed, so pull only what is missing locally
             up_command += " --pull missing"
             if quiet_pull:
                 up_command += " --quiet-pull"
@@ -402,10 +398,7 @@ def down(
                 "docker-devkit.yaml declares no services; a builds-only or k8s-only repo has no compose stack"
             )
 
-        # Down keys on the project, not on a file list: a name-only root plus
-        # --remove-orphans removes every container the project ever created — any
-        # selection, any profile — without resolving a single include, so an option's
-        # env holes cannot break an open-mode teardown.
+        # Tear down by project name, covering every selection and profile.
         assembly_root = _write_temp_root({"name": project_name})
         context = ComposeContext(root, config, [assembly_root], None, assembly_root=assembly_root)
 
@@ -420,8 +413,7 @@ def down(
 
 
 def _service_names(root: Path, path: Path) -> set[str]:
-    # Name extraction only: the typed ComposeDocument lens carries bind laws generated
-    # artifacts satisfy but authored compose files never promised to.
+    # Extract names only; authored files never promised the bind-law lens.
     document: dict[str, object] = _mapping_or_empty(yaml.safe_load((root / path).read_text(encoding="utf-8")))
     return set(_mapping_or_empty(document.get("services")))
 
@@ -437,11 +429,6 @@ def _write_temp_root(document: Mapping[str, Any]) -> Path:
 
 
 def _probe_lock_entries(context: ComposeContext) -> None:
-    # Fail closed over every lock entry — each mirror-prefixed by construction under
-    # the declared or default prefix — distinguishing a manifest the registry truly
-    # lacks (the declaring change has not been through CI's mirror job; no escape
-    # flag) from a probe that failed before reaching a verdict (credentials, network,
-    # daemon availability).
     for value in sorted(parse_image_lock(context.lock_file).root.values()):
         reference, _, digest = value.rpartition("@")
         try:
