@@ -7,13 +7,13 @@ from dataclasses import dataclass
 from itertools import groupby
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Annotated, Any, TypeIs
+from typing import Annotated, Any
 
 import typer
 import yaml
 from bashrun.bash import CalledProcessError, bash_handoff, bash_output
 
-from .assembly import Assembly, assert_known_profiles, require_compose_stack, require_env_file
+from .assembly import Assembly, _mapping_or_empty, assert_known_profiles, require_compose_stack, require_env_file
 from .build_docker import run_build
 from .config import (
     CADDY_IMAGE,
@@ -100,24 +100,11 @@ def up(
 
     try:
         if assembly.routes or assembly.ports:
-            # Validate every upstream and port owner against compose's own resolution.
-            resolved = {
-                line.strip() for line in bash_output(f"{context.command('config', '--services')}").splitlines()
-            }
-            resolved.discard("")
-            for route in assembly.routes:
-                upstream = route.upstream.partition(":")[0]
-                if upstream not in resolved:
-                    raise RuntimeError(
-                        f"route {route.path} upstream {upstream} resolves to no service in the selected assembly"
-                    )
-            if assembly.auth_route is not None:
-                upstream = assembly.auth_route.upstream.partition(":")[0]
-                if upstream not in resolved:
-                    raise RuntimeError(f"the selected auth option's upstream {upstream} is absent from the assembly")
-            for port in assembly.ports:
-                if port.service not in resolved:
-                    raise RuntimeError(f"ports for service {port.service!r} — absent from the selected assembly")
+            # Validate every wired upstream and port owner against compose's own resolution.
+            assembly.assert_resolves(set(_compose_config(context, "--services")))
+        if assembly.profiles:
+            # Refuse profile names the compose files do not define.
+            assert_known_profiles(assembly.profiles, _compose_config(context, "--profiles"))
 
         # Print the resolved assembly so nothing implicit rides hidden.
         if assembly.riding:
@@ -128,15 +115,6 @@ def up(
                 print(f"{name}: {selected_option if selected_option is not None else '(none selected)'}")
         if assembly.routes:
             print(f"door: {' '.join(route.path for route in assembly.routes)}")
-
-        # Refuse profile names the compose files do not define.
-        if assembly.profiles:
-            defined = [
-                line.strip()
-                for line in bash_output(f"{context.command()} config --profiles").splitlines()
-                if line.strip()
-            ]
-            assert_known_profiles(assembly.profiles, defined)
 
         # Refuse --build in a repo with no build declarations.
         if build and not (config.repository or config.base_images):
@@ -298,14 +276,14 @@ def render_dev_overlay(root: Path, config: DockerDevkitConfig, assembly: Assembl
     return {"services": services}
 
 
-def _mapping_or_empty(value: object) -> dict[str, object]:
-    return value if _is_mapping(value) else {}
-
-
 def _write_temp_root(document: Mapping[str, Any]) -> Path:
     with NamedTemporaryFile("w", suffix=".yaml", prefix="devkit-assembly-", delete=False, encoding="utf-8") as handle:
         handle.write(yaml.safe_dump(document, sort_keys=False, default_flow_style=False))
         return Path(handle.name)
+
+
+def _compose_config(context: ComposeContext, *arguments: str) -> list[str]:
+    return [line.strip() for line in bash_output(context.command("config", *arguments)).splitlines() if line.strip()]
 
 
 def _probe_lock_entries(context: ComposeContext) -> None:
@@ -333,7 +311,3 @@ def _cleanup(context: ComposeContext) -> None:
         context.dev_overlay.unlink(missing_ok=True)
     if context.assembly_root is not None:
         context.assembly_root.unlink(missing_ok=True)
-
-
-def _is_mapping(value: Any) -> TypeIs[dict[str, object]]:
-    return isinstance(value, dict)
