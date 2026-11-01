@@ -303,6 +303,32 @@ class DockerDevkitConfig(BaseModel):
                 bundles.append(ComposeBundle(name, self.bundle_output(name), list(entry.workloads), dict(entry.vars)))
         return bundles
 
+    def _route_sites(self) -> list[tuple[str, RouteConfig]]:
+        # Every route with its declaration site, in services declaration order — a group's
+        # options first, then its own riding routes.
+        return [
+            (where, route)
+            for name, entry in self.services.items()
+            for where, entry_routes in (
+                [(f"services.{name}", entry.routes)]
+                if not isinstance(entry, ServiceGroup)
+                else [
+                    (f"services.{name}.options.{option_name}", option.routes)
+                    for option_name, option in entry.options.items()
+                ]
+                + [(f"services.{name}", entry.routes)]
+            )
+            for route in entry_routes
+        ]
+
+    def _any_local_entries(self) -> bool:
+        return any(
+            not option.remote
+            for entry in self.services.values()
+            if isinstance(entry, ServiceGroup)
+            for option in entry.options.values()
+        ) or any(not entry.remote for entry in self.services.values() if not isinstance(entry, ServiceGroup))
+
     @field_validator("requires")
     @classmethod
     def _validate_requires(cls, value: str) -> str:
@@ -399,7 +425,7 @@ class DockerDevkitConfig(BaseModel):
     def _require_unique_route_paths(self) -> Self:
         # Route paths are door-wide unique.
         owner: dict[str, str] = {}
-        for where, route in _route_sites(self.services):
+        for where, route in self._route_sites():
             if route.path in owner:
                 raise ValueError(
                     f"{where}: route path {route.path} is already declared at {owner[route.path]}; "
@@ -427,7 +453,7 @@ class DockerDevkitConfig(BaseModel):
     @model_validator(mode="after")
     def _require_gateway_pairing(self) -> Self:
         # The door emits iff any route rides anywhere.
-        any_route = any(_route_sites(self.services))
+        any_route = any(self._route_sites())
         if any_route and self.gateway is None:
             raise ValueError("routes are declared; gateway (the door's host port) is required")
         if not any_route and self.gateway is not None:
@@ -439,7 +465,7 @@ class DockerDevkitConfig(BaseModel):
         if self.services:
             if not self.project_name:
                 raise ValueError("services are declared; project_name is required (the compose project name)")
-            if _any_local_entries(self.services) and not self.repository:
+            if self._any_local_entries() and not self.repository:
                 raise ValueError(
                     "local entries (workloads:) are declared; repository is required — published artifacts "
                     "derive their names from it"
@@ -514,34 +540,6 @@ def _coerce_port_strings(where: str, entry: dict[str, object], owning_name: str,
             raise ValueError(f"{where}.ports entry {item!r} is not a published/target[/protocol] string")
         coerced.append({"service": owning_name, "published": published, "target": target, "protocol": protocol})
     entry["ports"] = coerced
-
-
-def _route_sites(services: dict[str, ServiceGroup | ServiceEntry]) -> list[tuple[str, RouteConfig]]:
-    # Every route with its declaration site, in services declaration order — a group's
-    # options first, then its own riding routes.
-    return [
-        (where, route)
-        for name, entry in services.items()
-        for where, entry_routes in (
-            [(f"services.{name}", entry.routes)]
-            if not isinstance(entry, ServiceGroup)
-            else [
-                (f"services.{name}.options.{option_name}", option.routes)
-                for option_name, option in entry.options.items()
-            ]
-            + [(f"services.{name}", entry.routes)]
-        )
-        for route in entry_routes
-    ]
-
-
-def _any_local_entries(services: dict[str, ServiceGroup | ServiceEntry]) -> bool:
-    return any(
-        not option.remote
-        for entry in services.values()
-        if isinstance(entry, ServiceGroup)
-        for option in entry.options.values()
-    ) or any(not entry.remote for entry in services.values() if not isinstance(entry, ServiceGroup))
 
 
 def is_mapping(value: object) -> TypeIs[dict[str, object]]:
