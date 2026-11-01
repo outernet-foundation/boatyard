@@ -20,6 +20,7 @@ from .config import (
     DOOR_SERVICE_NAME,
     DockerDevkitConfig,
     LOCK_PATH,
+    PortDeclaration,
     RouteConfig,
     ServiceGroup,
     bundle_output,
@@ -139,8 +140,21 @@ def up(
     root = Path.cwd()
     config = load_config(root)
 
+    # Every environment read happens here: the merged view, the selection, the profiles,
+    # and the auth-gated forwarded pair (its PUBLIC_URL refusal fires only under a
+    # selected auth option).
     environment = merged_environment(root)
     selected = selection(config, environment)
+    profiles = selected_profiles(environment)
+    forwarded = (
+        forwarded_pair(environment)
+        if selected is not None and selected.choices.get(AUTH_GROUP_NAME) is not None
+        else None
+    )
+
+    auth_route: RouteConfig | None = None
+    routes: list[RouteConfig] = []
+    ports: list[PortDeclaration] = []
 
     if selected is None:
         context = ComposeContext(root, config, [DEFAULT_COMPOSE_FILE], environment)
@@ -177,118 +191,17 @@ def up(
 
         routes = [route for _, entry in selected.entries for route in entry.routes]
         ports = [port for _, entry in selected.entries for port in entry.ports]
-
-        auth_route: RouteConfig | None = None
         auth = config.services.get(AUTH_GROUP_NAME)
         if isinstance(auth, ServiceGroup):
             option_name = selected.choices.get(AUTH_GROUP_NAME)
             if option_name is not None:
                 auth_route = auth.options[option_name].routes[0]
 
-        document: AssemblyRoot = {}
-        if config.project_name:
-            document["name"] = config.project_name
-        if sources:
-            document["include"] = sources
-
-        services: dict[str, ServiceStanza] = {}
-        if routes:
-            door_environment: dict[str, str] | None = None
-            if auth_route is not None:
-                door_environment = forwarded_pair(environment)
-            assert config.gateway is not None
-            stanza: DoorStanza = {
-                "image": CADDY_IMAGE_HOLE,
-                "configs": [{"source": DOOR_CONFIG_NAME, "target": DOOR_CONFIG_TARGET}],
-                "ports": [{"target": str(DOOR_LISTEN_PORT), "published": config.gateway, "protocol": "tcp"}],
-            }
-            if door_environment:
-                stanza["environment"] = door_environment
-            services[DOOR_SERVICE_NAME] = ServiceStanza(**stanza)
-        for port in ports:
-            port_entry: PortEntry = {
-                "target": port.target,
-                "published": port.published,
-                "protocol": port.protocol,
-            }
-            if port.host_ip is not None:
-                port_entry["host_ip"] = port.host_ip
-            services.setdefault(port.service, {}).setdefault("ports", []).append(port_entry)
-        if services:
-            document["services"] = services
-        if routes:
-            # The Caddyfile rides as inline content with every $ doubled, so compose
-            # interpolation leaves caddy's {$ENV} runtime placeholders for the caddy runtime.
-            # handle blocks are mutually exclusive and caddy sorts them longest-path-first,
-            # so declaration order cannot shadow; the catch-all /* rides as a bare handle.
-            caddyfile_lines = [f":{DOOR_LISTEN_PORT} {{"]
-            for route in routes:
-                matcher = "" if route.path == "/*" else f" {route.path}"
-                if route.raw is not None:
-                    block = ["\t\t" + line for line in route.raw.splitlines()]
-                elif route is auth_route:
-                    block = [
-                        f"\t\treverse_proxy {route.upstream} {{",
-                        "\t\t\theader_up X-Forwarded-Proto {$FORWARDED_PROTO}",
-                        "\t\t\theader_up X-Forwarded-Port {$FORWARDED_PORT}",
-                        "\t\t}",
-                    ]
-                else:
-                    block = [f"\t\treverse_proxy {route.upstream}"]
-                head = "\thandle_path" if route.strip_prefix else "\thandle"
-                caddyfile_lines.extend((f"{head}{matcher} {{", *block, "\t}"))
-            caddyfile_lines.append("}")
-            document["configs"] = {
-                DOOR_CONFIG_NAME: {"content": ("\n".join(caddyfile_lines) + "\n").replace("$", "$$")}
-            }
-
-        assembly_root = _write_temp_root(document)
-        context = ComposeContext(root, config, [assembly_root], environment, assembly_root=assembly_root)
-        if routes or ports:
-            # The drift-impossible teeth, against the assembly compose itself resolves
-            # (includes included): every route upstream and every port's owning service
-            # must exist.
-            try:
-                resolved = {
-                    line.strip() for line in bash_output(f"{context.command('config', '--services')}").splitlines()
-                }
-            except BaseException:
-                assembly_root.unlink(missing_ok=True)
-                raise
-
-            resolved.discard("")
-            for route in routes:
-                upstream = route.upstream.partition(":")[0]
-                if upstream not in resolved:
-                    assembly_root.unlink(missing_ok=True)
-                    raise RuntimeError(
-                        f"route {route.path} upstream {upstream} resolves to no service in the selected assembly"
-                    )
-            if auth_route is not None:
-                upstream = auth_route.upstream.partition(":")[0]
-                if upstream not in resolved:
-                    assembly_root.unlink(missing_ok=True)
-                    raise RuntimeError(f"the selected auth option's upstream {upstream} is absent from the assembly")
-            for port in ports:
-                if port.service not in resolved:
-                    assembly_root.unlink(missing_ok=True)
-                    raise RuntimeError(f"ports for service {port.service!r} — absent from the selected assembly")
-
-        if selected.riding:
-            print(f"riding: {', '.join(selected.riding)}")
-        for name, entry in config.services.items():
-            if isinstance(entry, ServiceGroup):
-                selected_option = selected.choices.get(name)
-                print(f"{name}: {selected_option if selected_option is not None else '(none selected)'}")
-        if routes:
-            print(f"door: {' '.join(route.path for route in routes)}")
-
         dev_overlay: Path | None = None
         if dev:
-            declared: set[str] = set()
-            for path in local_outputs:
-                declared |= _service_names(root, path)
-
+            # Overlay keys ride only for services the selected local outputs define (a
+            # stray key would add a half-defined service).
+            declared = {service_name for _path, names in file_services for service_name in names}
             overlay_services: dict[str, OverlayService] = {}
             for name, service in config.service_builds.items():
                 if not service.dev_stage or name not in declared:
@@ -337,68 +250,138 @@ def up(
                 handle.write(yaml.safe_dump({"services": overlay_services}, sort_keys=False, default_flow_style=False))
                 dev_overlay = Path(handle.name)
 
+        document: AssemblyRoot = {}
+        if config.project_name:
+            document["name"] = config.project_name
+        if sources:
+            document["include"] = sources
+
+        services: dict[str, ServiceStanza] = {}
+        if routes:
+            assert config.gateway is not None
+            stanza: DoorStanza = {
+                "image": CADDY_IMAGE_HOLE,
+                "configs": [{"source": DOOR_CONFIG_NAME, "target": DOOR_CONFIG_TARGET}],
+                "ports": [{"target": str(DOOR_LISTEN_PORT), "published": config.gateway, "protocol": "tcp"}],
+            }
+            if forwarded is not None:
+                stanza["environment"] = forwarded
+            services[DOOR_SERVICE_NAME] = ServiceStanza(**stanza)
+        for port in ports:
+            port_entry: PortEntry = {
+                "target": port.target,
+                "published": port.published,
+                "protocol": port.protocol,
+            }
+            if port.host_ip is not None:
+                port_entry["host_ip"] = port.host_ip
+            services.setdefault(port.service, {}).setdefault("ports", []).append(port_entry)
+        if services:
+            document["services"] = services
+        if routes:
+            # The Caddyfile rides as inline content with every $ doubled, so compose
+            # interpolation leaves caddy's {$ENV} runtime placeholders for the caddy runtime.
+            # handle blocks are mutually exclusive and caddy sorts them longest-path-first,
+            # so declaration order cannot shadow; the catch-all /* rides as a bare handle.
+            caddyfile_lines = [f":{DOOR_LISTEN_PORT} {{"]
+            for route in routes:
+                matcher = "" if route.path == "/*" else f" {route.path}"
+                if route.raw is not None:
+                    block = ["\t\t" + line for line in route.raw.splitlines()]
+                elif route is auth_route:
+                    block = [
+                        f"\t\treverse_proxy {route.upstream} {{",
+                        "\t\t\theader_up X-Forwarded-Proto {$FORWARDED_PROTO}",
+                        "\t\t\theader_up X-Forwarded-Port {$FORWARDED_PORT}",
+                        "\t\t}",
+                    ]
+                else:
+                    block = [f"\t\treverse_proxy {route.upstream}"]
+                head = "\thandle_path" if route.strip_prefix else "\thandle"
+                caddyfile_lines.extend((f"{head}{matcher} {{", *block, "\t}"))
+            caddyfile_lines.append("}")
+            document["configs"] = {
+                DOOR_CONFIG_NAME: {"content": ("\n".join(caddyfile_lines) + "\n").replace("$", "$$")}
+            }
+
+        assembly_root = _write_temp_root(document)
+        compose_files = [assembly_root, dev_overlay] if dev_overlay is not None else [assembly_root]
         context = ComposeContext(
             root,
             config,
-            [assembly_root, *([dev_overlay] if dev_overlay is not None else [])],
+            compose_files,
             environment,
             dev_overlay=dev_overlay,
             assembly_root=assembly_root,
         )
 
-    if build and (config is None or not (config.repository or config.base_images)):
-        raise typer.BadParameter(
-            "--build requires build declarations (repository or base_images) in docker-devkit.yaml"
-        )
-
-    if config is not None and context.lock_file.exists():
-        # Fail closed over every lock entry — each mirror-prefixed by construction under
-        # the declared or default prefix — distinguishing a manifest the registry truly
-        # lacks (the declaring change has not been through CI's mirror job; no escape
-        # flag) from a probe that failed before reaching a verdict (credentials, network,
-        # daemon availability).
-        for value in sorted(parse_image_lock(context.lock_file).root.values()):
-            reference, _, digest = value.rpartition("@")
-            try:
-                bash_output(f"docker buildx imagetools inspect {shlex.quote(value)}")
-            except CalledProcessError as error:
-                stderr = (error.stderr or str(error)).strip()
-                if _MANIFEST_ABSENT_PATTERN.search(stderr):
+    try:
+        if routes or ports:
+            # The drift-impossible teeth, against the assembly compose itself resolves
+            # (includes included): every route upstream and every port's owning service
+            # must exist.
+            resolved = {line.strip() for line in bash_output(f"{context.command('config', '--services')}").splitlines()}
+            resolved.discard("")
+            for route in routes:
+                upstream = route.upstream.partition(":")[0]
+                if upstream not in resolved:
                     raise RuntimeError(
-                        f"Image {reference or value} (digest {digest or 'unknown'}) is not mirrored yet; "
-                        "the CI mirror job populates it when the declaring change runs"
+                        f"route {route.path} upstream {upstream} resolves to no service in the selected assembly"
                     )
-                raise RuntimeError(
-                    f"Image {reference or value} (digest {digest or 'unknown'}): the mirror probe "
-                    "(docker buildx imagetools inspect) failed before it could determine whether the image "
-                    "exists, so this is not evidence the image is missing; check registry credentials, network, "
-                    f"and docker daemon availability. Probe error: {stderr}"
-                )
+            if auth_route is not None:
+                upstream = auth_route.upstream.partition(":")[0]
+                if upstream not in resolved:
+                    raise RuntimeError(f"the selected auth option's upstream {upstream} is absent from the assembly")
+            for port in ports:
+                if port.service not in resolved:
+                    raise RuntimeError(f"ports for service {port.service!r} — absent from the selected assembly")
 
-    if build:
-        run_build()
-        if dev:
-            # The overlay rides :dev images, so a dev bring-up builds both shapes.
-            run_build(dev=True)
+        if selected is not None and config is not None:
+            if selected.riding:
+                print(f"riding: {', '.join(selected.riding)}")
+            for name, entry in config.services.items():
+                if isinstance(entry, ServiceGroup):
+                    selected_option = selected.choices.get(name)
+                    print(f"{name}: {selected_option if selected_option is not None else '(none selected)'}")
+            if routes:
+                print(f"door: {' '.join(route.path for route in routes)}")
 
-    # compose ignores COMPOSE_PROFILES whenever a --profile flag is present, so forward the
-    # selection explicitly; shell env wins over .env, comma-split and deduplicated.
-    profiles = selected_profiles(environment)
-    if profiles:
-        defined = [
-            line.strip() for line in bash_output(f"{context.command()} config --profiles").splitlines() if line.strip()
-        ]
-        assert_known_profiles(profiles, defined)
-    up_command = context.command(*(f"--profile {profile}" for profile in profiles), "up")
-    if not build:
-        # tree-<sha> tags are content-addressed and may not be pushed, so pull only what is missing locally
-        up_command += " --pull missing"
-        if quiet_pull:
-            up_command += " --quiet-pull"
-    if not attached:
-        up_command += " -d"
+        if profiles:
+            defined = [
+                line.strip()
+                for line in bash_output(f"{context.command()} config --profiles").splitlines()
+                if line.strip()
+            ]
+            assert_known_profiles(profiles, defined)
 
-    _handoff(context, up_command)
+        if build and (config is None or not (config.repository or config.base_images)):
+            raise typer.BadParameter(
+                "--build requires build declarations (repository or base_images) in docker-devkit.yaml"
+            )
+
+        if config is not None and context.lock_file.exists():
+            _probe_lock_entries(context)
+
+        if build:
+            run_build()
+            if dev:
+                # The overlay rides :dev images, so a dev bring-up builds both shapes.
+                run_build(dev=True)
+
+        # compose ignores COMPOSE_PROFILES whenever a --profile flag is present, so forward the
+        # selection explicitly; shell env wins over .env, comma-split and deduplicated.
+        up_command = context.command(*(f"--profile {profile}" for profile in profiles), "up")
+        if not build:
+            # tree-<sha> tags are content-addressed and may not be pushed, so pull only what is missing locally
+            up_command += " --pull missing"
+            if quiet_pull:
+                up_command += " --quiet-pull"
+        if not attached:
+            up_command += " -d"
+
+        bash_handoff(up_command)
+    finally:
+        _cleanup(context)
 
 
 @down_app.command()
@@ -430,23 +413,10 @@ def down(
     if volumes:
         command += " -v"
 
-    _handoff(context, command)
-
-
-def _handoff(context: ComposeContext, command: str) -> None:
     try:
         bash_handoff(command)
     finally:
-        if context.dev_overlay is not None:
-            context.dev_overlay.unlink(missing_ok=True)
-        if context.assembly_root is not None:
-            context.assembly_root.unlink(missing_ok=True)
-
-
-def _write_temp_root(document: Mapping[str, Any]) -> Path:
-    with NamedTemporaryFile("w", suffix=".yaml", prefix="devkit-assembly-", delete=False, encoding="utf-8") as handle:
-        handle.write(yaml.safe_dump(document, sort_keys=False, default_flow_style=False))
-        return Path(handle.name)
+        _cleanup(context)
 
 
 def _service_names(root: Path, path: Path) -> set[str]:
@@ -458,6 +428,44 @@ def _service_names(root: Path, path: Path) -> set[str]:
 
 def _mapping_or_empty(value: object) -> dict[str, object]:
     return value if _is_mapping(value) else {}
+
+
+def _write_temp_root(document: Mapping[str, Any]) -> Path:
+    with NamedTemporaryFile("w", suffix=".yaml", prefix="devkit-assembly-", delete=False, encoding="utf-8") as handle:
+        handle.write(yaml.safe_dump(document, sort_keys=False, default_flow_style=False))
+        return Path(handle.name)
+
+
+def _probe_lock_entries(context: ComposeContext) -> None:
+    # Fail closed over every lock entry — each mirror-prefixed by construction under
+    # the declared or default prefix — distinguishing a manifest the registry truly
+    # lacks (the declaring change has not been through CI's mirror job; no escape
+    # flag) from a probe that failed before reaching a verdict (credentials, network,
+    # daemon availability).
+    for value in sorted(parse_image_lock(context.lock_file).root.values()):
+        reference, _, digest = value.rpartition("@")
+        try:
+            bash_output(f"docker buildx imagetools inspect {shlex.quote(value)}")
+        except CalledProcessError as error:
+            stderr = (error.stderr or str(error)).strip()
+            if _MANIFEST_ABSENT_PATTERN.search(stderr):
+                raise RuntimeError(
+                    f"Image {reference or value} (digest {digest or 'unknown'}) is not mirrored yet; "
+                    "the CI mirror job populates it when the declaring change runs"
+                )
+            raise RuntimeError(
+                f"Image {reference or value} (digest {digest or 'unknown'}): the mirror probe "
+                "(docker buildx imagetools inspect) failed before it could determine whether the image "
+                "exists, so this is not evidence the image is missing; check registry credentials, network, "
+                f"and docker daemon availability. Probe error: {stderr}"
+            )
+
+
+def _cleanup(context: ComposeContext) -> None:
+    if context.dev_overlay is not None:
+        context.dev_overlay.unlink(missing_ok=True)
+    if context.assembly_root is not None:
+        context.assembly_root.unlink(missing_ok=True)
 
 
 def _is_mapping(value: Any) -> TypeIs[dict[str, object]]:
