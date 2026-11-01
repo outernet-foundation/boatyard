@@ -65,6 +65,8 @@ type BakeValue = str | list[str] | dict[str, str]
 
 Target = Literal["both", "compose", "k8s"]
 
+PLAIN_VARIANT = "common"
+
 
 def chart_lock_key(name: str) -> str:
     return name.upper().replace("-", "_") + "_CHART"
@@ -380,6 +382,36 @@ class DockerDevkitConfig(BaseModel):
                 )
             )
         return requirements
+
+    def build_legs(self) -> list[dict[str, str]]:
+        # The CI fanout closures: a union-find over the derived context edges groups
+        # dependency closures, and load-time coherence guarantees one variant set per
+        # closure, so one leg builds a whole closure group in a single bake invocation;
+        # one leg per closure × variant cell. The leg schema (targets, variant) is a
+        # named contract with the toolkit binding.
+        services = self.service_builds
+        parent = {service: service for service in services}
+
+        for name, service in services.items():
+            for dependency in service.contexts:
+                left, right = _find(parent, name), _find(parent, dependency)
+                if left != right:
+                    parent[right] = left
+
+        members: dict[str, list[str]] = {}
+        for service in services:
+            members.setdefault(_find(parent, service), []).append(service)
+
+        entries_by_variant: dict[str, list[str]] = {}
+        for group in sorted(sorted(member_list) for member_list in members.values()):
+            for name in group:
+                for target, variant in services[name].target_variants:
+                    entries_by_variant.setdefault(variant or PLAIN_VARIANT, []).append(target)
+
+        return [
+            {"targets": " ".join(sorted(targets)), "variant": variant}
+            for variant, targets in sorted(entries_by_variant.items())
+        ]
 
     def _route_sites(self) -> list[tuple[str, RouteConfig]]:
         # Every route with its declaration site, in services declaration order — a group's
@@ -706,6 +738,15 @@ def mirrored_ref(reference: str, prefix: str) -> str:
     if reference.startswith(f"{prefix}/"):
         raise RuntimeError(f"declarations are upstream-native; {reference} already carries the mirror prefix {prefix}")
     return f"{prefix}/{reference}"
+
+
+def _find(parent: dict[str, str], service: str) -> str:
+    root = service
+    while parent[root] != root:
+        root = parent[root]
+    while parent[service] != service:
+        parent[service], service = root, parent[service]
+    return root
 
 
 def load_config(root: Path) -> DockerDevkitConfig | None:
