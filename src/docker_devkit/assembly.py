@@ -8,6 +8,7 @@ from tempfile import NamedTemporaryFile
 from typing import TypeIs
 
 import yaml
+from bashrun.bash import bash_output
 
 from .config import (
     AUTH_GROUP_NAME,
@@ -153,35 +154,43 @@ class Assembly:
             if option_name is not None:
                 self.auth_route = auth.options[option_name].routes[0]
 
-        # Materialize the per-run compose files: root first, dev overlay last (the
-        # -f order, so the overlay overrides); a failure unlinks what was written.
+        # Materialize and validate in one step: the per-run compose files (root
+        # first, dev overlay last — the -f order, so the overlay overrides) and
+        # compose's own resolution over them; a failure unlinks what was written.
         self.compose_files = []
         try:
-            self.compose_files.append(write_temp_compose_file(self._render_root_document(), "devkit-assembly-"))
-            if dev:
-                self.compose_files.append(write_temp_compose_file(self._render_dev_overlay(), "devkit-dev-overlay-"))
+            self._materialize_and_validate(dev)
         except BaseException:
             self.cleanup()
             raise
 
+    def _materialize_and_validate(self, dev: bool) -> None:
+        self.compose_files.append(write_temp_compose_file(self._render_root_document(), "devkit-assembly-"))
+        if dev:
+            self.compose_files.append(write_temp_compose_file(self._render_dev_overlay(), "devkit-dev-overlay-"))
+        if self.routes or self.ports:
+            # Validate every wired upstream and port owner against compose's own
+            # resolution (the auth option's route rides the routes list by
+            # construction, its option being a selected entry).
+            resolved = set(_compose_config(self.root, self.compose_files, "--services"))
+            for route in self.routes:
+                upstream = route.upstream.partition(":")[0]
+                if upstream not in resolved:
+                    raise RuntimeError(
+                        f"route {route.path} upstream {upstream} resolves to no service in the selected assembly"
+                    )
+            for port in self.ports:
+                if port.service not in resolved:
+                    raise RuntimeError(
+                        f"ports for service {port.service!r} resolve to no service in the selected assembly"
+                    )
+        if self.profiles:
+            # Refuse profile names the compose files do not define.
+            assert_known_profiles(self.profiles, _compose_config(self.root, self.compose_files, "--profiles"))
+
     def cleanup(self) -> None:
         for compose_file in self.compose_files:
             compose_file.unlink(missing_ok=True)
-
-    def assert_resolves(self, resolved: set[str]) -> None:
-        # Compose's own resolution is the authority on what the selected assembly
-        # defines: every route upstream (the auth option's route rides the list by
-        # construction, its option being a selected entry) and every port's owning
-        # service must appear in it.
-        for route in self.routes:
-            upstream = route.upstream.partition(":")[0]
-            if upstream not in resolved:
-                raise RuntimeError(
-                    f"route {route.path} upstream {upstream} resolves to no service in the selected assembly"
-                )
-        for port in self.ports:
-            if port.service not in resolved:
-                raise RuntimeError(f"ports for service {port.service!r} resolve to no service in the selected assembly")
 
     def _render_root_document(self) -> dict[str, object]:
         # The per-run root compose file: name, includes, the door, parent port stanzas, Caddyfile.
@@ -309,6 +318,14 @@ def write_temp_compose_file(document: Mapping[str, object], prefix: str) -> Path
     with NamedTemporaryFile("w", suffix=".yaml", prefix=prefix, delete=False, encoding="utf-8") as handle:
         handle.write(yaml.safe_dump(document, sort_keys=False, default_flow_style=False))
         return Path(handle.name)
+
+
+def _compose_config(root: Path, compose_files: list[Path], *arguments: str) -> list[str]:
+    return [
+        line.strip()
+        for line in bash_output(compose_command(root, compose_files, "config", *arguments)).splitlines()
+        if line.strip()
+    ]
 
 
 def assert_known_profiles(profiles: list[str], defined: list[str]) -> None:

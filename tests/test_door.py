@@ -6,7 +6,7 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
-from docker_devkit import compose
+from docker_devkit import assembly, compose
 from docker_devkit.config import LOCK_PATH
 
 FAKE_DIGEST = "sha256:" + "a" * 64
@@ -76,6 +76,7 @@ def _assembly_document(
     monkeypatch.delenv("GATEWAY_PORT", raising=False)
     monkeypatch.chdir(tmp_path)
     capture = AssemblyCapture()
+    monkeypatch.setattr(assembly, "bash_output", _probe_present_and_services)
     monkeypatch.setattr(compose, "bash_output", _probe_present_and_services)
     monkeypatch.setattr(compose, "bash_handoff", capture.run)
 

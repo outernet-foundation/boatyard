@@ -10,7 +10,6 @@ from bashrun.bash import CalledProcessError, bash_handoff, bash_output
 
 from .assembly import (
     Assembly,
-    assert_known_profiles,
     compose_command,
     require_compose_stack,
     require_env_file,
@@ -44,18 +43,11 @@ def up(
     root = Path.cwd()
     config = load_config(root)
 
-    # Resolve, render, and materialize in one construction; every selection refusal rides it.
+    # Resolve, render, and validate in one construction; every refusal rides it.
     assembly = Assembly(root, config, dev=dev)
     assert config is not None
 
     try:
-        if assembly.routes or assembly.ports:
-            # Validate every wired upstream and port owner against compose's own resolution.
-            assembly.assert_resolves(set(_compose_config(root, assembly.compose_files, "--services")))
-        if assembly.profiles:
-            # Refuse profile names the compose files do not define.
-            assert_known_profiles(assembly.profiles, _compose_config(root, assembly.compose_files, "--profiles"))
-
         # Print the resolved assembly so nothing implicit rides hidden.
         if assembly.riding:
             print(f"riding: {', '.join(assembly.riding)}")
@@ -120,14 +112,6 @@ def down(
         bash_handoff(command)
     finally:
         assembly_root.unlink(missing_ok=True)
-
-
-def _compose_config(root: Path, compose_files: list[Path], *arguments: str) -> list[str]:
-    return [
-        line.strip()
-        for line in bash_output(compose_command(root, compose_files, "config", *arguments)).splitlines()
-        if line.strip()
-    ]
 
 
 def _probe_lock_entries(root: Path) -> None:
