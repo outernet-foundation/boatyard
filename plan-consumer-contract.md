@@ -151,8 +151,15 @@ install-zed's `--build` mode currently forks the build pipeline in consumer
 code (renders its own bake file, assembles its own env, `--set`-retargets tags
 to a transient host-local registry — a comment-synced mirror of the build
 verb). The verb grows the retarget flag; the fork dissolves into
-`uv run build --registry … --push`. Exact spelling is plan-session material;
-the direction (one pipeline, configurable destination) is locked.
+`uv run build --registry <addr>`. Rulings, as design consequences rather than
+choices: `--registry` implies push mode — a retargeted build has nowhere to go
+but the registry, and a `--load` pairing is meaningless and refuses; cache
+refs follow the retarget (`{registry}/build-cache:{target}` — one law
+everywhere: cache rides the same registry the tags do; the persistent laptop
+registry gives the install iteration loop the same layer caching ghcr builds
+get); the box-facing address spelling stays consumer-side — install-zed
+derives it from `$SSH_CLIENT` as it already does. Flag name is plan-session
+material.
 
 ### D8 — Consumers own their env-line reading
 
@@ -227,9 +234,6 @@ invariant check survives anywhere in the design.
 These are answered in follow-up sessions before the implementation plan is
 written; the design is not locked until they close.
 
-- **O1 — `build --registry` spelling.** Direction locked (D7); flag name,
-  interaction with `--push`/cache refs, and the host-vs-box address split are
-  plan-session details.
-- **O2 — catch-up archaeology.** The dev165→final diff across CLI, schema,
+- **O1 — catch-up archaeology.** The dev165→final diff across CLI, schema,
   lock format, and artifact shapes may surface consumer edits beyond D9's
   enumeration; findings fold back into the plan.

@@ -11,7 +11,10 @@ file absorbs and replaces `plan-image-identity.md` and
 `plan-platform-resolved-lock.md` (both deleted in absorbing commits; git is
 the history), capturing investigation sessions 2026-10-15 and 2026-10-22,
 the consumer-consumption rulings of 2026-10-30, and the platform-resolved
-lock rulings of 2026-10-31. All open questions are closed and
+lock rulings of 2026-10-31. Parts 0–1 are absorbed into and execute inside
+`plan-consumer-contract.md` (2026-11-01, amendments recorded there); this
+file remains the decision record for Parts 2–4 and the sequencing between
+them. All open questions are closed and
 recorded at the end. The compose consumer model's present truth lives in this
 repo's `AGENTS.md`; this ADR records the changes to it. Code anchors are as of
 their capture date and may drift.
