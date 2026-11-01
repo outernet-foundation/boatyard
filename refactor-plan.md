@@ -22,7 +22,7 @@ Tick a phase only after its final commit and a green verification trio;
 - [x] Phase 3 — image_refs → lock + 2.3
 - [x] Phase 4 — daemon_gc → bake
 - [x] Phase 5 — mirror flatten, 2.6
-- [ ] Phase 6 — dedup: record members + lock/assembly/verbs
+- [x] Phase 6 — dedup: record members + lock/assembly/verbs
 - [ ] Phase 7 — dedup: score/publish/config + 2.5 + 2.7
 - [ ] Phase 8 — inline wave + 2.9
 - [ ] Phase 9 — dead code + validation timing
