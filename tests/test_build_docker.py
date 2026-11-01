@@ -656,9 +656,7 @@ class TestPushShelving:
         }
         first = self._prepare(monkeypatch, tmp_path, entries)
 
-        result_first = runner.invoke(
-            build.app, ["--push", "--gpu", "cuda", "--targets", "zed-capture aoa-bridge"]
-        )
+        result_first = runner.invoke(build.app, ["--push", "--gpu", "cuda", "--targets", "zed-capture aoa-bridge"])
 
         assert result_first.exit_code == 0, result_first.output
         second = self._prepare(monkeypatch, tmp_path, entries)
