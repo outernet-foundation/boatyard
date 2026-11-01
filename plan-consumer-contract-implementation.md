@@ -37,7 +37,8 @@ These rulings bind every phase:
   guards lock resolution; charts are arch-neutral and exempt); the lock is
   structured YAML recording, per image, the index digest plus one concrete
   manifest digest per declared platform; env consumption is synthesized
-  per-run at the edges.
+  per-run at the edges. Variant axes follow the same law (ADR D12): value
+  sets and defaults are declared, never probed.
 - Construction over policing — the session's axiom: no cross-file invariant
   check survives anywhere. The one place detection remains is the literal-
   image refusal (D5), a validity rule of the input format at parse boundaries
@@ -45,7 +46,8 @@ These rulings bind every phase:
 - Vocabulary stays concrete: a per-platform digest is a platform manifest, a
   read location is a read source. Phase 8 retires the mental-model names
   that got blessed as identifiers (`door`, `shelf`, `PublishLeg`,
-  `build_legs`); nothing reintroduces them or mints new metaphor names in
+  `build_legs`); phase 7 retires `fan`/`own_fan` under the variant-axis
+  declaration; nothing reintroduces them or mints new metaphor names in
   code, tests, refusal strings, or docs.
 - The domain-record refactor is frozen (ADR D2); a straggler derivation that
   surfaces during this work folds as ordinary work, not a reopened arc.
@@ -65,7 +67,8 @@ lock foundation    phases 2-5   structured YAML lock, toolchain-derived
                                 env synthesis, lock-env + tree-tags
 declaration teeth  phase 6      literal image references refused at
                                 derivation
-push destination    phase 7      --push <addr>; the shelf leaves build
+build surface       phase 7      --push <addr>, variant axes, the shelf
+                                 leaves build
 release and wave   phases 8-9   vocabulary renames + docs pass, one
                                  devkit release, the five-consumer catch-up
 ```
@@ -116,7 +119,7 @@ state holds and its verify list passes green.
 | 4 | Platform-resolving lock writer and mirror probes | docker-devkit | absorbed Part 0 |
 | 5 | Env synthesis, `lock-env`, and `tree-tags` | docker-devkit | D6, absorbed Part 0 |
 | 6 | Literal image references refused at derivation | docker-devkit | D5 |
-| 7 | The push-destination axis; the shelf leaves build | docker-devkit | D7, D11 |
+| 7 | The build surface: push-destination axis, variant axes, shelf extraction | docker-devkit | D7, D11, D12 |
 | 8 | Renames, docs pass, and initiative release | docker-devkit | D1 |
 | 9 | Consumer catch-up wave | all five consumers | D8, D9 |
 
@@ -328,11 +331,13 @@ End state:
 Verify: each refusal fires with a fix-naming error; the scan is gone from
 `image_refs.py`; fixture trees carrying literals refuse at both boundaries.
 
-## Phase 7 — The push-destination axis; the shelf leaves build
+## Phase 7 — The build surface: push-destination axis, variant axes, and the shelf
 
-Cluster push destination · docker-devkit · ADR D7 and D11. Load: `bake.py`
-(`run_build`, push mode, cache refs, the shelf push, the `REGISTRY` read),
-`config.py` (`render_bake`), `verbs/build.py` (flags), `pyproject.toml`
+Cluster build surface · docker-devkit · ADR D7, D11, and D12. Load:
+`bake.py` (`run_build`, push mode, cache refs, the shelf push, the
+`REGISTRY` read, `Gpu`/`detect_gpu`), `config.py` (`render_bake`,
+`build_legs`), `service_builds.py` (`GpuFamily`, `FAN_ARG`, `own_fan`,
+`derive_services`), `verbs/build.py`, `verbs/matrix.py`, `pyproject.toml`
 (dependencies).
 
 End state:
@@ -343,28 +348,41 @@ End state:
   (`{addr}/{target}` tags, `{addr}/build-cache:{target}` cache refs; one
   law everywhere). The optional-value mechanics ride click's `flag_value`
   through typer; if the wrapper resists, a thin click-level option override
-  is the escape hatch — not a second flag.
-- A registry destination requires a concrete `--gpu` (a pushed build is
-  fully determined, never host-detected); `--dev` with a registry
-  destination refuses. `--gpu-only` dies here (ADR D10): zero users in the
-  wild, its filter expressible with `--targets`.
+  is the escape hatch — not a second flag. `--dev` with a registry
+  destination refuses (dev stages are local-only).
+- Variant axes are declared (ADR D12): a `variants:` mapping in
+  `docker-devkit.yaml` (ARG name → values, the first value the default
+  cell); a service declaring a named ARG builds one target per declared
+  value. `derive_services` takes the axes from `load_config` as a parameter
+  (the one-way law holds). `GpuFamily`, `FAN_ARG`, `Gpu`, `GPU_TYPES`,
+  `detect_gpu()`, `--gpu`, and `--gpu-only` die; `own_fan` becomes the
+  declared-axis data on the parse record; the push-requires-concrete rule
+  dies with detection — nothing host-derived remains. Selection rides
+  `--targets` cells: `api/cuda` addresses a variant-bearing target, a bare
+  name selects the default cell, an unknown cell refuses listing the
+  declared values.
 - The builds-shelf push leaves `build` entirely (ADR D11): the shelving
   block, its `REGISTRY` read, and the `build_artifact_registry` import die
   in `bake.py`, and the devkit drops the build-artifact-registry dependency.
   Bake's `metadata.json` (cwd-stable) is the handoff the toolkit's shelf
   step reads (phase 9); the release channel loses nothing — its pull side
   was always toolkit-side.
+- The matrix output schema is unchanged; `build_legs` cells carry suffixed
+  targets for variant-bearing services, `variant` values come from the
+  declaration, and the workflow's `GPU:` translation dies in phase 9.
 - install-zed's fork dissolves onto this in phase 9: `build --push
-  localhost:5000 --gpu none` against its persistent local registry. The
-  box-facing address spelling stays consumer-side (`$SSH_CLIENT`),
-  addressing the same registry.
+  localhost:5000` against its persistent local registry. The box-facing
+  address spelling stays consumer-side (`$SSH_CLIENT`), addressing the same
+  registry.
 
 Verify: golden tests over the rendered bake for both destinations (tags,
-cache refs); the `--dev` and `--gpu auto` refusals under a registry
-destination; `--gpu-only` gone from the surface; the shelving block and
-`REGISTRY` read gone from `bake.py`; the dependency gone from
-`pyproject.toml`; a `--push localhost:5000` build round-trips through the
-persistent local registry.
+cache refs); the variant battery (declared values reach the rendered args;
+cell selection by suffix; bare-name default cell; unknown-cell refusal
+listing values; matrix cells suffixed); `--gpu`, `--gpu-only`, and host
+detection gone from surface and modules; the shelving block and `REGISTRY`
+read gone from `bake.py`; the dependency gone from `pyproject.toml`; a
+`--push localhost:5000` build round-trips through the persistent local
+registry.
 
 ## Phase 8 — Renames, docs pass, and initiative release
 
@@ -401,9 +419,10 @@ End state:
   synthesis at the edges preserves both its documented virtues (native
   `--env-file` consumption at the `up` handoff, the raw-`docker compose`
   valve). The `image_refs.py` row loses the coupling machinery and the scan;
-  `lock`, `lock-env`, and `tree-tags` join the entry-point table; the
-  build row carries the destination axis and the gone flags (`--lock-only`,
-  `--check`, `--upgrade`, `--gpu-only`); the D5 refusals
+`lock`, `lock-env`, and `tree-tags` join the entry-point table; the
+build row carries the destination axis and the gone flags (`--lock-only`,
+`--check`, `--upgrade`, `--gpu`, `--gpu-only`); the service_builds row
+carries the variant-axis declaration; the D5 refusals
   join the module rows that own those boundaries; every row the renames
   touch — the edge naming across `config.py`/`assembly.py`/`score.py`, the
   publish records — carries the new names.
@@ -429,6 +448,8 @@ End state:
   which re-resolves every entry, so no per-entry migration exists.
   `platforms` completes where the config refusal forces it: placeframe
   declares amd64 and Make-it-Sing declares its platform in the same relock.
+  placeframe declares its variant axis (`TORCH_DEVICE: [cuda, rocm]`, cuda
+  the default cell) in the same relock.
   The reserved front-door service name is `edge` from this release (phase
   8's rename) — devkit-derived, so consumers edit nothing; the renamed
   container at next bring-up is expected.
@@ -456,7 +477,7 @@ End state:
   surface — arm64 manifests by reading `images.<NAME>.platforms[linux/arm64]`
   from the committed YAML lock with plain `yaml.safe_load`, service tags
   through `uv run tree-tags <service>…`, and its `--build` mode through
-  `uv run build --push localhost:5000 --gpu none` (its `REGISTRY_PORT`
+  `uv run build --push localhost:5000` (its `REGISTRY_PORT`
   constant; the forked bake pipeline dissolves). Its relock lands arm64
   platform-manifest digests for loki/alloy — the box ships executable
   images and the ZED-box AOA deployment unblocks (its
@@ -469,10 +490,12 @@ End state:
   reusable workflows invoke the CLI and bind `docker-build-matrix` and
   `publish-compose --plan` — frozen CI contracts that remain as-is. Riding
   the repin, the build workflow's freshness line becomes
-  `uv run --locked lock --check`, and the build job gains the shelf step
+  `uv run --locked lock --check`, the build line drops its `--gpu` argument
+  and `GPU:` env translation (matrix targets carry variant cells), and the
+  build job gains the shelf step
   (ADR D11): a toolkit verb beside the release-side pull, invoked through
-  the toolkit project runner like `free-disk-space`, shelving each leg's
-  shard from bake's `metadata.json` under the workflow's existing
+  the toolkit project runner like `free-disk-space`, shelving each matrix
+  cell's shard from bake's `metadata.json` under the workflow's existing
   `REGISTRY` env. The `shelf` naming — `verbs/release.py` and the new
   step — is `builds_ref` throughout. Phase 1 findings may surface further
   flag-level edits here; fold them into this phase.
