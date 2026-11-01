@@ -41,6 +41,11 @@ These rulings bind every phase:
   check survives anywhere. The one place detection remains is the literal-
   image refusal (D5), a validity rule of the input format at parse boundaries
   the devkit already owns.
+- Vocabulary stays concrete: a per-platform digest is a platform manifest, a
+  read location is a read source. Phase 8 retires the mental-model names
+  that got blessed as identifiers (`door`, `shelf`, `PublishLeg`,
+  `build_legs`); nothing reintroduces them or mints new metaphor names in
+  code, tests, refusal strings, or docs.
 - The domain-record refactor is frozen (ADR D2); a straggler derivation that
   surfaces during this work folds as ordinary work, not a reopened arc.
 - Digests live exclusively in `docker-devkit.lock`, written only by
@@ -59,8 +64,8 @@ lock foundation    phases 2-5   structured YAML lock, toolchain-derived
 declaration teeth  phase 6      literal image references refused at
                                 derivation
 retarget           phase 7      build --registry
-release and wave   phases 8-9   docs pass, one devkit release, the
-                                five-consumer catch-up
+release and wave   phases 8-9   vocabulary renames + docs pass, one
+                                devkit release, the five-consumer catch-up
 ```
 
 Order within a cluster is strict; cluster order is fixed above. The release
@@ -108,7 +113,7 @@ state holds and its verify list passes green.
 | 5 | Env synthesis, `lock-env`, and `tree-tags` | docker-devkit | D6, absorbed Part 0 |
 | 6 | Literal image references refused at derivation | docker-devkit | D5 |
 | 7 | Registry-retargeted builds | docker-devkit | D7 |
-| 8 | Docs pass and initiative release | docker-devkit | D1 |
+| 8 | Renames, docs pass, and initiative release | docker-devkit | D1 |
 | 9 | Consumer catch-up wave | all five consumers | D8, D9 |
 
 "Absorbed Part 0" anchors point at the design the consumer-contract ADR
@@ -335,13 +340,34 @@ Verify: retargeted tags and cache refs in the rendered bake (golden tests);
 the `--load` refusal; push-mode implication; a retargeted build round-trips
 through a transient local registry.
 
-## Phase 8 — Docs pass and initiative release
+## Phase 8 — Renames, docs pass, and initiative release
 
 Cluster release · docker-devkit · ADR D1 and D6. Load: docker-devkit's
-`AGENTS.md`, the release flow in github-actions-toolkit's `AGENTS.md`.
+`AGENTS.md`, the release flow in github-actions-toolkit's `AGENTS.md`,
+`config.py` (`DOOR_SERVICE_NAME`), `publish.py` (`PublishLeg`/`PublishedLeg`),
+`bake.py` (the `shelf` local).
 
 End state:
 
+- Vocabulary renames land as ordinary work in this release — mental-model
+  names that got blessed as identifiers retire for concrete ones, in code,
+  tests, refusal strings, and docs alike:
+  - The reserved front-door service renames `door` → `edge`
+    (`DOOR_SERVICE_NAME` → `EDGE_SERVICE_NAME`): the emitted edge stanza, the
+    reserved-name law, and generate-score's refusal rename with it. The
+    service is materialized per-run and never committed under
+    `stack/generated/**`, so no consumer artifact churns; running stacks
+    pick the new name up at their next bring-up, and `down` already removes
+    every project-labeled container, so nothing stale survives.
+  - `build_legs()` renames to `build_partitions()` — the closures are
+    union-find partitions over the derived context edges — and
+    `PublishLeg`/`PublishedLeg` rename to `PublishEntry`/`PublishedEntry`.
+    Internal only: the matrix JSON keys (`targets`, `variant`) and the
+    `--plan` JSON (`bundle`) carry none of these names.
+  - The `shelf` local and comment in `bake.py` (`shelf = f"{registry}/builds"`)
+    rename to `builds_ref` — the builds registry's ghcr reference. The
+    toolkit's matching `shelf` naming in its `verbs/release.py` folds into
+    phase 9's toolkit pass.
 - The AGENTS rewrite lands with the code, stating present truth: the
   release-flow law is restated — what ships with a bumped `major_minor` from
   1.0 on is schema/CLI/artifact-breaking change; there is no Python API to
@@ -352,13 +378,16 @@ End state:
   `--env-file` consumption at the `up` handoff, the raw-`docker compose`
   valve). The `image_refs.py` row loses the coupling machinery and the scan;
   `tree-tags` and `lock-env` join the entry-point table; the D5 refusals
-  join the module rows that own those boundaries.
-- docker-devkit ships one release carrying phases 2–7 (pre-1.0; breaking
+  join the module rows that own those boundaries; every row the renames
+  touch — the edge naming across `config.py`/`assembly.py`/`score.py`, the
+  publish records, the bake comment — carries the new names.
+- docker-devkit ships one release carrying phases 2–8 (pre-1.0; breaking
   rides the patch flow). This release is the pin target of the wave.
 
 Verify: the battery green; the release published; `AGENTS.md` matches the
 shipped surface with no stale references (grep the repo for `bake_bundle`,
-the coupling names, the env-line law wording).
+the coupling names, the env-line law wording, and the retired identifiers —
+`DOOR_`, `build_legs`, `PublishLeg`, `shelf`).
 
 ## Phase 9 — Consumer catch-up wave
 
@@ -374,6 +403,9 @@ End state:
   which re-resolves every entry, so no per-entry migration exists.
   `platforms` completes where the config refusal forces it: placeframe
   declares amd64 and Make-it-Sing declares its platform in the same relock.
+  The reserved front-door service name is `edge` from this release (phase
+  8's rename) — devkit-derived, so consumers edit nothing; the renamed
+  container at next bring-up is expected.
 - placeframe: `scripts/preflight.py` drops its four library imports and the
   `VERSION_COUPLINGS` list (the coupling CI step dies with it, and so does
   any `unpinned_references` step — D5 moved the teeth into the devkit);
@@ -410,6 +442,9 @@ End state:
   reusable workflows invoke the CLI and bind `docker-build-matrix` and
   `publish-compose --plan` — frozen CI contracts that remain as-is. Phase 1
   findings may surface flag-level edits here; fold them into this phase.
+  This phase also carries the toolkit-side half of phase 8's shelf rename:
+  the `shelf` parameter and locals in `verbs/release.py` become
+  `builds_ref`.
 
 Verify: consumer CI green end-to-end; grep over the five consumer repos
 returns zero `docker_devkit` imports; the placeframe regeneration diff is
