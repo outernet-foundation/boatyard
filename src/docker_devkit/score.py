@@ -32,11 +32,8 @@ from docker_devkit.config import (
     chart_lock_key,
     parse_image_lock,
 )
-from docker_devkit.documents import (
-    BindVolume,
-    ComposeDocument,
-    WorkloadDocument,
-)
+from docker_devkit.documents import BindVolume, ComposeDocument, WorkloadDocument
+from docker_devkit.lock import env_entries
 from docker_devkit.markers import contains_marker, resolve_includes, resolve_lock_refs
 from docker_devkit.provisioners import compiled_provisioners, dump_compose
 from docker_devkit.secrets import SecretsDeclaration, collect_secret_keys
@@ -123,14 +120,14 @@ def generate_artifacts(config: DockerDevkitConfig, target: Target, local: bool) 
     # The lock beside the manifest is the single digest source for authored lock markers.
     lock_path = root / LOCK_PATH
     if not lock_path.is_file():
-        raise RuntimeError(f"{lock_path.as_posix()}: the image lock is required for generation (build writes it)")
+        raise RuntimeError(f"{lock_path.as_posix()}: the image lock is required for generation (lock writes it)")
     lock = parse_image_lock(lock_path)
-    if not lock.root:
+    if not lock.images and not lock.charts:
         raise RuntimeError(f"{lock_path.as_posix()}: the image lock carries no entries")
     k8s_output = config.k8s_output_path(local)
 
     if target in ("both", "compose"):
-        generate_compose(config, lock.root)
+        generate_compose(config, env_entries(lock))
 
     if target in ("both", "k8s") and config.k8s is not None:
         generate_k8s(config, config.k8s, k8s_output, lock)
@@ -170,7 +167,7 @@ def generate_compose(config: DockerDevkitConfig, images: dict[str, str]) -> None
                     raise RuntimeError(
                         f"bundle {bundle.name!r}: its provisioners declare services, so score-compose "
                         f"synthesizes a wait-for-resources gate; {LOCK_PATH.as_posix()} lacks the "
-                        "ALPINE_IMAGE entry the gate pin needs (build writes it)"
+                        "ALPINE_IMAGE entry the gate pin needs (lock writes it)"
                     )
                 templates = [
                     builtin_templates / HEALTHCHECK_TEMPLATE,
@@ -387,7 +384,7 @@ def generate_k8s(config: DockerDevkitConfig, k8s: K8sConfig, output: Path, lock:
     # The output arrives root-absolute (config.k8s_output_path).
     assert config.root is not None
     root = config.root
-    images = lock.root
+    images = env_entries(lock)
     output_path = output
     state_dir = output_path.parent / ".score-k8s"
     output_path.parent.mkdir(parents=True, exist_ok=True)

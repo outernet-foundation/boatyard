@@ -6,7 +6,13 @@ from typing import Annotated
 import typer
 from bashrun.bash import bash_handoff
 
-from docker_devkit.assembly import compose_command, require_compose_stack, require_env_file, write_temp_compose_file
+from docker_devkit.assembly import (
+    compose_command,
+    require_compose_stack,
+    require_env_file,
+    write_lock_env_file,
+    write_temp_compose_file,
+)
 from docker_devkit.config import load_config
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
@@ -23,8 +29,9 @@ def down(
 
     # Tear down by project name, covering every selection and profile.
     assembly_root = write_temp_compose_file({"name": config.project_name}, "devkit-assembly-")
+    lock_env_file = write_lock_env_file(root)
 
-    command = compose_command(root, [assembly_root], "down", "--remove-orphans")
+    command = compose_command(root, [assembly_root], "down", "--remove-orphans", lock_env_file=lock_env_file)
     if volumes:
         command += " -v"
 
@@ -32,3 +39,5 @@ def down(
         bash_handoff(command)
     finally:
         assembly_root.unlink(missing_ok=True)
+        if lock_env_file is not None:
+            lock_env_file.unlink(missing_ok=True)

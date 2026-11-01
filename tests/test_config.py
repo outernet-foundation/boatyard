@@ -1,4 +1,5 @@
 import importlib.metadata
+import re
 from typing import Any
 from pathlib import Path
 
@@ -28,9 +29,10 @@ def write_config(tmp_path: Path, payload: dict[str, object]) -> None:
 
 def write_lock(tmp_path: Path, entries: dict[str, str] | None = None) -> None:
     (tmp_path / LOCK_PATH).parent.mkdir(parents=True, exist_ok=True)
-    lines = entries or {"ALPINE_IMAGE": "ghcr.io/outernet-foundation/mirror/docker.io/library/alpine:3.21.0@" + DIGEST}
+    images = entries or {"ALPINE_IMAGE": "ghcr.io/outernet-foundation/mirror/docker.io/library/alpine:3.21.0@" + DIGEST}
     (tmp_path / LOCK_PATH).write_text(
-        "".join(f"{name}={reference}\n" for name, reference in lines.items()), encoding="utf-8"
+        yaml.safe_dump({"images": {name: {"index": reference} for name, reference in images.items()}}, sort_keys=False),
+        encoding="utf-8",
     )
 
 
@@ -156,6 +158,7 @@ class TestBaseImages:
             tmp_path,
             {
                 "requires": ">=0.1",
+                "platforms": ["linux/amd64"],
                 "base_images": {"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15", "API_IMAGE": "ghcr.io/org/api@" + DIGEST},
             },
         )
@@ -911,6 +914,23 @@ class TestPlatforms:
         with pytest.raises(ValidationError, match="os/arch pair"):
             load_config(tmp_path)
 
+    def test_base_images_without_platforms_refuse_naming_the_fix(self, tmp_path: Path) -> None:
+        write_config(tmp_path, {"requires": ">=0.1", "base_images": {"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"}})
+
+        with pytest.raises(ValidationError, match=r"platforms is required.*\[linux/amd64\]"):
+            load_config(tmp_path)
+
+    def test_charts_stay_exempt_from_the_platforms_rule(self, tmp_path: Path) -> None:
+        write_config(
+            tmp_path,
+            {"requires": ">=0.1", "k8s": {"charts": {"loki": "oci://ghcr.io/grafana/helm-charts/loki:7.3.0"}}},
+        )
+        write_lock(tmp_path)
+        (tmp_path / "stack" / "score" / "k8s" / "values").mkdir(parents=True)
+        (tmp_path / "stack" / "score" / "k8s" / "values" / "loki.yaml").write_text("loki: {}\n", encoding="utf-8")
+
+        assert load_config(tmp_path) is not None
+
 
 class TestLeftoverManifestGuard:
     def test_leftover_manifest_refuses_loudly(self, tmp_path: Path) -> None:
@@ -934,7 +954,14 @@ class TestLeftoverManifestGuard:
 
 class TestLockPairing:
     def test_base_images_without_lock_refuse(self, tmp_path: Path) -> None:
-        write_config(tmp_path, {"requires": ">=0.1", "base_images": {"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"}})
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "platforms": ["linux/amd64"],
+                "base_images": {"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"},
+            },
+        )
 
         with pytest.raises(RuntimeError, match="image lock is required"):
             load_config(tmp_path)
@@ -951,7 +978,14 @@ class TestLockPairing:
             load_config(tmp_path)
 
     def test_lock_beside_base_images_loads(self, tmp_path: Path) -> None:
-        write_config(tmp_path, {"requires": ">=0.1", "base_images": {"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"}})
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "platforms": ["linux/amd64"],
+                "base_images": {"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"},
+            },
+        )
         write_lock(tmp_path)
 
         assert load_config(tmp_path) is not None
@@ -999,9 +1033,93 @@ def test_direct_model_construction_is_valid_for_tests(tmp_path: Path) -> None:
     assert config.compose_bundles()[0].name == "core"
 
 
-def test_parse_image_lock_rejects_entries_without_a_digest(tmp_path: Path) -> None:
-    lock = tmp_path / "images.lock"
-    lock.write_text("LOKI_IMAGE=ghcr.io/example/loki:3.5.0\n", encoding="utf-8")
+def _write_raw_lock(tmp_path: Path, text: str) -> Path:
+    lock = tmp_path / LOCK_PATH
+    lock.write_text(text, encoding="utf-8")
+    return lock
 
-    with pytest.raises(ValidationError, match="not digest-pinned"):
-        parse_image_lock(lock)
+
+class TestImageLockParse:
+    def test_the_empty_lock_stays_legal(self, tmp_path: Path) -> None:
+        assert parse_image_lock(_write_raw_lock(tmp_path, "")).images == {}
+        assert parse_image_lock(_write_raw_lock(tmp_path, "{}\n")).charts == {}
+
+    def test_malformed_yaml_refuses_naming_the_line(self, tmp_path: Path) -> None:
+        lock = _write_raw_lock(tmp_path, "images:\n  A_IMAGE: [unclosed\n")
+
+        with pytest.raises(ValueError, match=rf"^{re.escape(lock.as_posix())}:\d+: "):
+            parse_image_lock(lock)
+
+    def test_duplicate_keys_refuse_naming_the_line(self, tmp_path: Path) -> None:
+        lock = _write_raw_lock(
+            tmp_path,
+            f"images:\n  A_IMAGE:\n    index: ghcr.io/x/a:1@{DIGEST}\n  A_IMAGE:\n    index: ghcr.io/x/a:2@{DIGEST}\n",
+        )
+
+        with pytest.raises(ValueError, match=rf"{re.escape(lock.as_posix())}: line 4: duplicate key 'A_IMAGE'"):
+            parse_image_lock(lock)
+
+    def test_the_env_line_format_refuses_as_a_bare_scalar(self, tmp_path: Path) -> None:
+        lock = _write_raw_lock(tmp_path, f"A_IMAGE=ghcr.io/x/a:1@{DIGEST}\n")
+
+        with pytest.raises(TypeError, match="mapping of images:/charts:"):
+            parse_image_lock(lock)
+
+    def test_a_non_digest_pinned_index_refuses(self, tmp_path: Path) -> None:
+        lock = _write_raw_lock(tmp_path, "images:\n  A_IMAGE:\n    index: ghcr.io/x/a:1.2.3\n")
+
+        with pytest.raises(ValueError, match="not digest-pinned"):
+            parse_image_lock(lock)
+
+    def test_a_non_digest_pinned_platform_entry_refuses(self, tmp_path: Path) -> None:
+        lock = _write_raw_lock(
+            tmp_path,
+            f"images:\n  A_IMAGE:\n    index: ghcr.io/x/a:1@{DIGEST}\n"
+            "    platforms:\n      linux/amd64: ghcr.io/x/a:1\n",
+        )
+
+        with pytest.raises(ValueError, match="not digest-pinned"):
+            parse_image_lock(lock)
+
+    def test_a_non_digest_pinned_chart_refuses(self, tmp_path: Path) -> None:
+        lock = _write_raw_lock(tmp_path, "charts:\n  LOKI_CHART: ghcr.io/x/loki:7.3.0\n")
+
+        with pytest.raises(ValueError, match="chart LOKI_CHART is not digest-pinned"):
+            parse_image_lock(lock)
+
+    def test_a_malformed_platform_key_refuses(self, tmp_path: Path) -> None:
+        lock = _write_raw_lock(
+            tmp_path,
+            f"images:\n  A_IMAGE:\n    index: ghcr.io/x/a:1@{DIGEST}\n"
+            f"    platforms:\n      amd64: ghcr.io/x/a:1@{DIGEST}\n",
+        )
+
+        with pytest.raises(ValueError, match="os/arch pair"):
+            parse_image_lock(lock)
+
+    def test_a_name_in_both_sections_refuses(self, tmp_path: Path) -> None:
+        lock = _write_raw_lock(
+            tmp_path,
+            f"images:\n  A_IMAGE:\n    index: ghcr.io/x/a:1@{DIGEST}\ncharts:\n  A_IMAGE: ghcr.io/x/a:1@{DIGEST}\n",
+        )
+
+        with pytest.raises(ValueError, match="both images and charts"):
+            parse_image_lock(lock)
+
+    def test_require_answers_the_index_for_images_and_the_flat_entry_for_charts(self, tmp_path: Path) -> None:
+        lock = parse_image_lock(
+            _write_raw_lock(
+                tmp_path,
+                f"images:\n  A_IMAGE:\n    index: ghcr.io/x/a:1@{DIGEST}\n"
+                f"charts:\n  LOKI_CHART: ghcr.io/x/loki:7.3.0@{DIGEST}\n",
+            )
+        )
+
+        assert lock.require("A_IMAGE", "subject") == f"ghcr.io/x/a:1@{DIGEST}"
+        assert lock.require("LOKI_CHART", "subject") == f"ghcr.io/x/loki:7.3.0@{DIGEST}"
+
+    def test_require_refuses_naming_the_lock_verb(self, tmp_path: Path) -> None:
+        lock = parse_image_lock(_write_raw_lock(tmp_path, "{}\n"))
+
+        with pytest.raises(RuntimeError, match=r"lacks the CADDY_IMAGE entry.*lock verb writes it"):
+            lock.require("CADDY_IMAGE", "routes are declared, so the door rides")

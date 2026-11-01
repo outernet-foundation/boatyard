@@ -12,6 +12,7 @@ from bashrun.bash import bash, bash_output
 
 from docker_devkit.config import LOCK_PATH, load_config, parse_image_lock
 from docker_devkit.crane import install_crane
+from docker_devkit.lock import env_entries
 from docker_devkit.publish import (
     STUB_VALUE,
     VAR_PATTERN,
@@ -83,7 +84,7 @@ def publish_compose(
 
     substitutions = {
         **config.service_shas(),
-        **parse_image_lock(root / LOCK_PATH).root,
+        **env_entries(parse_image_lock(root / LOCK_PATH)),
     }
 
     published: list[PublishedLeg] = []

@@ -169,7 +169,11 @@ def _generate_with_chart(
     monkeypatch.setattr(score_generate_module, "bash_output", helm.run)
     assert config.k8s is not None
     config.root = tmp_path
-    generate_k8s(config, config.k8s, tmp_path / output, ImageLock.model_validate(images))
+    lock = ImageLock.model_validate({
+        "images": {name: {"index": ref} for name, ref in images.items() if not name.endswith("_CHART")},
+        "charts": {name: ref for name, ref in images.items() if name.endswith("_CHART")},
+    })
+    generate_k8s(config, config.k8s, tmp_path / output, lock)
     return helm
 
 

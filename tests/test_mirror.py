@@ -36,6 +36,13 @@ def _write_config(root: Path, sections: dict[str, object] | None = None) -> None
     )
 
 
+def _write_lock(root: Path, images: dict[str, str], charts: dict[str, str] | None = None) -> None:
+    document: dict[str, object] = {"images": {name: {"index": reference} for name, reference in images.items()}}
+    if charts:
+        document["charts"] = charts
+    (root / LOCK_PATH).write_text(yaml.safe_dump(document), encoding="utf-8")
+
+
 class CommandRecorder:
     def __init__(self, present_refs: set[str] | None = None) -> None:
         self.commands: list[str] = []
@@ -68,6 +75,7 @@ class TestMirrorVerb:
             tmp_path,
             {
                 "mirror": {"prefix": MIRROR_PREFIX},
+                "platforms": ["linux/amd64"],
                 "base_images": {
                     "UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15",
                     "API_IMAGE": "ghcr.io/outernet-foundation/placeframe/api:1.2.3",
@@ -75,9 +83,9 @@ class TestMirrorVerb:
             },
         )
         (tmp_path / "workloads").mkdir()
-        (tmp_path / LOCK_PATH).write_text(
-            f"API_IMAGE={MIRROR_PREFIX}/ghcr.io/outernet-foundation/placeframe/api:1.2.3@{FAKE_DIGEST}\n",
-            encoding="utf-8",
+        _write_lock(
+            tmp_path,
+            {"API_IMAGE": f"{MIRROR_PREFIX}/ghcr.io/outernet-foundation/placeframe/api:1.2.3@{FAKE_DIGEST}"},
         )
 
     def _invoke(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recorder: CommandRecorder) -> Result:
@@ -105,7 +113,7 @@ class TestMirrorVerb:
     def test_skips_references_the_lock_pins_as_mirrored(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._write_tree(tmp_path)
         mirrored_uv = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{FAKE_DIGEST}"
-        (tmp_path / LOCK_PATH).write_text(f"UV_IMAGE={mirrored_uv}\n", encoding="utf-8")
+        _write_lock(tmp_path, {"UV_IMAGE": mirrored_uv})
         recorder = CommandRecorder(present_refs={mirrored_uv})
 
         result = self._invoke(tmp_path, monkeypatch, recorder)
@@ -120,7 +128,7 @@ class TestMirrorVerb:
     def test_presence_probe_failure_falls_through_to_copy(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._write_tree(tmp_path)
         mirrored_uv = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{FAKE_DIGEST}"
-        (tmp_path / LOCK_PATH).write_text(f"UV_IMAGE={mirrored_uv}\n", encoding="utf-8")
+        _write_lock(tmp_path, {"UV_IMAGE": mirrored_uv})
         recorder = CommandRecorder()
 
         result = self._invoke(tmp_path, monkeypatch, recorder)
@@ -137,15 +145,16 @@ class TestMirrorVerb:
         _write_config(
             tmp_path,
             {
+                "platforms": ["linux/amd64"],
                 "base_images": {"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"},
                 "k8s": {"charts": {"loki": f"oci://{upstream_chart}"}},
             },
         )
         (tmp_path / "workloads").mkdir()
-        (tmp_path / LOCK_PATH).write_text(
-            f"UV_IMAGE={MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{FAKE_DIGEST}\n"
-            f"LOKI_CHART={MIRROR_PREFIX}/{upstream_chart}\n",
-            encoding="utf-8",
+        _write_lock(
+            tmp_path,
+            {"UV_IMAGE": f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{FAKE_DIGEST}"},
+            {"LOKI_CHART": f"{MIRROR_PREFIX}/{upstream_chart}"},
         )
         values = tmp_path / "stack" / "score" / "k8s" / "values" / "loki.yaml"
         values.parent.mkdir(parents=True)
@@ -169,9 +178,7 @@ class TestMirrorVerb:
             {"k8s": {"charts": {"loki": f"oci://ghcr.io/grafana/helm-charts/loki@{FAKE_DIGEST}"}}},
         )
         (tmp_path / "workloads").mkdir()
-        (tmp_path / LOCK_PATH).write_text(
-            f"OTHER_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.21.0@{FAKE_DIGEST}\n", encoding="utf-8"
-        )
+        _write_lock(tmp_path, {"OTHER_IMAGE": f"{MIRROR_PREFIX}/docker.io/library/alpine:3.21.0@{FAKE_DIGEST}"})
         values = tmp_path / "stack" / "score" / "k8s" / "values" / "loki.yaml"
         values.parent.mkdir(parents=True)
         values.write_text("loki: {}\n", encoding="utf-8")

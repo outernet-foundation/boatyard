@@ -61,6 +61,7 @@ def up(
             assembly.compose_files,
             *(argument for profile in assembly.profiles for argument in ("--profile", profile)),
             "up",
+            lock_env_file=assembly.lock_env_file,
         )
         if not build:
             up_command += " --pull missing"
@@ -75,7 +76,12 @@ def up(
 
 
 def _probe_lock_entries(config: DockerDevkitConfig) -> None:
-    for value in sorted(config.lock_entries().root.values()):
+    lock = config.lock_entries()
+    references = sorted(
+        [reference for entry in lock.images.values() for reference in (entry.index, *entry.platforms.values())]
+        + list(lock.charts.values())
+    )
+    for value in references:
         reference, _, digest = value.rpartition("@")
         try:
             bash_output(f"docker buildx imagetools inspect {shlex.quote(value)}")

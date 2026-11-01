@@ -2,7 +2,6 @@ import hashlib
 import json
 import os
 import platform
-import re
 import shutil
 from pathlib import Path
 from subprocess import CalledProcessError
@@ -29,16 +28,6 @@ REPO_AOA = "ghcr.io/example/aoa-bridge"
 
 runner = CliRunner()
 
-_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
-
-
-def _plain_output(rendered: str) -> str:
-    # Under GITHUB_ACTIONS rich renders refusals as styled panels: option spellings
-    # carry escape codes between every dash-joined segment and lines wrap at panel
-    # width, so assertions must read the message with styling and wrapping removed.
-    unwrapped = re.sub(r"\s+", " ", _ANSI_ESCAPE.sub("", rendered))
-    return unwrapped
-
 
 def _write_repo(
     root: Path,
@@ -55,15 +44,18 @@ def _write_repo(
         (directory / "Dockerfile").write_text(text, encoding="utf-8")
     payload: dict[str, Any] = {"requires": ">=0", "repository": repository}
     if base_images:
+        # base_images force the platforms declaration (the lock resolves one platform
+        # manifest per declared os/arch); amd64 keeps the fixtures native for _amd64_host.
+        payload["platforms"] = platforms or ["linux/amd64"]
         payload["base_images"] = base_images
+    elif platforms:
+        payload["platforms"] = platforms
     if charts:
         payload["k8s"] = {"charts": charts}
         for chart in charts:
             values = root / "stack" / "score" / "k8s" / "values" / f"{chart}.yaml"
             values.parent.mkdir(parents=True, exist_ok=True)
             values.write_text("chart: {}\n", encoding="utf-8")
-    if platforms:
-        payload["platforms"] = platforms
     (root / "docker-devkit.yaml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     if (base_images or charts) and not (root / LOCK_PATH).exists():
         # Declarations => the committed lock is required at load.
@@ -128,15 +120,6 @@ def _head_sha(command: str) -> str:
 
 def _noop_install_oras() -> None:
     return None
-
-
-class DigestRecorder:
-    def __init__(self) -> None:
-        self.inspected: list[str] = []
-
-    def resolve(self, reference: str) -> str:
-        self.inspected.append(reference)
-        return DIGEST_A
 
 
 class BakeRunner:
@@ -379,79 +362,6 @@ class TestBuildKeysGuard:
         assert isinstance(result.exception, RuntimeError)
         assert "no Dockerfile service derives" in str(result.exception)
 
-    def test_lock_only_without_services_writes_the_lock(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        recorder = DigestRecorder()
-        monkeypatch.setattr(bake_module, "resolve_remote_digest", recorder.resolve)
-        self._prepare(monkeypatch, tmp_path)
-
-        result = runner.invoke(build.app, ["--lock-only"])
-
-        assert result.exit_code == 0, result.output
-        lock = (tmp_path / LOCK_PATH).read_text(encoding="utf-8")
-        assert lock.startswith("RATHOLE_IMAGE=")
-
-    def test_relock_prunes_entries_whose_declarations_died(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        recorder = DigestRecorder()
-        monkeypatch.setattr(bake_module, "resolve_remote_digest", recorder.resolve)
-        self._prepare(monkeypatch, tmp_path)
-        (tmp_path / LOCK_PATH).write_text(
-            "DEAD_OPERATOR_IMAGE=ghcr.io/outernet-foundation/mirror/quay.io/op/operator:1.0@sha256:" + "b" * 64 + "\n"
-            "RATHOLE_IMAGE=ghcr.io/outernet-foundation/mirror/docker.io/outernet-foundation/rathole:0.11.0@sha256:"
-            + "c" * 64
-            + "\n",
-            encoding="utf-8",
-        )
-
-        result = runner.invoke(build.app, ["--lock-only"])
-
-        assert result.exit_code == 0, result.output
-        lock = (tmp_path / LOCK_PATH).read_text(encoding="utf-8")
-        assert lock == (
-            "RATHOLE_IMAGE=ghcr.io/outernet-foundation/mirror/docker.io/outernet-foundation/rathole:0.11.0@sha256:"
-            + "c" * 64
-            + "\n"
-        )
-
-
-class TestLockOnlySelfSkip:
-    def test_lock_only_skips_without_a_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(build.app, ["--lock-only"])
-
-        assert result.exit_code == 0, result.output
-        assert "no lock declarations to relock" in result.output
-        assert not (tmp_path / "workloads").exists()
-
-    def test_lock_only_skips_without_declarations(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
-        monkeypatch.chdir(tmp_path)
-        _write_repo(tmp_path, dockerfiles={"api": EXTERNAL})
-
-        result = runner.invoke(build.app, ["--lock-only"])
-
-        assert result.exit_code == 0, result.output
-        assert "nothing to relock" in result.output
-        assert not (tmp_path / LOCK_PATH).exists()
-
-    def test_lock_only_skips_in_a_compose_only_repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.chdir(tmp_path)
-        _write_repo(tmp_path, dockerfiles=None)
-
-        result = runner.invoke(build.app, ["--lock-only"])
-
-        assert result.exit_code == 0, result.output
-        assert not (tmp_path / LOCK_PATH).exists()
-
-    def test_building_run_without_config_still_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(build.app, ["--gpu", "none"])
-
-        assert result.exit_code != 0
-        assert isinstance(result.exception, RuntimeError)
-        assert "No docker-devkit.yaml" in str(result.exception)
-
 
 class TestDevBuilds:
     def _invoke_dev(
@@ -521,16 +431,6 @@ class TestDevBuilds:
         assert result.exit_code != 0
         assert "local-only" in result.output
 
-    def test_dev_refuses_lock_only(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
-        monkeypatch.chdir(tmp_path)
-        _write_repo(tmp_path, dockerfiles={"api": DEV_STAGE})
-
-        result = runner.invoke(build.app, ["--dev", "--lock-only"])
-
-        assert result.exit_code != 0
-        assert "--lock-only" in _plain_output(result.output)
-
     def test_dev_without_any_dev_stage_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
@@ -585,7 +485,6 @@ class TestPushShelving:
         monkeypatch.setattr(bake_module, "push_build", recorder)
         monkeypatch.setattr(bake_module, "install_oras", _noop_install_oras)
         monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(bake_module, "resolve_remote_digest", _fixed_digest)
         monkeypatch.setenv("REGISTRY", "ghcr.io/owner")
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL, "aoa-bridge": EXTERNAL})
@@ -678,7 +577,6 @@ class TestPushShelving:
         monkeypatch.setattr(bake_module, "push_build", PushBuildRecorder())
         monkeypatch.setattr(bake_module, "install_oras", _noop_install_oras)
         monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(bake_module, "resolve_remote_digest", _fixed_digest)
         monkeypatch.setenv("REGISTRY", "ghcr.io/owner")
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL})
@@ -694,155 +592,6 @@ class TestPushShelving:
 
 
 LOCK_DOCKERFILES: dict[str, str] = {"api": EXTERNAL}
-LOCK_BASE_IMAGES = {
-    "UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15",
-    "API_IMAGE": "ghcr.io/outernet-foundation/placeframe/api:1.2.3",
-}
-
-
-class TestLockRecording:
-    def _invoke_lock(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-        arguments: list[str],
-        base_images: dict[str, str] | None = None,
-        charts: dict[str, str] | None = None,
-    ) -> DigestRecorder:
-        recorder = DigestRecorder()
-        monkeypatch.setattr(bake_module, "resolve_remote_digest", recorder.resolve)
-        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
-        monkeypatch.chdir(tmp_path)
-        _write_repo(
-            tmp_path,
-            dockerfiles=LOCK_DOCKERFILES,
-            base_images=base_images or dict(LOCK_BASE_IMAGES),
-            charts=charts,
-        )
-
-        result = runner.invoke(build.app, arguments)
-
-        assert result.exit_code == 0, result.output
-        return recorder
-
-    def test_records_declarations_under_the_mirror_name(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        (tmp_path / LOCK_PATH).write_text(
-            f"API_IMAGE={MIRROR_PREFIX}/ghcr.io/outernet-foundation/placeframe/api:1.2.2@{DIGEST_A}\n",
-            encoding="utf-8",
-        )
-
-        recorder = self._invoke_lock(monkeypatch, tmp_path, ["--lock-only"])
-
-        assert recorder.inspected == [
-            "ghcr.io/astral-sh/uv:0.12.15",
-            "ghcr.io/outernet-foundation/placeframe/api:1.2.3",
-        ]
-        lock = (tmp_path / LOCK_PATH).read_text(encoding="utf-8")
-        assert f"API_IMAGE={MIRROR_PREFIX}/ghcr.io/outernet-foundation/placeframe/api:1.2.3@{DIGEST_A}" in lock
-        assert f"UV_IMAGE={MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{DIGEST_A}" in lock
-
-    def test_written_lock_carries_no_generated_header(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        self._invoke_lock(monkeypatch, tmp_path, ["--lock-only"])
-
-        lock = (tmp_path / LOCK_PATH).read_text(encoding="utf-8")
-        assert lock.startswith("API_IMAGE=")
-
-    def test_digest_pinned_declarations_pass_through_prefixed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        recorder = self._invoke_lock(
-            monkeypatch, tmp_path, ["--lock-only"], base_images={"ALPINE_IMAGE": f"docker.io/library/alpine@{DIGEST_A}"}
-        )
-
-        assert recorder.inspected == []
-        lock = (tmp_path / LOCK_PATH).read_text(encoding="utf-8")
-        assert f"ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine@{DIGEST_A}" in lock
-
-    def test_cached_entries_resolve_again_only_on_upgrade(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        (tmp_path / "workloads").mkdir()
-        (tmp_path / LOCK_PATH).write_text(
-            f"API_IMAGE={MIRROR_PREFIX}/ghcr.io/outernet-foundation/placeframe/api:1.2.3@{DIGEST_A}\n"
-            f"UV_IMAGE={MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{DIGEST_A}\n",
-            encoding="utf-8",
-        )
-
-        recorder = self._invoke_lock(monkeypatch, tmp_path, ["--lock-only"])
-        assert recorder.inspected == []
-
-        recorder = self._invoke_lock(monkeypatch, tmp_path, ["--lock-only", "--upgrade"])
-        assert recorder.inspected == [
-            "ghcr.io/astral-sh/uv:0.12.15",
-            "ghcr.io/outernet-foundation/placeframe/api:1.2.3",
-        ]
-
-
-LOKI_UPSTREAM = "ghcr.io/grafana/helm-charts/loki"
-
-
-class TestChartLockRecording:
-    def test_tag_declared_chart_resolves_under_its_chart_lock_key(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        recorder = DigestRecorder()
-        monkeypatch.setattr(bake_module, "resolve_remote_digest", recorder.resolve)
-        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
-        monkeypatch.chdir(tmp_path)
-        _write_repo(tmp_path, dockerfiles=None, charts={"loki": f"oci://{LOKI_UPSTREAM}:7.3.0"})
-
-        result = runner.invoke(build.app, ["--lock-only"])
-
-        assert result.exit_code == 0, result.output
-        assert recorder.inspected == [f"{LOKI_UPSTREAM}:7.3.0"]
-        lock = (tmp_path / LOCK_PATH).read_text(encoding="utf-8")
-        assert f"LOKI_CHART={MIRROR_PREFIX}/{LOKI_UPSTREAM}:7.3.0@{DIGEST_A}" in lock
-
-    def test_digest_declared_chart_passes_through_unresolved(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        recorder = DigestRecorder()
-        monkeypatch.setattr(bake_module, "resolve_remote_digest", recorder.resolve)
-        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
-        monkeypatch.chdir(tmp_path)
-        _write_repo(tmp_path, dockerfiles=None, charts={"loki": f"oci://{LOKI_UPSTREAM}@{DIGEST_B}"})
-
-        result = runner.invoke(build.app, ["--lock-only"])
-
-        assert result.exit_code == 0, result.output
-        assert recorder.inspected == []
-        lock = (tmp_path / LOCK_PATH).read_text(encoding="utf-8")
-        assert f"LOKI_CHART={MIRROR_PREFIX}/{LOKI_UPSTREAM}@{DIGEST_B}" in lock
-
-    def test_unchanged_chart_declaration_copies_its_frozen_digest_forward(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        recorder = DigestRecorder()
-        monkeypatch.setattr(bake_module, "resolve_remote_digest", recorder.resolve)
-        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
-        monkeypatch.chdir(tmp_path)
-        _write_repo(tmp_path, dockerfiles=None, charts={"loki": f"oci://{LOKI_UPSTREAM}:7.3.0"})
-        (tmp_path / LOCK_PATH).write_text(
-            f"LOKI_CHART={MIRROR_PREFIX}/{LOKI_UPSTREAM}:7.3.0@{DIGEST_B}\n", encoding="utf-8"
-        )
-
-        result = runner.invoke(build.app, ["--lock-only"])
-
-        assert result.exit_code == 0, result.output
-        assert recorder.inspected == []
-        lock = (tmp_path / LOCK_PATH).read_text(encoding="utf-8")
-        assert f"LOKI_CHART={MIRROR_PREFIX}/{LOKI_UPSTREAM}:7.3.0@{DIGEST_B}" in lock
-
-    def test_chart_tag_bump_re_resolves(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        recorder = DigestRecorder()
-        monkeypatch.setattr(bake_module, "resolve_remote_digest", recorder.resolve)
-        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
-        monkeypatch.chdir(tmp_path)
-        _write_repo(tmp_path, dockerfiles=None, charts={"loki": f"oci://{LOKI_UPSTREAM}:7.3.1"})
-        (tmp_path / LOCK_PATH).write_text(
-            f"LOKI_CHART={MIRROR_PREFIX}/{LOKI_UPSTREAM}:7.3.0@{DIGEST_B}\n", encoding="utf-8"
-        )
-
-        result = runner.invoke(build.app, ["--lock-only"])
-
-        assert result.exit_code == 0, result.output
-        assert recorder.inspected == [f"{LOKI_UPSTREAM}:7.3.1"]
-        lock = (tmp_path / LOCK_PATH).read_text(encoding="utf-8")
-        assert f"LOKI_CHART={MIRROR_PREFIX}/{LOKI_UPSTREAM}:7.3.1@{DIGEST_A}" in lock
 
 
 class TestBakeSeesLockValues:
@@ -850,7 +599,7 @@ class TestBakeSeesLockValues:
         probe = BakeEnvProbe()
         monkeypatch.setattr(bake_module, "bash", probe.run)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
-        monkeypatch.setattr(bake_module, "resolve_remote_digest", _fixed_digest)
+        monkeypatch.setattr("docker_devkit.lock.resolve_remote_digest", _fixed_digest)
         monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles=LOCK_DOCKERFILES, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
@@ -859,60 +608,6 @@ class TestBakeSeesLockValues:
 
         assert result.exit_code == 0, result.output
         assert probe.uv_image == f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{DIGEST_A}"
-
-
-class TestLockCheck:
-    def _invoke(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-        arguments: list[str],
-        *,
-        base_images: dict[str, str] | None = None,
-    ) -> Any:
-        recorder = DigestRecorder()
-        monkeypatch.setattr(bake_module, "resolve_remote_digest", recorder.resolve)
-        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
-        monkeypatch.chdir(tmp_path)
-        _write_repo(
-            tmp_path,
-            dockerfiles=LOCK_DOCKERFILES,
-            base_images=LOCK_BASE_IMAGES if base_images is None else base_images,
-        )
-        return runner.invoke(build.app, arguments)
-
-    def test_fresh_lock_passes_and_writes_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        assert self._invoke(monkeypatch, tmp_path, ["--lock-only"]).exit_code == 0
-        before = (tmp_path / LOCK_PATH).read_text(encoding="utf-8")
-
-        result = self._invoke(monkeypatch, tmp_path, ["--lock-only", "--check"])
-
-        assert result.exit_code == 0, result.output
-        assert (tmp_path / LOCK_PATH).read_text(encoding="utf-8") == before
-
-    def test_stale_lock_exits_nonzero_and_writes_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        (tmp_path / LOCK_PATH).write_text(
-            f"API_IMAGE={MIRROR_PREFIX}/ghcr.io/outernet-foundation/placeframe/api:1.2.2@{DIGEST_A}\n",
-            encoding="utf-8",
-        )
-
-        result = self._invoke(monkeypatch, tmp_path, ["--lock-only", "--check"])
-
-        assert result.exit_code == 1, result.output
-        assert "image lock is stale" in result.output
-        assert (tmp_path / LOCK_PATH).read_text(encoding="utf-8").startswith("API_IMAGE=")
-
-    def test_self_skips_where_no_declarations_exist(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        result = self._invoke(monkeypatch, tmp_path, ["--lock-only", "--check"], base_images={})
-
-        assert result.exit_code == 0, result.output
-        assert "nothing to relock" in result.output
-
-    def test_check_without_lock_only_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        result = self._invoke(monkeypatch, tmp_path, ["--check"])
-
-        assert result.exit_code != 0, result.output
-        assert "pass --lock-only" in _plain_output(result.output)
 
 
 def _render_config(

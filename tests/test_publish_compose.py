@@ -222,7 +222,9 @@ class TestPublishComposeVerb:
             },
         )
         (tmp_path / "workloads").mkdir()
-        (tmp_path / LOCK_PATH).write_text(f"CADDY_IMAGE={CADDY_LOCK_REF}\n", encoding="utf-8")
+        (tmp_path / LOCK_PATH).write_text(
+            yaml.safe_dump({"images": {"CADDY_IMAGE": {"index": CADDY_LOCK_REF}}}), encoding="utf-8"
+        )
         (tmp_path / "Caddyfile").write_text("reverse_proxy {$UPSTREAM}\n", encoding="utf-8")
         artifact = tmp_path / "stack" / "generated" / "compose" / "compose.livekit-tier.yaml"
         artifact.parent.mkdir(parents=True)
@@ -313,7 +315,10 @@ class TestBundleMode:
     def _write_tree(self, tmp_path: Path, sections: dict[str, object] | None = None) -> None:
         _write_config(tmp_path, sections or ROOT_BUNDLE_SECTION)
         (tmp_path / "workloads").mkdir()
-        (tmp_path / LOCK_PATH).write_text(f"ALPINE_IMAGE=alpine:3.20@sha256:{'a' * 64}\n", encoding="utf-8")
+        (tmp_path / LOCK_PATH).write_text(
+            yaml.safe_dump({"images": {"ALPINE_IMAGE": {"index": "alpine:3.20@sha256:" + "a" * 64}}}),
+            encoding="utf-8",
+        )
         compose_dir = tmp_path / "stack" / "generated" / "compose"
         compose_dir.mkdir(parents=True)
         for name in ("compose.core-cuda.yaml", "compose.core-rocm.yaml", "compose.gateway-open.yaml"):

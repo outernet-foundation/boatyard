@@ -26,6 +26,7 @@ LOCKED_ERROR = (
 DEV_TOGGLES = "outernet.internal/dev-toggles"
 OVERLAY_ARGUMENT_PATTERN = re.compile(r"-f (\S*devkit-dev-overlay-\S+\.yaml)")
 ASSEMBLY_ARGUMENT_PATTERN = re.compile(r"-f (\S*devkit-assembly-\S+\.yaml)")
+LOCK_ENV_ARGUMENT_PATTERN = re.compile(r"(\S*devkit-lock-env-\S+\.env)")
 
 runner = CliRunner()
 
@@ -66,7 +67,9 @@ def _write_ref_tree(root: Path) -> None:
 
 
 def _normalize(command: str, root: Path) -> str:
-    return re.sub(r"\S*devkit-assembly-\S+\.yaml", "ASSEMBLY", command).replace(str(root), "ROOT")
+    command = re.sub(r"\S*devkit-assembly-\S+\.yaml", "ASSEMBLY", command)
+    command = re.sub(r"\S*devkit-lock-env-\S+\.env", "LOCKENV", command)
+    return command.replace(str(root), "ROOT")
 
 
 def _write_lock(root: Path, entries: dict[str, str] | None = None) -> None:
@@ -74,7 +77,8 @@ def _write_lock(root: Path, entries: dict[str, str] | None = None) -> None:
         "CADDY_IMAGE": MIRROR_PREFIX + "/docker.io/library/caddy:2.8.4-alpine@" + FAKE_DIGEST,
     }
     root.joinpath(*LOCK_PATH.parts).write_text(
-        "".join(f"{name}={reference}\n" for name, reference in declared.items()), encoding="utf-8"
+        yaml.safe_dump({"images": {name: {"index": reference} for name, reference in declared.items()}}),
+        encoding="utf-8",
     )
 
 
@@ -725,7 +729,8 @@ class TestDownTeardown:
         assert len(recorder.commands) == 1
         command = recorder.commands[0]
         assert command.startswith("docker compose -f ")
-        assert f" --project-directory {tmp_path} --env-file .env --env-file {tmp_path / LOCK_PATH}" in command
+        assert f" --project-directory {tmp_path} --env-file .env --env-file " in command
+        assert LOCK_ENV_ARGUMENT_PATTERN.search(command) is not None
         assert command.endswith("down --remove-orphans")
         match = ASSEMBLY_ARGUMENT_PATTERN.search(command)
         assert match is not None
@@ -747,8 +752,8 @@ class TestDownTeardown:
             result = runner.invoke(down.app, [])
 
             assert result.exit_code == 0, result.output
-            normalized = re.sub(r"\S*devkit-assembly-\S+\.yaml", "ASSEMBLY", recorder.commands[0])
-            commands.append(normalized.replace(str(tree), "ROOT"))
+            normalized = _normalize(recorder.commands[0], tree)
+            commands.append(normalized)
         assert commands[0] == commands[1] == commands[2]
 
     def test_down_volumes_flag_rides(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -975,9 +980,9 @@ class TestLockRequirement:
             "docker compose -f ASSEMBLY --project-directory ROOT --env-file .env down --remove-orphans"
         ]
 
-    def test_present_lock_still_rides_the_prefix(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_present_lock_rides_the_second_env_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._write_lock_free_tree(tmp_path)
-        (tmp_path / LOCK_PATH).write_text("ALPINE_IMAGE=alpine:3.20\n", encoding="utf-8")
+        _write_lock(tmp_path, {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST})
         recorder = HandoffRecorder()
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(down, "bash_handoff", recorder.run)
@@ -986,10 +991,7 @@ class TestLockRequirement:
 
         assert result.exit_code == 0, result.output
         assert [_normalize(command, tmp_path) for command in recorder.commands] == [
-            (
-                "docker compose -f ASSEMBLY --project-directory ROOT "
-                f"--env-file .env --env-file ROOT/{LOCK_PATH} down --remove-orphans"
-            )
+            "docker compose -f ASSEMBLY --project-directory ROOT --env-file .env --env-file LOCKENV down --remove-orphans"
         ]
 
     def test_lock_free_repo_skips_the_probe(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -1008,14 +1010,14 @@ class TestLockRequirement:
 
 
 class TestMirroredLockEnforcement:
-    def _write_mirrored_tree(self, tmp_path: Path, lock_text: str) -> None:
+    def _write_mirrored_tree(self, tmp_path: Path, entries: dict[str, str]) -> None:
         _write_ref_tree(tmp_path)
         (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
-        (tmp_path / LOCK_PATH).write_text(lock_text, encoding="utf-8")
+        _write_lock(tmp_path, entries)
 
     def test_missing_entry_fails_closed_with_the_locked_message(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._write_mirrored_tree(
-            tmp_path, f"ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{FAKE_DIGEST}\n"
+            tmp_path, {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST}
         )
         monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
         monkeypatch.setattr(up, "bash_output", _probe_absent)
@@ -1030,7 +1032,7 @@ class TestMirroredLockEnforcement:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         self._write_mirrored_tree(
-            tmp_path, f"ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{FAKE_DIGEST}\n"
+            tmp_path, {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST}
         )
         monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
         monkeypatch.setattr(up, "bash_output", _probe_unauthorized)
@@ -1047,7 +1049,7 @@ class TestMirroredLockEnforcement:
 
     def test_present_entries_proceed_to_bring_up(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._write_mirrored_tree(
-            tmp_path, f"ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{FAKE_DIGEST}\n"
+            tmp_path, {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST}
         )
         monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
         recorder = HandoffRecorder()
@@ -1059,17 +1061,14 @@ class TestMirroredLockEnforcement:
 
         assert result.exit_code == 0, result.output
         assert [_normalize(command, tmp_path) for command in recorder.commands] == [
-            (
-                "docker compose -f ASSEMBLY --project-directory ROOT "
-                f"--env-file .env --env-file ROOT/{LOCK_PATH} up --pull missing -d"
-            )
+            "docker compose -f ASSEMBLY --project-directory ROOT --env-file .env --env-file LOCKENV up --pull missing -d"
         ]
 
     def test_reports_the_first_missing_entry_deterministically(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         present = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{FAKE_DIGEST}"
         absent = f"{MIRROR_PREFIX}/docker.io/library/alpine:3.20@{FAKE_DIGEST}"
         probe = SelectiveProbe(present)
-        self._write_mirrored_tree(tmp_path, f"UV_IMAGE={present}\nALPINE_IMAGE={absent}\n")
+        self._write_mirrored_tree(tmp_path, {"UV_IMAGE": present, "ALPINE_IMAGE": absent})
         monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
         monkeypatch.setattr(up, "bash_output", probe.run)
         monkeypatch.chdir(tmp_path)

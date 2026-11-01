@@ -12,6 +12,7 @@ from docker_devkit.config import (
     mirrored_ref,
 )
 from docker_devkit.crane import install_crane
+from docker_devkit.lock import env_entries
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
@@ -25,8 +26,9 @@ def mirror() -> None:
     prefix = config.mirror.prefix if config.mirror is not None else DEFAULT_MIRROR_PREFIX
 
     lock = config.lock_entries()
+    entries = env_entries(lock)
     mirror_targets = [
-        (reference, lock.root.get(name))
+        (reference, entries.get(name))
         for name, reference in sorted(config.base_images.items(), key=lambda item: item[1])
     ]
     for chart_name, chart_ref in sorted((config.k8s.charts if config.k8s is not None else {}).items()):

@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import difflib
 import hashlib
 import json
 import os
 import platform
-import re
 import shutil
-from itertools import starmap
 from pathlib import Path
 from subprocess import CalledProcessError
 from tempfile import TemporaryDirectory
@@ -19,17 +16,9 @@ from build_artifact_registry.builds import push_build
 from build_artifact_registry.setup_oras import install_oras
 from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
-from docker_devkit.config import (
-    CHART_REFERENCE_PREFIX,
-    DEFAULT_MIRROR_PREFIX,
-    DockerDevkitConfig,
-    LOCK_PATH,
-    chart_lock_key,
-    load_config,
-    mirrored_ref,
-)
+from docker_devkit.config import DockerDevkitConfig, load_config
 from docker_devkit.daemon_gc import check_gc_limits
-from docker_devkit.image_refs import ImageReference, resolve_remote_digest
+from docker_devkit.lock import env_entries, write_lock
 from docker_devkit.service_builds import GpuFamily
 
 
@@ -38,8 +27,6 @@ METADATA_PATH = Path("metadata.json")
 DIGEST_PROJECT = "images-digests"
 DIGEST_PLATFORM = "all"
 DIGEST_FILE_NAME = "images-digests.json"
-
-DIGEST_TAIL_PATTERN = re.compile(r"@sha256:[a-f0-9]{64}$")
 
 # A flat Literal: typer cannot annotate unions and pyright cannot type a star-unpacked
 # subscript, so the family membership pins by test instead of by derivation.
@@ -90,42 +77,27 @@ def run_build(
     push: bool = False,
     targets_opt: list[str] | None = None,
     gpu: Gpu = "auto",
-    upgrade: bool = False,
-    lock_only: bool = False,
     gpu_only: bool = False,
     no_cache: bool = False,
     dev: bool = False,
-    check: bool = False,
 ) -> None:
     # root/config inject for callers that already loaded them (up --build); the CLI
     # derives both from the working directory.
     root = root if root is not None else Path.cwd()
     config = config if config is not None else load_config(root)
     if config is None:
-        if not lock_only:
-            raise RuntimeError("No docker-devkit.yaml at the repo root; build derives its targets from it")
-        print("no docker-devkit.yaml; no lock declarations to relock")
-        return
+        raise RuntimeError("No docker-devkit.yaml at the repo root; build derives its targets from it")
 
     if dev and push:
         raise typer.BadParameter("--dev builds local-only images under the :dev tag; drop --push")
-    if dev and lock_only:
-        raise typer.BadParameter("--lock-only writes the lock without building; --dev selects a build shape")
-    if check and not lock_only:
-        raise typer.BadParameter("--check asserts the lock the --lock-only lane would write; pass --lock-only")
-
-    lock_file = root / LOCK_PATH
-    mirror_prefix = config.mirror.prefix if config.mirror is not None else DEFAULT_MIRROR_PREFIX
 
     service_shas = config.service_shas()
     os.environ.update(service_shas)
 
-    lock_data = config.lock_entries().root
-
-    if not config.service_builds and not lock_only:
+    if not config.service_builds:
         raise RuntimeError(
             "no Dockerfile service derives under this repo; build builds the derived services "
-            "(relock declarations without building via --lock-only)"
+            "(relock declarations without building via the lock verb)"
         )
 
     if push and gpu == "auto":
@@ -135,61 +107,13 @@ def run_build(
         raise typer.BadParameter("--gpu-only requires a concrete gpu (cuda or rocm), not 'auto' or 'none'.")
 
     # Check Docker GC limits so local GPU builds don't evict the build cache.
-    if not push and not lock_only and not targets_opt:
+    if not push and not targets_opt:
         check_gc_limits()
 
-    # Record one lock entry per declaration: the mirror-prefixed reference, digest resolved
-    # against upstream — crane copies are byte-identical, so the digest holds under both
-    # names. The declared tag rides the entry, so a tag bump breaks the prefix match and
-    # re-resolves while an unchanged declaration copies its frozen digest forward.
-    declarations: list[ImageReference] = list(starmap(ImageReference, config.base_images.items()))
-    if config.k8s is not None:
-        declarations += [
-            ImageReference(chart_lock_key(name), reference.removeprefix(CHART_REFERENCE_PREFIX))
-            for name, reference in config.k8s.charts.items()
-        ]
-    if lock_only and not declarations:
-        print("no lock declarations (neither base_images nor k8s.charts); nothing to relock")
-        return
-    for occurrence in declarations:
-        lock_base = mirrored_ref(occurrence.reference, mirror_prefix)
-        if DIGEST_TAIL_PATTERN.search(occurrence.reference):
-            lock_data[occurrence.name] = lock_base
-            continue
-        if not upgrade and occurrence.name in lock_data and lock_data[occurrence.name].startswith(lock_base + "@"):
-            continue
-        lock_data[occurrence.name] = f"{lock_base}@{resolve_remote_digest(occurrence.reference)}"
-
-    # The lock owns exactly the declared names — an entry whose declaration died is an
-    # orphan the up-time probe would still fail-closed over (an undeclared mirror digest
-    # gating bring-up), so a relock prunes it.
-    declared_names = {occurrence.name for occurrence in declarations}
-    lock_data = {name: reference for name, reference in lock_data.items() if name in declared_names}
-
-    lock_text = "\n".join(f"{key}={value}" for key, value in sorted(lock_data.items())) + "\n"
-
-    if check:
-        committed = lock_file.read_text(encoding="utf-8") if lock_file.exists() else ""
-        if committed != lock_text:
-            print(
-                "".join(
-                    difflib.unified_diff(
-                        committed.splitlines(keepends=True),
-                        lock_text.splitlines(keepends=True),
-                        fromfile=f"committed {LOCK_PATH.as_posix()}",
-                        tofile=f"computed {LOCK_PATH.as_posix()}",
-                    )
-                )
-            )
-            raise SystemExit("image lock is stale. Run 'build --lock-only' and commit the result.")
-        return
-
-    lock_file.write_text(lock_text, encoding="utf-8")
-
-    if lock_only:
-        return
-
-    os.environ.update(lock_data)
+    # The incremental lock write rides every building run (the uv sync shape): anyone who
+    # builds also locks, and bake reads the freshly written entries as environment.
+    written = write_lock(config)
+    os.environ.update(env_entries(written))
 
     host = host_platform()
 

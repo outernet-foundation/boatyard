@@ -23,8 +23,10 @@ from docker_devkit.config import (
     ServiceGroup,
     is_mapping,
     parse_dev_toggles,
+    parse_image_lock,
 )
 from docker_devkit.documents import WorkloadDocument
+from docker_devkit.lock import env_entries
 
 ENV_FILE = Path(".env")
 BUNDLES_VARIABLE = "BUNDLES"
@@ -53,6 +55,7 @@ class Assembly:
     ports: list[PortDeclaration]
     auth_route: RouteConfig | None
     compose_files: list[Path]
+    lock_env_file: Path | None
 
     def __init__(self, root: Path, config: DockerDevkitConfig | None, dev: bool = False) -> None:
         self.root = root
@@ -152,6 +155,8 @@ class Assembly:
         # Materialize and validate in one step: the per-run compose files (root
         # first, dev overlay last — the -f order, so the overlay overrides) and
         # compose's own resolution over them; a failure unlinks what was written.
+        # The lock's env projection rides the same lifecycle as its second --env-file.
+        self.lock_env_file = write_lock_env_file(root)
         self.compose_files = []
         try:
             self._materialize_and_validate(dev)
@@ -167,7 +172,9 @@ class Assembly:
             # Validate every wired upstream and port owner against compose's own
             # resolution (the auth option's route rides the routes list by
             # construction, its option being a selected entry).
-            resolved = set(_compose_config(self.root, self.compose_files, "--services"))
+            resolved = set(
+                _compose_config(self.root, self.compose_files, "--services", lock_env_file=self.lock_env_file)
+            )
             for route in self.routes:
                 upstream = route.upstream.partition(":")[0]
                 if upstream not in resolved:
@@ -181,11 +188,16 @@ class Assembly:
                     )
         if self.profiles:
             # Refuse profile names the compose files do not define.
-            assert_known_profiles(self.profiles, _compose_config(self.root, self.compose_files, "--profiles"))
+            assert_known_profiles(
+                self.profiles,
+                _compose_config(self.root, self.compose_files, "--profiles", lock_env_file=self.lock_env_file),
+            )
 
     def cleanup(self) -> None:
         for compose_file in self.compose_files:
             compose_file.unlink(missing_ok=True)
+        if self.lock_env_file is not None:
+            self.lock_env_file.unlink(missing_ok=True)
 
     def _render_root_document(self) -> dict[str, object]:
         # The per-run root compose file: name, includes, the door, parent port stanzas, Caddyfile.
@@ -311,15 +323,26 @@ def require_compose_stack(config: DockerDevkitConfig | None) -> DockerDevkitConf
     return config
 
 
-def compose_command(root: Path, compose_files: list[Path], *arguments: str) -> str:
+def compose_command(root: Path, compose_files: list[Path], *arguments: str, lock_env_file: Path | None = None) -> str:
     quoted_arguments = [shlex.quote(argument) for argument in arguments]
     files_arguments = " ".join(f"-f {shlex.quote(str(compose_file))}" for compose_file in compose_files)
-    lock_file = root / LOCK_PATH
-    lock_argument = f" --env-file {shlex.quote(str(lock_file))}" if lock_file.exists() else ""
+    lock_argument = f" --env-file {shlex.quote(str(lock_env_file))}" if lock_env_file is not None else ""
     prefix = (
         f"docker compose {files_arguments} --project-directory {shlex.quote(str(root))} --env-file .env{lock_argument}"
     )
     return " ".join([prefix, *quoted_arguments])
+
+
+def write_lock_env_file(root: Path) -> Path | None:
+    # The committed lock is structured YAML; compose consumes its env projection as a
+    # per-run --env-file beside the per-run compose files.
+    lock_path = root / LOCK_PATH
+    if not lock_path.is_file():
+        return None
+    entries = env_entries(parse_image_lock(lock_path))
+    with NamedTemporaryFile("w", suffix=".env", prefix="devkit-lock-env-", delete=False, encoding="utf-8") as handle:
+        handle.write("".join(f"{name}={reference}\n" for name, reference in sorted(entries.items())))
+        return Path(handle.name)
 
 
 def write_temp_compose_file(document: Mapping[str, object], prefix: str) -> Path:
@@ -328,10 +351,14 @@ def write_temp_compose_file(document: Mapping[str, object], prefix: str) -> Path
         return Path(handle.name)
 
 
-def _compose_config(root: Path, compose_files: list[Path], *arguments: str) -> list[str]:
+def _compose_config(
+    root: Path, compose_files: list[Path], *arguments: str, lock_env_file: Path | None = None
+) -> list[str]:
     return [
         line.strip()
-        for line in bash_output(compose_command(root, compose_files, "config", *arguments)).splitlines()
+        for line in bash_output(
+            compose_command(root, compose_files, "config", *arguments, lock_env_file=lock_env_file)
+        ).splitlines()
         if line.strip()
     ]
 
