@@ -138,7 +138,7 @@ class ManifestDocument(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     kind: str = ""
-    metadata: ManifestMetadata | None = None
+    metadata: ManifestMetadata = Field(default_factory=ManifestMetadata)
 
 
 class WorkloadState(BaseModel):

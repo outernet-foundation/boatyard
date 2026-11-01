@@ -37,7 +37,6 @@ from .documents import (
     BindVolume,
     ComposeDocument,
     ManifestDocument,
-    ManifestMetadata,
     ScoreState,
     WorkloadDocument,
     compute_service_shas,
@@ -551,8 +550,7 @@ def generate_k8s(root: Path, config: DockerDevkitConfig, output: Path, images: d
     decorated: list[tuple[str, str, str, int, str]] = []
     for index, block in enumerate(documents):
         manifest = ManifestDocument.model_validate(yaml.safe_load(block) or {})
-        metadata = manifest.metadata or ManifestMetadata()
-        decorated.append((manifest.kind, metadata.namespace, metadata.name, index, block))
+        decorated.append((manifest.kind, manifest.metadata.namespace, manifest.metadata.name, index, block))
     decorated.sort()
     write_generated_file(output_path, "".join(f"---\n{block}" for *_, block in decorated))
 
