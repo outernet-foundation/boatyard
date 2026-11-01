@@ -15,17 +15,17 @@ The P0 foundation — the platform-resolved structured lock — is delivered by
 the consumer-contract initiative, `plan-consumer-contract-implementation.md`.
 Phase completion lives in git history; nothing here tracks status.
 
-## Prerequisites (delivered by Plan A)
+## Prerequisites (delivered by the consumer-contract initiative)
 
 Before phase 8 opens, the consumer-contract release and its catch-up wave
-have landed:
+have landed (tracked by that initiative's plan):
 
 - `docker-devkit.lock` is structured YAML — per image the index digest plus
   one concrete manifest digest per declared platform, charts flat — written
-  by the platform-resolving `build --lock-only`; env consumption is
+  by the `lock` verb and `build`'s incremental freeze; env consumption is
   synthesized per-run at the compose/bake edges, with a `lock-env` verb.
 - Literal image references are refused at derivation; the version-coupling
-  registry is gone; `build --registry` exists.
+  registry is gone; `build --push <addr>` exists.
 - All five consumers repin once in the catch-up wave, with completed
   `platforms` declarations and structured locks.
 
@@ -46,8 +46,8 @@ These rulings bind every phase:
 - The PR channel publishes nothing permanent anywhere — only content-keyed
   ephemera (`tree-`, `sha-`).
 - Exact tags only. Digests live exclusively in `docker-devkit.lock`, written only
-  by `build --lock-only`. `latest` is never a pin and is aliased only by stable
-  releases.
+  by the lock writer (the `lock` verb and `build`'s incremental freeze). `latest`
+  is never a pin and is aliased only by stable releases.
 - No tag GC and no retention policies on image repos carrying release tags; ghcr
   deletion is version-level, so any future sweeper must be version-level and
   release-protecting. None is planned.
@@ -140,7 +140,7 @@ precision; the design detail is lifted into the phases below.
 
 Cluster precision · docker-devkit · absorbed Part 1, "The design" and "The
 fail-closed construct guard". Load: `service_builds.py` (`ParsedDockerfile`,
-`ServiceBuild`, `derive_services`), `config.py` (`build_legs` — the
+`ServiceBuild`, `derive_services`), `config.py` (`build_partitions` — the
 context-edge closure), the Dockerfile fixtures under `tests/`.
 
 End state:
@@ -170,14 +170,14 @@ Verify: fixture tests — one per loud failure, one per attributed construct.
 
 Cluster precision · docker-devkit · absorbed Part 1, "Over-inclusion fates"
 and "Soundness argument". Load: `service_builds.py` (`compute_service_shas`,
-`service_sha_env`), `config.py` (`build_legs`), `tests/test_service_builds.py`.
+`service_sha_env`), `config.py` (`build_partitions`), `tests/test_service_builds.py`.
 
 End state:
 
 - The closure walk (union-find over the derived context edges, inside
-  `build_legs`) lifts to a shared function in `service_builds.py` beside the
-  model it walks; `build_legs` and the hasher both consume it — the one-way
-  import law holds (`service_builds` imports nothing from `config`).
+  `build_partitions`) lifts to a shared function in `service_builds.py` beside
+  the model it walks; `build_partitions` and the hasher both consume it — the
+  one-way import law holds (`service_builds` imports nothing from `config`).
 - `compute_service_shas` hashes, per service: the Dockerfile itself (any
   recipe change re-keys, keeping the closure self-consistent — a new `COPY`
   line moves the hash at the same moment the newly copied files enter the
@@ -218,7 +218,7 @@ End state:
   remaining way a `tree-` tag can lie.
 - `build --dev` and bare `up` are exempt — dev tags are not content-addressed
   and the bind-mount workflow runs dirty by design; bare `up` pulls
-  committed-tree tags and is self-consistent. `--lock-only`,
+  committed-tree tags and is self-consistent. The `lock` verb,
   `generate-score`, and `publish-compose` carry no guard (clean CI checkouts
   make it a no-op there).
 
@@ -403,7 +403,7 @@ End state:
 - `ref:` carries a tag, never a digest — a digest spelling refuses at config
   load. Any published channel spelling is a legal pin (stable semver, dev,
   `{40-hex}` sha); `latest` refuses; range specifiers refuse.
-- `build --lock-only` writes one flat bundle entry per declaration into the
+- The lock writer records one flat bundle entry per declaration into the
   structured lock (`bundles: {NAME_BUNDLE: reference@sha256:…}` — the
   upper-cased qualified name plus `_BUNDLE`, bare entries included:
   `LIVEKIT_BUNDLE`; bundles are arch-neutral, so no index/platforms
@@ -411,7 +411,7 @@ End state:
   semantics identical to image entries; `_BUNDLE` names collision-refuse against
   `base_images` keys at load.
 - A version-tagged ref without its lock entry refuses loudly naming
-  `build --lock-only` — the charts law, verbatim.
+  the `lock` verb — the charts law, verbatim.
 - Bundle refs resolve direct — org ghcr, un-prefixed; the `mirror` verb never
   enumerates bundle declarations.
 
@@ -439,10 +439,9 @@ materialized root carries digest refs.
 ## Phase 20 — Local bundle overrides
 
 Cluster P3+P4a · docker-devkit · ADR Part 4, Stage 1. Load: `assembly.py`
-(the selection and materialization; `parse_env_file` lives here — `host.py`
-was dissolved by the refactor), `config.py` (`DOOR_SERVICE_NAME`) and
-`score.py` (the door-reserved generation refusal — `door.py` was dissolved
-likewise), `documents.py` (`ComposeDocument`).
+(the selection and materialization; `parse_env_file` lives here), `config.py`
+(`EDGE_SERVICE_NAME`) and `score.py` (the edge-reserved generation refusal),
+`documents.py` (`ComposeDocument`).
 
 End state:
 
@@ -454,11 +453,11 @@ End state:
   name is inert.
 - An overridden option skips its lock-entry probe and its lock-entry
   requirement — testing an unpublished bundle is the point.
-- Path form carries full local-output teeth: must exist and parse; a `door`
+- Path form carries full local-output teeth: must exist and parse; an `edge`
   service refuses; service-name collisions with other selected sources refuse;
   route/port validation runs unchanged.
 - Path form attaches the producer's lock through the same per-run env synthesis
-  Plan A delivered (phase 5 of that plan), derived from the override path's
+  Plan A delivered, derived from the override path's
   fixed `stack/generated/compose/` layout (three parents up), ordered so the
   consumer's own declarations win any shared key — pin the precedence against
   the version-pinned compose binary in tests. The ref form attaches nothing
@@ -468,7 +467,7 @@ End state:
   already serves local-only tree tags; the unit of iteration is commit → build.
 
 Verify: both value forms; the refusal list; the inert override; probe and
-requirement skip; producer-lock attachment and ordering; door and collision
+requirement skip; producer-lock attachment and ordering; edge and collision
 teeth.
 
 ## Phase 21 — Consumer-surface release
@@ -513,7 +512,7 @@ End state:
 - `publish.yml` gains `images:` for `livekit-token`; `:latest` references are
   gone.
 - `.env` flips to `BUNDLES=placeframe-cuda,tunnel-rathole`; the yaml bundle ref
-  flips from digest to version tag; `build --lock-only` writes the
+  flips from digest to version tag; the `lock` verb writes the
   `PLACEFRAME_CUDA_BUNDLE` and `TUNNEL_RATHOLE_BUNDLE` entries.
 - Stale git releases and tags `pr-4-237`, `pr-4-238`, `pr-6-250` are deleted;
   `pr-5-248` and `pr-7-254` are checked against still-open PRs first and deleted
