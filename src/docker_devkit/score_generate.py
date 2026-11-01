@@ -19,7 +19,7 @@ from bashrun.bash import bash, bash_output
 from .config import (
     DEV_TOGGLES_ANNOTATION,
     DOOR_SERVICE_NAME,
-    ENV_NAME_PATTERN,
+    parse_dev_toggles,
     LOCK_PATH,
     SECRETS_FILE,
     SECRETS_OUTPUT,
@@ -436,21 +436,10 @@ def _validate_dev_toggles(name: str, document: Any, claimed: dict[str, str]) -> 
     service_name = metadata.get("name")
     if not isinstance(service_name, str) or not service_name:
         raise SystemExit(f"{name}: metadata.name is required to key the dev overlay service")
-    seen: set[str] = set()
-    for item in raw.split(","):
-        toggle_name, separator, default = item.strip().partition("=")
-        if not separator:
-            raise SystemExit(
-                f"{name}: {DEV_TOGGLES_ANNOTATION} entry {item.strip()!r} misses its default; "
-                "the ruled spelling is NAME=default pairs"
-            )
-        if ENV_NAME_PATTERN.fullmatch(toggle_name) is None:
-            raise SystemExit(f"{name}: {DEV_TOGGLES_ANNOTATION} name {toggle_name!r} must be ALL_CAPS")
-        if not default:
-            raise SystemExit(f"{name}: {DEV_TOGGLES_ANNOTATION} default for {toggle_name} is empty")
-        if toggle_name in seen:
-            raise SystemExit(f"{name}: {DEV_TOGGLES_ANNOTATION} names {toggle_name} twice")
-        seen.add(toggle_name)
+    try:
+        parse_dev_toggles(name, raw)
+    except ValueError as error:
+        raise SystemExit(str(error)) from None
     if service_name in claimed:
         raise SystemExit(f"{claimed[service_name]} and {name} both declare {DEV_TOGGLES_ANNOTATION} for {service_name}")
     claimed[service_name] = name

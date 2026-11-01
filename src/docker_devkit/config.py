@@ -84,6 +84,27 @@ def chart_values_path(score_dir: Path, chart: str) -> Path:
     return score_dir / "k8s" / "values" / f"{chart}.yaml"
 
 
+def parse_dev_toggles(where: str, raw: str) -> dict[str, str]:
+    # The dev-toggles spelling law (NAME=default pairs): the one parser generation's
+    # validator and up's dev overlay consume.
+    toggles: dict[str, str] = {}
+    for item in raw.split(","):
+        toggle_name, separator, default = item.strip().partition("=")
+        if not separator:
+            raise ValueError(
+                f"{where}: {DEV_TOGGLES_ANNOTATION} entry {item.strip()!r} misses its default; "
+                "the ruled spelling is NAME=default pairs"
+            )
+        if ENV_NAME_PATTERN.fullmatch(toggle_name) is None:
+            raise ValueError(f"{where}: {DEV_TOGGLES_ANNOTATION} name {toggle_name!r} must be ALL_CAPS")
+        if not default:
+            raise ValueError(f"{where}: {DEV_TOGGLES_ANNOTATION} default for {toggle_name} is empty")
+        if toggle_name in toggles:
+            raise ValueError(f"{where}: {DEV_TOGGLES_ANNOTATION} names {toggle_name} twice")
+        toggles[toggle_name] = default
+    return toggles
+
+
 class MirrorConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

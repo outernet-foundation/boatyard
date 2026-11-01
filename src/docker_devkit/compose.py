@@ -25,6 +25,7 @@ from .config import (
     ServiceGroup,
     compose_bundles,
     load_config,
+    parse_dev_toggles,
     parse_image_lock,
 )
 
@@ -286,10 +287,7 @@ def render_dev_overlay(root: Path, config: DockerDevkitConfig, assembly: Assembl
             service_name = metadata.get("name")
             if not isinstance(service_name, str) or not service_name or service_name not in declared:
                 continue
-            toggles = {
-                toggle_name: default
-                for toggle_name, _, default in (item.strip().partition("=") for item in raw.split(","))
-            }
+            toggles = parse_dev_toggles(service_name, raw)
             service = services.setdefault(service_name, {})
             service["environment"] = {key: f"${{{key}:-{value}}}" for key, value in toggles.items()}
     if not services:
