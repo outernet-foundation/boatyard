@@ -438,69 +438,93 @@ the coupling names, the env-line law wording, and the retired identifiers —
 
 Cluster wave · all five consumers · ADR D8, D9, and phase 1's edit list.
 Load: each consumer's `docker-devkit.yaml`, `docker-devkit.lock`, `.env`,
-`uv.lock`, CI workflows; the phase 1 edit list (fold its findings in before
-editing).
+`uv.lock`, CI workflows; the phase 1 edit list —
+`plan-consumer-contract-archaeology.md`, whose findings are folded into the
+text below.
 
 End state:
 
 - Every consumer repins once, onto the phase 8 release, and relocks — the
-  env-format lock is rewritten as structured YAML by the `lock` verb,
-  which re-resolves every entry, so no per-entry migration exists.
-  `platforms` completes where the config refusal forces it: placeframe
-  declares amd64 and Make-it-Sing declares its platform in the same relock.
-  placeframe declares its variant axis (`TORCH_DEVICE: [cuda, rocm]`, cuda
-  the default cell) in the same relock.
-  The reserved front-door service name is `edge` from this release (phase
-  8's rename) — devkit-derived, so consumers edit nothing; the renamed
-  container at next bring-up is expected.
+   env-format lock is rewritten as structured YAML by the `lock` verb,
+   which re-resolves every entry, so no per-entry migration exists.
+   `platforms` completes where the config refusal forces it (every
+   `base_images`-declaring consumer): placeframe declares amd64,
+   Make-it-Sing, infra-rathole, and lbe-toolkit declare theirs in the same
+   relock. placeframe declares its variant axis (`TORCH_DEVICE: [cuda, rocm]`, cuda
+   the default cell) in the same relock.
+   The reserved front-door service name is `edge` from this release (phase
+   8's rename) — devkit-derived, so consumers edit nothing; the renamed
+   container at next bring-up is expected. Riding the same wave: every
+   consumer's github-actions-toolkit `uses:` SHAs bump to the toolkit
+   commit carrying the workflow updates below (one SHA per repo, per the
+   toolkit's lint; Make-it-Sing starts the wave a SHA behind the others and
+   jumps from further back).
 - placeframe: `scripts/preflight.py` drops its four library imports and the
-  `VERSION_COUPLINGS` list (the coupling CI step dies with it, and so does
-  any `unpinned_references` step — D5 moved the teeth into the devkit);
-  `scripts/src/scripts/{api_auth,sweep_postprocess}.py` read `.env` through
-  a consumer-local module implementing compose's env-file grammar
-  (`KEY=VALUE`, `#` comments, no interpolation — compose is the file's
-  authoritative reader, so its rules are the spec; no dotenv dependency, no
-  shared micro-package, the filename hardcoded exactly as the scripts
-  already spell it); the two score test modules
-  (`scripts/tests/test_score_{compose,k8s}_generation.py`) rewrite to assert
-  against committed artifacts (freshness is already gated by
-  `generate-score --check` in CI); `scripts/AGENTS.md` drops its
-  `docker_devkit` module references. After the relock: one deliberate
-  `stack/generated/**` regeneration cycle — the structured lock changes every
-  marker-resolved image reference in the artifacts (compose-side resolution
-  now selects platform manifests) — commit the devkit bump, run
-  `generate-score`, commit the artifacts in a second commit (placeframe's
-  CI disables the score-staleness gate; operator discipline covers this
-  cycle).
+   `VERSION_COUPLINGS` list (the coupling CI step dies with it, and so does
+   any `unpinned_references` step — D5 moved the teeth into the devkit);
+   its postgres-wrapper leg rewrites onto the CLI — `uv run build --targets
+   postgres` for the local build, `uv run tree-tags postgres` for the
+   `POSTGRES_SHA` the `docker run` invocation spells;
+   `scripts/src/scripts/{api_auth,sweep_postprocess}.py` read `.env` through
+   a consumer-local module implementing compose's env-file grammar
+   (`KEY=VALUE`, `#` comments, no interpolation — compose is the file's
+   authoritative reader, so its rules are the spec; no dotenv dependency, no
+   shared micro-package, the filename hardcoded exactly as the scripts
+   already spell it), and sweep_postprocess's lock read
+   (`INITIALIZE_S3_IMAGE`) becomes a plain YAML platform selection
+   (`images.INITIALIZE_S3_IMAGE.platforms[linux/amd64]`); the two score test modules
+   (`scripts/tests/test_score_{compose,k8s}_generation.py`) rewrite to assert
+   against committed artifacts (freshness is already gated by
+   `generate-score --check` in CI); the docs pass covers
+   `scripts/AGENTS.md` (module references, preflight prose), the root
+   `AGENTS.md` preflight prose ("image refs, version couplings"),
+   `stack/AGENTS.md` (`--gpu none` and `build --lock-only` mentions), and
+   the stale `compute_service_shas` comments in
+   `workloads/{reconstructor,localizer}/Dockerfile`. After the relock: one deliberate
+   `stack/generated/**` regeneration cycle — the structured lock changes every
+   marker-resolved image reference in the artifacts (compose-side resolution
+   now selects platform manifests) — commit the devkit bump, run
+   `generate-score`, commit the artifacts in a second commit (placeframe's
+   CI disables the score-staleness gate; operator discipline covers this
+   cycle).
 - placeframe-capture-tool: install-zed (`orchestrator.py`, `box_install.py`,
-  `constants.py`) drops its library imports and rewrites onto the read
-  surface — arm64 manifests by reading `images.<NAME>.platforms[linux/arm64]`
-  from the committed YAML lock with plain `yaml.safe_load`, service tags
-  through `uv run tree-tags <service>…`, and its `--build` mode through
-  `uv run build --push localhost:5000` (its `REGISTRY_PORT`
-  constant; the forked bake pipeline dissolves). Its relock lands arm64
-  platform-manifest digests for loki/alloy — the box ships executable
-  images and the ZED-box AOA deployment unblocks (its
-  `zed-aoa-diagnosis-handoff.md` gates the deploy on exactly this).
-- infra-rathole and lbe-toolkit: repin and relock only — no imports to drop.
-  lbe-toolkit's floating uv tag (`ghcr.io/astral-sh/uv:python3.13-…`)
-  becomes an `{uv}`-templated value in the same relock: intent stays
-  authored, components derive.
+   `constants.py`) drops its library imports and rewrites onto the read
+   surface — arm64 manifests by reading `images.<NAME>.platforms[linux/arm64]`
+   from the committed YAML lock with plain `yaml.safe_load`, service tags
+   through `uv run tree-tags <service>…`, and its `--build` mode through
+   `uv run build --push localhost:5000` (its `REGISTRY_PORT`
+   constant; the forked bake pipeline dissolves). Its relock lands arm64
+   platform-manifest digests for loki/alloy — the box ships executable
+   images and the ZED-box AOA deployment unblocks (its
+   `zed-aoa-diagnosis-handoff.md` gates the deploy on exactly this). The
+   repin touches both declarations (the root exact pin and the `scripts/`
+   member floor); the docs pass covers `AGENTS.md` and `scripts/AGENTS.md`
+   (`build --lock-only` mentions, the env-format lock description, and the
+   stock-image index-digest defect paragraph — its stated correction path
+   is this wave) plus the AOA handoff's own `--lock-only` references.
+- infra-rathole and lbe-toolkit: repin, relock, and declare `platforms`
+   (the phase 2 refusal forces both — each declares `base_images`); no
+   imports to drop. lbe-toolkit's floating uv tag (`ghcr.io/astral-sh/uv:python3.13-…`)
+   becomes an `{uv}`-templated value in the same relock: intent stays
+   authored, components derive. infra-rathole's `AGENTS.md`/`README.md`
+   `build --lock-only` mentions become `lock` in the same docs pass.
 - github-actions-toolkit: never a dependency (the resolver-cycle law); its
-  reusable workflows invoke the CLI and bind `docker-build-matrix` and
-  `publish-compose --plan` — frozen CI contracts that remain as-is. Riding
-  the repin, the build workflow's freshness line becomes
-  `uv run --locked lock --check`, the build line drops its `--gpu` argument
-  and `GPU:` env translation (matrix targets carry variant cells), and the
-  build job gains the shelf step
-  (ADR D11): a toolkit verb beside the release-side pull, invoked through
-  the toolkit project runner like `free-disk-space`, shelving each matrix
-  cell's shard from bake's `metadata.json` under the workflow's existing
-  `REGISTRY` env. The `shelf` naming — `verbs/release.py` and the new
-  step — is `builds_ref` throughout. Phase 1 findings may surface further
-  flag-level edits here; fold them into this phase.
+   reusable workflows invoke the CLI and bind `docker-build-matrix` and
+   `publish-compose --plan` — frozen CI contracts that remain as-is. Riding
+   the repin, the build workflow's freshness line becomes
+   `uv run --locked lock --check`, the build line drops its `--gpu` argument
+   and `GPU:` env translation (matrix targets carry variant cells), and the
+   build job gains the shelf step
+   (ADR D11): a toolkit verb beside the release-side pull, invoked through
+   the toolkit project runner like `free-disk-space`, shelving each matrix
+   cell's shard from bake's `metadata.json` under the workflow's existing
+   `REGISTRY` env. The `shelf` naming — `verbs/release.py` and the new
+   step — is `builds_ref` throughout. Phase 1 findings may surface further
+   flag-level edits here; fold them into this phase.
 
 Verify: consumer CI green end-to-end; grep over the five consumer repos
 returns zero `docker_devkit` imports; the placeframe regeneration diff is
 committed and reviewed; capture-tool's lock carries arm64 platform
-manifests; `up` probes pass against the mirror.
+manifests; `up` probes pass against the mirror; every consumer's toolkit
+`uses:` refs carry one SHA and every `--lock-only`/`--gpu` mention is gone
+from consumer docs and workflows.
