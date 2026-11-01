@@ -28,7 +28,6 @@ from docker_devkit.config import (
     SECRETS_OUTPUT,
     DockerDevkitConfig,
     chart_lock_key,
-    chart_values_path,
     compose_bundles,
     parse_image_lock,
     require_lock_entry,
@@ -119,7 +118,7 @@ class ScoreState(BaseModel):
     workloads: dict[str, WorkloadState] = {}
 
 
-def generate_artifacts(root: Path, config: DockerDevkitConfig, target: Target, local: bool) -> None:
+def generate_artifacts(config: DockerDevkitConfig, target: Target, local: bool) -> None:
     # Resolve image tags from the committed tree, exactly as up and build do; the artifacts
     # embed tree tags, so the build keys are required.
     if not (config.repository or config.base_images):
@@ -127,6 +126,8 @@ def generate_artifacts(root: Path, config: DockerDevkitConfig, target: Target, l
             "the build keys (repository or base_images) are required in docker-devkit.yaml — "
             "score artifacts embed the tree tags they derive"
         )
+    assert config.root is not None
+    root = config.root
     os.environ.update(compute_service_shas(root, config.service_builds))
     if config.k8s is not None:
         os.environ[STORAGE_CLASS_VAR] = LOCAL_STORAGE_CLASS if local else CLOUD_STORAGE_CLASS
@@ -137,16 +138,16 @@ def generate_artifacts(root: Path, config: DockerDevkitConfig, target: Target, l
     images = parse_image_lock(lock_path).root
     if not images:
         raise RuntimeError(f"{lock_path.as_posix()}: the image lock carries no entries")
-    k8s_output = config.k8s_local_output if local else config.k8s_output
+    k8s_output = config.k8s_output_path(local)
 
     if target in ("both", "compose"):
-        generate_compose(root, config, images)
+        generate_compose(config, images)
 
     if target in ("both", "k8s") and config.k8s is not None:
-        generate_k8s(root, config, config.k8s, k8s_output, images)
+        generate_k8s(config, config.k8s, k8s_output, images)
 
     if (root / SECRETS_FILE).is_file():
-        enforce_secret_contract(root, config, target, k8s_output)
+        enforce_secret_contract(config, target, k8s_output)
 
 
 def tool_requirements(config: DockerDevkitConfig, target: Target) -> list[ToolRequirement]:
@@ -180,13 +181,15 @@ def tool_requirements(config: DockerDevkitConfig, target: Target) -> list[ToolRe
     return requirements
 
 
-def generate_compose(root: Path, config: DockerDevkitConfig, images: dict[str, str]) -> None:
+def generate_compose(config: DockerDevkitConfig, images: dict[str, str]) -> None:
+    assert config.root is not None
+    root = config.root
     bundles = compose_bundles(config)
     if not bundles:
         raise RuntimeError(
             "the compose target requires local service entries (workloads:) under docker-devkit.yaml's services key"
         )
-    score_dir = root / config.score_dir
+    score_dir = config.score_dir_path()
     score_state = score_dir / ".score-compose"
 
     with _builtin_patch_templates() as builtin_templates:
@@ -228,9 +231,9 @@ def generate_compose(root: Path, config: DockerDevkitConfig, images: dict[str, s
                     working_dir=score_dir,
                 )
 
-                output = root / bundle.output
+                output = bundle.output
                 output.parent.mkdir(parents=True, exist_ok=True)
-                with _rendered_workloads(root, config, bundle.workloads, bundle.vars, images) as workloads:
+                with _rendered_workloads(config, bundle.workloads, bundle.vars, images) as workloads:
                     bash(
                         f"score-compose generate {workloads} --output {output.as_posix()}",
                         cwd=score_dir,
@@ -421,12 +424,15 @@ def closure_provisioners(score_dir: Path, rendering: str, workloads: list[str]) 
     return selected
 
 
-def generate_k8s(root: Path, config: DockerDevkitConfig, k8s: K8sConfig, output: Path, images: dict[str, str]) -> None:
+def generate_k8s(config: DockerDevkitConfig, k8s: K8sConfig, output: Path, images: dict[str, str]) -> None:
     # Run score-k8s in the output's directory; it writes its .score-k8s state under its cwd.
-    output_path = root / output
+    # The output arrives root-absolute (config.k8s_output_path).
+    assert config.root is not None
+    root = config.root
+    output_path = output
     state_dir = output_path.parent / ".score-k8s"
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    score_dir = root / config.score_dir
+    score_dir = config.score_dir_path()
 
     compose_workloads = {name for bundle in compose_bundles(config) for name in bundle.workloads}
     for name in k8s.workloads:
@@ -456,7 +462,7 @@ def generate_k8s(root: Path, config: DockerDevkitConfig, k8s: K8sConfig, output:
             working_dir=output_path.parent,
         )
 
-        with _rendered_workloads(root, config, k8s.workloads, k8s.vars, images) as workloads:
+        with _rendered_workloads(config, k8s.workloads, k8s.vars, images) as workloads:
             bash(f"score-k8s generate {workloads} --output {output_path.as_posix()}", cwd=output_path.parent)
 
     # Render charts through helm template into the same sorted documents; the lock is the
@@ -471,7 +477,7 @@ def generate_k8s(root: Path, config: DockerDevkitConfig, k8s: K8sConfig, output:
                 entry = require_lock_entry(images, key, f"chart {chart_name!r}")
                 # Pass a marker-free values file through untouched; resolve markers into a tempdir copy.
                 values_arguments: list[str] = []
-                path = root / chart_values_path(config.score_dir, chart_name)
+                path = config.chart_values_path(chart_name)
                 document = yaml.safe_load(path.read_text(encoding="utf-8"))
                 if not contains_marker(document):
                     values_arguments.append(path.as_posix())
@@ -479,7 +485,7 @@ def generate_k8s(root: Path, config: DockerDevkitConfig, k8s: K8sConfig, output:
                     resolved = resolve_lock_refs(
                         resolve_includes(document, root, path.as_posix()), images, path.as_posix()
                     )
-                    target = values_dir / chart_values_path(config.score_dir, chart_name)
+                    target = values_dir / config.chart_values_path(chart_name).relative_to(root)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     write_generated_file(target, dump_compose(resolved))
                     values_arguments.append(target.as_posix())
@@ -525,10 +531,12 @@ def generate_k8s(root: Path, config: DockerDevkitConfig, k8s: K8sConfig, output:
     shutil.rmtree(state_dir, ignore_errors=True)
 
 
-def enforce_secret_contract(root: Path, config: DockerDevkitConfig, target: Target, k8s_output: Path) -> None:
+def enforce_secret_contract(config: DockerDevkitConfig, target: Target, k8s_output: Path) -> None:
     # Validate each rendering this run generated against the declaration, and derive the mint
     # list from the declaration alone. The contract activates by the declaration file's
     # presence; the cluster Secret name derives from the compose project name.
+    assert config.root is not None
+    root = config.root
     declaration_path = root / SECRETS_FILE
     k8s_secret = f"{config.project_name}-secrets"
 
@@ -540,14 +548,14 @@ def enforce_secret_contract(root: Path, config: DockerDevkitConfig, target: Targ
     if target in ("both", "compose"):
         consumed: set[str] = set()
         for bundle in compose_bundles(config):
-            artifact = root / bundle.output
+            artifact = bundle.output
             for match in COMPOSE_HOLE.finditer(artifact.read_text(encoding="utf-8")):
                 if len(match.group(1)) % 2 == 1:
                     consumed.add(match.group(2))
         validate_consumed(consumed, declared, "compose", SECRETS_FILE.as_posix())
 
     if target in ("both", "k8s") and config.k8s is not None:
-        artifact = root / k8s_output
+        artifact = k8s_output
         consumed = set()
         for block in _split_documents(artifact.read_text(encoding="utf-8")):
             collect_secret_keys(yaml.safe_load(block), k8s_secret, consumed)
@@ -592,7 +600,6 @@ def _init_state(
 
 @contextmanager
 def _rendered_workloads(
-    root: Path,
     config: DockerDevkitConfig,
     workloads: list[str],
     rendering_vars: dict[str, str],
@@ -609,7 +616,7 @@ def _rendered_workloads(
         directory = Path(temporary_directory)
 
         for name in workloads:
-            source_path = root / config.score_dir / name
+            source_path = config.score_dir_path() / name
             document = resolve_lock_refs(_load_yaml_file(source_path), images, f"workload {name}")
             source = yaml.safe_dump(document, sort_keys=False, width=1000)
             parts: list[str] = []

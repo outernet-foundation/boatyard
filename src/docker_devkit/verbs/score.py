@@ -58,13 +58,13 @@ def generate_score(
             bin_dir.mkdir()
             ensure_score_tools(config, bin_dir, target)
             os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
-            generate_artifacts(root, config, target, False)
+            generate_artifacts(config, target, False)
             outputs = [bundle.output for bundle in compose_bundles(config)]
             if k8s_rendering:
-                outputs.append(config.k8s_output)
+                outputs.append(config.k8s_output_path(False))
             if (root / SECRETS_FILE).is_file():
-                outputs.append(SECRETS_OUTPUT)
-            pathspec = " ".join((root / output).as_posix() for output in outputs)
+                outputs.append(root / SECRETS_OUTPUT)
+            pathspec = " ".join(output.as_posix() for output in outputs)
             if bash_output(f"git status --porcelain -- {pathspec}").strip():
                 bash(f"git diff -- {pathspec}")
                 raise SystemExit(
@@ -80,4 +80,4 @@ def generate_score(
             "generate-score needs these on PATH, at these exact versions (output differs between releases):\n"
             + "\n".join(lines)
         )
-    generate_artifacts(root, config, target, local)
+    generate_artifacts(config, target, local)

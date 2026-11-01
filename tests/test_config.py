@@ -331,7 +331,7 @@ class TestServices:
         assert config is not None
         bundles = compose_bundles(config)
         assert [bundle.name for bundle in bundles] == ["cuda", "rocm"]
-        assert bundles[0].output == Path("stack/generated/compose/compose.cuda.yaml")
+        assert bundles[0].output == tmp_path / "stack/generated/compose/compose.cuda.yaml"
         assert bundles[0].vars == {"GPU_VARIANT": "cuda"}
         livekit = config.services["livekit"]
         assert isinstance(livekit, ServiceEntry)
@@ -988,13 +988,14 @@ class TestServiceDerivation:
         assert sorted(config.service_builds) == ["api"]
 
 
-def test_direct_model_construction_is_valid_for_tests() -> None:
+def test_direct_model_construction_is_valid_for_tests(tmp_path: Path) -> None:
     config = DockerDevkitConfig.model_validate({
         "requires": ">=0.1",
         "repository": "ghcr.io/org/repo",
         "project_name": "example",
         "services": {"core": {"workloads": ["api.yaml"]}},
     })
+    config.root = tmp_path
 
     assert compose_bundles(config)[0].name == "core"
 

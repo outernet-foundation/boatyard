@@ -65,14 +65,6 @@ def chart_lock_key(name: str) -> str:
     return name.upper().replace("-", "_") + "_CHART"
 
 
-def bundle_output(name: str) -> Path:
-    return BUNDLE_OUTPUT_DIR / f"compose.{name}.yaml"
-
-
-def chart_values_path(score_dir: Path, chart: str) -> Path:
-    return score_dir / "k8s" / "values" / f"{chart}.yaml"
-
-
 def parse_dev_toggles(where: str, raw: str) -> dict[str, str]:
     # The dev-toggles spelling law (NAME=default pairs): the one parser generation's
     # validator and up's dev overlay consume.
@@ -274,6 +266,24 @@ class DockerDevkitConfig(BaseModel):
 
     # Derived by load_config from the Dockerfile tree (derive_services); never authored.
     service_builds: dict[str, ServiceBuild] = Field(default_factory=dict, exclude=True)
+    # The repo root the config was loaded from; load-injected, never authored.
+    root: Path | None = Field(default=None, exclude=True)
+
+    def score_dir_path(self) -> Path:
+        assert self.root is not None
+        return self.root / self.score_dir
+
+    def k8s_output_path(self, local: bool) -> Path:
+        assert self.root is not None
+        return self.root / (self.k8s_local_output if local else self.k8s_output)
+
+    def bundle_output(self, name: str) -> Path:
+        assert self.root is not None
+        return self.root / BUNDLE_OUTPUT_DIR / f"compose.{name}.yaml"
+
+    def chart_values_path(self, chart: str) -> Path:
+        assert self.root is not None
+        return self.root / self.score_dir / "k8s" / "values" / f"{chart}.yaml"
 
     @field_validator("requires")
     @classmethod
@@ -418,6 +428,48 @@ class DockerDevkitConfig(BaseModel):
                 )
         return self
 
+    def finalize(self) -> None:
+        # Filesystem-gated laws: the leftover-manifest guard, the service derivation, and
+        # the pairing laws that need the derived service set.
+        assert self.root is not None
+        root = self.root
+        if (root / LEFTOVER_MANIFEST_PATH).exists():
+            raise RuntimeError(
+                f"{LEFTOVER_MANIFEST_PATH.as_posix()} exists; the manifest dissolved — its declarations live in "
+                f"{DEFAULT_CONFIG_PATH.as_posix()}'s root base_images/repository keys. Delete the leftover."
+            )
+        if (root / LEFTOVER_LOCK_PATH).exists():
+            raise RuntimeError(
+                f"{LEFTOVER_LOCK_PATH.as_posix()} exists; the lock lives at {LOCK_PATH.as_posix()} in the repo root. "
+                "Move the file (git mv)."
+            )
+
+        service_builds = derive_services(root)
+        if service_builds and self.repository is None:
+            listed = ", ".join(sorted(service_builds))
+            raise RuntimeError(
+                f"Dockerfile service directories exist ({listed}); repository is required — it derives every image tag"
+            )
+        self.service_builds = service_builds
+
+        declared_charts = self.k8s.charts if self.k8s is not None else {}
+        if (self.base_images or declared_charts) and not (root / LOCK_PATH).is_file():
+            raise RuntimeError(
+                f"{LOCK_PATH.as_posix()}: base_images or k8s.charts are declared, so the committed image lock is "
+                "required beside them (build writes it)"
+            )
+        if self.gateway is not None:
+            require_lock_entry(
+                optional_lock_entries(root),
+                CADDY_IMAGE,
+                "routes are declared, so the door rides",
+                hint="declare CADDY_IMAGE in base_images and run build --lock-only",
+            )
+        for chart in declared_charts:
+            values = self.chart_values_path(chart)
+            if not values.is_file():
+                raise RuntimeError(f"{values.as_posix()}: the chart's values file is required at the derived path")
+
 
 def _coerce_port_strings(where: str, entry: dict[str, object], owning_name: str, *, bare_legal: bool) -> None:
     # A non-list ports value rides through untouched; field validation reports it.
@@ -536,10 +588,12 @@ def compose_bundles(config: DockerDevkitConfig) -> list[ComposeBundle]:
                 if option.remote:
                     continue
                 bundles.append(
-                    ComposeBundle(option_name, bundle_output(option_name), list(option.workloads), dict(option.vars))
+                    ComposeBundle(
+                        option_name, config.bundle_output(option_name), list(option.workloads), dict(option.vars)
+                    )
                 )
         elif not entry.remote:
-            bundles.append(ComposeBundle(name, bundle_output(name), list(entry.workloads), dict(entry.vars)))
+            bundles.append(ComposeBundle(name, config.bundle_output(name), list(entry.workloads), dict(entry.vars)))
     return bundles
 
 
@@ -579,46 +633,6 @@ def load_config(root: Path) -> DockerDevkitConfig | None:
     installed = importlib.metadata.version("docker-devkit")
     if installed != DEV_SENTINEL and not SpecifierSet(config.requires).contains(installed, prereleases=True):
         raise SystemExit(f"docker-devkit {installed} does not satisfy requires={config.requires!r}")
-    _finalize(config, root)
+    config.root = root
+    config.finalize()
     return config
-
-
-def _finalize(config: DockerDevkitConfig, root: Path) -> None:
-    # Filesystem-gated laws: the leftover-manifest guard, the service derivation, and
-    # the pairing laws that need the derived service set.
-    if (root / LEFTOVER_MANIFEST_PATH).exists():
-        raise RuntimeError(
-            f"{LEFTOVER_MANIFEST_PATH.as_posix()} exists; the manifest dissolved — its declarations live in "
-            f"{DEFAULT_CONFIG_PATH.as_posix()}'s root base_images/repository keys. Delete the leftover."
-        )
-    if (root / LEFTOVER_LOCK_PATH).exists():
-        raise RuntimeError(
-            f"{LEFTOVER_LOCK_PATH.as_posix()} exists; the lock lives at {LOCK_PATH.as_posix()} in the repo root. "
-            "Move the file (git mv)."
-        )
-
-    service_builds = derive_services(root)
-    if service_builds and config.repository is None:
-        listed = ", ".join(sorted(service_builds))
-        raise RuntimeError(
-            f"Dockerfile service directories exist ({listed}); repository is required — it derives every image tag"
-        )
-    config.service_builds = service_builds
-
-    declared_charts = config.k8s.charts if config.k8s is not None else {}
-    if (config.base_images or declared_charts) and not (root / LOCK_PATH).is_file():
-        raise RuntimeError(
-            f"{LOCK_PATH.as_posix()}: base_images or k8s.charts are declared, so the committed image lock is "
-            "required beside them (build writes it)"
-        )
-    if config.gateway is not None:
-        require_lock_entry(
-            optional_lock_entries(root),
-            CADDY_IMAGE,
-            "routes are declared, so the door rides",
-            hint="declare CADDY_IMAGE in base_images and run build --lock-only",
-        )
-    for chart in declared_charts:
-        values = root / chart_values_path(config.score_dir, chart)
-        if not values.is_file():
-            raise RuntimeError(f"{values.as_posix()}: the chart's values file is required at the derived path")

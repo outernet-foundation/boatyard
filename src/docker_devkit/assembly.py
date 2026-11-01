@@ -21,7 +21,6 @@ from docker_devkit.config import (
     RouteConfig,
     ServiceEntry,
     ServiceGroup,
-    bundle_output,
     compose_bundles,
     is_mapping,
     parse_dev_toggles,
@@ -122,7 +121,7 @@ class Assembly:
             if entry.ref is not None:
                 self.includes.append(entry.ref)
                 continue
-            output = root / bundle_output(name)
+            output = config.bundle_output(name)
             if not output.is_file():
                 raise RuntimeError(
                     f"selected entry {name!r} has no bundle output {output.as_posix()}; generate-score writes it"
