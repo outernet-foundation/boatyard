@@ -15,7 +15,7 @@ from pydantic import (
 from docker_devkit.config import is_list, is_mapping
 
 # Mint keys ride the externally managed k8s Secret named by k8s_secret; the declaration
-# model lives here and its enforcement stage in score_generate.
+# model lives here and its enforcement stage in score.
 
 # Declaration keys are ALL_CAPS.
 DECLARED_KEY = re.compile(r"^[A-Z][A-Z0-9_]*$")
