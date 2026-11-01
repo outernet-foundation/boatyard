@@ -14,7 +14,7 @@ ADR. If this plan and the ADR disagree, reconcile both docs before touching
 code (spec-first).
 
 This plan is also the naming session the ADR deferred: the tag-lookup verb is
-`tree-tags` (phase 5) and the retarget flag is `--registry` (phase 7).
+`tree-tags` (phase 5) and the push destination is `--push <addr>` (phase 7).
 
 Phase completion lives in git history; nothing here tracks status.
 
@@ -49,8 +49,9 @@ These rulings bind every phase:
   code, tests, refusal strings, or docs.
 - The domain-record refactor is frozen (ADR D2); a straggler derivation that
   surfaces during this work folds as ordinary work, not a reopened arc.
-- Digests live exclusively in `docker-devkit.lock`, written only by
-  `build --lock-only`. Pre-1.0 breaking changes ride the patch flow; from 1.0
+- Digests live exclusively in `docker-devkit.lock`, written only by the
+  `lock` verb and `build`'s incremental freeze — never hand-authored.
+  Pre-1.0 breaking changes ride the patch flow; from 1.0
   on, schema/CLI/artifact-breaking changes ship with a manually bumped
   `major_minor`.
 
@@ -64,9 +65,9 @@ lock foundation    phases 2-5   structured YAML lock, toolchain-derived
                                 env synthesis, lock-env + tree-tags
 declaration teeth  phase 6      literal image references refused at
                                 derivation
-retarget           phase 7      build --registry
+push destination    phase 7      --push <addr>; the shelf leaves build
 release and wave   phases 8-9   vocabulary renames + docs pass, one
-                                devkit release, the five-consumer catch-up
+                                 devkit release, the five-consumer catch-up
 ```
 
 Order within a cluster is strict; cluster order is fixed above. The release
@@ -110,12 +111,12 @@ state holds and its verify list passes green.
 | # | Phase | Repo | ADR anchor |
 |---|---|---|---|
 | 1 | Contract archaeology | docker-devkit + consumers | O1 |
-| 2 | Platform declarations and the structured lock model | docker-devkit | D6, absorbed Part 0 |
+| 2 | Platform declarations, the structured lock model, and the `lock` verb | docker-devkit | D6, D10, absorbed Part 0 |
 | 3 | Toolchain-derived base-image templates; coupling registry dies | docker-devkit | D3, D4 |
 | 4 | Platform-resolving lock writer and mirror probes | docker-devkit | absorbed Part 0 |
 | 5 | Env synthesis, `lock-env`, and `tree-tags` | docker-devkit | D6, absorbed Part 0 |
 | 6 | Literal image references refused at derivation | docker-devkit | D5 |
-| 7 | Registry-retargeted builds | docker-devkit | D7 |
+| 7 | The push-destination axis; the shelf leaves build | docker-devkit | D7, D11 |
 | 8 | Renames, docs pass, and initiative release | docker-devkit | D1 |
 | 9 | Consumer catch-up wave | all five consumers | D8, D9 |
 
@@ -151,12 +152,13 @@ Verify: the edit list names every consumer file the diff touches; grep over
 the five consumer repos returns zero `docker_devkit` imports outside the
 inventory.
 
-## Phase 2 — Platform declarations and the structured lock model
+## Phase 2 — Platform declarations, the structured lock model, and the `lock` verb
 
-Cluster lock foundation · docker-devkit · ADR D6 source 2. Load: `config.py`
-(`DockerDevkitConfig`, `load_config`, `ImageLock`, `parse_image_lock`, the
-filesystem-gated lock laws), `tests/test_config.py` (the lock-parsing
-battery).
+Cluster lock foundation · docker-devkit · ADR D6 source 2 and D10. Load:
+`config.py` (`DockerDevkitConfig`, `load_config`, `ImageLock`,
+`parse_image_lock`, the filesystem-gated lock laws), `tests/test_config.py`
+(the lock-parsing battery), `bake.py` (the lock writer inside `run_build`),
+`pyproject.toml` (entry points).
 
 End state:
 
@@ -171,12 +173,20 @@ End state:
   carry over; the empty lock stays legal. Bundle entries never join this
   model — Parts 2–4 remain paused with the parent ADR.
 - The writer renders deterministically: sorted names, sorted platform keys,
-  byte-stable across machines — `--lock-only --check` stays hermetic on
+  byte-stable across machines — `lock --check` stays hermetic on
   any-arch runners.
+- The resolve-only lock surface moves to its own `lock` verb (ADR D10):
+  `lock [--check] [--upgrade]`, self-skipping where no lock declarations
+  exist — `--lock-only`, `--check`, and `--upgrade` leave `build`. The
+  writer leaves `run_build`'s flow for a `lock.py` module the verb and
+  `run_build` share; `build` keeps its incremental write on every building
+  run (the `uv sync` shape). The toolkit's freshness line rewrites to
+  `lock --check` in phase 9.
 
 Verify: config refusal (images declared, `platforms` absent); YAML parse
 refusals (malformed, duplicate, non-digest); two consecutive writes are
-byte-identical.
+byte-identical; the `lock` verb covers check, upgrade, and self-skip with
+`--lock-only` gone from `build`'s surface.
 
 ## Phase 3 — Toolchain-derived base-image templates; coupling registry dies
 
@@ -196,7 +206,7 @@ End state:
 - Plain values stay plain (the golang/caddy/zed class — a tag declared
   nowhere else has no drift surface). A literal value in place of a template
   is the deliberate-skew escape hatch, visible in every diff. A template
-  composing a nonexistent tag fails at `build --lock-only` — fail-closed,
+  composing a nonexistent tag fails at `lock` — fail-closed,
   same as a mistyped literal today.
 - `VersionCoupling`/`VersionSite` and `version_coupling_violations` are gone
   from `image_refs.py`; nothing replaces them — D3 eliminates every coupling
@@ -210,8 +220,8 @@ unaffected; grep shows the coupling machinery gone.
 ## Phase 4 — Platform-resolving lock writer and mirror probes
 
 Cluster lock foundation · docker-devkit · ADR Absorption, Part 0 design moves
-3 and 8 plus "Migration". Load: `bake.py` (`run_build`'s lock writer,
-`--lock-only`, `--check`), `image_refs.py` (the `imagetools inspect`
+3 and 8 plus "Migration". Load: `lock.py` (the lock writer, its `--check`),
+`image_refs.py` (the `imagetools inspect`
 resolution), `verbs/mirror.py`, `publish.py` (its memoized digest pinning
 stays index-shaped — compose `include: oci://@digest` consumes indexes).
 
@@ -225,7 +235,7 @@ End state:
   declarations record the manifest uniformly as index and sole platform
   entry. Resolution is a pure function of config — the writing machine's arch
   is never consulted (pin with fixture indexes, never live registries).
-- `build --lock-only` writes the structured lock; declaration-incremental
+- The `lock` verb writes the structured lock; declaration-incremental
   freeze carries whole structured entries forward; `--upgrade` re-resolves
   everything; `--check` diffs the YAML form. A repo whose committed lock is
   env-format fails `--check` with the full-format diff — that diff is the
@@ -318,39 +328,49 @@ End state:
 Verify: each refusal fires with a fix-naming error; the scan is gone from
 `image_refs.py`; fixture trees carrying literals refuse at both boundaries.
 
-## Phase 7 — Registry-retargeted builds
+## Phase 7 — The push-destination axis; the shelf leaves build
 
-Cluster retarget · docker-devkit · ADR D7. Load: `bake.py` (`run_build`, push
-mode, cache refs, the shelf push), `config.py` (`render_bake`),
-`verbs/build.py` (flags).
+Cluster push destination · docker-devkit · ADR D7 and D11. Load: `bake.py`
+(`run_build`, push mode, cache refs, the shelf push, the `REGISTRY` read),
+`config.py` (`render_bake`), `verbs/build.py` (flags), `pyproject.toml`
+(dependencies).
 
 End state:
 
-- `build --registry <addr>` implies push mode — a retargeted build has
-  nowhere to go but the registry — and a `--registry` + `--load` pairing
-  refuses as meaningless.
-- Tags and cache refs re-root under the registry: `{registry}/{target}` tags
-  and `{registry}/build-cache:{target}` cache refs — one law everywhere:
-  cache rides the same registry the tags do, so the persistent laptop
-  registry gives the install iteration loop the same layer caching ghcr
-  builds get. The builds-shelf digest-manifest push is unchanged (it is
-  HEAD-keyed and reads its registry facts from the neutral env).
-- install-zed's forked pipeline — its own bake render, env assembly, and
-  `--set` retargeting to a transient host-local registry — dissolves into
-  this flag in phase 9. The box-facing address spelling stays
-  consumer-side: install-zed derives it from `$SSH_CLIENT` as it already
-  does.
+- The push destination is one flag with an optional value (ADR D7): `--push`
+  alone builds for the config's `repository`; `--push <addr>` builds for
+  that registry — tags and cache refs re-root under the destination
+  (`{addr}/{target}` tags, `{addr}/build-cache:{target}` cache refs; one
+  law everywhere). The optional-value mechanics ride click's `flag_value`
+  through typer; if the wrapper resists, a thin click-level option override
+  is the escape hatch — not a second flag.
+- A registry destination requires a concrete `--gpu` (a pushed build is
+  fully determined, never host-detected); `--dev` with a registry
+  destination refuses. `--gpu-only` dies here (ADR D10): zero users in the
+  wild, its filter expressible with `--targets`.
+- The builds-shelf push leaves `build` entirely (ADR D11): the shelving
+  block, its `REGISTRY` read, and the `build_artifact_registry` import die
+  in `bake.py`, and the devkit drops the build-artifact-registry dependency.
+  Bake's `metadata.json` (cwd-stable) is the handoff the toolkit's shelf
+  step reads (phase 9); the release channel loses nothing — its pull side
+  was always toolkit-side.
+- install-zed's fork dissolves onto this in phase 9: `build --push
+  localhost:5000 --gpu none` against its persistent local registry. The
+  box-facing address spelling stays consumer-side (`$SSH_CLIENT`),
+  addressing the same registry.
 
-Verify: retargeted tags and cache refs in the rendered bake (golden tests);
-the `--load` refusal; push-mode implication; a retargeted build round-trips
-through a transient local registry.
+Verify: golden tests over the rendered bake for both destinations (tags,
+cache refs); the `--dev` and `--gpu auto` refusals under a registry
+destination; `--gpu-only` gone from the surface; the shelving block and
+`REGISTRY` read gone from `bake.py`; the dependency gone from
+`pyproject.toml`; a `--push localhost:5000` build round-trips through the
+persistent local registry.
 
 ## Phase 8 — Renames, docs pass, and initiative release
 
 Cluster release · docker-devkit · ADR D1 and D6. Load: docker-devkit's
 `AGENTS.md`, the release flow in github-actions-toolkit's `AGENTS.md`,
-`config.py` (`DOOR_SERVICE_NAME`), `publish.py` (`PublishLeg`/`PublishedLeg`),
-`bake.py` (the `shelf` local).
+`config.py` (`DOOR_SERVICE_NAME`), `publish.py` (`PublishLeg`/`PublishedLeg`).
 
 End state:
 
@@ -369,10 +389,9 @@ End state:
     `PublishLeg`/`PublishedLeg` rename to `PublishEntry`/`PublishedEntry`.
     Internal only: the matrix JSON keys (`targets`, `variant`) and the
     `--plan` JSON (`bundle`) carry none of these names.
-  - The `shelf` local and comment in `bake.py` (`shelf = f"{registry}/builds"`)
-    rename to `builds_ref` — the builds registry's ghcr reference. The
-    toolkit's matching `shelf` naming in its `verbs/release.py` folds into
-    phase 9's toolkit pass.
+  - The `shelf` vocabulary retires as `builds_ref` where it survives — the
+    toolkit's `verbs/release.py` and the shelf step phase 9 adds; the
+    devkit-side local died with phase 7's extraction.
 - The AGENTS rewrite lands with the code, stating present truth: the
   release-flow law is restated — what ships with a bumped `major_minor` from
   1.0 on is schema/CLI/artifact-breaking change; there is no Python API to
@@ -382,10 +401,12 @@ End state:
   synthesis at the edges preserves both its documented virtues (native
   `--env-file` consumption at the `up` handoff, the raw-`docker compose`
   valve). The `image_refs.py` row loses the coupling machinery and the scan;
-  `tree-tags` and `lock-env` join the entry-point table; the D5 refusals
+  `lock`, `lock-env`, and `tree-tags` join the entry-point table; the
+  build row carries the destination axis and the gone flags (`--lock-only`,
+  `--check`, `--upgrade`, `--gpu-only`); the D5 refusals
   join the module rows that own those boundaries; every row the renames
   touch — the edge naming across `config.py`/`assembly.py`/`score.py`, the
-  publish records, the bake comment — carries the new names.
+  publish records — carries the new names.
 - docker-devkit ships one release carrying phases 2–8 (pre-1.0; breaking
   rides the patch flow). This release is the pin target of the wave.
 
@@ -404,7 +425,7 @@ editing).
 End state:
 
 - Every consumer repins once, onto the phase 8 release, and relocks — the
-  env-format lock is rewritten as structured YAML by `build --lock-only`,
+  env-format lock is rewritten as structured YAML by the `lock` verb,
   which re-resolves every entry, so no per-entry migration exists.
   `platforms` completes where the config refusal forces it: placeframe
   declares amd64 and Make-it-Sing declares its platform in the same relock.
@@ -435,9 +456,9 @@ End state:
   surface — arm64 manifests by reading `images.<NAME>.platforms[linux/arm64]`
   from the committed YAML lock with plain `yaml.safe_load`, service tags
   through `uv run tree-tags <service>…`, and its `--build` mode through
-  `uv run build --registry <addr>` (the forked bake pipeline dissolves). Its
-  relock lands arm64 platform-manifest digests for loki/alloy — the box
-  ships executable
+  `uv run build --push localhost:5000 --gpu none` (its `REGISTRY_PORT`
+  constant; the forked bake pipeline dissolves). Its relock lands arm64
+  platform-manifest digests for loki/alloy — the box ships executable
   images and the ZED-box AOA deployment unblocks (its
   `zed-aoa-diagnosis-handoff.md` gates the deploy on exactly this).
 - infra-rathole and lbe-toolkit: repin and relock only — no imports to drop.
@@ -446,14 +467,17 @@ End state:
   authored, components derive.
 - github-actions-toolkit: never a dependency (the resolver-cycle law); its
   reusable workflows invoke the CLI and bind `docker-build-matrix` and
-  `publish-compose --plan` — frozen CI contracts that remain as-is. Phase 1
-  findings may surface flag-level edits here; fold them into this phase.
-  This phase also carries the toolkit-side half of phase 8's shelf rename:
-  the `shelf` parameter and locals in `verbs/release.py` become
-  `builds_ref`.
+  `publish-compose --plan` — frozen CI contracts that remain as-is. Riding
+  the repin, the build workflow's freshness line becomes
+  `uv run --locked lock --check`, and the build job gains the shelf step
+  (ADR D11): a toolkit verb beside the release-side pull, invoked through
+  the toolkit project runner like `free-disk-space`, shelving each leg's
+  shard from bake's `metadata.json` under the workflow's existing
+  `REGISTRY` env. The `shelf` naming — `verbs/release.py` and the new
+  step — is `builds_ref` throughout. Phase 1 findings may surface further
+  flag-level edits here; fold them into this phase.
 
 Verify: consumer CI green end-to-end; grep over the five consumer repos
 returns zero `docker_devkit` imports; the placeframe regeneration diff is
 committed and reviewed; capture-tool's lock carries arm64 platform
-manifests; `up`
-probes pass against the mirror.
+manifests; `up` probes pass against the mirror.
