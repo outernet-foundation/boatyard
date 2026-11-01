@@ -18,7 +18,7 @@ from .documents import ComposeDocument
 from .image_refs import resolve_remote_digest
 from .service_builds import compute_service_shas
 
-_VAR_PATTERN = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)(:[?\-+][^}]*)?\}")
+_VAR_PATTERN = re.compile(r"\$\{([A-Z][A-Z0-9_]*)(:[?\-+][^}]*)?\}")
 STUB_VALUE = "publish-stub"
 
 
@@ -56,9 +56,8 @@ def publish_compose(
     ] = False,
 ) -> None:
     root = Path.cwd()
-    devkit = load_config(root)
-    bundles = compose_bundles(devkit) if devkit is not None else []
-    if not bundles:
+    config = load_config(root)
+    if config is None or not compose_bundles(config):
         if plan:
             print(json.dumps([]))
             return
@@ -66,8 +65,8 @@ def publish_compose(
             "publishing happens iff local service entries are declared in docker-devkit.yaml; "
             "one artifact per workload-bearing entry or option, named under root repository"
         )
-    config = devkit
-    assert config is not None
+
+    bundles = compose_bundles(config)
 
     if plan:
         legs = [{"bundle": entry.name} for entry in bundles]
