@@ -7,8 +7,8 @@ import yaml
 from pydantic import ValidationError
 
 from docker_devkit import documents
-from docker_devkit.config import DockerDevkitConfig, ServiceBuild
-from docker_devkit.documents import compute_service_shas, parse_image_lock, render_bake
+from docker_devkit.config import DockerDevkitConfig, ServiceBuild, parse_image_lock
+from docker_devkit.documents import compute_service_shas, render_bake
 
 REPOSITORY = "ghcr.io/outernet-foundation/example"
 

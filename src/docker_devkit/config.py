@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Literal, NamedTuple, Self, get_args
 
 from packaging.specifiers import SpecifierSet
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidationInfo, field_validator, model_validator
 from strictyaml import load as load_strict_yaml
 
 DEFAULT_CONFIG_PATH = Path("docker-devkit.yaml")
@@ -62,6 +62,8 @@ ENV_HOLE_PATTERN = re.compile(r"^\$\{[A-Z][A-Z0-9_]*(?::[^{}]*)?\}$")
 PORT_PATTERN = re.compile(r"^[0-9]+$")
 
 AUTH_GROUP_NAME = "auth"
+DOOR_SERVICE_NAME = "door"
+CADDY_IMAGE = "CADDY_IMAGE"
 PORT_PROTOCOLS = ("tcp", "udp")
 
 
@@ -447,6 +449,41 @@ def _coerce_port_strings(where: str, entry: dict[str, Any], owning_name: str, *,
     entry["ports"] = coerced
 
 
+class ImageLock(RootModel[dict[str, str]]):
+    # The env-format pair file beside the root config; entries parse from raw text so
+    # errors can name the offending line.
+    @model_validator(mode="before")
+    @classmethod
+    def _parse_entries(cls, value: Any, info: ValidationInfo) -> Any:
+        if not isinstance(value, str):
+            return value
+        context: dict[str, Any] = info.context or {}
+        source = context.get("path", "the image lock")
+        entries: dict[str, str] = {}
+        for number, line in enumerate(value.splitlines(), start=1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            name, separator, reference = stripped.partition("=")
+            if not separator or not name.strip() or not reference.strip():
+                raise ValueError(f"{source}:{number}: lock lines are NAME=reference entries")
+            if name in entries:
+                raise ValueError(f"{source}:{number}: duplicate lock entry {name}")
+            entries[name] = reference
+        return entries
+
+    @model_validator(mode="after")
+    def _require_digest_pins(self, info: ValidationInfo) -> Self:
+        context: dict[str, Any] = info.context or {}
+        for name, reference in self.root.items():
+            if not reference.rpartition("@")[2].startswith("sha256:"):
+                raise ValueError(
+                    f"{context.get('path', 'the image lock')}: entry {name} is not digest-pinned "
+                    f"({reference!r}); build writes @sha256:… pins"
+                )
+        return self
+
+
 class ComposeBundle(NamedTuple):
     name: str
     output: Path
@@ -566,6 +603,10 @@ def derive_services(root: Path) -> dict[str, ServiceBuild]:
     return services
 
 
+def parse_image_lock(path: Path) -> ImageLock:
+    return ImageLock.model_validate(path.read_text(encoding="utf-8"), context={"path": path.as_posix()})
+
+
 def load_config(root: Path) -> DockerDevkitConfig | None:
     path = root / DEFAULT_CONFIG_PATH
     if not path.exists():
@@ -606,6 +647,14 @@ def _finalize(config: DockerDevkitConfig, root: Path) -> None:
             f"{LOCK_PATH.as_posix()}: base_images or k8s.charts are declared, so the committed image lock is "
             "required beside them (build writes it)"
         )
+    if config.gateway is not None:
+        lock = root / LOCK_PATH
+        entries = parse_image_lock(lock).root if lock.is_file() else {}
+        if CADDY_IMAGE not in entries:
+            raise RuntimeError(
+                f"routes are declared, so the door rides; {LOCK_PATH.as_posix()} lacks the {CADDY_IMAGE} entry — "
+                "declare CADDY_IMAGE in base_images and run build --lock-only"
+            )
     for chart in declared_charts:
         values = root / chart_values_path(config.score_dir, chart)
         if not values.is_file():

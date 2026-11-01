@@ -5,9 +5,15 @@ from pathlib import Path
 import typer
 from bashrun.bash import bash, bash_check
 
-from .config import DEFAULT_MIRROR_PREFIX, LOCK_PATH, MirrorConfig, chart_lock_key, load_config
+from .config import (
+    DEFAULT_MIRROR_PREFIX,
+    LOCK_PATH,
+    MirrorConfig,
+    chart_lock_key,
+    load_config,
+    parse_image_lock,
+)
 from .crane import install_crane
-from .documents import parse_image_lock
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 

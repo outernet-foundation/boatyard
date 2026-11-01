@@ -15,13 +15,19 @@ from bashrun.bash import bash, bash_check, bash_output
 from build_artifact_registry.builds import push_build
 from build_artifact_registry.setup_oras import install_oras
 
-from .config import CHART_REFERENCE_PREFIX, DEFAULT_MIRROR_PREFIX, LOCK_PATH, chart_lock_key, load_config
+from .config import (
+    CHART_REFERENCE_PREFIX,
+    DEFAULT_MIRROR_PREFIX,
+    LOCK_PATH,
+    chart_lock_key,
+    load_config,
+    parse_image_lock,
+)
 from .documents import (
     KEEP_STORAGE_PATTERN,
     BakeMetadata,
     DaemonConfig,
     compute_service_shas,
-    parse_image_lock,
     render_bake,
 )
 from .host import GPU_TYPES, Gpu, detect_gpu, host_platform

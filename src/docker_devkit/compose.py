@@ -15,6 +15,8 @@ from bashrun.bash import CalledProcessError, bash_handoff, bash_output
 from .build_docker import run_build
 from .config import (
     AUTH_GROUP_NAME,
+    CADDY_IMAGE,
+    DOOR_SERVICE_NAME,
     DockerDevkitConfig,
     ENV_NAME_PATTERN,
     LOCK_PATH,
@@ -23,8 +25,8 @@ from .config import (
     bundle_output,
     compose_bundles,
     load_config,
+    parse_image_lock,
 )
-from .documents import parse_image_lock
 from .environment import (
     assert_known_profiles,
     forwarded_pair,
@@ -38,11 +40,10 @@ DEFAULT_COMPOSE_FILE = Path("compose.yml")
 DEV_TOGGLES_ANNOTATION = "outernet.internal/dev-toggles"
 DEV_MOUNT_TARGET = "/app"
 
-DOOR_SERVICE_NAME = "door"
 DOOR_LISTEN_PORT = 8443
 DOOR_CONFIG_NAME = "devkit-door-caddyfile"
 DOOR_CONFIG_TARGET = "/etc/caddy/Caddyfile"
-CADDY_IMAGE_HOLE = "${CADDY_IMAGE:?err}"
+CADDY_IMAGE_HOLE = f"${{{CADDY_IMAGE}:?err}}"
 
 _MANIFEST_ABSENT_PATTERN = re.compile(r"\b404\b|not found|manifest unknown", re.IGNORECASE)
 
@@ -197,12 +198,6 @@ def up(
 
         services: dict[str, ServiceStanza] = {}
         if routes:
-            lock_path = root / LOCK_PATH
-            if not lock_path.is_file() or "CADDY_IMAGE" not in parse_image_lock(lock_path).root:
-                raise RuntimeError(
-                    f"routes are declared, so the door rides; {LOCK_PATH.as_posix()} lacks the CADDY_IMAGE entry — "
-                    "declare CADDY_IMAGE in base_images and run build --lock-only"
-                )
             door_environment: dict[str, str] | None = None
             if auth_route is not None:
                 door_environment = forwarded_pair(environment)

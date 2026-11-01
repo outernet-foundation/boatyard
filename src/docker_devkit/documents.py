@@ -24,41 +24,6 @@ from .config import FAN_ARG, DockerDevkitConfig, service_sha_env
 KEEP_STORAGE_PATTERN = re.compile(r"^(\d+(?:\.\d+)?)\s*([TGMK]i?B)?$", re.IGNORECASE)
 
 
-class ImageLock(RootModel[dict[str, str]]):
-    # The env-format pair file beside the bake manifest; entries parse from raw text so
-    # errors can name the offending line.
-    @model_validator(mode="before")
-    @classmethod
-    def _parse_entries(cls, value: Any, info: ValidationInfo) -> Any:
-        if not isinstance(value, str):
-            return value
-        context: dict[str, Any] = info.context or {}
-        source = context.get("path", "the image lock")
-        entries: dict[str, str] = {}
-        for number, line in enumerate(value.splitlines(), start=1):
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
-                continue
-            name, separator, reference = stripped.partition("=")
-            if not separator or not name.strip() or not reference.strip():
-                raise ValueError(f"{source}:{number}: lock lines are NAME=reference entries")
-            if name in entries:
-                raise ValueError(f"{source}:{number}: duplicate lock entry {name}")
-            entries[name] = reference
-        return entries
-
-    @model_validator(mode="after")
-    def _require_digest_pins(self, info: ValidationInfo) -> Self:
-        context: dict[str, Any] = info.context or {}
-        for name, reference in self.root.items():
-            if not reference.rpartition("@")[2].startswith("sha256:"):
-                raise ValueError(
-                    f"{context.get('path', 'the image lock')}: entry {name} is not digest-pinned "
-                    f"({reference!r}); build writes @sha256:… pins"
-                )
-        return self
-
-
 class BindVolume(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -255,10 +220,6 @@ def render_bake(config: DockerDevkitConfig, *, push: bool, host: str, dev: bool 
                 build["cache_from"] = [f"type=registry,ref={cache}:{target}"]
             services[target] = {"build": build}
     return yaml.safe_dump({"services": services}, sort_keys=False)
-
-
-def parse_image_lock(path: Path) -> ImageLock:
-    return ImageLock.model_validate(path.read_text(encoding="utf-8"), context={"path": path.as_posix()})
 
 
 def compute_service_shas(repo_root: Path, config: DockerDevkitConfig) -> dict[str, str]:

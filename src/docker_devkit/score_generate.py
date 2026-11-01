@@ -25,6 +25,7 @@ from .config import (
     chart_values_path,
     compose_bundles,
     load_config,
+    parse_image_lock,
 )
 from .documents import (
     BindVolume,
@@ -33,7 +34,6 @@ from .documents import (
     ManifestMetadata,
     ScoreState,
     compute_service_shas,
-    parse_image_lock,
 )
 from .markers import contains_marker, is_list, is_mapping, resolve_includes, resolve_lock_refs
 from .provisioners import compiled_provisioners, dump_compose
