@@ -150,9 +150,9 @@ def up(
 
         # Build local images; --dev builds both shapes.
         if build:
-            run_build()
+            run_build(root=root, config=config)
             if dev:
-                run_build(dev=True)
+                run_build(root=root, config=config, dev=True)
 
         # Hand off to docker compose up.
         up_command = context.command(*(f"--profile {profile}" for profile in assembly.profiles), "up")

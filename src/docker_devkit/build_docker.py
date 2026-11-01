@@ -18,6 +18,7 @@ from build_artifact_registry.setup_oras import install_oras
 from .config import (
     CHART_REFERENCE_PREFIX,
     DEFAULT_MIRROR_PREFIX,
+    DockerDevkitConfig,
     LOCK_PATH,
     chart_lock_key,
     load_config,
@@ -93,6 +94,8 @@ def build(
 
 def run_build(
     *,
+    root: Path | None = None,
+    config: DockerDevkitConfig | None = None,
     push: bool = False,
     targets_opt: list[str] | None = None,
     gpu: Gpu = "auto",
@@ -103,8 +106,11 @@ def run_build(
     dev: bool = False,
     check: bool = False,
 ) -> None:
-    root = Path.cwd()
-    config = load_config(root)
+    # root/config inject for callers that already loaded them (up --build); the CLI
+    # derives both from the working directory.
+    root = root if root is not None else Path.cwd()
+    if config is None:
+        config = load_config(root)
     if config is None:
         if not lock_only:
             raise RuntimeError("No docker-devkit.yaml at the repo root; build derives its targets from it")

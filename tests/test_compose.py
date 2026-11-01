@@ -918,7 +918,8 @@ class TestDevOverlay:
         result = runner.invoke(compose.up_app, ["--build", "--dev"])
 
         assert result.exit_code == 0, result.output
-        assert builds == [{}, {"dev": True}]
+        assert [set(build) for build in builds] == [{"root", "config"}, {"root", "config", "dev"}]
+        assert builds[0]["config"] is builds[1]["config"]
 
     def test_up_dev_layers_and_cleans_the_overlay(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_dev_tree(
