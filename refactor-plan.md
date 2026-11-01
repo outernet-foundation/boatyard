@@ -6,6 +6,9 @@ Six modules dissolve, no new module is created; the package root goes from 16
 modules to 10. Work phase by phase — each phase is sized for one agent
 session; if the context window fills, stop at a phase boundary and hand off
 to the next session with this file. Never merge commits across phases.
+Yield between phases: once a phase's final commit lands and the verification
+trio passes, report and stop — the next phase starts only on the operator's
+go-ahead, never on the agent's own momentum.
 
 The import graph after all folds is verified cycle-free: `service_builds.py`,
 `image_refs.py`, `markers.py` have zero internal imports today;
