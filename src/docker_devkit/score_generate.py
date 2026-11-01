@@ -36,6 +36,7 @@ from .documents import (
     ManifestDocument,
     ManifestMetadata,
     ScoreState,
+    WorkloadDocument,
     compute_service_shas,
 )
 from .markers import contains_marker, is_list, is_mapping, resolve_includes, resolve_lock_refs
@@ -367,8 +368,8 @@ def _validate_workload_surface(name: str, document: Any) -> set[str]:
     # The deployment-surface refusal laws the shipped templates cannot carry, checked
     # against the authored workload document. Returns the container file paths whose
     # binds ride un-doubled (the consumer-interpolation annotation's names).
-    metadata: dict[str, Any] = document.get("metadata") or {}
-    annotations: dict[str, Any] = metadata.get("annotations") or {}
+    metadata = WorkloadDocument.model_validate(document).metadata
+    annotations = metadata.annotations
     containers: dict[str, Any] = document.get("containers") or {}
     adapter = annotations.get(PROBE_ADAPTER_ANNOTATION)
     if adapter is not None and adapter not in PROBE_ADAPTERS:
@@ -426,14 +427,13 @@ def _validate_workload_surface(name: str, document: Any) -> set[str]:
 def _validate_dev_toggles(name: str, document: Any, claimed: dict[str, str]) -> None:
     # The dev-overlay spelling laws, refused at generation: the annotation is consumed at
     # `up --dev`, and the declaring change is where malformed spelling should fail.
-    metadata: dict[str, Any] = document.get("metadata") or {}
-    annotations: dict[str, Any] = metadata.get("annotations") or {}
-    raw = annotations.get(DEV_TOGGLES_ANNOTATION)
+    workload = WorkloadDocument.model_validate(document)
+    raw = workload.metadata.annotations.get(DEV_TOGGLES_ANNOTATION)
     if raw is None:
         return
     if not isinstance(raw, str) or not raw.strip():
         raise SystemExit(f"{name}: {DEV_TOGGLES_ANNOTATION} must be a comma-separated NAME=default string")
-    service_name = metadata.get("name")
+    service_name = workload.metadata.name
     if not isinstance(service_name, str) or not service_name:
         raise SystemExit(f"{name}: metadata.name is required to key the dev overlay service")
     try:
@@ -484,8 +484,7 @@ def generate_k8s(root: Path, config: DockerDevkitConfig, output: Path, images: d
         if name in compose_workloads:
             continue
         k8s_document: Any = _load_yaml_file(score_dir / name)
-        k8s_metadata: dict[str, Any] = k8s_document.get("metadata") or {}
-        k8s_annotations: dict[str, Any] = k8s_metadata.get("annotations") or {}
+        k8s_annotations = WorkloadDocument.model_validate(k8s_document).metadata.annotations
         if DEV_TOGGLES_ANNOTATION in k8s_annotations:
             raise SystemExit(
                 f"{name}: {DEV_TOGGLES_ANNOTATION} is compose dev-overlay vocabulary; this workload "

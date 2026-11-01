@@ -88,6 +88,20 @@ class ComposeDocument(BaseModel):
         return self
 
 
+class WorkloadMetadata(BaseModel):
+    # Shape only: value laws (annotation spellings, name presence) stay at their consumers.
+    model_config = ConfigDict(extra="allow")
+
+    name: object = None
+    annotations: dict[str, object] = Field(default_factory=dict)
+
+
+class WorkloadDocument(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    metadata: WorkloadMetadata = Field(default_factory=WorkloadMetadata)
+
+
 class BakedImage(BaseModel):
     model_config = ConfigDict(extra="ignore")
 

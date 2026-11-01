@@ -26,6 +26,7 @@ from .config import (
     is_string_mapping,
     parse_dev_toggles,
 )
+from .documents import WorkloadDocument
 from .host import parse_env_file
 
 ENV_FILE = Path(".env")
@@ -269,15 +270,13 @@ class Assembly:
         }
         for bundle in compose_bundles(self.config):
             for workload in bundle.workloads:
-                workload_document: dict[str, object] = mapping_or_empty(
+                document = WorkloadDocument.model_validate(
                     yaml.safe_load((self.root / self.config.score_dir / workload).read_text(encoding="utf-8"))
                 )
-                metadata: dict[str, object] = mapping_or_empty(workload_document.get("metadata"))
-                annotations: dict[str, object] = mapping_or_empty(metadata.get("annotations"))
-                raw: object | None = annotations.get(DEV_TOGGLES_ANNOTATION)
+                raw = document.metadata.annotations.get(DEV_TOGGLES_ANNOTATION)
                 if not isinstance(raw, str) or not raw.strip():
                     continue
-                service_name = metadata.get("name")
+                service_name = document.metadata.name
                 if not isinstance(service_name, str) or not service_name or service_name not in declared:
                     continue
                 toggles = parse_dev_toggles(service_name, raw)
@@ -310,8 +309,7 @@ def compose_command(root: Path, compose_files: list[Path], *arguments: str) -> s
     lock_file = root / LOCK_PATH
     lock_argument = f" --env-file {shlex.quote(str(lock_file))}" if lock_file.exists() else ""
     prefix = (
-        f"docker compose {files_arguments} --project-directory {shlex.quote(str(root))} "
-        f"--env-file .env{lock_argument}"
+        f"docker compose {files_arguments} --project-directory {shlex.quote(str(root))} --env-file .env{lock_argument}"
     )
     return " ".join([prefix, *quoted_arguments])
 
