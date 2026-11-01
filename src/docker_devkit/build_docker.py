@@ -22,7 +22,7 @@ from .config import (
     LOCK_PATH,
     chart_lock_key,
     load_config,
-    parse_image_lock,
+    optional_lock_entries,
 )
 from .documents import (
     KEEP_STORAGE_PATTERN,
@@ -130,7 +130,7 @@ def run_build(
     service_shas = compute_service_shas(root, config)
     os.environ.update(service_shas)
 
-    lock_data = parse_image_lock(lock_file).root if lock_file.exists() else {}
+    lock_data = optional_lock_entries(root)
 
     if not config.service_builds and not lock_only:
         raise RuntimeError(

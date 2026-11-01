@@ -11,7 +11,7 @@ from .config import (
     MirrorConfig,
     chart_lock_key,
     load_config,
-    parse_image_lock,
+    optional_lock_entries,
 )
 from .crane import install_crane
 
@@ -26,7 +26,7 @@ def mirror() -> None:
         raise RuntimeError("a docker-devkit.yaml with base_images (or k8s.charts) is required to mirror")
     prefix = config.mirror.prefix if config.mirror is not None else DEFAULT_MIRROR_PREFIX
 
-    lock_entries = parse_image_lock(root / LOCK_PATH).root if (root / LOCK_PATH).exists() else {}
+    lock_entries = optional_lock_entries(root)
     mirror_targets = [
         (reference, lock_entries.get(name))
         for name, reference in sorted(config.base_images.items(), key=lambda item: item[1])

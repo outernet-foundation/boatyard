@@ -662,6 +662,12 @@ def parse_image_lock(path: Path) -> ImageLock:
     return ImageLock.model_validate(path.read_text(encoding="utf-8"), context={"path": path.as_posix()})
 
 
+def optional_lock_entries(root: Path) -> dict[str, str]:
+    # The lock read where absence is legal; required-lock callers parse it directly.
+    lock_path = root / LOCK_PATH
+    return parse_image_lock(lock_path).root if lock_path.is_file() else {}
+
+
 def load_config(root: Path) -> DockerDevkitConfig | None:
     path = root / DEFAULT_CONFIG_PATH
     if not path.exists():
@@ -703,8 +709,7 @@ def _finalize(config: DockerDevkitConfig, root: Path) -> None:
             "required beside them (build writes it)"
         )
     if config.gateway is not None:
-        lock = root / LOCK_PATH
-        entries = parse_image_lock(lock).root if lock.is_file() else {}
+        entries = optional_lock_entries(root)
         if CADDY_IMAGE not in entries:
             raise RuntimeError(
                 f"routes are declared, so the door rides; {LOCK_PATH.as_posix()} lacks the {CADDY_IMAGE} entry — "

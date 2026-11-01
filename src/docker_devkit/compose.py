@@ -16,7 +16,7 @@ from .assembly import (
     write_temp_compose_file,
 )
 from .build_docker import run_build
-from .config import LOCK_PATH, load_config, parse_image_lock
+from .config import load_config, optional_lock_entries
 
 _MANIFEST_ABSENT_PATTERN = re.compile(r"\b404\b|not found|manifest unknown", re.IGNORECASE)
 
@@ -103,10 +103,7 @@ def down(
 
 
 def _probe_lock_entries(root: Path) -> None:
-    lock_path = root / LOCK_PATH
-    if not lock_path.exists():
-        return
-    for value in sorted(parse_image_lock(lock_path).root.values()):
+    for value in sorted(optional_lock_entries(root).values()):
         reference, _, digest = value.rpartition("@")
         try:
             bash_output(f"docker buildx imagetools inspect {shlex.quote(value)}")
