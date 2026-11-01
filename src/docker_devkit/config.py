@@ -360,19 +360,19 @@ class DockerDevkitConfig(BaseModel):
         # String-form ports name their owner by context (the entry or option they sit on);
         # group-level ports must spell the mapping form because a group has no namesake service.
         # Shapes that are not mappings ride through untouched; field validation reports them.
-        if not is_string_mapping(services):
+        if not is_mapping(services):
             return services
         for name, raw_entry in services.items():
-            if not is_string_mapping(raw_entry):
+            if not is_mapping(raw_entry):
                 continue
             if "options" in raw_entry:
                 raw_options: object = raw_entry["options"] or {}
-                if not is_string_mapping(raw_options):
+                if not is_mapping(raw_options):
                     continue
                 if not raw_options:
                     raise ValueError(f"services.{name}: a group's options: is a non-empty map of alternatives")
                 for option_name, raw_option in raw_options.items():
-                    if not is_string_mapping(raw_option):
+                    if not is_mapping(raw_option):
                         continue
                     _coerce_port_strings(
                         f"services.{name}.options.{option_name}", raw_option, option_name, bare_legal=True
@@ -441,11 +441,11 @@ class DockerDevkitConfig(BaseModel):
 def _coerce_port_strings(where: str, entry: dict[str, object], owning_name: str, *, bare_legal: bool) -> None:
     # A non-list ports value rides through untouched; field validation reports it.
     ports: object = entry.get("ports") or []
-    if not _is_object_list(ports):
+    if not is_list(ports):
         return
     coerced: list[object] = []
     for item in ports:
-        if is_string_mapping(item):
+        if is_mapping(item):
             coerced.append(item)
             continue
         if not isinstance(item, str):
@@ -478,11 +478,13 @@ def _collect_route_owners(routes: list[RouteConfig], where: str, route_owner: di
     return any_route
 
 
-def is_string_mapping(value: object) -> TypeIs[dict[str, object]]:
+def is_mapping(value: object) -> TypeIs[dict[str, object]]:
+    # The shared yaml-shape predicates: markers, secrets, and the config pre-passes narrow
+    # through these.
     return isinstance(value, dict)
 
 
-def _is_object_list(value: object) -> TypeIs[list[object]]:
+def is_list(value: object) -> TypeIs[list[object]]:
     return isinstance(value, list)
 
 

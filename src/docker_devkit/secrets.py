@@ -12,7 +12,7 @@ from pydantic import (
     model_validator,
 )
 
-from .markers import is_mapping, is_list
+from .config import is_list, is_mapping
 
 # Mint keys ride the externally managed k8s Secret named by k8s_secret; the declaration
 # model lives here and its enforcement stage in score_generate.

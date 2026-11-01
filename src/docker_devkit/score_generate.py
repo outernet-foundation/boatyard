@@ -19,6 +19,8 @@ from bashrun.bash import bash, bash_output
 from .config import (
     DEV_TOGGLES_ANNOTATION,
     DOOR_SERVICE_NAME,
+    is_list,
+    is_mapping,
     parse_dev_toggles,
     LOCK_PATH,
     SECRETS_FILE,
@@ -39,7 +41,7 @@ from .documents import (
     WorkloadDocument,
     compute_service_shas,
 )
-from .markers import contains_marker, is_list, is_mapping, resolve_includes, resolve_lock_refs
+from .markers import contains_marker, resolve_includes, resolve_lock_refs
 from .provisioners import compiled_provisioners, dump_compose
 from .secrets import SecretsDeclaration, collect_secret_keys, validate_consumed
 
@@ -454,8 +456,9 @@ def closure_provisioners(score_dir: Path, rendering: str, workloads: list[str]) 
         resources = document.get("resources") if is_mapping(document) else None
         if is_mapping(resources):
             for resource in resources.values():
-                if is_mapping(resource) and isinstance(resource.get("type"), str):
-                    referenced.add(resource["type"])
+                resource_type = resource.get("type") if is_mapping(resource) else None
+                if isinstance(resource_type, str):
+                    referenced.add(resource_type)
     selected: list[str] = []
     directory = score_dir / rendering
     if not directory.is_dir():

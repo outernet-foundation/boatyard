@@ -23,7 +23,7 @@ from .config import (
     ServiceGroup,
     bundle_output,
     compose_bundles,
-    is_string_mapping,
+    is_mapping,
     parse_dev_toggles,
 )
 from .documents import WorkloadDocument
@@ -365,4 +365,4 @@ def _service_names(path: Path) -> set[str]:
 
 
 def mapping_or_empty(value: object) -> dict[str, object]:
-    return value if is_string_mapping(value) else {}
+    return value if is_mapping(value) else {}

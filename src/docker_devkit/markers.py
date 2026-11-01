@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, TypeIs
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, ConfigDict, field_validator
+
+from .config import is_list, is_mapping
 
 # Authoring markers are single-key mappings so authored sources stay plain-YAML-parseable.
 # Include markers insert a repo-root-relative file's bytes or parsed structure; lock markers
@@ -137,14 +139,6 @@ def _split_path(path: str, reference: str, source: str) -> tuple[str, str]:
     if not separator or not registry or not repository:
         raise RuntimeError(f"{source}: lock reference {reference!r} has no registry/repository split")
     return registry, repository
-
-
-def is_mapping(node: Any) -> TypeIs[dict[Any, Any]]:
-    return isinstance(node, dict)
-
-
-def is_list(node: Any) -> TypeIs[list[Any]]:
-    return isinstance(node, list)
 
 
 def _marker_entry(node: Any, markers: tuple[str, ...]) -> tuple[str, Any] | None:
