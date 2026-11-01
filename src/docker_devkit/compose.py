@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import re
 import shlex
+from collections.abc import Mapping
 from dataclasses import dataclass
 from os import environ
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Annotated, Any, TypeIs
+from typing import Annotated, Any, Literal, NotRequired, TypedDict, TypeIs
 
 import typer
 import yaml
@@ -64,6 +65,56 @@ class ComposeContext:
         lock_argument = f" --env-file {self.lock_file}" if self.lock_file.exists() else ""
         prefix = f"docker compose {files_arguments} --project-directory {self.root} --env-file .env{lock_argument}"
         return " ".join([prefix, *arguments])
+
+
+class ConfigReference(TypedDict):
+    source: str
+    target: str
+
+
+class PortEntry(TypedDict):
+    target: str
+    published: str
+    protocol: str
+    host_ip: NotRequired[str]
+
+
+class InlineConfig(TypedDict):
+    content: str
+
+
+class ServiceStanza(TypedDict, total=False):
+    image: str
+    configs: list[ConfigReference]
+    ports: list[PortEntry]
+    environment: dict[str, str]
+
+
+class DoorStanza(TypedDict):
+    image: str
+    configs: list[ConfigReference]
+    ports: list[PortEntry]
+    environment: NotRequired[dict[str, str]]
+
+
+class DevMount(TypedDict):
+    type: Literal["bind"]
+    source: str
+    target: str
+    read_only: bool
+
+
+class OverlayService(TypedDict, total=False):
+    image: str
+    volumes: list[DevMount]
+    environment: dict[str, str]
+
+
+class AssemblyRoot(TypedDict, total=False):
+    name: str
+    include: list[str]
+    services: dict[str, ServiceStanza]
+    configs: dict[str, InlineConfig]
 
 
 @up_app.command()
@@ -181,13 +232,13 @@ def up(
             if option_name is not None:
                 auth_route = auth.options[option_name].routes[0]
 
-        document: dict[str, Any] = {}
+        document: AssemblyRoot = {}
         if config.project_name:
             document["name"] = config.project_name
         if sources:
             document["include"] = sources
 
-        services: dict[str, dict[str, Any]] = {}
+        services: dict[str, ServiceStanza] = {}
         if routes:
             lock_path = root / LOCK_PATH
             if not lock_path.is_file() or "CADDY_IMAGE" not in parse_image_lock(lock_path).root:
@@ -213,16 +264,16 @@ def up(
                     forwarded_port = "80"
                 door_environment = {"FORWARDED_PROTO": scheme, "FORWARDED_PORT": forwarded_port}
             assert config.gateway is not None
-            stanza: dict[str, Any] = {
+            stanza: DoorStanza = {
                 "image": CADDY_IMAGE_HOLE,
                 "configs": [{"source": DOOR_CONFIG_NAME, "target": DOOR_CONFIG_TARGET}],
                 "ports": [{"target": str(DOOR_LISTEN_PORT), "published": config.gateway, "protocol": "tcp"}],
             }
             if door_environment:
                 stanza["environment"] = door_environment
-            services[DOOR_SERVICE_NAME] = stanza
+            services[DOOR_SERVICE_NAME] = ServiceStanza(**stanza)
         for port in ports:
-            port_entry: dict[str, str | None] = {
+            port_entry: PortEntry = {
                 "target": port.target,
                 "published": port.published,
                 "protocol": port.protocol,
@@ -305,7 +356,7 @@ def up(
             for path in local_outputs:
                 declared |= _service_names(root, path)
 
-            overlay_services: dict[str, dict[str, Any]] = {}
+            overlay_services: dict[str, OverlayService] = {}
             for name, service in config.service_builds.items():
                 if not service.dev_stage or name not in declared:
                     continue
@@ -499,7 +550,7 @@ def _split_names(value: str) -> list[str]:
     return names
 
 
-def _write_temp_root(document: dict[str, Any]) -> Path:
+def _write_temp_root(document: Mapping[str, Any]) -> Path:
     with NamedTemporaryFile("w", suffix=".yaml", prefix="devkit-assembly-", delete=False, encoding="utf-8") as handle:
         handle.write(yaml.safe_dump(document, sort_keys=False, default_flow_style=False))
         return Path(handle.name)
