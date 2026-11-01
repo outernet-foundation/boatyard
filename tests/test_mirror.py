@@ -5,7 +5,8 @@ import yaml
 from pydantic import ValidationError
 from typer.testing import CliRunner, Result
 
-from docker_devkit import crane, mirror
+from docker_devkit import crane
+from docker_devkit.verbs import mirror
 from docker_devkit.config import LOCK_PATH, mirrored_ref
 
 MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"

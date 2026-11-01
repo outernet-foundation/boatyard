@@ -8,7 +8,8 @@ import yaml
 from bashrun.bash import CalledProcessError, bash, bash_output
 from typer.testing import CliRunner
 
-from docker_devkit import assembly, compose
+from docker_devkit import assembly
+from docker_devkit.verbs import compose
 from docker_devkit.config import LOCK_PATH
 
 MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"

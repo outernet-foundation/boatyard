@@ -6,7 +6,8 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
-from docker_devkit import assembly, compose
+from docker_devkit import assembly
+from docker_devkit.verbs import compose
 from docker_devkit.config import LOCK_PATH
 
 FAKE_DIGEST = "sha256:" + "a" * 64
