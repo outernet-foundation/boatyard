@@ -8,7 +8,9 @@ import yaml
 from pydantic import ValidationError
 from typer.testing import CliRunner
 
-from docker_devkit import crane, publish_compose
+from docker_devkit import crane
+from docker_devkit import publish as publish_compose
+from docker_devkit.verbs import publish as publish_verb
 from docker_devkit.config import LOCK_PATH, load_config
 
 REPOSITORY = "ghcr.io/outernet-foundation/lbe-toolkit"
@@ -68,10 +70,10 @@ def _invoke_publishing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Publi
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("REGISTRY_USERNAME", "publisher")
     monkeypatch.setenv("REGISTRY_TOKEN", "secret")
-    monkeypatch.setattr(publish_compose, "bash", recorder.run)
+    monkeypatch.setattr(publish_verb, "bash", recorder.run)
     monkeypatch.setattr(crane, "bash", recorder.run)
-    monkeypatch.setattr(publish_compose, "bash_output", _command_output)
-    monkeypatch.setattr(publish_compose, "compute_service_shas", _service_shas)
+    monkeypatch.setattr(publish_verb, "bash_output", _command_output)
+    monkeypatch.setattr(publish_verb, "compute_service_shas", _service_shas)
     monkeypatch.setattr(publish_compose, "resolve_remote_digest", DigestResolver().resolve)
     return recorder
 
@@ -249,7 +251,7 @@ class TestPublishComposeVerb:
         self._write_tree(tmp_path)
         recorder = self._invoke(monkeypatch, tmp_path)
 
-        result = runner.invoke(publish_compose.app, [])
+        result = runner.invoke(publish_verb.app, [])
 
         assert result.exit_code == 0, result.output
         assert recorder.commands[0].startswith("docker login ghcr.io -u publisher")
@@ -274,7 +276,7 @@ class TestPublishComposeVerb:
         summary_path = tmp_path / "job-summary.md"
         monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
 
-        result = runner.invoke(publish_compose.app, [])
+        result = runner.invoke(publish_verb.app, [])
 
         assert result.exit_code == 0, result.output
         summary = summary_path.read_text(encoding="utf-8")
@@ -289,7 +291,7 @@ class TestPublishComposeVerb:
         monkeypatch.setenv("REGISTRY_USERNAME", "publisher")
         monkeypatch.setenv("REGISTRY_TOKEN", "secret")
 
-        result = runner.invoke(publish_compose.app, [])
+        result = runner.invoke(publish_verb.app, [])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, RuntimeError)
@@ -300,7 +302,7 @@ class TestPublishComposeVerb:
         monkeypatch.delenv("REGISTRY_USERNAME", raising=False)
         monkeypatch.delenv("REGISTRY_TOKEN", raising=False)
 
-        result = runner.invoke(publish_compose.app, [])
+        result = runner.invoke(publish_verb.app, [])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, SystemExit)
@@ -322,7 +324,7 @@ class TestBundleMode:
         monkeypatch.delenv("REGISTRY_USERNAME", raising=False)
         monkeypatch.delenv("REGISTRY_TOKEN", raising=False)
 
-        result = runner.invoke(publish_compose.app, ["--plan"])
+        result = runner.invoke(publish_verb.app, ["--plan"])
 
         assert result.exit_code == 0, result.output
         assert json.loads(result.output) == [
@@ -337,7 +339,7 @@ class TestBundleMode:
         self._write_tree(tmp_path)
         recorder = _invoke_publishing(monkeypatch, tmp_path)
 
-        result = runner.invoke(publish_compose.app, ["--bundle", "core-cuda"])
+        result = runner.invoke(publish_verb.app, ["--bundle", "core-cuda"])
 
         assert result.exit_code == 0, result.output
         publish_commands = [command for command in recorder.commands if command.startswith("docker compose")]
@@ -354,7 +356,7 @@ class TestBundleMode:
         self._write_tree(tmp_path)
         recorder = _invoke_publishing(monkeypatch, tmp_path)
 
-        result = runner.invoke(publish_compose.app, [])
+        result = runner.invoke(publish_verb.app, [])
 
         assert result.exit_code == 0, result.output
         publish_commands = [command for command in recorder.commands if command.startswith("docker compose")]
@@ -381,7 +383,7 @@ class TestBundleMode:
         self._write_tree(tmp_path)
         _invoke_publishing(monkeypatch, tmp_path)
 
-        result = runner.invoke(publish_compose.app, ["--bundle", "core-fabric"])
+        result = runner.invoke(publish_verb.app, ["--bundle", "core-fabric"])
 
         assert result.exit_code != 0
 
@@ -393,7 +395,7 @@ class TestPlan:
         monkeypatch.delenv("REGISTRY_USERNAME", raising=False)
         monkeypatch.delenv("REGISTRY_TOKEN", raising=False)
 
-        result = runner.invoke(publish_compose.app, ["--plan"])
+        result = runner.invoke(publish_verb.app, ["--plan"])
 
         assert result.exit_code == 0, result.output
         assert json.loads(result.output) == []
@@ -403,7 +405,7 @@ class TestPlan:
         monkeypatch.delenv("REGISTRY_USERNAME", raising=False)
         monkeypatch.delenv("REGISTRY_TOKEN", raising=False)
 
-        result = runner.invoke(publish_compose.app, ["--plan"])
+        result = runner.invoke(publish_verb.app, ["--plan"])
 
         assert result.exit_code == 0, result.output
         assert json.loads(result.output) == []
