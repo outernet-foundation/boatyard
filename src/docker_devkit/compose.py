@@ -64,7 +64,10 @@ def up(
 
         # Hand off to docker compose up.
         up_command = compose_command(
-            root, assembly.compose_files, *(f"--profile {profile}" for profile in assembly.profiles), "up"
+            root,
+            assembly.compose_files,
+            *(argument for profile in assembly.profiles for argument in ("--profile", profile)),
+            "up",
         )
         if not build:
             up_command += " --pull missing"

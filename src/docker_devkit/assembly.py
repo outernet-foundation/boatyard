@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 from collections.abc import Mapping
 from itertools import combinations, groupby
 from os import environ
@@ -304,11 +305,15 @@ def require_compose_stack(config: DockerDevkitConfig | None) -> None:
 
 
 def compose_command(root: Path, compose_files: list[Path], *arguments: str) -> str:
-    files_arguments = " ".join(f"-f {compose_file}" for compose_file in compose_files)
+    quoted_arguments = [shlex.quote(argument) for argument in arguments]
+    files_arguments = " ".join(f"-f {shlex.quote(str(compose_file))}" for compose_file in compose_files)
     lock_file = root / LOCK_PATH
-    lock_argument = f" --env-file {lock_file}" if lock_file.exists() else ""
-    prefix = f"docker compose {files_arguments} --project-directory {root} --env-file .env{lock_argument}"
-    return " ".join([prefix, *arguments])
+    lock_argument = f" --env-file {shlex.quote(str(lock_file))}" if lock_file.exists() else ""
+    prefix = (
+        f"docker compose {files_arguments} --project-directory {shlex.quote(str(root))} "
+        f"--env-file .env{lock_argument}"
+    )
+    return " ".join([prefix, *quoted_arguments])
 
 
 def write_temp_compose_file(document: Mapping[str, object], prefix: str) -> Path:
