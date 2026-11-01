@@ -1,11 +1,13 @@
 # The consumer contract: CLI, declarations, and artifacts only
 
 Pre-implementation ADR, captured 2026-11-01 at the end of the
-import-elimination design session. The decisions below are locked; the open
-questions at the end are the design's unfinished surface, answered in follow-up
-sessions before any implementation plan (a separate session's artifact) is
-written. This ADR absorbs Parts 0 and 1 of `plan-artifact-identity.md` (see
-"Absorption"); that file's Parts 2–4 remain paused with it.
+import-elimination design session. The decisions below are locked; the one
+open item (O1, the catch-up archaeology) is execution-scoped — it runs as the
+first phase of the implementation plan
+(`plan-consumer-contract-implementation.md`), and its findings fold back into
+that plan's catch-up phase before the wave runs. This ADR absorbs Parts 0 and
+1 of `plan-artifact-identity.md` (see "Absorption"); that file's Parts 2–4
+remain paused with it.
 
 ## Orientation: the problem
 
@@ -229,31 +231,26 @@ no surface; literal refs — the escape-hatch class banned outright (D5), the
 one place detection remains, reframed as format validity. No cross-file
 invariant check survives anywhere in the design.
 
-## Next-session surgery
+## The plan pair
 
-The next session's first job is doc surgery, then implementation-plan
-construction. End state: two ADRs and two implementation plans, each
-self-contained.
+Two ADRs and two implementation plans, each self-contained:
 
-1. **Plan A** (new file) — implements this ADR: D3–D7 devkit work; the
-   absorbed Parts 0–1, with their design detail *lifted from*
-   `plan-artifact-identity.md`'s Part 0 and Part 1 sections (resolver
-   selection rules, migration, dirty-tree guard, re-key choreography, test
-   batteries); the consumer catch-up (D9); the O1 archaeology.
-2. **Plan B** — `plan-artifact-identity-implementation.md` reduced to phases
-   8–21 (Parts 2–4), rewritten to stand alone: phases 1–7 become stated
-   prerequisites delivered by Plan A.
-3. **`plan-artifact-identity.md`** slims to the Parts 2–4 decision record;
-   its Part 0/1 sections move into Plan A (this file's Absorption section
-   keeps the amendments); its Sequencing section rewrites to steps 2–4 with
-   step 1 delivered by this initiative.
-4. **Stale anchors everywhere**: the implementation plan's module references
-   predate the refactor — `build_docker.py` → `bake.py`, `compose.py` →
-   `assembly.py`/`verbs/`, `documents.py` members → `config.py` (record) and
-   `service_builds.py`, `host.py` dissolved. Its session-start checkout table
-   references dead branches (`compose-bundles`, `more-docs`); docker-devkit
-   sits on `refactor` at 0.5.9, unpublished. Re-derive the table at Plan A's
-   release point.
+1. **Plan A** — `plan-consumer-contract-implementation.md` — implements this
+   ADR: D3–D7 devkit work; the absorbed Parts 0–1, with their design detail
+   lifted in (resolver selection rules, migration, dirty-tree guard, re-key
+   choreography, test batteries); the consumer catch-up (D9); and the O1
+   archaeology as its first phase. It locks the names this ADR deferred to
+   plan-session material: the tag-lookup verb is `tree-tags`, the retarget
+   flag is `--registry`.
+2. **Plan B** — `plan-artifact-identity-implementation.md`, phases 8–21
+   (Parts 2–4), standing alone over stated prerequisites Plan A delivers;
+   its session-start checkout table is re-derived at this initiative's
+   release boundary, before its first session opens.
+3. `plan-artifact-identity.md` is the Parts 2–4 decision record; this ADR's
+   Absorption section holds the Part 0/1 amendments.
+4. Both plans carry refactor-true module anchors (`bake.py`,
+   `assembly.py`/`verbs/`, `config.py`, `service_builds.py`; `host.py` is
+   dissolved).
 
 Archaeology starting point (verified at capture): all five consumers pin
 `docker-devkit==0.4.9.dev165` — the latest published; the refactor's 0.5.9 is
@@ -263,11 +260,9 @@ unpublished. Library imports live in placeframe's `scripts/preflight.py`,
 `scripts/src/scripts/install_zed/{orchestrator,box_install,constants}.py` —
 each maps to a D-decision dissolution; re-verify with grep before editing.
 
-## Open questions
-
-These are answered in follow-up sessions before the implementation plan is
-written; the design is not locked until they close.
+## Open question
 
 - **O1 — catch-up archaeology.** The dev165→final diff across CLI, schema,
   lock format, and artifact shapes may surface consumer edits beyond D9's
-  enumeration; findings fold back into the plan.
+  enumeration; it executes as Plan A's first phase, and findings fold back
+  into that plan's catch-up phase before the wave runs.
