@@ -717,7 +717,9 @@ def _resolve_base_image_templates(root: Path, base_images: dict[str, str]) -> di
         elif key == "python":
             pins[key] = _python_version_pin(root)
         else:
-            raise RuntimeError(f"base_images template key {{{key}}} is unknown; the toolchain pins are {{uv}}, {{python}}")
+            raise RuntimeError(
+                f"base_images template key {{{key}}} is unknown; the toolchain pins are {{uv}}, {{python}}"
+            )
     resolved: dict[str, str] = {}
     for name, reference in base_images.items():
         parts: list[str] = []

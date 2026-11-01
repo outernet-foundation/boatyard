@@ -365,7 +365,9 @@ class TestBaseImageTemplates:
         )
         write_lock(tmp_path)
 
-        with pytest.raises(RuntimeError, match=r"template key \{golang\} is unknown; the toolchain pins are \{uv\}, \{python\}"):
+        with pytest.raises(
+            RuntimeError, match=r"template key \{golang\} is unknown; the toolchain pins are \{uv\}, \{python\}"
+        ):
             load_config(tmp_path)
 
 
