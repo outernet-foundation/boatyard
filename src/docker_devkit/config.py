@@ -812,17 +812,10 @@ def _resolve_base_image_templates(root: Path, base_images: dict[str, str]) -> di
             raise RuntimeError(
                 f"base_images template key {{{key}}} is unknown; the toolchain pins are {{uv}}, {{python}}"
             )
-    resolved: dict[str, str] = {}
-    for name, reference in base_images.items():
-        parts: list[str] = []
-        cursor = 0
-        for match in TEMPLATE_KEY_PATTERN.finditer(reference):
-            parts.append(reference[cursor : match.start()])
-            parts.append(pins[match.group(1)])
-            cursor = match.end()
-        parts.append(reference[cursor:])
-        resolved[name] = "".join(parts)
-    return resolved
+    return {
+        name: TEMPLATE_KEY_PATTERN.sub(lambda match: pins[match.group(1)], reference)
+        for name, reference in base_images.items()
+    }
 
 
 def _uv_version_pin(root: Path) -> str:

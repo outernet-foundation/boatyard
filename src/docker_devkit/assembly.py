@@ -97,8 +97,10 @@ class Assembly:
                 )
             choices[group] = name
 
+        auth_option = choices.get(AUTH_GROUP_NAME)
+
         self.profiles = _split_names(environment.get(PROFILES_VARIABLE, ""))
-        self.forwarded = forwarded_pair(environment) if choices.get(AUTH_GROUP_NAME) is not None else None
+        self.forwarded = forwarded_pair(environment) if auth_option is not None else None
 
         # The declaration-order flatten every assembly view reads: each group yields
         # itself (its riding routes and ports) plus its selected option, each bare
@@ -146,10 +148,8 @@ class Assembly:
         self.ports = [port for _, entry in entries for port in entry.ports]
         self.auth_route = None
         auth = config.services.get(AUTH_GROUP_NAME)
-        if isinstance(auth, ServiceGroup):
-            option_name = choices.get(AUTH_GROUP_NAME)
-            if option_name is not None:
-                self.auth_route = auth.options[option_name].routes[0]
+        if isinstance(auth, ServiceGroup) and auth_option is not None:
+            self.auth_route = auth.options[auth_option].routes[0]
 
         # Materialize and validate in one step: the per-run compose files (root
         # first, dev overlay last — the -f order, so the overlay overrides) and
@@ -285,7 +285,7 @@ class Assembly:
         for bundle in self.config.compose_bundles():
             for workload in bundle.workloads:
                 document = WorkloadDocument.model_validate(
-                    yaml.safe_load((self.root / self.config.score_dir / workload).read_text(encoding="utf-8"))
+                    yaml.safe_load((self.config.score_dir_path() / workload).read_text(encoding="utf-8"))
                 )
                 raw = document.metadata.annotations.get(DEV_TOGGLES_ANNOTATION)
                 if not isinstance(raw, str) or not raw.strip():

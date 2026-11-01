@@ -6,6 +6,7 @@ import shlex
 import shutil
 from collections.abc import Generator
 from contextlib import contextmanager
+from functools import partial
 from hashlib import sha256
 from importlib.resources import as_file, files
 from pathlib import Path
@@ -276,7 +277,7 @@ def generate_compose(config: DockerDevkitConfig, images: dict[str, str]) -> None
             "the compose target requires local service entries (workloads:) under docker-devkit.yaml's services key"
         )
     score_dir = config.score_dir_path()
-    score_state = score_dir / ".score-compose"
+    score_state = score_dir / STATE_PREFIX
 
     with _builtin_patch_templates() as builtin_templates:
         for bundle in bundles:
@@ -619,7 +620,7 @@ def generate_k8s(config: DockerDevkitConfig, k8s: K8sConfig, output: Path, lock:
                     resolved = resolve_lock_refs(
                         resolve_includes(document, root, path.as_posix()), images, path.as_posix()
                     )
-                    target = values_dir / config.chart_values_path(chart_name).relative_to(root)
+                    target = values_dir / path.relative_to(root)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     write_generated_file(target, dump_compose(resolved))
                     values_arguments.append(target.as_posix())
@@ -884,23 +885,21 @@ def _rendered_workloads(
             source_path = config.score_dir_path() / name
             document = resolve_lock_refs(_load_yaml_file(source_path), images, f"workload {name}")
             source = yaml.safe_dump(document, sort_keys=False, width=1000)
-            parts: list[str] = []
-            index = 0
-            for match in PLACEHOLDER.finditer(source):
-                parts.append(source[index : match.start()])
-                variable = match.group(1)
-                value = rendering_vars.get(variable) or os.environ.get(variable)
-                if not value:
-                    raise SystemExit(
-                        f"{name}: ${{{variable}}} is set in neither the rendering's vars map nor the "
-                        "environment (service SHAs derive from the build keys)"
-                    )
-                parts.append(value)
-                index = match.end()
-            parts.append(source[index:])
-            (directory / name).write_text("".join(parts), "utf-8")
+            rendered = PLACEHOLDER.sub(partial(_placeholder_value, rendering_vars, name), source)
+            (directory / name).write_text(rendered, "utf-8")
 
         yield " ".join((directory / name).as_posix() for name in workloads)
+
+
+def _placeholder_value(rendering_vars: dict[str, str], workload_name: str, match: re.Match[str]) -> str:
+    variable = match.group(1)
+    value = rendering_vars.get(variable) or os.environ.get(variable)
+    if not value:
+        raise SystemExit(
+            f"{workload_name}: ${{{variable}}} is set in neither the rendering's vars map nor the "
+            "environment (service SHAs derive from the build keys)"
+        )
+    return value
 
 
 def dump_compose(value: object) -> str:

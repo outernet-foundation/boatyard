@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from functools import partial
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -70,15 +71,14 @@ def finalize_baked(baked_paths: list[Path], repository: str) -> None:
             )
 
         # Refs under the bundle repository are this repo's own built images; publish them digest-pinned.
-        text = baked_path.read_text(encoding="utf-8")
-        parts: list[str] = []
-        cursor = 0
-        for match in own_image_pattern.finditer(text):
-            parts.append(text[cursor : match.start()])
-            reference = match.group(0)
-            if reference not in digests:
-                digests[reference] = resolve_remote_digest(reference)
-            parts.append(f"{reference.rsplit(':', 1)[0]}@{digests[reference]}")
-            cursor = match.end()
-        parts.append(text[cursor:])
-        baked_path.write_text("".join(parts), encoding="utf-8")
+        baked_path.write_text(
+            own_image_pattern.sub(partial(_pinned_reference, digests), baked_path.read_text(encoding="utf-8")),
+            encoding="utf-8",
+        )
+
+
+def _pinned_reference(digests: dict[str, str], match: re.Match[str]) -> str:
+    reference = match.group(0)
+    if reference not in digests:
+        digests[reference] = resolve_remote_digest(reference)
+    return f"{reference.rsplit(':', 1)[0]}@{digests[reference]}"
