@@ -4,7 +4,7 @@ import json
 import re
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
-from typing import Any, Literal, Self
+from typing import Literal, Self
 
 import pathspec
 import yaml
@@ -19,9 +19,11 @@ from pydantic import (
     model_validator,
 )
 
-from .config import FAN_ARG, DockerDevkitConfig, service_sha_env
+from .config import FAN_ARG, DockerDevkitConfig, require_single_top, service_sha_env
 
 KEEP_STORAGE_PATTERN = re.compile(r"^(\d+(?:\.\d+)?)\s*([TGMK]i?B)?$", re.IGNORECASE)
+
+type BakeValue = str | list[str] | dict[str, str]
 
 
 class BindVolume(BaseModel):
@@ -146,11 +148,12 @@ class DaemonConfig(BaseModel):
     def _require_keep_storage(self, info: ValidationInfo) -> Self:
         if self.builder.gc.default_keep_storage:
             return self
-        context: dict[str, Any] = info.context or {}
-        sample = json.dumps({"builder": {"gc": {"defaultKeepStorage": f"{context.get('min_gb', 60)}GB"}}}, indent=2)
+        context: dict[str, object] = info.context or {}
+        min_gb = context.get("min_gb", 60)
+        sample = json.dumps({"builder": {"gc": {"defaultKeepStorage": f"{min_gb}GB"}}}, indent=2)
         raise ValueError(
             f"builder.gc.defaultKeepStorage missing in {context.get('path', 'daemon.json')}; "
-            f"need >= {context.get('min_gb', 60)}GB:\n\n{sample}"
+            f"need >= {min_gb}GB:\n\n{sample}"
         )
 
 
@@ -183,14 +186,14 @@ class ScoreState(BaseModel):
 def render_bake(config: DockerDevkitConfig, *, push: bool, host: str, dev: bool = False) -> str:
     # The per-run temp bake file: bake validates its own input by failing on it, so no
     # model sits behind the render. Identical configs render byte-identical files.
-    services: dict[str, dict[str, Any]] = {}
+    services: dict[str, dict[str, dict[str, BakeValue]]] = {}
     for service in config.service_builds.values():
         for target, variant in service.target_variants:
             args: dict[str, str] = {key: f"${{{key}:-}}" for key in config.base_images}
             if variant is not None:
                 args[FAN_ARG] = variant
             args.update({sha: f"${{{sha}:?err}}" for sha in service.sha_args})
-            build: dict[str, Any] = {"dockerfile": service.dockerfile}
+            build: dict[str, BakeValue] = {"dockerfile": service.dockerfile}
             if dev:
                 build["target"] = "dev"
             if config.platforms:
@@ -235,8 +238,7 @@ def compute_service_shas(repo_root: Path, config: DockerDevkitConfig) -> dict[st
     # Derive the workload root as the single top-level directory holding every service;
     # files under it that belong to no service are excluded from every SHA.
     tops = {PurePosixPath(service_dir).parts[0] for service_dir in service_dirs if PurePosixPath(service_dir).parts}
-    if len(tops) > 1:
-        raise RuntimeError(f"services span multiple top-level directories: {sorted(tops)}")
+    require_single_top(tops, "services")
     workload_root = PurePosixPath(next(iter(tops))) if tops else None
 
     tree_entries = bash_output("git ls-tree -r HEAD", cwd=repo_root).splitlines()

@@ -563,8 +563,7 @@ def derive_services(root: Path) -> dict[str, ServiceBuild]:
             if child.is_dir() and (child / DOCKERFILE_NAME).is_file():
                 service_dirs[child.name] = child
                 tops.add(top.name)
-    if len(tops) > 1:
-        raise RuntimeError(f"Dockerfile service directories span multiple top-level directories: {sorted(tops)}")
+    require_single_top(tops, "Dockerfile service directories")
 
     services: dict[str, ServiceBuild] = {}
     own_fans: dict[str, bool] = {}
