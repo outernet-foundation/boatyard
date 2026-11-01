@@ -11,6 +11,8 @@ from pydantic import (
     model_validator,
 )
 
+from docker_devkit.config import DEV_TOGGLES_ANNOTATION
+
 
 class BindVolume(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -86,3 +88,9 @@ class WorkloadDocument(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     metadata: WorkloadMetadata = Field(default_factory=WorkloadMetadata)
+
+    @property
+    def dev_toggles(self) -> tuple[object | None, object]:
+        # The raw dev-toggles annotation value (None when absent) beside the service name;
+        # consumers own their refuse/skip policies.
+        return self.metadata.annotations.get(DEV_TOGGLES_ANNOTATION), self.metadata.name

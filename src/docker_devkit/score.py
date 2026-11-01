@@ -471,13 +471,11 @@ def _validate_workload_surface(name: str, document: Any) -> set[str]:
 def _validate_dev_toggles(name: str, document: Any, claimed: dict[str, str]) -> None:
     # The dev-overlay spelling laws, refused at generation: the annotation is consumed at
     # `up --dev`, and the declaring change is where malformed spelling should fail.
-    workload = WorkloadDocument.model_validate(document)
-    raw = workload.metadata.annotations.get(DEV_TOGGLES_ANNOTATION)
+    raw, service_name = WorkloadDocument.model_validate(document).dev_toggles
     if raw is None:
         return
     if not isinstance(raw, str) or not raw.strip():
         raise SystemExit(f"{name}: {DEV_TOGGLES_ANNOTATION} must be a comma-separated NAME=default string")
-    service_name = workload.metadata.name
     if not isinstance(service_name, str) or not service_name:
         raise SystemExit(f"{name}: metadata.name is required to key the dev overlay service")
     parse_dev_toggles(name, raw)

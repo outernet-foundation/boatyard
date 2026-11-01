@@ -287,10 +287,9 @@ class Assembly:
                 document = WorkloadDocument.model_validate(
                     yaml.safe_load((self.config.score_dir_path() / workload).read_text(encoding="utf-8"))
                 )
-                raw = document.metadata.annotations.get(DEV_TOGGLES_ANNOTATION)
+                raw, service_name = document.dev_toggles
                 if not isinstance(raw, str) or not raw.strip():
                     continue
-                service_name = document.metadata.name
                 if not isinstance(service_name, str) or not service_name or service_name not in declared:
                     continue
                 toggles = parse_dev_toggles(service_name, raw)
