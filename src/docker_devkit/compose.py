@@ -55,22 +55,48 @@ class ComposeContext:
     dev_overlay: Path | None = None
     assembly_root: Path | None = None
 
-    @classmethod
-    def bring_up(cls, root: Path, *, dev: bool) -> ComposeContext:
-        config = load_config(root)
+    @property
+    def lock_file(self) -> Path:
+        return self.root / LOCK_PATH
 
-        if not (root / ENV_FILE).exists():
-            raise RuntimeError("No .env file found; create one first (e.g., copy .env.example)")
+    def command(self, *arguments: str) -> str:
+        files_arguments = " ".join(f"-f {compose_file}" for compose_file in self.compose_files)
+        lock_argument = f" --env-file {self.lock_file}" if self.lock_file.exists() else ""
+        prefix = f"docker compose {files_arguments} --project-directory {self.root} --env-file .env{lock_argument}"
+        return " ".join([prefix, *arguments])
 
-        environment = parse_env_file(root / ENV_FILE)
-        environment.update(environ)
-        names = _split_names(environment.get(BUNDLES_VARIABLE, ""))
 
-        if config is None or not config.services:
-            if names:
-                raise RuntimeError(f"{BUNDLES_VARIABLE}= is set but this repo declares no services")
-            return cls(root, config, [DEFAULT_COMPOSE_FILE], environment)
+@up_app.command()
+def up(
+    attached: Annotated[bool, typer.Option("--attached", "-a", help="Run in foreground (not detached)")] = False,
+    quiet_pull: Annotated[
+        bool,
+        typer.Option("--quiet-pull", "-q", help="Suppress per-layer pull progress (still shows pull/push totals)."),
+    ] = False,
+    build: Annotated[
+        bool,
+        typer.Option("--build", help="Build all images locally before bringing the stack up; skips pulling"),
+    ] = False,
+    dev: Annotated[
+        bool,
+        typer.Option("--dev", help="Layer the generated dev overlay (dev-stage images, repo bind, .env toggle holes)."),
+    ] = False,
+) -> None:
+    root = Path.cwd()
+    config = load_config(root)
 
+    if not (root / ENV_FILE).exists():
+        raise RuntimeError("No .env file found; create one first (e.g., copy .env.example)")
+
+    environment = parse_env_file(root / ENV_FILE)
+    environment.update(environ)
+    names = _split_names(environment.get(BUNDLES_VARIABLE, ""))
+
+    if config is None or not config.services:
+        if names:
+            raise RuntimeError(f"{BUNDLES_VARIABLE}= is set but this repo declares no services")
+        context = ComposeContext(root, config, [DEFAULT_COMPOSE_FILE], environment)
+    else:
         # BUNDLES= names options only: at most one per group, zero legal when riders carry
         # the assembly.
         options: dict[str, str] = {}
@@ -229,7 +255,7 @@ class ComposeContext:
             }
 
         assembly_root = _write_temp_root(document)
-        context = cls(root, config, [assembly_root], environment, assembly_root=assembly_root)
+        context = ComposeContext(root, config, [assembly_root], environment, assembly_root=assembly_root)
         if routes or ports:
             # The drift-impossible teeth, against the assembly compose itself resolves
             # (includes included): every route upstream and every port's owning service
@@ -241,6 +267,7 @@ class ComposeContext:
             except BaseException:
                 assembly_root.unlink(missing_ok=True)
                 raise
+
             resolved.discard("")
             for route in routes:
                 upstream = route.upstream.partition(":")[0]
@@ -347,7 +374,7 @@ class ComposeContext:
                 handle.write(yaml.safe_dump({"services": overlay_services}, sort_keys=False, default_flow_style=False))
                 dev_overlay = Path(handle.name)
 
-        return cls(
+        context = ComposeContext(
             root,
             config,
             [assembly_root, *([dev_overlay] if dev_overlay is not None else [])],
@@ -356,64 +383,11 @@ class ComposeContext:
             assembly_root=assembly_root,
         )
 
-    @classmethod
-    def teardown(cls, root: Path) -> ComposeContext:
-        config = load_config(root)
-
-        if not (root / ENV_FILE).exists():
-            raise RuntimeError("No .env file found; create one first (e.g., copy .env.example)")
-
-        if config is None or not config.services:
-            return cls(root, config, [DEFAULT_COMPOSE_FILE], None)
-        project_name = config.project_name
-        if not project_name:
-            raise RuntimeError(
-                "docker-devkit.yaml declares no services; a builds-only or k8s-only repo has no compose stack"
-            )
-
-        # Teardown keys on the project, not on a file list: a name-only root plus
-        # --remove-orphans removes every container the project ever created — any
-        # selection, any profile — without resolving a single include, so an option's
-        # env holes cannot break an open-mode teardown.
-        assembly_root = _write_temp_root({"name": project_name})
-        return cls(root, config, [assembly_root], None, assembly_root=assembly_root)
-
-    @property
-    def lock_file(self) -> Path:
-        return self.root / LOCK_PATH
-
-    def command(self, *arguments: str) -> str:
-        files_arguments = " ".join(f"-f {compose_file}" for compose_file in self.compose_files)
-        lock_argument = f" --env-file {self.lock_file}" if self.lock_file.exists() else ""
-        prefix = f"docker compose {files_arguments} --project-directory {self.root} --env-file .env{lock_argument}"
-        return " ".join([prefix, *arguments])
-
-
-@up_app.command()
-def up(
-    attached: Annotated[bool, typer.Option("--attached", "-a", help="Run in foreground (not detached)")] = False,
-    quiet_pull: Annotated[
-        bool,
-        typer.Option("--quiet-pull", "-q", help="Suppress per-layer pull progress (still shows pull/push totals)."),
-    ] = False,
-    build: Annotated[
-        bool,
-        typer.Option("--build", help="Build all images locally before bringing the stack up; skips pulling"),
-    ] = False,
-    dev: Annotated[
-        bool,
-        typer.Option("--dev", help="Layer the generated dev overlay (dev-stage images, repo bind, .env toggle holes)."),
-    ] = False,
-) -> None:
-    root = Path.cwd()
-    context = ComposeContext.bring_up(root, dev=dev)
-
-    if build and (context.config is None or not (context.config.repository or context.config.base_images)):
+    if build and (config is None or not (config.repository or config.base_images)):
         raise typer.BadParameter(
             "--build requires build declarations (repository or base_images) in docker-devkit.yaml"
         )
 
-    config = context.config
     if config is not None and context.lock_file.exists():
         # Fail closed over every lock entry — each mirror-prefixed by construction under
         # the declared or default prefix — distinguishing a manifest the registry truly
@@ -446,7 +420,7 @@ def up(
 
     # compose ignores COMPOSE_PROFILES whenever a --profile flag is present, so forward the
     # selection explicitly; shell env wins over .env, comma-split and deduplicated.
-    profiles = _split_names((context.environment or {}).get("COMPOSE_PROFILES", ""))
+    profiles = _split_names(environment.get("COMPOSE_PROFILES", ""))
     if profiles:
         defined = [
             line.strip() for line in bash_output(f"{context.command()} config --profiles").splitlines() if line.strip()
@@ -473,7 +447,28 @@ def up(
 def down(
     volumes: Annotated[bool, typer.Option("--volumes", "-v", help="Remove named volumes.")] = False,
 ) -> None:
-    context = ComposeContext.teardown(Path.cwd())
+    root = Path.cwd()
+    config = load_config(root)
+
+    if not (root / ENV_FILE).exists():
+        raise RuntimeError("No .env file found; create one first (e.g., copy .env.example)")
+
+    if config is None or not config.services:
+        context = ComposeContext(root, config, [DEFAULT_COMPOSE_FILE], None)
+    else:
+        project_name = config.project_name
+        if not project_name:
+            raise RuntimeError(
+                "docker-devkit.yaml declares no services; a builds-only or k8s-only repo has no compose stack"
+            )
+
+        # Down keys on the project, not on a file list: a name-only root plus
+        # --remove-orphans removes every container the project ever created — any
+        # selection, any profile — without resolving a single include, so an option's
+        # env holes cannot break an open-mode teardown.
+        assembly_root = _write_temp_root({"name": project_name})
+        context = ComposeContext(root, config, [assembly_root], None, assembly_root=assembly_root)
+
     command = context.command("down", "--remove-orphans")
     if volumes:
         command += " -v"

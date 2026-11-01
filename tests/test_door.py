@@ -1,17 +1,33 @@
+import re
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
+from typer.testing import CliRunner
 
 from docker_devkit import compose
-from docker_devkit.compose import ComposeContext
 from docker_devkit.config import LOCK_PATH
 
 FAKE_DIGEST = "sha256:" + "a" * 64
 LIVEKIT_REF = "oci://ghcr.io/org/livekit@" + FAKE_DIGEST
 KEYCLOAK_REF = "oci://ghcr.io/org/keycloak@" + FAKE_DIGEST
 CADDY_LOCK_ENTRY = "ghcr.io/outernet-foundation/mirror/docker.io/library/caddy:2.8.4-alpine@" + FAKE_DIGEST
+
+ASSEMBLY_ARGUMENT_PATTERN = re.compile(r"-f (\S*devkit-assembly-\S+\.yaml)")
+
+runner = CliRunner()
+
+
+class AssemblyCapture:
+    # Reads the materialized per-run root compose file out of the handoff command.
+    def __init__(self) -> None:
+        self.document: dict[str, Any] | None = None
+
+    def run(self, command: str) -> None:
+        match = ASSEMBLY_ARGUMENT_PATTERN.search(command)
+        if match is not None:
+            self.document = yaml.safe_load(Path(match.group(1)).read_text(encoding="utf-8"))
 
 
 def _assembly_document(
@@ -58,13 +74,16 @@ def _assembly_document(
     monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
     monkeypatch.delenv("PUBLIC_URL", raising=False)
     monkeypatch.delenv("GATEWAY_PORT", raising=False)
+    monkeypatch.chdir(tmp_path)
+    capture = AssemblyCapture()
     monkeypatch.setattr(compose, "bash_output", _probe_present_and_services)
+    monkeypatch.setattr(compose, "bash_handoff", capture.run)
 
-    context = ComposeContext.bring_up(tmp_path, dev=False)
-    assert context.assembly_root is not None
-    document = yaml.safe_load(context.assembly_root.read_text(encoding="utf-8"))
-    context.assembly_root.unlink(missing_ok=True)
-    return document
+    result = runner.invoke(compose.up_app, [])
+
+    assert result.exit_code == 0, result.output
+    assert capture.document is not None
+    return capture.document
 
 
 def _probe_present_and_services(command: str) -> str:

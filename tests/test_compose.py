@@ -9,7 +9,6 @@ from bashrun.bash import CalledProcessError, bash, bash_output
 from typer.testing import CliRunner
 
 from docker_devkit import compose
-from docker_devkit.compose import ComposeContext
 from docker_devkit.config import LOCK_PATH
 
 MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
@@ -141,6 +140,19 @@ class AssemblyRecorder(HandoffRecorder):
     def run(self, command: str) -> None:
         super().run(command)
         match = ASSEMBLY_ARGUMENT_PATTERN.search(command)
+        if match is not None:
+            self.documents.append(yaml.safe_load(Path(match.group(1)).read_text(encoding="utf-8")))
+
+
+class OverlayRecorder(HandoffRecorder):
+    # Captures the materialized dev overlay file alongside the handoff command.
+    def __init__(self) -> None:
+        super().__init__()
+        self.documents: list[dict[str, Any]] = []
+
+    def run(self, command: str) -> None:
+        super().run(command)
+        match = OVERLAY_ARGUMENT_PATTERN.search(command)
         if match is not None:
             self.documents.append(yaml.safe_load(Path(match.group(1)).read_text(encoding="utf-8")))
 
@@ -770,18 +782,24 @@ SINGLE_STAGE_DOCKERFILE = "FROM ghcr.io/org/base:1 AS dev\n"
 
 
 class TestDevOverlay:
-    def test_dev_stage_service_gets_dev_image_repo_bind_and_toggle_holes(self, tmp_path: Path):
+    def test_dev_stage_service_gets_dev_image_repo_bind_and_toggle_holes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         _write_dev_tree(
             tmp_path,
             dockerfile=MULTI_STAGE_DOCKERFILE,
             api_annotations={DEV_TOGGLES: "RELOAD=true,DEBUG_API=false"},
         )
+        monkeypatch.delenv("BUNDLES", raising=False)
+        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
+        recorder = OverlayRecorder()
+        monkeypatch.setattr(compose, "bash_handoff", recorder.run)
+        monkeypatch.chdir(tmp_path)
 
-        context = ComposeContext.bring_up(tmp_path, dev=True)
+        result = runner.invoke(compose.up_app, ["--dev"])
 
-        assert context.dev_overlay is not None
-        assert context.compose_files[-1] == context.dev_overlay
-        document = yaml.safe_load(context.dev_overlay.read_text(encoding="utf-8"))
+        assert result.exit_code == 0, result.output
+        [document] = recorder.documents
         assert document == {
             "services": {
                 "api": {
@@ -798,35 +816,24 @@ class TestDevOverlay:
                 }
             }
         }
-        overlay = context.dev_overlay
-        assert overlay is not None
-        overlay.unlink()
-        assembly_root = context.assembly_root
-        assert assembly_root is not None
-        assembly_root.unlink(missing_ok=True)
 
-    def test_a_single_stage_dev_label_is_not_dev_shape_and_refuses(self, tmp_path: Path):
-        _write_dev_tree(tmp_path, dockerfile=SINGLE_STAGE_DOCKERFILE)
-
-        with pytest.raises(RuntimeError, match="no dev shape"):
-            ComposeContext.bring_up(tmp_path, dev=True)
-
-    def test_toggle_only_service_gets_environment_holes_without_an_image(self, tmp_path: Path):
+    def test_toggle_only_service_gets_environment_holes_without_an_image(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         _write_dev_tree(tmp_path, dockerfile=SINGLE_STAGE_DOCKERFILE, api_annotations={DEV_TOGGLES: "RELOAD=true"})
+        monkeypatch.delenv("BUNDLES", raising=False)
+        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
+        recorder = OverlayRecorder()
+        monkeypatch.setattr(compose, "bash_handoff", recorder.run)
+        monkeypatch.chdir(tmp_path)
 
-        context = ComposeContext.bring_up(tmp_path, dev=True)
+        result = runner.invoke(compose.up_app, ["--dev"])
 
-        assert context.dev_overlay is not None
-        document = yaml.safe_load(context.dev_overlay.read_text(encoding="utf-8"))
+        assert result.exit_code == 0, result.output
+        [document] = recorder.documents
         assert document == {"services": {"api": {"environment": {"RELOAD": "${RELOAD:-true}"}}}}
-        overlay = context.dev_overlay
-        assert overlay is not None
-        overlay.unlink()
-        assembly_root = context.assembly_root
-        assert assembly_root is not None
-        assembly_root.unlink(missing_ok=True)
 
-    def test_overlay_targets_only_services_the_selection_defines(self, tmp_path: Path):
+    def test_overlay_targets_only_services_the_selection_defines(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         # api carries the dev shape, but the selection is the edge option alone; a dev
         # overlay keying api would add a half-defined service, so only edge rides.
         _write_dev_tree(
@@ -836,18 +843,17 @@ class TestDevOverlay:
             edge_annotations={DEV_TOGGLES: "DEBUG_EDGE=false"},
         )
         (tmp_path / ".env").write_text("BUNDLES=edge\n", encoding="utf-8")
+        monkeypatch.delenv("BUNDLES", raising=False)
+        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
+        recorder = OverlayRecorder()
+        monkeypatch.setattr(compose, "bash_handoff", recorder.run)
+        monkeypatch.chdir(tmp_path)
 
-        context = ComposeContext.bring_up(tmp_path, dev=True)
+        result = runner.invoke(compose.up_app, ["--dev"])
 
-        assert context.dev_overlay is not None
-        document = yaml.safe_load(context.dev_overlay.read_text(encoding="utf-8"))
+        assert result.exit_code == 0, result.output
+        [document] = recorder.documents
         assert document == {"services": {"edge": {"environment": {"DEBUG_EDGE": "${DEBUG_EDGE:-false}"}}}}
-        overlay = context.dev_overlay
-        assert overlay is not None
-        overlay.unlink()
-        assembly_root = context.assembly_root
-        assert assembly_root is not None
-        assembly_root.unlink(missing_ok=True)
 
     def test_up_dev_without_dev_shape_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_dev_tree(tmp_path, dockerfile=SINGLE_STAGE_DOCKERFILE)
@@ -904,21 +910,30 @@ class TestDevOverlay:
             "RELOAD=true,RELOAD=false",
         ],
     )
-    def test_malformed_annotations_refuse(self, tmp_path: Path, annotation: str):
+    def test_malformed_annotations_refuse(self, tmp_path: Path, annotation: str, monkeypatch: pytest.MonkeyPatch):
         _write_dev_tree(tmp_path, dockerfile=MULTI_STAGE_DOCKERFILE, api_annotations={DEV_TOGGLES: annotation})
+        monkeypatch.delenv("BUNDLES", raising=False)
+        monkeypatch.chdir(tmp_path)
 
-        with pytest.raises(RuntimeError):
-            ComposeContext.bring_up(tmp_path, dev=True)
+        result = runner.invoke(compose.up_app, ["--dev"])
 
-    def test_non_string_annotation_refuses(self, tmp_path: Path):
+        assert result.exit_code != 0
+        assert isinstance(result.exception, RuntimeError)
+
+    def test_non_string_annotation_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_dev_tree(tmp_path, dockerfile=MULTI_STAGE_DOCKERFILE, api_annotations={DEV_TOGGLES: "RELOAD=true"})
         path = tmp_path / "stack" / "score" / "api.yaml"
         document = yaml.safe_load(path.read_text(encoding="utf-8"))
         document["metadata"]["annotations"][DEV_TOGGLES] = True
         path.write_text(yaml.safe_dump(document), encoding="utf-8")
+        monkeypatch.delenv("BUNDLES", raising=False)
+        monkeypatch.chdir(tmp_path)
 
-        with pytest.raises(RuntimeError, match="NAME=default"):
-            ComposeContext.bring_up(tmp_path, dev=True)
+        result = runner.invoke(compose.up_app, ["--dev"])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, RuntimeError)
+        assert "NAME=default" in str(result.exception)
 
 
 class TestLockRequirement:
