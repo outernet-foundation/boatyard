@@ -82,16 +82,14 @@ def _write_workload(root: Path, name: str, service_name: str, annotations: dict[
     path.write_text(yaml.safe_dump({"metadata": metadata}), encoding="utf-8")
 
 
-def _no_profiles(compose_prefix: str) -> list[str]:
-    return []
+def _defined_profiles(command: str) -> str:
+    assert "config --profiles" in command
+    return "keycloak\ntunnel-ngrok\n"
 
 
-def _defined_profiles(compose_prefix: str) -> list[str]:
-    return ["keycloak", "tunnel-ngrok"]
-
-
-def _rathole_profiles(compose_prefix: str) -> list[str]:
-    return ["tunnel-rathole"]
+def _rathole_profiles(command: str) -> str:
+    assert "config --profiles" in command
+    return "tunnel-rathole\n"
 
 
 def _silent_handoff(_command: str) -> None:
@@ -172,7 +170,7 @@ class PresentProbeAndServices:
 class TestProfileForwarding:
     def _invoke_up(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> HandoffRecorder:
         recorder = HandoffRecorder()
-        monkeypatch.setattr(compose, "enumerate_profiles", _defined_profiles)
+        monkeypatch.setattr(compose, "bash_output", _defined_profiles)
         monkeypatch.setattr(compose, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
         return recorder
@@ -211,7 +209,7 @@ class TestProfileForwarding:
         (tmp_path / ".env").write_text("COMPOSE_PROFILES=tunnel-ngrok\n", encoding="utf-8")
         monkeypatch.setenv("COMPOSE_PROFILES", "tunnel-rathole")
         recorder = HandoffRecorder()
-        monkeypatch.setattr(compose, "enumerate_profiles", _rathole_profiles)
+        monkeypatch.setattr(compose, "bash_output", _rathole_profiles)
         monkeypatch.setattr(compose, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
@@ -945,7 +943,6 @@ class TestLockRequirement:
         self._write_lock_free_tree(tmp_path)
         recorder = HandoffRecorder()
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr(compose, "enumerate_profiles", _no_profiles)
         monkeypatch.setattr(compose, "bash_handoff", recorder.run)
 
         result = runner.invoke(compose.down_app, [])

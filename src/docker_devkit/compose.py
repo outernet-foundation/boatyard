@@ -27,13 +27,6 @@ from .config import (
     load_config,
 )
 from .documents import parse_image_lock
-from .door import (
-    DOOR_CONFIG_NAME,
-    DOOR_SERVICE_NAME,
-    door_service_stanza,
-    parse_public_url,
-    render_caddyfile,
-)
 from .host import parse_env_file
 
 ENV_FILE = Path(".env")
@@ -41,6 +34,12 @@ DEFAULT_COMPOSE_FILE = Path("compose.yml")
 BUNDLES_VARIABLE = "BUNDLES"
 DEV_TOGGLES_ANNOTATION = "outernet.internal/dev-toggles"
 DEV_MOUNT_TARGET = "/app"
+
+DOOR_SERVICE_NAME = "door"
+DOOR_LISTEN_PORT = 8443
+DOOR_CONFIG_NAME = "devkit-door-caddyfile"
+DOOR_CONFIG_TARGET = "/etc/caddy/Caddyfile"
+CADDY_IMAGE_HOLE = "${CADDY_IMAGE:?err}"
 
 _MANIFEST_ABSENT_PATTERN = re.compile(r"\b404\b|not found|manifest unknown", re.IGNORECASE)
 
@@ -64,25 +63,26 @@ class ComposeContext:
         if not (root / ENV_FILE).exists():
             raise RuntimeError("No .env file found; create one first (e.g., copy .env.example)")
 
-        environment = _merged_env(root)
+        environment = parse_env_file(root / ENV_FILE)
+        environment.update(environ)
 
         if config is None or not config.services:
-            if _selection_names(environment):
+            if _split_names(environment.get(BUNDLES_VARIABLE, "")):
                 raise RuntimeError(f"{BUNDLES_VARIABLE}= is set but this repo declares no services")
             return cls(root, config, [DEFAULT_COMPOSE_FILE], environment)
 
         choices = _resolve_selection(config, environment)
         sources, local_outputs = _selected_sources(root, config, choices)
         _refuse_service_collisions(root, local_outputs)
-        routes = _assembly_routes(config, choices)
-        ports = _assembly_ports(config, choices)
+        entries = _assembly_entries(config, choices)
+        routes = [route for _, entry in entries for route in entry.routes]
+        ports = [port for _, entry in entries for port in entry.ports]
+        auth_route = _auth_route(config, choices)
 
-        assembly_root = _write_assembly_root(
-            root, config, sources, routes, ports, _auth_route(config, choices), environment
-        )
+        assembly_root = _write_assembly_root(root, config, sources, routes, ports, auth_route, environment)
         context = cls(root, config, [assembly_root], environment, assembly_root=assembly_root)
         try:
-            _validate_assembly(context, routes, ports, _auth_route(config, choices))
+            _validate_assembly(context, routes, ports, auth_route)
         except BaseException:
             assembly_root.unlink(missing_ok=True)
             raise
@@ -114,7 +114,8 @@ class ComposeContext:
 
         if config is None or not config.services:
             return cls(root, config, [DEFAULT_COMPOSE_FILE], None)
-        if not config.project_name:
+        project_name = config.project_name
+        if not project_name:
             raise RuntimeError(
                 "docker-devkit.yaml declares no services; a builds-only or k8s-only repo has no compose stack"
             )
@@ -123,7 +124,7 @@ class ComposeContext:
         # --remove-orphans removes every container the project ever created — any
         # selection, any profile — without resolving a single include, so an option's
         # env holes cannot break an open-mode teardown.
-        assembly_root = _write_minimal_root(config)
+        assembly_root = _write_temp_root({"name": project_name})
         return cls(root, config, [assembly_root], None, assembly_root=assembly_root)
 
     @property
@@ -170,9 +171,8 @@ def up(
         # daemon availability).
         for value in sorted(parse_image_lock(context.lock_file).root.values()):
             message = _mirror_probe_message(value)
-            if message is None:
-                continue
-            raise RuntimeError(message)
+            if message is not None:
+                raise RuntimeError(message)
 
     if build:
         run_build()
@@ -182,14 +182,11 @@ def up(
 
     # compose ignores COMPOSE_PROFILES whenever a --profile flag is present, so forward the
     # selection explicitly; shell env wins over .env, comma-split and deduplicated.
-    raw_profiles = (context.environment or {}).get("COMPOSE_PROFILES", "")
-    profiles: list[str] = []
-    for entry in raw_profiles.split(","):
-        profile = entry.strip()
-        if profile and profile not in profiles:
-            profiles.append(profile)
+    profiles = _split_names((context.environment or {}).get("COMPOSE_PROFILES", ""))
     if profiles:
-        defined = enumerate_profiles(context.command())
+        defined = [
+            line.strip() for line in bash_output(f"{context.command()} config --profiles").splitlines() if line.strip()
+        ]
         unknown = [profile for profile in profiles if profile not in defined]
         if unknown:
             raise RuntimeError(
@@ -230,25 +227,10 @@ def _handoff(context: ComposeContext, command: str) -> None:
             context.assembly_root.unlink(missing_ok=True)
 
 
-def _merged_env(root: Path) -> dict[str, str]:
-    values = parse_env_file(root / ENV_FILE)
-    values.update(environ)
-    return values
-
-
-def _selection_names(environment: dict[str, str]) -> list[str]:
-    names: list[str] = []
-    for entry in environment.get(BUNDLES_VARIABLE, "").split(","):
-        name = entry.strip()
-        if name and name not in names:
-            names.append(name)
-    return names
-
-
 def _resolve_selection(config: DockerDevkitConfig, environment: dict[str, str]) -> dict[str, str]:
     # BUNDLES= names options only: at most one per group, zero legal when riders carry the
     # assembly. Returns the group -> option choices.
-    names = _selection_names(environment)
+    names = _split_names(environment.get(BUNDLES_VARIABLE, ""))
     options: dict[str, str] = {}
     riding: list[str] = []
     for name, entry in config.services.items():
@@ -278,16 +260,26 @@ def _resolve_selection(config: DockerDevkitConfig, environment: dict[str, str]) 
     return choices
 
 
+def _split_names(value: str) -> list[str]:
+    names: list[str] = []
+    for entry in value.split(","):
+        name = entry.strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
 def _selected_sources(root: Path, config: DockerDevkitConfig, choices: dict[str, str]) -> tuple[list[str], list[Path]]:
     # The include list in services declaration order: every riding entry plus each group's
     # selected option, as an OCI ref (remote) or an absolute bundle-output path (local).
     sources: list[str] = []
     local_outputs: list[Path] = []
-
-    def add(entry: ServiceEntry, name: str) -> None:
+    for name, entry in _assembly_entries(config, choices):
+        if isinstance(entry, ServiceGroup):
+            continue
         if entry.ref is not None:
             sources.append(entry.ref)
-            return
+            continue
         output = root / bundle_output(name)
         if not output.is_file():
             raise RuntimeError(
@@ -299,41 +291,24 @@ def _selected_sources(root: Path, config: DockerDevkitConfig, choices: dict[str,
             )
         sources.append(output.resolve().as_posix())
         local_outputs.append(output)
-
-    for name, entry in config.services.items():
-        if isinstance(entry, ServiceGroup):
-            option_name = choices.get(name)
-            if option_name is not None:
-                add(entry.options[option_name], option_name)
-        else:
-            add(entry, name)
     return sources, local_outputs
 
 
-def _assembly_routes(config: DockerDevkitConfig, choices: dict[str, str]) -> list[RouteConfig]:
-    routes: list[RouteConfig] = []
+def _assembly_entries(
+    config: DockerDevkitConfig, choices: dict[str, str]
+) -> list[tuple[str, ServiceGroup | ServiceEntry]]:
+    # The declaration-order flatten every assembly view reads: each group yields itself
+    # (its riding routes and ports) plus its selected option, each bare entry yields itself.
+    entries: list[tuple[str, ServiceGroup | ServiceEntry]] = []
     for name, entry in config.services.items():
         if isinstance(entry, ServiceGroup):
-            routes.extend(entry.routes)
+            entries.append((name, entry))
             option_name = choices.get(name)
             if option_name is not None:
-                routes.extend(entry.options[option_name].routes)
+                entries.append((option_name, entry.options[option_name]))
         else:
-            routes.extend(entry.routes)
-    return routes
-
-
-def _assembly_ports(config: DockerDevkitConfig, choices: dict[str, str]) -> list[PortDeclaration]:
-    ports: list[PortDeclaration] = []
-    for name, entry in config.services.items():
-        if isinstance(entry, ServiceGroup):
-            ports.extend(entry.ports)
-            option_name = choices.get(name)
-            if option_name is not None:
-                ports.extend(entry.options[option_name].ports)
-        else:
-            ports.extend(entry.ports)
-    return ports
+            entries.append((name, entry))
+    return entries
 
 
 def _auth_route(config: DockerDevkitConfig, choices: dict[str, str]) -> RouteConfig | None:
@@ -363,7 +338,7 @@ def _write_assembly_root(
 
     services: dict[str, Any] = {}
     if routes:
-        services[DOOR_SERVICE_NAME] = _door_stanza(root, config, routes, auth_route, environment)
+        services[DOOR_SERVICE_NAME] = _door_stanza(root, config, auth_route, environment)
     for port in ports:
         entry: dict[str, Any] = {"target": port.target, "published": port.published, "protocol": port.protocol}
         if port.host_ip is not None:
@@ -373,8 +348,27 @@ def _write_assembly_root(
         document["services"] = services
     if routes:
         # The Caddyfile rides as inline content with every $ doubled, so compose
-        # interpolation leaves caddy's {$ENV} placeholders for the caddy runtime.
-        document["configs"] = {DOOR_CONFIG_NAME: {"content": render_caddyfile(routes, auth_route).replace("$", "$$")}}
+        # interpolation leaves caddy's {$ENV} runtime placeholders for the caddy runtime.
+        # handle blocks are mutually exclusive and caddy sorts them longest-path-first,
+        # so declaration order cannot shadow; the catch-all /* rides as a bare handle.
+        caddyfile_lines = [f":{DOOR_LISTEN_PORT} {{"]
+        for route in routes:
+            matcher = "" if route.path == "/*" else f" {route.path}"
+            if route.raw is not None:
+                block = ["\t\t" + line for line in route.raw.splitlines()]
+            elif route is auth_route:
+                block = [
+                    f"\t\treverse_proxy {route.upstream} {{",
+                    "\t\t\theader_up X-Forwarded-Proto {$FORWARDED_PROTO}",
+                    "\t\t\theader_up X-Forwarded-Port {$FORWARDED_PORT}",
+                    "\t\t}",
+                ]
+            else:
+                block = [f"\t\treverse_proxy {route.upstream}"]
+            head = "\thandle_path" if route.strip_prefix else "\thandle"
+            caddyfile_lines.extend((f"{head}{matcher} {{", *block, "\t}"))
+        caddyfile_lines.append("}")
+        document["configs"] = {DOOR_CONFIG_NAME: {"content": ("\n".join(caddyfile_lines) + "\n").replace("$", "$$")}}
 
     return _write_temp_root(document)
 
@@ -382,7 +376,6 @@ def _write_assembly_root(
 def _door_stanza(
     root: Path,
     config: DockerDevkitConfig,
-    routes: list[RouteConfig],
     auth_route: RouteConfig | None,
     environment: dict[str, str],
 ) -> dict[str, Any]:
@@ -400,18 +393,24 @@ def _door_stanza(
                 "an auth option is selected, so the door derives the forwarded scheme and port from PUBLIC_URL; "
                 "PUBLIC_URL is missing from the environment"
             )
-        scheme, port = parse_public_url(public_url)
-        door_environment = {
-            "FORWARDED_PROTO": scheme,
-            "FORWARDED_PORT": port,
-        }
+        scheme, _, rest = public_url.partition("://")
+        hostport = rest.partition("/")[0]
+        if ":" in hostport:
+            forwarded_port = hostport.rpartition(":")[2]
+        elif scheme == "https":
+            forwarded_port = "443"
+        else:
+            forwarded_port = "80"
+        door_environment = {"FORWARDED_PROTO": scheme, "FORWARDED_PORT": forwarded_port}
     assert config.gateway is not None
-    return door_service_stanza(config.gateway, door_environment)
-
-
-def _write_minimal_root(config: DockerDevkitConfig) -> Path:
-    assert config.project_name is not None
-    return _write_temp_root({"name": config.project_name})
+    stanza: dict[str, Any] = {
+        "image": CADDY_IMAGE_HOLE,
+        "configs": [{"source": DOOR_CONFIG_NAME, "target": DOOR_CONFIG_TARGET}],
+        "ports": [{"target": str(DOOR_LISTEN_PORT), "published": config.gateway, "protocol": "tcp"}],
+    }
+    if door_environment:
+        stanza["environment"] = door_environment
+    return stanza
 
 
 def _write_temp_root(document: dict[str, Any]) -> Path:
@@ -468,14 +467,6 @@ def _refuse_service_collisions(root: Path, selected: list[Path]) -> None:
                 )
 
 
-def _service_names(root: Path, path: Path) -> set[str]:
-    # Name extraction only: the typed ComposeDocument lens carries bind laws generated
-    # artifacts satisfy but authored compose files never promised to.
-    document: Any = yaml.safe_load((root / path).read_text(encoding="utf-8"))
-    services: dict[str, Any] = document.get("services") or {}
-    return set(services)
-
-
 def _generate_dev_overlay(root: Path, config: DockerDevkitConfig, local_outputs: list[Path]) -> Path | None:
     declared: set[str] = set()
     for path in local_outputs:
@@ -489,7 +480,14 @@ def _generate_dev_overlay(root: Path, config: DockerDevkitConfig, local_outputs:
             raise RuntimeError("repository is required; dev image tags derive from it")
         services[name] = {
             "image": f"{config.repository}/{name}:dev",
-            "volumes": [_dev_bind_volume(root)],
+            "volumes": [
+                {
+                    "type": "bind",
+                    "source": root.resolve().as_posix(),
+                    "target": DEV_MOUNT_TARGET,
+                    "read_only": True,
+                }
+            ],
         }
     for bundle in compose_bundles(config):
         for workload in bundle.workloads:
@@ -513,17 +511,15 @@ def _generate_dev_overlay(root: Path, config: DockerDevkitConfig, local_outputs:
         "w", suffix=".yaml", prefix="devkit-dev-overlay-", delete=False, encoding="utf-8"
     ) as handle:
         handle.write(yaml.safe_dump({"services": services}, sort_keys=False, default_flow_style=False))
-        overlay = Path(handle.name)
-    return overlay
+        return Path(handle.name)
 
 
-def _dev_bind_volume(root: Path) -> dict[str, Any]:
-    return {
-        "type": "bind",
-        "source": root.resolve().as_posix(),
-        "target": DEV_MOUNT_TARGET,
-        "read_only": True,
-    }
+def _service_names(root: Path, path: Path) -> set[str]:
+    # Name extraction only: the typed ComposeDocument lens carries bind laws generated
+    # artifacts satisfy but authored compose files never promised to.
+    document: Any = yaml.safe_load((root / path).read_text(encoding="utf-8"))
+    services: dict[str, Any] = document.get("services") or {}
+    return set(services)
 
 
 def _workload_dev_toggles(root: Path, config: DockerDevkitConfig, workload: str) -> tuple[str, dict[str, str]] | None:
@@ -533,12 +529,12 @@ def _workload_dev_toggles(root: Path, config: DockerDevkitConfig, workload: str)
     raw: Any = annotations.get(DEV_TOGGLES_ANNOTATION)
     if raw is None:
         return None
-    if isinstance(raw, str):
-        service_name = metadata.get("name")
-        if not isinstance(service_name, str) or not service_name:
-            raise RuntimeError(f"{workload}: metadata.name is required to key the dev overlay service")
-        return service_name, _parse_dev_toggles(workload, raw)
-    raise RuntimeError(f"{workload}: {DEV_TOGGLES_ANNOTATION} must be a comma-separated NAME=default string")
+    if not isinstance(raw, str) or not raw.strip():
+        raise RuntimeError(f"{workload}: {DEV_TOGGLES_ANNOTATION} must be a comma-separated NAME=default string")
+    service_name = metadata.get("name")
+    if not isinstance(service_name, str) or not service_name:
+        raise RuntimeError(f"{workload}: metadata.name is required to key the dev overlay service")
+    return service_name, _parse_dev_toggles(workload, raw)
 
 
 def _parse_dev_toggles(workload: str, raw: str) -> dict[str, str]:
@@ -558,11 +554,6 @@ def _parse_dev_toggles(workload: str, raw: str) -> dict[str, str]:
             raise RuntimeError(f"{workload}: {DEV_TOGGLES_ANNOTATION} names {name} twice")
         pairs[name] = default
     return pairs
-
-
-def enumerate_profiles(compose_prefix: str) -> list[str]:
-    output = bash_output(f"{compose_prefix} config --profiles")
-    return [line.strip() for line in output.splitlines() if line.strip()]
 
 
 def _mirror_probe_message(value: str) -> str | None:

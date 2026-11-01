@@ -1,99 +1,186 @@
-from docker_devkit.config import RouteConfig
-from docker_devkit.door import (
-    DOOR_LISTEN_PORT,
-    door_service_stanza,
-    parse_public_url,
-    render_caddyfile,
-)
+from pathlib import Path
+from typing import Any
+
+import pytest
+import yaml
+
+from docker_devkit import compose
+from docker_devkit.compose import ComposeContext
+from docker_devkit.config import LOCK_PATH
+
+FAKE_DIGEST = "sha256:" + "a" * 64
+LIVEKIT_REF = "oci://ghcr.io/org/livekit@" + FAKE_DIGEST
+KEYCLOAK_REF = "oci://ghcr.io/org/keycloak@" + FAKE_DIGEST
+CADDY_LOCK_ENTRY = "ghcr.io/outernet-foundation/mirror/docker.io/library/caddy:2.8.4-alpine@" + FAKE_DIGEST
 
 
-def route(**kwargs: object) -> RouteConfig:
-    return RouteConfig.model_validate({"path": kwargs.pop("path"), "upstream": kwargs.pop("upstream"), **kwargs})
+def _assembly_document(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    routes: list[dict[str, object]],
+    *,
+    auth: bool = False,
+    gateway: str = "${GATEWAY_PORT:?err}",
+    public_url: str = "http://192.168.8.10:58080",
+) -> dict[str, Any]:
+    services: dict[str, object] = {
+        "livekit": {"ref": LIVEKIT_REF, "routes": routes},
+    }
+    if auth:
+        services["auth"] = {
+            "options": {
+                "keycloak": {
+                    "ref": KEYCLOAK_REF,
+                    "routes": [{"path": "/auth/*", "upstream": "keycloak:8080", "strip_prefix": True}],
+                }
+            }
+        }
+        services = {"auth": services.pop("auth"), **services}
+    (tmp_path / "docker-devkit.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "requires": ">=0.0",
+                "project_name": "door-demo",
+                "gateway": gateway,
+                "services": services,
+            },
+            default_flow_style=False,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    tmp_path.joinpath(*LOCK_PATH.parts).write_text(f"CADDY_IMAGE={CADDY_LOCK_ENTRY}\n", encoding="utf-8")
+    (tmp_path / ".env").write_text(
+        f"GATEWAY_PORT=58080\nPUBLIC_URL={public_url}\nBUNDLES={'keycloak' if auth else ''}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("BUNDLES", raising=False)
+    monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
+    monkeypatch.delenv("PUBLIC_URL", raising=False)
+    monkeypatch.delenv("GATEWAY_PORT", raising=False)
+    monkeypatch.setattr(compose, "bash_output", _probe_present_and_services)
+
+    context = ComposeContext.bring_up(tmp_path, dev=False)
+    assert context.assembly_root is not None
+    document = yaml.safe_load(context.assembly_root.read_text(encoding="utf-8"))
+    context.assembly_root.unlink(missing_ok=True)
+    return document
+
+
+def _probe_present_and_services(command: str) -> str:
+    if "imagetools inspect" in command:
+        return ""
+    assert "config --services" in command
+    return "livekit\nkeycloak\ngrafana\napi\nx\ndoor\n"
+
+
+def _caddyfile(document: dict[str, Any]) -> str:
+    return document["configs"]["devkit-door-caddyfile"]["content"]
 
 
 class TestRenderCaddyfile:
-    def test_the_site_listens_on_the_door_port(self) -> None:
-        caddyfile = render_caddyfile([route(path="/*", upstream="api:8000")], None)
+    def test_the_site_listens_on_the_door_port(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        document = _assembly_document(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
 
-        assert caddyfile.startswith(f":{DOOR_LISTEN_PORT} {{\n")
+        assert _caddyfile(document).startswith(":8443 {\n")
 
-    def test_the_catch_all_rides_as_a_bare_handle(self) -> None:
-        caddyfile = render_caddyfile([route(path="/*", upstream="api:8000")], None)
+    def test_the_catch_all_rides_as_a_bare_handle(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        document = _assembly_document(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
 
-        assert "\thandle {\n\t\treverse_proxy api:8000\n\t}\n}" in caddyfile
+        assert "\thandle {\n\t\treverse_proxy livekit:8000\n\t}\n}" in _caddyfile(document)
 
-    def test_wildcard_paths_render_as_handle_matchers(self) -> None:
-        caddyfile = render_caddyfile([route(path="/livekit-token/*", upstream="livekit-token:8000")], None)
+    def test_wildcard_paths_render_as_handle_matchers(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        document = _assembly_document(tmp_path, monkeypatch, [{"path": "/grafana/*", "upstream": "grafana:3000"}])
 
-        assert "\thandle /livekit-token/* {\n\t\treverse_proxy livekit-token:8000\n\t}" in caddyfile
+        assert "\thandle /grafana/* {\n\t\treverse_proxy grafana:3000\n\t}" in _caddyfile(document)
 
-    def test_strip_prefix_renders_as_handle_path(self) -> None:
-        caddyfile = render_caddyfile([route(path="/auth/*", upstream="keycloak:8080", strip_prefix=True)], None)
+    def test_strip_prefix_renders_as_handle_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        document = _assembly_document(
+            tmp_path, monkeypatch, [{"path": "/grafana/*", "upstream": "grafana:3000", "strip_prefix": True}]
+        )
 
-        assert "\thandle_path /auth/* {\n\t\treverse_proxy keycloak:8080\n\t}" in caddyfile
+        assert "\thandle_path /grafana/* {\n\t\treverse_proxy grafana:3000\n\t}" in _caddyfile(document)
 
-    def test_the_auth_route_carries_the_forwarded_headers(self) -> None:
-        auth = route(path="/auth/*", upstream="keycloak:8080", strip_prefix=True)
-        caddyfile = render_caddyfile([auth], auth)
+    def test_the_auth_route_carries_the_forwarded_headers(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        document = _assembly_document(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], auth=True)
 
+        caddyfile = _caddyfile(document)
         assert "\t\t\treverse_proxy keycloak:8080 {" in caddyfile.replace("\t\treverse_proxy", "\t\t\treverse_proxy")
-        assert "header_up X-Forwarded-Proto {$FORWARDED_PROTO}" in caddyfile
-        assert "header_up X-Forwarded-Port {$FORWARDED_PORT}" in caddyfile
+        assert "header_up X-Forwarded-Proto {$$FORWARDED_PROTO}" in caddyfile
+        assert "header_up X-Forwarded-Port {$$FORWARDED_PORT}" in caddyfile
 
-    def test_plain_routes_carry_no_forwarded_headers(self) -> None:
-        auth = route(path="/auth/*", upstream="keycloak:8080", strip_prefix=True)
-        caddyfile = render_caddyfile([auth, route(path="/*", upstream="api:8000")], auth)
+    def test_plain_routes_carry_no_forwarded_headers(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        document = _assembly_document(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], auth=True)
 
-        assert "header_up" not in caddyfile.split("handle {", 1)[1]
+        assert "header_up" not in _caddyfile(document).split("handle {", 1)[1]
 
-    def test_a_raw_route_rides_verbatim_under_its_path(self) -> None:
-        caddyfile = render_caddyfile(
-            [route(path="/x/*", upstream="x:1", raw='respond "raw" 200')],
-            None,
+    def test_a_raw_route_rides_verbatim_under_its_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        document = _assembly_document(
+            tmp_path,
+            monkeypatch,
+            [{"path": "/x/*", "upstream": "x:1", "raw": 'respond "raw" 200'}],
         )
 
-        assert '\thandle /x/* {\n\t\trespond "raw" 200\n\t}' in caddyfile
+        assert '\thandle /x/* {\n\t\trespond "raw" 200\n\t}' in _caddyfile(document)
 
-    def test_blocks_render_in_declaration_order(self) -> None:
-        caddyfile = render_caddyfile(
+    def test_blocks_render_in_declaration_order(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        document = _assembly_document(
+            tmp_path,
+            monkeypatch,
             [
-                route(path="/*", upstream="api:8000"),
-                route(path="/grafana/*", upstream="grafana:3000"),
+                {"path": "/*", "upstream": "livekit:8000"},
+                {"path": "/grafana/*", "upstream": "grafana:3000"},
             ],
-            None,
         )
 
-        assert caddyfile.index("reverse_proxy api:8000") < caddyfile.index("reverse_proxy grafana:3000")
+        caddyfile = _caddyfile(document)
+        assert caddyfile.index("reverse_proxy livekit:8000") < caddyfile.index("reverse_proxy grafana:3000")
 
 
-class TestParsePublicUrl:
-    def test_http_with_an_explicit_port(self) -> None:
-        assert parse_public_url("http://192.168.8.10:58080") == ("http", "58080")
+class TestPublicUrlDerivation:
+    @pytest.mark.parametrize(
+        ("public_url", "expected"),
+        [
+            ("http://192.168.8.10:58080", ("http", "58080")),
+            ("https://example.dev:8443/path", ("https", "8443")),
+            ("https://example.dev", ("https", "443")),
+            ("http://example.dev", ("http", "80")),
+        ],
+    )
+    def test_the_forwarded_pair_derives_from_public_url(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        public_url: str,
+        expected: tuple[str, str],
+    ) -> None:
+        document = _assembly_document(
+            tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], auth=True, public_url=public_url
+        )
 
-    def test_https_with_an_explicit_port(self) -> None:
-        assert parse_public_url("https://example.dev:8443/path") == ("https", "8443")
-
-    def test_https_defaults_to_443(self) -> None:
-        assert parse_public_url("https://example.dev") == ("https", "443")
-
-    def test_http_defaults_to_80(self) -> None:
-        assert parse_public_url("http://example.dev") == ("http", "80")
+        assert document["services"]["door"]["environment"] == {
+            "FORWARDED_PROTO": expected[0],
+            "FORWARDED_PORT": expected[1],
+        }
 
 
-class TestDoorServiceStanza:
-    def test_the_stanza_carries_the_caddy_hole_config_mount_and_port(self) -> None:
-        stanza = door_service_stanza("${GATEWAY_PORT:?err}", None)
+class TestDoorStanza:
+    def test_the_stanza_carries_the_caddy_hole_config_mount_and_port(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        document = _assembly_document(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
 
-        assert stanza == {
+        assert document["services"]["door"] == {
             "image": "${CADDY_IMAGE:?err}",
             "configs": [{"source": "devkit-door-caddyfile", "target": "/etc/caddy/Caddyfile"}],
             "ports": [{"target": "8443", "published": "${GATEWAY_PORT:?err}", "protocol": "tcp"}],
         }
 
-    def test_the_auth_environment_rides_when_auth_is_selected(self) -> None:
-        stanza = door_service_stanza("8080", {"FORWARDED_PROTO": "http", "FORWARDED_PORT": "58080"})
+    def test_the_published_port_rides_a_literal_gateway(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        document = _assembly_document(
+            tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], gateway="8080"
+        )
 
-        assert stanza["environment"] == {
-            "FORWARDED_PROTO": "http",
-            "FORWARDED_PORT": "58080",
-        }
+        assert document["services"]["door"]["ports"] == [{"target": "8443", "published": "8080", "protocol": "tcp"}]
