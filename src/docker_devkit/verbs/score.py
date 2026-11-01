@@ -9,8 +9,8 @@ from typing import Annotated
 import typer
 from bashrun.bash import bash, bash_output
 
-from docker_devkit.config import SECRETS_FILE, SECRETS_OUTPUT, load_config
-from docker_devkit.score import Target, ensure_score_tools, generate_artifacts, tool_requirements
+from docker_devkit.config import SECRETS_FILE, SECRETS_OUTPUT, Target, load_config
+from docker_devkit.score import ensure_score_tools, generate_artifacts
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
@@ -73,7 +73,7 @@ def generate_score(
         return
 
     # Refuse to run without the exact pinned tools, since output differs between releases.
-    missing = [item for item in tool_requirements(config, target) if shutil.which(item.binary) is None]
+    missing = [item for item in config.tool_requirements(target) if shutil.which(item.binary) is None]
     if missing:
         lines = [f"  {item.binary} {item.version}: {item.release}" for item in missing]
         raise RuntimeError(

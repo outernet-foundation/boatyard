@@ -13,7 +13,6 @@ from docker_devkit.config import DockerDevkitConfig
 from docker_devkit.documents import BindVolume, ComposeService
 from docker_devkit.score import (
     generate_k8s,
-    tool_requirements,
     write_generated_file,
 )
 from docker_devkit.provisioners import compiled_provisioners
@@ -34,7 +33,7 @@ def test_tool_requirements_skip_score_k8s_for_compose_only() -> None:
         services={"rathole-client": {"workloads": ["rathole-client.yaml"]}},
     )
 
-    binaries = [item.binary for item in tool_requirements(config, "both")]
+    binaries = [item.binary for item in config.tool_requirements("both")]
 
     assert binaries == ["score-compose"]
 
@@ -57,24 +56,24 @@ def test_tool_pin_defaults_live_on_the_root_model() -> None:
 def test_tool_requirements_gate_helm_on_charts_and_target() -> None:
     with_charts = _root_config(k8s={"workloads": ["api.yaml"], "charts": {"loki": "oci://r/chart:1.0.0"}})
 
-    assert [item.binary for item in tool_requirements(with_charts, "both")] == ["score-compose", "score-k8s", "helm"]
-    assert [item.binary for item in tool_requirements(with_charts, "compose")] == ["score-compose"]
+    assert [item.binary for item in with_charts.tool_requirements("both")] == ["score-compose", "score-k8s", "helm"]
+    assert [item.binary for item in with_charts.tool_requirements("compose")] == ["score-compose"]
 
     without_charts = _root_config(k8s={"workloads": ["api.yaml"]})
 
-    assert [item.binary for item in tool_requirements(without_charts, "both")] == ["score-compose", "score-k8s"]
+    assert [item.binary for item in without_charts.tool_requirements("both")] == ["score-compose", "score-k8s"]
 
 
 def test_tool_requirements_carry_fetch_facts_for_every_tool() -> None:
     with_charts = _root_config(k8s={"workloads": ["api.yaml"], "charts": {"loki": "oci://r/chart:1.0.0"}})
 
-    for item in tool_requirements(with_charts, "both"):
+    for item in with_charts.tool_requirements("both"):
         assert item.version
         assert item.release.startswith("https://")
         assert item.archive.startswith("https://")
         assert item.extract
 
-    helm = tool_requirements(with_charts, "both")[-1]
+    helm = with_charts.tool_requirements("both")[-1]
 
     assert helm.extract == "--strip-components=1 linux-amd64/helm"
 

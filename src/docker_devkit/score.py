@@ -10,7 +10,7 @@ from hashlib import sha256
 from importlib.resources import as_file, files
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Literal, NamedTuple
+from typing import Any
 
 import yaml
 from bashrun.bash import bash, bash_output
@@ -20,6 +20,7 @@ from docker_devkit.config import (
     DEV_TOGGLES_ANNOTATION,
     DOOR_SERVICE_NAME,
     K8sConfig,
+    Target,
     is_list,
     is_mapping,
     parse_dev_toggles,
@@ -74,21 +75,11 @@ COMPOSE_RESTART_POLICIES = ("no", "always", "on-failure", "unless-stopped")
 PUBLISH_ANNOTATION = "outernet.internal/publish"
 CONSUMER_INTERPOLATED_ANNOTATION = "outernet.internal/consumer-interpolated"
 
-Target = Literal["both", "compose", "k8s"]
-
 # The storage classes are org-global infra facts, one k8s consumer; score-k8s defines the
 # variable name the workload files interpolate.
 STORAGE_CLASS_VAR = "SCORE_STORAGE_CLASS"
 CLOUD_STORAGE_CLASS = "hcloud-volumes"
 LOCAL_STORAGE_CLASS = "local-path"
-
-
-class ToolRequirement(NamedTuple):
-    binary: str
-    version: str
-    release: str
-    archive: str
-    extract: str
 
 
 class ManifestMetadata(BaseModel):
@@ -147,37 +138,6 @@ def generate_artifacts(config: DockerDevkitConfig, target: Target, local: bool) 
 
     if (root / SECRETS_FILE).is_file():
         enforce_secret_contract(config, target, k8s_output)
-
-
-def tool_requirements(config: DockerDevkitConfig, target: Target) -> list[ToolRequirement]:
-    score_tools: list[tuple[str, str]] = []
-    if target in ("both", "compose"):
-        score_tools.append(("score-compose", config.score_compose_version))
-    if target in ("both", "k8s") and config.k8s is not None:
-        score_tools.append(("score-k8s", config.score_k8s_version))
-    requirements = [
-        ToolRequirement(
-            binary=binary,
-            version=version,
-            release=f"https://github.com/score-spec/{binary}/releases/tag/{version}",
-            archive=f"https://github.com/score-spec/{binary}/releases/download/{version}/{binary}_{version}_linux_amd64.tar.gz",
-            extract=binary,
-        )
-        for binary, version in score_tools
-    ]
-    # Strip one path component for helm, whose archive nests its binary under linux-amd64/.
-    if config.k8s is not None and config.k8s.charts and target in ("both", "k8s"):
-        version = config.helm_version
-        requirements.append(
-            ToolRequirement(
-                binary="helm",
-                version=version,
-                release=f"https://github.com/helm/helm/releases/tag/v{version}",
-                archive=f"https://get.helm.sh/helm-v{version}-linux-amd64.tar.gz",
-                extract="--strip-components=1 linux-amd64/helm",
-            )
-        )
-    return requirements
 
 
 def generate_compose(config: DockerDevkitConfig, images: dict[str, str]) -> None:
@@ -571,7 +531,7 @@ def enforce_secret_contract(config: DockerDevkitConfig, target: Target, k8s_outp
 
 def ensure_score_tools(config: DockerDevkitConfig, bin_dir: Path, target: Target = "both") -> None:
     # Fetch release binaries rather than go install, since score-spec tags are not valid Go module versions.
-    for requirement in tool_requirements(config, target):
+    for requirement in config.tool_requirements(target):
         archive = Path(requirement.archive).name
         bash(f"curl -fsSLO {requirement.archive}")
         bash(f"tar -xzf {archive} -C {bin_dir} {requirement.extract}")

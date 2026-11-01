@@ -63,6 +63,8 @@ DEV_TOGGLES_ANNOTATION = "outernet.internal/dev-toggles"
 
 type BakeValue = str | list[str] | dict[str, str]
 
+Target = Literal["both", "compose", "k8s"]
+
 
 def chart_lock_key(name: str) -> str:
     return name.upper().replace("-", "_") + "_CHART"
@@ -346,6 +348,38 @@ class DockerDevkitConfig(BaseModel):
                     build["cache_from"] = [f"type=registry,ref={cache}:{target}"]
                 services[target] = {"build": build}
         return yaml.safe_dump({"services": services}, sort_keys=False)
+
+    def tool_requirements(self, target: Target) -> list[ToolRequirement]:
+        # Fetch release binaries rather than go install, since score-spec tags are not valid
+        # Go module versions.
+        score_tools: list[tuple[str, str]] = []
+        if target in ("both", "compose"):
+            score_tools.append(("score-compose", self.score_compose_version))
+        if target in ("both", "k8s") and self.k8s is not None:
+            score_tools.append(("score-k8s", self.score_k8s_version))
+        requirements = [
+            ToolRequirement(
+                binary=binary,
+                version=version,
+                release=f"https://github.com/score-spec/{binary}/releases/tag/{version}",
+                archive=f"https://github.com/score-spec/{binary}/releases/download/{version}/{binary}_{version}_linux_amd64.tar.gz",
+                extract=binary,
+            )
+            for binary, version in score_tools
+        ]
+        # Strip one path component for helm, whose archive nests its binary under linux-amd64/.
+        if self.k8s is not None and self.k8s.charts and target in ("both", "k8s"):
+            version = self.helm_version
+            requirements.append(
+                ToolRequirement(
+                    binary="helm",
+                    version=version,
+                    release=f"https://github.com/helm/helm/releases/tag/v{version}",
+                    archive=f"https://get.helm.sh/helm-v{version}-linux-amd64.tar.gz",
+                    extract="--strip-components=1 linux-amd64/helm",
+                )
+            )
+        return requirements
 
     def _route_sites(self) -> list[tuple[str, RouteConfig]]:
         # Every route with its declaration site, in services declaration order — a group's
@@ -636,6 +670,14 @@ class ComposeBundle(NamedTuple):
     output: Path
     workloads: list[str]
     vars: dict[str, str]
+
+
+class ToolRequirement(NamedTuple):
+    binary: str
+    version: str
+    release: str
+    archive: str
+    extract: str
 
 
 def parse_image_lock(path: Path) -> ImageLock:
