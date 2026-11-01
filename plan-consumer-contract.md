@@ -159,9 +159,9 @@ implied modes, no companion retarget flag. Cache rides the push
 destination (`{addr}/build-cache:{target}`), so the persistent local
 registry install-zed runs (`localhost:5000`, a named container kept across
 installs precisely to make iteration cheap) accumulates the same layer
-caching ghcr builds get. A registry destination requires a concrete `--gpu`
-— a pushed build is fully determined, never host-detected; `--dev` with a
-registry destination refuses (dev stages are local-only). The box-facing
+caching ghcr builds get. A pushed build's cells are fully determined by
+declaration and explicit selection (D12); `--dev` with a registry
+destination refuses (dev stages are local-only). The box-facing
 address spelling stays consumer-side: install-zed derives it from
 `$SSH_CLIENT` as it already does, addressing the same registry the build
 pushes into.
@@ -194,9 +194,12 @@ assert against committed artifacts (freshness is already gated by
 the tag-lookup verb, and `build --push localhost:5000`; `platforms`
 declarations complete
 (placeframe amd64, Make-it-Sing) under Part 0's config refusal; placeframe
+declares its variant axis (`TORCH_DEVICE: [cuda, rocm]`, cuda the default
+cell) under D12; placeframe
 runs one deliberate `stack/generated/**` regeneration cycle after the Part 1
 re-key. The toolkit's build workflow updates with the repin: the freshness
-line becomes `lock --check`, and the build job gains the D11 shelf step.
+line becomes `lock --check`, the build line drops its `--gpu` argument and
+`GPU:` translation, and the build job gains the D11 shelf step.
 The full dev165→final contract diff (CLI, schema, lock format,
 artifacts) is owed archaeology — mechanical, but it may surface additional
 consumer edits this ADR does not enumerate.
@@ -221,11 +224,43 @@ The digest-manifest shelf push never belonged to `build`: it is
 release-channel bookkeeping whose pull side (shard merge under a SHA)
 already lives in github-actions-toolkit, driven by a CI-only `REGISTRY`
 env the CLI has no business reading. It moves to the toolkit's build
-workflow: after each matrix leg, a toolkit step shelves the leg's shard
+workflow: after each matrix cell, a toolkit step shelves the cell's shard
 from bake's `metadata.json` through build-artifact-registry — already a
 toolkit dependency. The devkit drops the shelving block, its `REGISTRY`
 read, and the build-artifact-registry dependency; a pushed build's only
 outputs are images and cache.
+
+### D12 — Variant axes are declared; `--gpu` and its machinery die
+
+The torch-accelerator dimension is the one build-matrix fact left living in
+code: `FAN_ARG = "TORCH_DEVICE"`, `GpuFamily = Literal["cuda","rocm"]`, the
+`Gpu` flag literal, and `detect_gpu()`'s hardcoded probes — one consumer's
+domain (a single Dockerfile in placeframe) embedded in a domain-neutral
+devkit at six layers. The concept is a variant axis: a build ARG whose value
+set is authored in `docker-devkit.yaml`:
+
+```yaml
+variants:
+  TORCH_DEVICE: [cuda, rocm]
+```
+
+A service declaring an ARG named in `variants:` builds one target per
+declared value, the first declared value the default cell (the ARG is the
+receiver convention, the `ARG {SERVICE}_SHA` shape); `derive_services` takes
+the declared axes from `load_config` as a parameter — the one-way law holds,
+service_builds still imports nothing from config. Selection rides
+`--targets`: a variant-bearing target is addressable by cell (`api/cuda`),
+a bare name selects the default cell, an unknown cell refuses listing the
+declared values. `--gpu`, `--gpu-only`, `Gpu`, `GpuFamily`, `GPU_TYPES`,
+`FAN_ARG`, and `detect_gpu()` die, and host gpu detection goes with them —
+what runs where is declared (the config default, the bundle selection at
+`up`), never probed. The push-requires-concrete-`--gpu` rule dies with
+detection itself: nothing host-derived remains to keep out of a pushed
+build, and CI names cells explicitly through the matrix, whose output
+schema is unchanged (`targets` carries cell suffixes; `variant` values come
+from the declaration). The deployment-side gpu templates keep their
+family-named filenames: selection there is already data-driven (the
+`GPU_VARIANT` bundle var), and template content is consumer domain.
 
 ## Absorption: Parts 0–1 of `plan-artifact-identity.md`
 
@@ -278,7 +313,7 @@ invariant check survives anywhere in the design.
 Two ADRs and two implementation plans, each self-contained:
 
  1. **Plan A** — `plan-consumer-contract-implementation.md` — implements this
-    ADR: D3–D7, D10, and D11 devkit work; the absorbed Part 0, with its
+    ADR: D3–D7 and D10–D12 devkit work; the absorbed Part 0, with its
     design detail lifted in (resolver selection rules, migration, test
     batteries); the
     consumer catch-up (D9); and the O1 archaeology as its first phase. It
