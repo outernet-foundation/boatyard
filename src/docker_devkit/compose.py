@@ -4,7 +4,6 @@ import re
 import shlex
 from collections.abc import Mapping
 from dataclasses import dataclass
-from os import environ
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Annotated, Any, Literal, NotRequired, TypedDict, TypeIs
@@ -20,18 +19,22 @@ from .config import (
     ENV_NAME_PATTERN,
     LOCK_PATH,
     RouteConfig,
-    ServiceEntry,
     ServiceGroup,
     bundle_output,
     compose_bundles,
     load_config,
 )
 from .documents import parse_image_lock
-from .host import parse_env_file
+from .environment import (
+    assert_known_profiles,
+    forwarded_pair,
+    merged_environment,
+    require_env_file,
+    selected_profiles,
+    selection,
+)
 
-ENV_FILE = Path(".env")
 DEFAULT_COMPOSE_FILE = Path("compose.yml")
-BUNDLES_VARIABLE = "BUNDLES"
 DEV_TOGGLES_ANNOTATION = "outernet.internal/dev-toggles"
 DEV_MOUNT_TARGET = "/app"
 
@@ -136,65 +139,19 @@ def up(
     root = Path.cwd()
     config = load_config(root)
 
-    if not (root / ENV_FILE).exists():
-        raise RuntimeError("No .env file found; create one first (e.g., copy .env.example)")
+    environment = merged_environment(root)
+    selected = selection(config, environment)
 
-    environment = parse_env_file(root / ENV_FILE)
-    environment.update(environ)
-    names = _split_names(environment.get(BUNDLES_VARIABLE, ""))
-
-    if config is None or not config.services:
-        if names:
-            raise RuntimeError(f"{BUNDLES_VARIABLE}= is set but this repo declares no services")
+    if selected is None:
         context = ComposeContext(root, config, [DEFAULT_COMPOSE_FILE], environment)
     else:
-        # BUNDLES= names options only: at most one per group, zero legal when riders carry
-        # the assembly.
-        options: dict[str, str] = {}
-        riding: list[str] = []
-        for name, entry in config.services.items():
-            if isinstance(entry, ServiceGroup):
-                for option_name in entry.options:
-                    options[option_name] = name
-            else:
-                riding.append(name)
-        if not names and not riding and options:
-            raise RuntimeError(
-                f"{BUNDLES_VARIABLE}= selects nothing and no bare entry rides; this repo's options are {sorted(options)}"
-            )
-        unknown = [name for name in names if name not in options]
-        if unknown:
-            riding_note = f"; riding entries, always on: {riding}" if riding else ""
-            raise RuntimeError(
-                f"{BUNDLES_VARIABLE}= names {unknown}; the selectable options are {sorted(options)}{riding_note}"
-            )
-        choices: dict[str, str] = {}
-        for name in names:
-            group = options[name]
-            if group in choices:
-                raise RuntimeError(
-                    f"{BUNDLES_VARIABLE}= selects {choices[group]} and {name}; at most one option per group ({group})"
-                )
-            choices[group] = name
-
-        # The declaration-order flatten every assembly view reads: each group yields itself
-        # (its riding routes and ports) plus its selected option, each bare entry yields itself.
-        entries: list[tuple[str, ServiceGroup | ServiceEntry]] = []
-        for name, entry in config.services.items():
-            if isinstance(entry, ServiceGroup):
-                entries.append((name, entry))
-                option_name = choices.get(name)
-                if option_name is not None:
-                    entries.append((option_name, entry.options[option_name]))
-            else:
-                entries.append((name, entry))
-
+        assert config is not None
         # The include list in services declaration order: every riding entry plus each
         # group's selected option, as an OCI ref (remote) or an absolute bundle-output
         # path (local).
         sources: list[str] = []
         local_outputs: list[Path] = []
-        for name, entry in entries:
+        for name, entry in selected.entries:
             if isinstance(entry, ServiceGroup):
                 continue
             if entry.ref is not None:
@@ -222,13 +179,13 @@ def up(
                         f"which both define service(s) {shared}; select one"
                     )
 
-        routes = [route for _, entry in entries for route in entry.routes]
-        ports = [port for _, entry in entries for port in entry.ports]
+        routes = [route for _, entry in selected.entries for route in entry.routes]
+        ports = [port for _, entry in selected.entries for port in entry.ports]
 
         auth_route: RouteConfig | None = None
         auth = config.services.get(AUTH_GROUP_NAME)
         if isinstance(auth, ServiceGroup):
-            option_name = choices.get(AUTH_GROUP_NAME)
+            option_name = selected.choices.get(AUTH_GROUP_NAME)
             if option_name is not None:
                 auth_route = auth.options[option_name].routes[0]
 
@@ -248,21 +205,7 @@ def up(
                 )
             door_environment: dict[str, str] | None = None
             if auth_route is not None:
-                public_url = environment.get("PUBLIC_URL", "").strip()
-                if not public_url:
-                    raise RuntimeError(
-                        "an auth option is selected, so the door derives the forwarded scheme and port from PUBLIC_URL; "
-                        "PUBLIC_URL is missing from the environment"
-                    )
-                scheme, _, rest = public_url.partition("://")
-                hostport = rest.partition("/")[0]
-                if ":" in hostport:
-                    forwarded_port = hostport.rpartition(":")[2]
-                elif scheme == "https":
-                    forwarded_port = "443"
-                else:
-                    forwarded_port = "80"
-                door_environment = {"FORWARDED_PROTO": scheme, "FORWARDED_PORT": forwarded_port}
+                door_environment = forwarded_pair(environment)
             assert config.gateway is not None
             stanza: DoorStanza = {
                 "image": CADDY_IMAGE_HOLE,
@@ -341,12 +284,12 @@ def up(
                     assembly_root.unlink(missing_ok=True)
                     raise RuntimeError(f"ports for service {port.service!r} — absent from the selected assembly")
 
-        if riding:
-            print(f"riding: {', '.join(riding)}")
+        if selected.riding:
+            print(f"riding: {', '.join(selected.riding)}")
         for name, entry in config.services.items():
             if isinstance(entry, ServiceGroup):
-                selected = choices.get(name)
-                print(f"{name}: {selected if selected is not None else '(none selected)'}")
+                selected_option = selected.choices.get(name)
+                print(f"{name}: {selected_option if selected_option is not None else '(none selected)'}")
         if routes:
             print(f"door: {' '.join(route.path for route in routes)}")
 
@@ -475,17 +418,12 @@ def up(
 
     # compose ignores COMPOSE_PROFILES whenever a --profile flag is present, so forward the
     # selection explicitly; shell env wins over .env, comma-split and deduplicated.
-    profiles = _split_names(environment.get("COMPOSE_PROFILES", ""))
+    profiles = selected_profiles(environment)
     if profiles:
         defined = [
             line.strip() for line in bash_output(f"{context.command()} config --profiles").splitlines() if line.strip()
         ]
-        unknown = [profile for profile in profiles if profile not in defined]
-        if unknown:
-            raise RuntimeError(
-                f"COMPOSE_PROFILES selects unknown profile(s) {unknown}; "
-                f"profiles defined by the compose files: {defined}"
-            )
+        assert_known_profiles(profiles, defined)
     up_command = context.command(*(f"--profile {profile}" for profile in profiles), "up")
     if not build:
         # tree-<sha> tags are content-addressed and may not be pushed, so pull only what is missing locally
@@ -505,8 +443,7 @@ def down(
     root = Path.cwd()
     config = load_config(root)
 
-    if not (root / ENV_FILE).exists():
-        raise RuntimeError("No .env file found; create one first (e.g., copy .env.example)")
+    require_env_file(root)
 
     if config is None or not config.services:
         context = ComposeContext(root, config, [DEFAULT_COMPOSE_FILE], None)
@@ -539,15 +476,6 @@ def _handoff(context: ComposeContext, command: str) -> None:
             context.dev_overlay.unlink(missing_ok=True)
         if context.assembly_root is not None:
             context.assembly_root.unlink(missing_ok=True)
-
-
-def _split_names(value: str) -> list[str]:
-    names: list[str] = []
-    for entry in value.split(","):
-        name = entry.strip()
-        if name and name not in names:
-            names.append(name)
-    return names
 
 
 def _write_temp_root(document: Mapping[str, Any]) -> Path:
