@@ -27,9 +27,9 @@ def mirror() -> None:
     mirror_targets: list[tuple[str, list[str]]] = []
     for name, reference in sorted(config.base_images.items(), key=lambda item: item[1]):
         entry = lock.images.get(name)
-        recorded = [] if entry is None else [entry.index, *entry.platforms.values()]
+        recorded = [] if entry is None else entry.recorded_digests
         mirror_targets.append((reference, recorded))
-    for chart_name, chart_ref in sorted((config.k8s.charts if config.k8s is not None else {}).items()):
+    for chart_name, chart_ref in sorted(config.declared_charts.items()):
         entry = lock.require(chart_lock_key(chart_name), f"chart {chart_name!r}")
         mirror_targets.append((chart_ref.removeprefix("oci://"), [entry]))
 

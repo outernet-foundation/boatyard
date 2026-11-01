@@ -45,7 +45,8 @@ def publish_compose(
 ) -> None:
     root = Path.cwd()
     config = load_config(root)
-    if config is None or not config.compose_bundles():
+    bundles = config.compose_bundles() if config is not None else []
+    if config is None or not bundles:
         if plan:
             print(json.dumps([]))
             return
@@ -53,8 +54,6 @@ def publish_compose(
             "publishing happens iff local service entries are declared in docker-devkit.yaml; "
             "one artifact per workload-bearing entry or option, named under root repository"
         )
-
-    bundles = config.compose_bundles()
 
     if plan:
         entries = [{"bundle": entry.name} for entry in bundles]

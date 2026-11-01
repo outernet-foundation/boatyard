@@ -160,8 +160,7 @@ class Assembly:
         try:
             self._materialize_and_validate(dev)
         except BaseException:
-            keep_lock_env_file(self.lock_env_file)
-            self.lock_env_file = None
+            self.keep_lock_env_file()
             self.cleanup()
             raise
 
@@ -199,6 +198,12 @@ class Assembly:
             compose_file.unlink(missing_ok=True)
         if self.lock_env_file is not None:
             self.lock_env_file.unlink(missing_ok=True)
+
+    def keep_lock_env_file(self) -> None:
+        # The shared failure dance: print the materialized file (path and content) and
+        # null the reference so a later cleanup unlinks the rest but keeps it.
+        keep_lock_env_file(self.lock_env_file)
+        self.lock_env_file = None
 
     def _render_root_document(self) -> dict[str, object]:
         # The per-run root compose file: name, includes, the edge, parent port stanzas, Caddyfile.

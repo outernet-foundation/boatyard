@@ -36,7 +36,8 @@ def generate_score(
         )
     root = Path.cwd()
     config = load_config(root)
-    if config is None or (not config.compose_bundles() and config.k8s is None):
+    bundles = config.compose_bundles() if config is not None else []
+    if config is None or (not bundles and config.k8s is None):
         if not check:
             raise RuntimeError(
                 "docker-devkit.yaml declares no local service entries and no k8s section; nothing to generate"
@@ -59,7 +60,7 @@ def generate_score(
             ensure_score_tools(config, bin_dir, target)
             os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
             generate_artifacts(config, target, False)
-            outputs = [bundle.output for bundle in config.compose_bundles()]
+            outputs = [bundle.output for bundle in bundles]
             if k8s_rendering:
                 outputs.append(config.k8s_output_path(False))
             if (root / SECRETS_FILE).is_file():

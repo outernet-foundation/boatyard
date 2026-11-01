@@ -335,6 +335,10 @@ class DockerDevkitConfig(BaseModel):
         lock_path = self.root / LOCK_PATH
         return parse_image_lock(lock_path) if lock_path.is_file() else ImageLock.model_validate({})
 
+    @property
+    def declared_charts(self) -> dict[str, str]:
+        return self.k8s.charts if self.k8s is not None else {}
+
     def select_platform(self, environment: Mapping[str, str]) -> str | None:
         # Declaration-driven platform selection: a singleton selects itself, a multi-platform
         # repo names PLATFORM= in .env (shell env overriding), and a set value outside the
@@ -733,7 +737,7 @@ class DockerDevkitConfig(BaseModel):
             )
         self.service_builds = service_builds
 
-        declared_charts = self.k8s.charts if self.k8s is not None else {}
+        declared_charts = self.declared_charts
         if (self.base_images or declared_charts) and not (root / LOCK_PATH).is_file():
             raise RuntimeError(
                 f"{LOCK_PATH.as_posix()}: base_images or k8s.charts are declared, so the committed image lock is "
@@ -742,10 +746,7 @@ class DockerDevkitConfig(BaseModel):
         if self.gateway is not None:
             # A cutover (env-line) lock skips the CADDY check here: its parse refusal fires
             # in every consumer instead, and the lock verb must stay runnable to rewrite it.
-            try:
-                entries = self.lock_entries()
-            except (TypeError, ValueError):
-                entries = None
+            entries = parse_committed_lock(root)
             if entries is not None:
                 entries.require(
                     CADDY_IMAGE,
@@ -882,6 +883,11 @@ class ImageLockEntry(BaseModel):
                     raise ValueError(f"{source}: platform key {platform!r} must be an os/arch pair like linux/arm64")
         return value
 
+    @property
+    def recorded_digests(self) -> list[str]:
+        # The digest set the up/mirror presence probes walk: the index plus every platform manifest.
+        return [self.index, *self.platforms.values()]
+
 
 class ImageLock(BaseModel):
     # The structured lock beside the root config: registry-resolved facts, written by the
@@ -952,6 +958,20 @@ def _reject_duplicate_keys(node: yaml.Node, source: str) -> None:
     elif isinstance(node, yaml.SequenceNode):
         for item in node.value:
             _reject_duplicate_keys(item, source)
+
+
+def parse_committed_lock(root: Path) -> ImageLock | None:
+    # The lenient cutover-lock read: an absent lock answers the empty lock, an unparseable
+    # one (the env-line format before the structured flip) answers None rather than
+    # refusing — the rewrite is the cutover migration mechanism, so the lock verb and the
+    # CADDY check stay runnable over a cutover lock.
+    path = root / LOCK_PATH
+    if not path.is_file():
+        return ImageLock()
+    try:
+        return parse_image_lock(path)
+    except (TypeError, ValueError):
+        return None
 
 
 def parse_image_lock(path: Path) -> ImageLock:

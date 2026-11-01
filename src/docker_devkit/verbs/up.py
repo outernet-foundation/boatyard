@@ -8,7 +8,7 @@ from typing import Annotated
 import typer
 from bashrun.bash import CalledProcessError, bash_handoff, bash_output
 
-from docker_devkit.assembly import Assembly, compose_command, keep_lock_env_file
+from docker_devkit.assembly import Assembly, compose_command
 from docker_devkit.bake import run_build
 from docker_devkit.config import DockerDevkitConfig, load_config
 
@@ -48,8 +48,7 @@ def up(
     try:
         _bring_up(assembly, attached=attached, quiet_pull=quiet_pull, build=build, dev=dev)
     except BaseException:
-        keep_lock_env_file(assembly.lock_env_file)
-        assembly.lock_env_file = None
+        assembly.keep_lock_env_file()
         raise
     finally:
         assembly.cleanup()
@@ -87,7 +86,7 @@ def _probe_lock_entries(config: DockerDevkitConfig) -> None:
     lock = config.lock_entries()
     references = sorted(
         set(
-            [reference for entry in lock.images.values() for reference in (entry.index, *entry.platforms.values())]
+            [reference for entry in lock.images.values() for reference in entry.recorded_digests]
             + list(lock.charts.values())
         )
     )
