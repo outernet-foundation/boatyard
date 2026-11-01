@@ -97,7 +97,7 @@ philosophy from lock facts to toolchain facts. Plain values stay plain (the
 golang/caddy/zed class — a tag declared nowhere else has no drift surface).
 A literal value in place of a template is the deliberate-skew escape hatch,
 visible in every diff. A template composing a nonexistent tag fails at
-`build --lock-only` — fail-closed, same as a mistyped literal today.
+`lock` — fail-closed, same as a mistyped literal today.
 
 Rationale: the version-coupling machinery treated symptoms of a
 misclassification — the uv image tag is a *function of* decisions already made
@@ -147,21 +147,24 @@ system.)
 `docker-build-matrix` and `publish-compose --plan` remain as-is: frozen CI
 contracts with the toolkit binding.
 
-### D7 — `build` grows a registry-retarget knob
+### D7 — `build`'s push destination is one axis
 
 install-zed's `--build` mode currently forks the build pipeline in consumer
-code (renders its own bake file, assembles its own env, `--set`-retargets tags
-to a transient host-local registry — a comment-synced mirror of the build
-verb). The verb grows the retarget flag; the fork dissolves into
-`uv run build --registry <addr>`. Rulings, as design consequences rather than
-choices: `--registry` implies push mode — a retargeted build has nowhere to go
-but the registry, and a `--load` pairing is meaningless and refuses; cache
-refs follow the retarget (`{registry}/build-cache:{target}` — one law
-everywhere: cache rides the same registry the tags do; the persistent laptop
-registry gives the install iteration loop the same layer caching ghcr builds
-get); the box-facing address spelling stays consumer-side — install-zed
-derives it from `$SSH_CLIENT` as it already does. Flag name is plan-session
-material.
+code (renders its own bake file, assembles its own env, `--set`-retargets
+tags to the local box registry — a comment-synced mirror of the build
+verb). The fork dissolves into the build verb's destination axis: `--push`
+with an optional value. `--push` alone builds for the config's
+`repository`; `--push <addr>` builds for that registry — one flag, no
+implied modes, no companion retarget flag. Cache rides the push
+destination (`{addr}/build-cache:{target}`), so the persistent local
+registry install-zed runs (`localhost:5000`, a named container kept across
+installs precisely to make iteration cheap) accumulates the same layer
+caching ghcr builds get. A registry destination requires a concrete `--gpu`
+— a pushed build is fully determined, never host-detected; `--dev` with a
+registry destination refuses (dev stages are local-only). The box-facing
+address spelling stays consumer-side: install-zed derives it from
+`$SSH_CLIENT` as it already does, addressing the same registry the build
+pushes into.
 
 ### D8 — Consumers own their env-line reading
 
@@ -188,12 +191,41 @@ placeframe's `scripts/preflight.py` drops its four imports and the
 `VERSION_COUPLINGS` list; its two score-generation test modules rewrite to
 assert against committed artifacts (freshness is already gated by
 `generate-score --check` in CI); install-zed rewrites onto YAML-lock reads,
-the tag-lookup verb, and `build --registry`; `platforms` declarations complete
+the tag-lookup verb, and `build --push localhost:5000`; `platforms`
+declarations complete
 (placeframe amd64, Make-it-Sing) under Part 0's config refusal; placeframe
 runs one deliberate `stack/generated/**` regeneration cycle after the Part 1
-re-key. The full dev165→final contract diff (CLI, schema, lock format,
+re-key. The toolkit's build workflow updates with the repin: the freshness
+line becomes `lock --check`, and the build job gains the D11 shelf step.
+The full dev165→final contract diff (CLI, schema, lock format,
 artifacts) is owed archaeology — mechanical, but it may surface additional
 consumer edits this ADR does not enumerate.
+
+### D10 — The resolve-only lock surface is the `lock` verb; `build` also locks
+
+`build --lock-only` was a second intent (resolve third-party digests,
+build nothing) squatting on the build verb. The resolve-only surface moves
+to its own verb: `lock`, with `--check` (freshness assert, the
+`uv lock --check` analog) and `--upgrade` (re-resolve everything),
+self-skipping where no lock declarations exist — `--lock-only`, `--check`,
+and `--upgrade` leave `build`. `build` keeps its incremental lock write on
+every building run (declaration-incremental freeze): anyone who builds
+also locks, the `uv sync` shape — no separate step to remember. `--gpu-only`
+dies in the same pass (zero users across every workflow and consumer; its
+filter is expressible with `--targets`); `--no-cache` stays as the free
+debug valve.
+
+### D11 — The builds shelf is toolkit-owned publication, not building
+
+The digest-manifest shelf push never belonged to `build`: it is
+release-channel bookkeeping whose pull side (shard merge under a SHA)
+already lives in github-actions-toolkit, driven by a CI-only `REGISTRY`
+env the CLI has no business reading. It moves to the toolkit's build
+workflow: after each matrix leg, a toolkit step shelves the leg's shard
+from bake's `metadata.json` through build-artifact-registry — already a
+toolkit dependency. The devkit drops the shelving block, its `REGISTRY`
+read, and the build-artifact-registry dependency; a pushed build's only
+outputs are images and cache.
 
 ## Absorption: Parts 0–1 of `plan-artifact-identity.md`
 
@@ -245,12 +277,13 @@ invariant check survives anywhere in the design.
 
 Two ADRs and two implementation plans, each self-contained:
 
-1. **Plan A** — `plan-consumer-contract-implementation.md` — implements this
-   ADR: D3–D7 devkit work; the absorbed Part 0, with its design detail
-   lifted in (resolver selection rules, migration, test batteries); the
-   consumer catch-up (D9); and the O1 archaeology as its first phase. It
-   locks the names this ADR deferred to plan-session material: the tag-lookup
-   verb is `tree-tags`, the retarget flag is `--registry`.
+ 1. **Plan A** — `plan-consumer-contract-implementation.md` — implements this
+    ADR: D3–D7, D10, and D11 devkit work; the absorbed Part 0, with its
+    design detail lifted in (resolver selection rules, migration, test
+    batteries); the
+    consumer catch-up (D9); and the O1 archaeology as its first phase. It
+    locks the names this ADR deferred to plan-session material: the tag-lookup
+    verb is `tree-tags`, the push destination is `--push <addr>`.
 2. **Plan B** — `plan-artifact-identity-implementation.md` — opens with the
    absorbed Part 1 precision cluster (attribution parser, precise hashes,
    dirty-tree guard, release, consumer re-key wave — phases 8–11) and then
