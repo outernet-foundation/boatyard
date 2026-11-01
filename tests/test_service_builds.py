@@ -83,14 +83,14 @@ class TestDeriveServices:
         assert services["api"].contexts == []
 
     def test_multi_stage_dockerfile_declares_a_dev_stage(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "api", "FROM docker.io/library/python:3.13-slim AS base\nFROM base AS dev\n")
+        write_dockerfile(tmp_path, "api", "ARG PY_IMAGE\nFROM ${PY_IMAGE} AS base\nFROM base AS dev\n")
 
         services = derive_services(tmp_path)
 
         assert services["api"].dev_stage
 
     def test_single_stage_dev_label_is_not_a_dev_stage(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "api", "FROM docker.io/library/python:3.13-slim AS dev\n")
+        write_dockerfile(tmp_path, "api", "ARG PY_IMAGE\nFROM ${PY_IMAGE} AS dev\n")
 
         services = derive_services(tmp_path)
 
@@ -102,12 +102,36 @@ class TestDeriveServices:
         with pytest.raises(RuntimeError, match="FROM python names no service directory"):
             derive_services(tmp_path)
 
-    def test_tagged_and_registry_refs_stay_external(self, tmp_path: Path) -> None:
+    def test_literal_from_refuses_naming_base_images(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "migrator", "FROM golang:1.22-alpine AS build\nFROM ghcr.io/org/base:1\n")
+
+        with pytest.raises(
+            RuntimeError, match=r"FROM golang:1\.22-alpine is a hand-written image reference.*base_images"
+        ):
+            derive_services(tmp_path)
+
+    def test_registry_path_with_an_arg_suffix_still_refuses(self, tmp_path: Path) -> None:
+        write_dockerfile(tmp_path, "api", "FROM ghcr.io/org/uv${UV_BASE_DIGEST}\n")
+
+        with pytest.raises(RuntimeError, match=r"FROM ghcr\.io/org/uv\$\{UV_BASE_DIGEST\} is a hand-written"):
+            derive_services(tmp_path)
+
+    def test_literal_copy_from_refuses_naming_base_images(self, tmp_path: Path) -> None:
+        write_dockerfile(tmp_path, "api", "ARG PY_IMAGE\nFROM ${PY_IMAGE}\nCOPY --from=ghcr.io/org/uv:1 /uv /bin/\n")
+
+        with pytest.raises(RuntimeError, match=r"COPY --from=ghcr\.io/org/uv:1 is a hand-written image reference"):
+            derive_services(tmp_path)
+
+    def test_stage_and_build_arg_copy_from_pass(self, tmp_path: Path) -> None:
+        write_dockerfile(
+            tmp_path,
+            "api",
+            "ARG PY_IMAGE\nFROM ${PY_IMAGE} AS base\nCOPY --from=base /x /y\nCOPY --from=${UV_IMAGE} /uv /bin/\n",
+        )
 
         services = derive_services(tmp_path)
 
-        assert services["migrator"].contexts == []
+        assert services["api"].contexts == []
 
     def test_torch_device_arg_fans_over_the_gpu_family(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
@@ -134,22 +158,22 @@ class TestDeriveServices:
             derive_services(tmp_path)
 
     def test_parents_disagreeing_on_variants_refuse(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "fanned-base", "FROM alpine:3.21\nARG TORCH_DEVICE\n")
-        write_dockerfile(tmp_path, "plain-base", "FROM alpine:3.21\n")
+        write_dockerfile(tmp_path, "fanned-base", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\nARG TORCH_DEVICE\n")
+        write_dockerfile(tmp_path, "plain-base", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n")
         write_dockerfile(tmp_path, "dependent", "FROM fanned-base AS a\nFROM plain-base AS b\n")
 
         with pytest.raises(RuntimeError, match="disagree on gpu variants"):
             derive_services(tmp_path)
 
     def test_sha_arg_naming_no_service_refuses(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "api", "FROM alpine:3.21\nARG GHOST_SHA\n")
+        write_dockerfile(tmp_path, "api", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\nARG GHOST_SHA\n")
 
         with pytest.raises(RuntimeError, match="ARG GHOST_SHA names no derived service"):
             derive_services(tmp_path)
 
     def test_dockerfiles_spanning_multiple_top_level_dirs_refuse(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "api", "FROM alpine:3.21\n")
-        write_dockerfile(tmp_path, "bridge", "FROM alpine:3.21\n", top="docker")
+        write_dockerfile(tmp_path, "api", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n")
+        write_dockerfile(tmp_path, "bridge", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n", top="docker")
 
         with pytest.raises(RuntimeError, match="span multiple top-level directories"):
             derive_services(tmp_path)

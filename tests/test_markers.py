@@ -231,10 +231,25 @@ def test_lock_image_marker_splits_untagged_references_without_a_tag_field() -> N
     }
 
 
-def test_lock_marker_leaves_plain_strings_untouched() -> None:
-    node: Any = {"image": "ghcr.io/example/app:v1"}
+def test_literal_image_values_refuse_naming_the_lock_marker() -> None:
+    with pytest.raises(RuntimeError, match=r"k8s\.yaml.*'ghcr.io/example/app:v1' is a hand-written.*lock: NAME"):
+        resolve_lock_refs({"image": "ghcr.io/example/app:v1"}, {}, "k8s.yaml")
 
-    assert resolve_lock_refs(node, {}, "k8s.yaml") == node
+
+def test_untagged_literal_image_values_refuse_anywhere_in_the_tree() -> None:
+    with pytest.raises(RuntimeError, match="is a hand-written image reference"):
+        resolve_lock_refs({"containers": [{"image": "postgres"}]}, {}, "workload api")
+
+
+def test_image_values_with_holes_and_plain_non_image_keys_pass() -> None:
+    node: Any = {
+        "name": "plain-value",
+        "image": "${API_SHA}",
+        "runtime": {"image": "${SPIKE_IMAGE:?err}"},
+        "templated": {"image": 'ghcr.io/org/api:{{ env "API_SHA" }}'},
+    }
+
+    assert resolve_lock_refs(node, {}, "x.yaml") == node
 
 
 def test_contains_marker_finds_nested_markers_of_every_kind() -> None:

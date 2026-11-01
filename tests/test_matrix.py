@@ -9,9 +9,9 @@ from docker_devkit.verbs.matrix import app
 
 runner = CliRunner()
 
-FANNED = "ARG TORCH_DEVICE\nFROM docker.io/library/python:3.13-slim\n"
+FANNED = "ARG PY_IMAGE\nARG TORCH_DEVICE\nFROM ${PY_IMAGE}\n"
 DEPENDENT = "FROM neural-networks-base\n"
-EXTERNAL = "FROM docker.io/library/python:3.13-slim\n"
+EXTERNAL = "ARG PY_IMAGE\nFROM ${PY_IMAGE}\n"
 
 
 def _write_repo(root: Path, dockerfiles: dict[str, str], *, config: dict[str, Any] | None = None) -> None:

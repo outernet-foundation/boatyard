@@ -22,7 +22,7 @@ def _commit_all(path: Path) -> None:
     subprocess.run(["git", "commit", "-m", "init", "--allow-empty"], cwd=str(path), capture_output=True, check=True)
 
 
-def _write_service(root: Path, name: str, text: str = "FROM python:3.13\n") -> None:
+def _write_service(root: Path, name: str, text: str = "ARG PY_IMAGE\nFROM ${PY_IMAGE}\n") -> None:
     directory = root / "workloads" / name
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "Dockerfile").write_text(text, encoding="utf-8")

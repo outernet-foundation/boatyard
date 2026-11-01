@@ -862,8 +862,8 @@ def _write_dev_tree(
     (root / ".env").write_text("BUNDLES=core\n", encoding="utf-8")
 
 
-MULTI_STAGE_DOCKERFILE = "FROM ghcr.io/org/base:1 AS dev\nFROM dev AS runtime\n"
-SINGLE_STAGE_DOCKERFILE = "FROM ghcr.io/org/base:1 AS dev\n"
+MULTI_STAGE_DOCKERFILE = "ARG BASE_IMAGE\nFROM ${BASE_IMAGE} AS dev\nFROM dev AS runtime\n"
+SINGLE_STAGE_DOCKERFILE = "ARG BASE_IMAGE\nFROM ${BASE_IMAGE} AS dev\n"
 
 
 class TestDevOverlay:

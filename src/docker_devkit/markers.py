@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,8 @@ INCLUDE_MARKERS = (TEXT_MARKER, YAML_MARKER)
 LOCK_MARKERS = (LOCK_MARKER, LOCK_IMAGE_MARKER)
 MARKERS = INCLUDE_MARKERS + LOCK_MARKERS
 DIGEST_FIELDS = ("digest", "sha")
+IMAGE_FIELD = "image"
+IMAGE_HOLE_PATTERN = re.compile(r"\$\{|{{")
 
 
 class LockImageSpec(BaseModel):
@@ -114,12 +117,25 @@ def resolve_lock_refs(node: Any, images: dict[str, str], source: str) -> Any:
         return fields
 
     if is_mapping(node):
+        _refuse_literal_images(node, source)
         return {key: resolve_lock_refs(value, images, source) for key, value in node.items()}
 
     if is_list(node):
         return [resolve_lock_refs(item, images, source) for item in node]
 
     return node
+
+
+def _refuse_literal_images(node: dict[str, Any], source: str) -> None:
+    # A hand-written literal image: value is a validity error of the authoring format:
+    # third-party images ride as {lock: NAME} markers; own images and runtime holes
+    # carry ${...} or {{ ... }} fills.
+    value = node.get(IMAGE_FIELD)
+    if isinstance(value, str) and IMAGE_HOLE_PATTERN.search(value) is None:
+        raise RuntimeError(
+            f"{source}: image {value!r} is a hand-written image reference; "
+            "write the field as image: {lock: NAME} to consume the lock"
+        )
 
 
 def _image_spec(value: Any, source: str) -> LockImageSpec:

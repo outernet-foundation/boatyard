@@ -63,12 +63,12 @@ def _write_repo(
         (root / LOCK_PATH).write_text("", encoding="utf-8")
 
 
-EXTERNAL = "FROM docker.io/library/python:3.13-slim\n"
-FANNED = "ARG TORCH_DEVICE\nFROM docker.io/library/python:3.13-slim\n"
+EXTERNAL = "ARG PY_IMAGE\nFROM ${PY_IMAGE}\n"
+FANNED = "ARG PY_IMAGE\nARG TORCH_DEVICE\nFROM ${PY_IMAGE}\n"
 DEPENDENT = "FROM neural-networks-base\n"
-DEV_STAGE = "FROM docker.io/library/python:3.13-slim AS base\nFROM base AS dev\n"
+DEV_STAGE = "ARG PY_IMAGE\nFROM ${PY_IMAGE} AS base\nFROM base AS dev\n"
 DEV_DEPENDENT = "FROM neural-networks-base AS base\nFROM base AS dev\n"
-LYING_DEV_STAGE = "FROM docker.io/library/python:3.13-slim AS dev\n"
+LYING_DEV_STAGE = "ARG PY_IMAGE\nFROM ${PY_IMAGE} AS dev\n"
 
 DEFAULT_DOCKERFILES: dict[str, str] = {
     "api": EXTERNAL,

@@ -776,7 +776,7 @@ def test_provisioners_register_by_resource_type_closure(tmp_path: Path, monkeypa
 WORKLOAD_WITH_LIVENESS = """
 containers:
   api:
-    image: ghcr.io/org/api:1
+    image: ${API_IMAGE:?err}
     livenessProbe:
       httpGet:
         path: /health
@@ -789,7 +789,7 @@ metadata:
     outernet.internal/probe-adapter: python-urllib
 containers:
   api:
-    image: ghcr.io/org/api:1
+    image: ${API_IMAGE:?err}
     readinessProbe:
       httpGet:
         path: /ready
@@ -799,7 +799,7 @@ containers:
 WORKLOAD_WITH_UNADAPTED_READINESS = """
 containers:
   api:
-    image: ghcr.io/org/api:1
+    image: ${API_IMAGE:?err}
     readinessProbe:
       httpGet:
         path: /ready
@@ -1027,7 +1027,7 @@ metadata:
     outernet.internal/consumer-interpolated: /etc/rathole/client.toml
 containers:
   rathole-client:
-    image: ghcr.io/org/rathole:1
+    image: ${RATHOLE_IMAGE:?err}
     files:
       /etc/rathole/client.toml:
         content: |
@@ -1265,7 +1265,8 @@ ORDER_INDEPENDENCE_PROVISIONER = """\
   type: order-provisioner
   services:
     order-service:
-      image: ghcr.io/example/service:1
+      image:
+        lock: SERVICE_IMAGE
 """
 
 ORDER_INDEPENDENCE_SECOND_PROVISIONER = """\
@@ -1273,7 +1274,8 @@ ORDER_INDEPENDENCE_SECOND_PROVISIONER = """\
   type: other-provisioner
   services:
     other-service:
-      image: ghcr.io/example/other:1
+      image:
+        lock: OTHER_IMAGE
 """
 
 
@@ -1305,7 +1307,11 @@ def test_provisioner_registration_order_does_not_change_generated_output(tmp_pat
     )
 
     outputs: dict[str, str] = {}
-    with compiled_provisioners(source, ["first.yaml", "second.yaml"], tmp_path, {}) as compiled:
+    order_lock = {
+        "SERVICE_IMAGE": "ghcr.io/example/service@sha256:" + "a" * 64,
+        "OTHER_IMAGE": "ghcr.io/example/other@sha256:" + "b" * 64,
+    }
+    with compiled_provisioners(source, ["first.yaml", "second.yaml"], tmp_path, order_lock) as compiled:
         registrations = {
             "forward": compiled.paths,
             "reversed": list(reversed(compiled.paths)),

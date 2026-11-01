@@ -15,7 +15,9 @@ DOCKERFILE_NAME = "Dockerfile"
 FAN_ARG = "TORCH_DEVICE"
 FROM_LINE_PATTERN = re.compile(r"^FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?", re.IGNORECASE)
 ARG_LINE_PATTERN = re.compile(r"^ARG\s+([A-Za-z_][A-Za-z0-9_]*)")
+COPY_FROM_LINE_PATTERN = re.compile(r"^COPY\s+--from=(\S+)", re.IGNORECASE)
 BARE_IDENTIFIER_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+BUILD_ARG_REFERENCE_PATTERN = re.compile(r"^\$\{[A-Za-z0-9_]+\}$")
 
 
 def service_sha_env(name: str) -> str:
@@ -99,7 +101,9 @@ def _parse_dockerfiles(root: Path) -> dict[str, ParsedDockerfile]:
     parsed: dict[str, ParsedDockerfile] = {}
     for name, directory in service_dirs.items():
         dockerfile = directory / DOCKERFILE_NAME
+        relative = dockerfile.relative_to(root).as_posix()
         from_images: list[str] = []
+        copy_from_values: list[str] = []
         stages: set[str] = set()
         args: list[str] = []
         for line in dockerfile.read_text(encoding="utf-8").splitlines():
@@ -109,19 +113,36 @@ def _parse_dockerfiles(root: Path) -> dict[str, ParsedDockerfile]:
                 if from_match.group(2) is not None:
                     stages.add(from_match.group(2))
                 continue
+            copy_from_match = COPY_FROM_LINE_PATTERN.match(line.strip())
+            if copy_from_match is not None:
+                copy_from_values.append(copy_from_match.group(1))
+                continue
             arg_match = ARG_LINE_PATTERN.match(line.strip())
             if arg_match is not None:
                 args.append(arg_match.group(1))
         contexts: list[str] = []
         for image in from_images:
-            if BARE_IDENTIFIER_PATTERN.fullmatch(image) is None or image in stages:
+            if image in stages:
+                continue
+            if BARE_IDENTIFIER_PATTERN.fullmatch(image) is None:
+                if BUILD_ARG_REFERENCE_PATTERN.fullmatch(image) is None:
+                    raise RuntimeError(
+                        f"{relative}: FROM {image} is a hand-written image reference; "
+                        "declare the base under base_images and FROM its build arg"
+                    )
                 continue
             if image not in service_dirs:
                 raise RuntimeError(
-                    f"{dockerfile.relative_to(root).as_posix()}: FROM {image} names no service directory; "
-                    "external bases must be registry references or base_images build args"
+                    f"{relative}: FROM {image} names no service directory; "
+                    "a bare identifier in FROM must name a sibling service or a stage"
                 )
             contexts.append(image)
+        for value in copy_from_values:
+            if "/" in value:
+                raise RuntimeError(
+                    f"{relative}: COPY --from={value} is a hand-written image reference; "
+                    "declare the base under base_images and COPY from its build arg"
+                )
         parsed[name] = ParsedDockerfile(
             name=name,
             dockerfile=dockerfile.relative_to(root).as_posix(),

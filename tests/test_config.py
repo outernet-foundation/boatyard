@@ -1185,14 +1185,14 @@ class TestLockPairing:
 
 class TestServiceDerivation:
     def test_repository_required_when_services_exist(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "api", "FROM alpine:3.21\n")
+        write_dockerfile(tmp_path, "api", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n")
         write_config(tmp_path, {"requires": ">=0.1"})
 
         with pytest.raises(RuntimeError, match="repository is required"):
             load_config(tmp_path)
 
     def test_derived_services_attach_to_the_loaded_config(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "api", "FROM alpine:3.21\n")
+        write_dockerfile(tmp_path, "api", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n")
         write_config(tmp_path, {"requires": ">=0.1", "repository": "ghcr.io/org/repo"})
 
         config = load_config(tmp_path)
