@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from os import environ
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Annotated, Any
+from typing import Annotated, Any, TypeIs
 
 import typer
 import yaml
@@ -187,7 +187,7 @@ def up(
         if sources:
             document["include"] = sources
 
-        services: dict[str, Any] = {}
+        services: dict[str, dict[str, Any]] = {}
         if routes:
             lock_path = root / LOCK_PATH
             if not lock_path.is_file() or "CADDY_IMAGE" not in parse_image_lock(lock_path).root:
@@ -222,7 +222,11 @@ def up(
                 stanza["environment"] = door_environment
             services[DOOR_SERVICE_NAME] = stanza
         for port in ports:
-            port_entry: dict[str, Any] = {"target": port.target, "published": port.published, "protocol": port.protocol}
+            port_entry: dict[str, str | None] = {
+                "target": port.target,
+                "published": port.published,
+                "protocol": port.protocol,
+            }
             if port.host_ip is not None:
                 port_entry["host_ip"] = port.host_ip
             services.setdefault(port.service, {}).setdefault("ports", []).append(port_entry)
@@ -320,12 +324,12 @@ def up(
                 }
             for bundle in compose_bundles(config):
                 for workload in bundle.workloads:
-                    workload_document: Any = yaml.safe_load(
-                        (root / config.score_dir / workload).read_text(encoding="utf-8")
+                    workload_document: dict[str, object] = _mapping_or_empty(
+                        yaml.safe_load((root / config.score_dir / workload).read_text(encoding="utf-8"))
                     )
-                    metadata: dict[str, Any] = workload_document.get("metadata") or {}
-                    annotations: dict[str, Any] = metadata.get("annotations") or {}
-                    raw: Any = annotations.get(DEV_TOGGLES_ANNOTATION)
+                    metadata: dict[str, object] = _mapping_or_empty(workload_document.get("metadata"))
+                    annotations: dict[str, object] = _mapping_or_empty(metadata.get("annotations"))
+                    raw: object | None = annotations.get(DEV_TOGGLES_ANNOTATION)
                     if raw is None:
                         continue
                     if not isinstance(raw, str) or not raw.strip():
@@ -504,6 +508,13 @@ def _write_temp_root(document: dict[str, Any]) -> Path:
 def _service_names(root: Path, path: Path) -> set[str]:
     # Name extraction only: the typed ComposeDocument lens carries bind laws generated
     # artifacts satisfy but authored compose files never promised to.
-    document: Any = yaml.safe_load((root / path).read_text(encoding="utf-8"))
-    services: dict[str, Any] = document.get("services") or {}
-    return set(services)
+    document: dict[str, object] = _mapping_or_empty(yaml.safe_load((root / path).read_text(encoding="utf-8")))
+    return set(_mapping_or_empty(document.get("services")))
+
+
+def _mapping_or_empty(value: object) -> dict[str, object]:
+    return value if _is_mapping(value) else {}
+
+
+def _is_mapping(value: Any) -> TypeIs[dict[str, object]]:
+    return isinstance(value, dict)
