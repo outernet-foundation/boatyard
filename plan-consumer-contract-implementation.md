@@ -33,7 +33,8 @@ These rulings bind every phase:
 - Fail closed: an unknown name, missing lock entry, template composing a
   nonexistent tag, or literal image reference refuses loudly, never silently.
 - Platform facts come from declarations, never from the touching machine:
-  `platforms` is required wherever images are declared; the lock is
+  `platforms` is required exactly when `base_images` is declared (the rule
+  guards lock resolution; charts are arch-neutral and exempt); the lock is
   structured YAML recording, per image, the index digest plus one concrete
   manifest digest per declared platform; env consumption is synthesized
   per-run at the edges.
@@ -81,9 +82,11 @@ capture (2026-11-01): docker-devkit at the refactor head (0.5.9, unpublished,
 five ADR commits past origin); the consumer rows record the pre-initiative
 state the archaeology diffs against — `compose-bundles` is the checkout state
 those repos were left stale on, not a deliverable branch, and the catch-up
-wave (phase 9) re-derives each row where its repo actually lands. Once phase
-sessions begin landing commits on a repo, that repo's HEAD advances past its
-recorded sha by design; only the branch keeps needing to match.
+wave (phase 9) re-derives each row where its repo actually lands. A repo's
+HEAD advances past its recorded sha by design — this plan's own prose edits
+advance docker-devkit's before any phase runs, and phase sessions' commits
+advance their repos' after; only the branch keeps needing to match, with
+each row's sha an ancestor of HEAD.
 
 | Repo | Branch | Commit |
 |---|---|---|
@@ -116,11 +119,8 @@ state holds and its verify list passes green.
 | 8 | Renames, docs pass, and initiative release | docker-devkit | D1 |
 | 9 | Consumer catch-up wave | all five consumers | D8, D9 |
 
-"Absorbed Part 0" anchors point at the design the consumer-contract ADR
-absorbed from `plan-artifact-identity.md`; the ADR's Absorption section holds
-its amendments and the design detail itself is lifted into the phases. The
-also-absorbed Part 1 (attribution-based tree-tag precision) executes at the
-opening of `plan-artifact-identity-implementation.md`.
+"Absorbed Part 0" anchors cite the Part 0 design lifted into phases 2–5;
+Part 1 lives in Plan B's opening (both per the preamble).
 
 ## Phase 1 — Contract archaeology
 
@@ -160,9 +160,10 @@ battery).
 
 End state:
 
-- `platforms` is required at `load_config` whenever `base_images` is declared
-  — the refusal names the fix; charts are exempt (arch-neutral); repos
-  declaring no images keep `platforms` optional.
+- `platforms` is required at `load_config` exactly when `base_images` is
+  declared — the refusal names the fix; charts are exempt (arch-neutral), so
+  chart-only and image-free repos keep `platforms` optional, and built
+  services alone never force it (they write no lock entries).
 - `ImageLock` becomes the typed YAML model: `images:` mapping name →
   `{index, platforms: {os/arch: reference}}`; `charts:` mapping name → flat
   digest-pinned reference. `parse_image_lock` swaps wholesale — no dual-read;
@@ -240,12 +241,13 @@ Verify: fixture-index selection battery (arm64 child present; attestations
 skipped; multi-match refusal; single manifest; `@digest` declaration); freeze
 and `--upgrade` semantics over structured entries; `--check` unified diff
 including the env→YAML cutover; mirror probe enumeration covers every
-recorded digest. Owed from the absorbed investigation and closed here: pull
-and `crane digest` a platform-manifest digest against the mirror (ghcr
-serves child manifests by digest; per-platform-manifest retrieval was
-verified only inside the copied index), and
-`imagetools inspect --raw <platform-manifest digest>` answers a manifest,
-not an index.
+recorded digest.
+
+Two live checks close what the absorbed investigation left open (ghcr
+serves child manifests by digest, but per-platform retrieval was verified
+only inside a copied index): pull and `crane digest` a platform-manifest
+digest against the mirror; and confirm `imagetools inspect --raw
+<platform-manifest digest>` answers a manifest, not an index.
 
 ## Phase 5 — Env synthesis, `lock-env`, and `tree-tags`
 
@@ -265,8 +267,10 @@ End state:
   attached as the second `--env-file`, with the materialized root file's temp
   lifecycle — printed and kept on failure like the bake file. Platform
   selection is declaration-driven: a config `platforms` singleton selects
-  itself; a multi-platform repo's `.env` names `PLATFORM=`; never host
-  introspection. Bake receives the same synthesis in-process.
+  itself; a multi-platform repo's `.env` names `PLATFORM=`, and a missing,
+  empty, or undeclared value refuses loudly listing the declared
+  platforms; never host introspection. Bake receives the same synthesis
+  in-process.
 - A `lock-env` verb emits the synthesized env on stdout (the raw
   `docker compose --env-file <(uv run lock-env)` valve).
 - The tag-lookup verb `tree-tags`: positional service names, one bare
@@ -284,9 +288,10 @@ End state:
   manifest under compose.
 
 Verify: synthesis determinism; both selection forms (singleton and
-`PLATFORM=`); probe classification over platform-manifest digests; marker
-substrate resolution; `lock-env` output composes bring-up; `tree-tags`
-correct-by-HEAD, unknown-name vocabulary listing, one-tag-per-line shape.
+`PLATFORM=`, with the missing/unknown-value refusal); probe classification
+over platform-manifest digests; marker substrate resolution; `lock-env`
+output composes bring-up; `tree-tags` correct-by-HEAD, unknown-name
+vocabulary listing, one-tag-per-line shape.
 
 ## Phase 6 — Literal image references refused at derivation
 
@@ -422,8 +427,9 @@ End state:
   `stack/generated/**` regeneration cycle — the structured lock changes every
   marker-resolved image reference in the artifacts (compose-side resolution
   now selects platform manifests) — commit the devkit bump, run
-  `generate-score`, commit the artifacts in a second commit (the score
-  staleness gate is disabled there; operator discipline).
+  `generate-score`, commit the artifacts in a second commit (placeframe's
+  CI disables the score-staleness gate; operator discipline covers this
+  cycle).
 - placeframe-capture-tool: install-zed (`orchestrator.py`, `box_install.py`,
   `constants.py`) drops its library imports and rewrites onto the read
   surface — arm64 manifests by reading `images.<NAME>.platforms[linux/arm64]`
