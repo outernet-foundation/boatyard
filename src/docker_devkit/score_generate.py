@@ -17,6 +17,9 @@ import yaml
 from bashrun.bash import bash, bash_output
 
 from .config import (
+    DEV_TOGGLES_ANNOTATION,
+    DOOR_SERVICE_NAME,
+    ENV_NAME_PATTERN,
     LOCK_PATH,
     SECRETS_FILE,
     SECRETS_OUTPUT,
@@ -234,8 +237,11 @@ def generate_compose(root: Path, config: DockerDevkitConfig, images: dict[str, s
     with _builtin_patch_templates() as builtin_templates:
         for bundle in bundles:
             interpolated_targets: set[str] = set()
+            toggle_services: dict[str, str] = {}
             for name in bundle.workloads:
-                interpolated_targets |= _validate_workload_surface(name, _load_yaml_file(score_dir / name))
+                workload_document = _load_yaml_file(score_dir / name)
+                interpolated_targets |= _validate_workload_surface(name, workload_document)
+                _validate_dev_toggles(name, workload_document, toggle_services)
             provisioner_names = closure_provisioners(score_dir, "compose", bundle.workloads)
             # The state dir is re-created per bundle so one bundle's provisioners and patch
             # templates never leak into another's output.
@@ -305,6 +311,13 @@ def generate_compose(root: Path, config: DockerDevkitConfig, images: dict[str, s
                             service["depends_on"] = [
                                 gate if dependency == GATE_SERVICE else dependency for dependency in depends_on
                             ]
+
+                # compose merges same-name services across includes silently, and the emitted
+                # front door owns the reserved name — a rendering squatting on it refuses here.
+                if DOOR_SERVICE_NAME in collapsed:
+                    raise SystemExit(
+                        f"bundle {bundle.name!r} rendering defines the reserved service {DOOR_SERVICE_NAME!r}"
+                    )
 
                 # Inline every bind as configs.content with $ doubled, leaving zero host-filesystem references.
                 parsed = ComposeDocument.model_validate(document)
@@ -410,6 +423,39 @@ def _validate_workload_surface(name: str, document: Any) -> set[str]:
     return interpolated
 
 
+def _validate_dev_toggles(name: str, document: Any, claimed: dict[str, str]) -> None:
+    # The dev-overlay spelling laws, refused at generation: the annotation is consumed at
+    # `up --dev`, and the declaring change is where malformed spelling should fail.
+    metadata: dict[str, Any] = document.get("metadata") or {}
+    annotations: dict[str, Any] = metadata.get("annotations") or {}
+    raw = annotations.get(DEV_TOGGLES_ANNOTATION)
+    if raw is None:
+        return
+    if not isinstance(raw, str) or not raw.strip():
+        raise SystemExit(f"{name}: {DEV_TOGGLES_ANNOTATION} must be a comma-separated NAME=default string")
+    service_name = metadata.get("name")
+    if not isinstance(service_name, str) or not service_name:
+        raise SystemExit(f"{name}: metadata.name is required to key the dev overlay service")
+    seen: set[str] = set()
+    for item in raw.split(","):
+        toggle_name, separator, default = item.strip().partition("=")
+        if not separator:
+            raise SystemExit(
+                f"{name}: {DEV_TOGGLES_ANNOTATION} entry {item.strip()!r} misses its default; "
+                "the ruled spelling is NAME=default pairs"
+            )
+        if ENV_NAME_PATTERN.fullmatch(toggle_name) is None:
+            raise SystemExit(f"{name}: {DEV_TOGGLES_ANNOTATION} name {toggle_name!r} must be ALL_CAPS")
+        if not default:
+            raise SystemExit(f"{name}: {DEV_TOGGLES_ANNOTATION} default for {toggle_name} is empty")
+        if toggle_name in seen:
+            raise SystemExit(f"{name}: {DEV_TOGGLES_ANNOTATION} names {toggle_name} twice")
+        seen.add(toggle_name)
+    if service_name in claimed:
+        raise SystemExit(f"{claimed[service_name]} and {name} both declare {DEV_TOGGLES_ANNOTATION} for {service_name}")
+    claimed[service_name] = name
+
+
 def closure_provisioners(score_dir: Path, rendering: str, workloads: list[str]) -> list[str]:
     # A rendering registers exactly the provisioner files whose types its workloads
     # reference; orphan files (a type nothing references) silently no-ship.
@@ -443,6 +489,19 @@ def generate_k8s(root: Path, config: DockerDevkitConfig, output: Path, images: d
     state_dir = output_path.parent / ".score-k8s"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     score_dir = root / config.score_dir
+
+    compose_workloads = {name for bundle in compose_bundles(config) for name in bundle.workloads}
+    for name in k8s.workloads:
+        if name in compose_workloads:
+            continue
+        k8s_document: Any = _load_yaml_file(score_dir / name)
+        k8s_metadata: dict[str, Any] = k8s_document.get("metadata") or {}
+        k8s_annotations: dict[str, Any] = k8s_metadata.get("annotations") or {}
+        if DEV_TOGGLES_ANNOTATION in k8s_annotations:
+            raise SystemExit(
+                f"{name}: {DEV_TOGGLES_ANNOTATION} is compose dev-overlay vocabulary; this workload "
+                "renders k8s-only, so the annotation can never apply"
+            )
 
     with (
         _builtin_patch_templates() as builtin_templates,

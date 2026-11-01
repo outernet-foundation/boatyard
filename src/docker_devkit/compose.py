@@ -16,9 +16,9 @@ from .build_docker import run_build
 from .config import (
     AUTH_GROUP_NAME,
     CADDY_IMAGE,
+    DEV_TOGGLES_ANNOTATION,
     DOOR_SERVICE_NAME,
     DockerDevkitConfig,
-    ENV_NAME_PATTERN,
     LOCK_PATH,
     RouteConfig,
     ServiceGroup,
@@ -37,7 +37,6 @@ from .environment import (
 )
 
 DEFAULT_COMPOSE_FILE = Path("compose.yml")
-DEV_TOGGLES_ANNOTATION = "outernet.internal/dev-toggles"
 DEV_MOUNT_TARGET = "/app"
 
 DOOR_LISTEN_PORT = 8443
@@ -162,10 +161,6 @@ def up(
             if not output.is_file():
                 raise RuntimeError(
                     f"selected entry {name!r} has no bundle output {output.as_posix()}; generate-score writes it"
-                )
-            if DOOR_SERVICE_NAME in _service_names(root, output.relative_to(root)):
-                raise RuntimeError(
-                    f"bundle output {output.as_posix()} defines the reserved door service {DOOR_SERVICE_NAME!r}"
                 )
             sources.append(output.resolve().as_posix())
             local_outputs.append(output)
@@ -319,41 +314,18 @@ def up(
                     metadata: dict[str, object] = _mapping_or_empty(workload_document.get("metadata"))
                     annotations: dict[str, object] = _mapping_or_empty(metadata.get("annotations"))
                     raw: object | None = annotations.get(DEV_TOGGLES_ANNOTATION)
-                    if raw is None:
-                        continue
                     if not isinstance(raw, str) or not raw.strip():
-                        raise RuntimeError(
-                            f"{workload}: {DEV_TOGGLES_ANNOTATION} must be a comma-separated NAME=default string"
-                        )
+                        continue
                     service_name = metadata.get("name")
                     if not isinstance(service_name, str) or not service_name:
-                        raise RuntimeError(f"{workload}: metadata.name is required to key the dev overlay service")
-                    toggles: dict[str, str] = {}
-                    for item in raw.split(","):
-                        toggle_name, separator, default = item.strip().partition("=")
-                        if not separator:
-                            raise RuntimeError(
-                                f"{workload}: {DEV_TOGGLES_ANNOTATION} entry {item.strip()!r} misses its default; "
-                                "the ruled spelling is NAME=default pairs"
-                            )
-                        if ENV_NAME_PATTERN.fullmatch(toggle_name) is None:
-                            raise RuntimeError(
-                                f"{workload}: {DEV_TOGGLES_ANNOTATION} name {toggle_name!r} must be ALL_CAPS"
-                            )
-                        if not default:
-                            raise RuntimeError(
-                                f"{workload}: {DEV_TOGGLES_ANNOTATION} default for {toggle_name} is empty"
-                            )
-                        if toggle_name in toggles:
-                            raise RuntimeError(f"{workload}: {DEV_TOGGLES_ANNOTATION} names {toggle_name} twice")
-                        toggles[toggle_name] = default
+                        continue
                     if service_name not in declared:
                         continue
-                    if "environment" in overlay_services.get(service_name, {}):
-                        raise RuntimeError(
-                            f"{workload} and another workload both declare {DEV_TOGGLES_ANNOTATION} for {service_name}"
-                        )
-                    overlay_services.setdefault(service_name, {})["environment"] = {
+                    toggles = {
+                        toggle_name: default
+                        for toggle_name, _, default in (item.strip().partition("=") for item in raw.split(","))
+                    }
+                    overlay_services.setdefault(service_name, OverlayService())["environment"] = {
                         key: f"${{{key}:-{value}}}" for key, value in toggles.items()
                     }
             if not overlay_services:

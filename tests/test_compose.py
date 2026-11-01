@@ -563,18 +563,6 @@ class TestUpMaterialization:
         assert isinstance(result.exception, RuntimeError)
         assert "PUBLIC_URL" in str(result.exception)
 
-    def test_a_local_output_defining_the_door_service_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        _write_consumer_tree(tmp_path)
-        _write_bundle_output(tmp_path, "cuda", ["api", "grafana", "door"])
-        monkeypatch.delenv("BUNDLES", raising=False)
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(compose.up_app, [])
-
-        assert result.exit_code != 0
-        assert isinstance(result.exception, RuntimeError)
-        assert "reserved door service" in str(result.exception)
-
 
 class TestUpValidation:
     def _invoke_up(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, services: str):
@@ -900,40 +888,6 @@ class TestDevOverlay:
         overlay_match = OVERLAY_ARGUMENT_PATTERN.search(recorder.commands[0])
         assert overlay_match is not None
         assert not Path(overlay_match.group(1)).exists()
-
-    @pytest.mark.parametrize(
-        "annotation",
-        [
-            "RELOAD",
-            "reload=true",
-            "RELOAD=",
-            "RELOAD=true,RELOAD=false",
-        ],
-    )
-    def test_malformed_annotations_refuse(self, tmp_path: Path, annotation: str, monkeypatch: pytest.MonkeyPatch):
-        _write_dev_tree(tmp_path, dockerfile=MULTI_STAGE_DOCKERFILE, api_annotations={DEV_TOGGLES: annotation})
-        monkeypatch.delenv("BUNDLES", raising=False)
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(compose.up_app, ["--dev"])
-
-        assert result.exit_code != 0
-        assert isinstance(result.exception, RuntimeError)
-
-    def test_non_string_annotation_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        _write_dev_tree(tmp_path, dockerfile=MULTI_STAGE_DOCKERFILE, api_annotations={DEV_TOGGLES: "RELOAD=true"})
-        path = tmp_path / "stack" / "score" / "api.yaml"
-        document = yaml.safe_load(path.read_text(encoding="utf-8"))
-        document["metadata"]["annotations"][DEV_TOGGLES] = True
-        path.write_text(yaml.safe_dump(document), encoding="utf-8")
-        monkeypatch.delenv("BUNDLES", raising=False)
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(compose.up_app, ["--dev"])
-
-        assert result.exit_code != 0
-        assert isinstance(result.exception, RuntimeError)
-        assert "NAME=default" in str(result.exception)
 
 
 class TestLockRequirement:

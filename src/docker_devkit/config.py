@@ -64,6 +64,7 @@ PORT_PATTERN = re.compile(r"^[0-9]+$")
 AUTH_GROUP_NAME = "auth"
 DOOR_SERVICE_NAME = "door"
 CADDY_IMAGE = "CADDY_IMAGE"
+DEV_TOGGLES_ANNOTATION = "outernet.internal/dev-toggles"
 PORT_PROTOCOLS = ("tcp", "udp")
 
 

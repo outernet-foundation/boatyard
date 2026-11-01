@@ -561,13 +561,14 @@ def _compose_init_templates(
     config: DockerDevkitConfig,
     images: dict[str, str],
     sources: dict[str, str],
+    generated: str = "services: {}\n",
 ) -> list[list[str]]:
     # One template-name list per bundle rendering, in declaration order.
     for relative, text in sources.items():
         source = tmp_path / relative
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_text(text, encoding="utf-8")
-    recorder = ComposeBashRecorder("services: {}\n")
+    recorder = ComposeBashRecorder(generated)
     monkeypatch.setattr(score_generate, "bash", recorder.run)
     score_generate.generate_compose(tmp_path, config, images)
     inits = [command for command in recorder.commands if command.startswith("score-compose init")]
@@ -819,6 +820,79 @@ def test_publish_annotation_refuses_naming_its_death(tmp_path: Path, monkeypatch
                 ),
             },
         )
+
+
+def _toggles_workload(annotation: object) -> str:
+    return (
+        f"metadata:\n  name: api\n  annotations:\n    outernet.internal/dev-toggles: {annotation!r}\ncontainers: {{}}\n"
+    )
+
+
+def test_dev_toggles_spelling_refuses_at_generation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _bundle_config()
+
+    for annotation in ("RELOAD", "reload=true", "RELOAD=", "RELOAD=true,RELOAD=false"):
+        with pytest.raises(SystemExit, match=r"api\.yaml.*dev-toggles"):
+            _compose_init_templates(
+                monkeypatch, tmp_path, config, {}, {"stack/score/api.yaml": _toggles_workload(annotation)}
+            )
+
+
+def test_a_non_string_dev_toggles_annotation_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _bundle_config()
+
+    with pytest.raises(SystemExit, match=r"api\.yaml.*NAME=default"):
+        _compose_init_templates(monkeypatch, tmp_path, config, {}, {"stack/score/api.yaml": _toggles_workload(True)})
+
+
+def test_dev_toggles_without_metadata_name_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _bundle_config()
+    source = "metadata:\n  annotations:\n    outernet.internal/dev-toggles: RELOAD=true\ncontainers: {}\n"
+
+    with pytest.raises(SystemExit, match=r"api\.yaml.*metadata\.name"):
+        _compose_init_templates(monkeypatch, tmp_path, config, {}, {"stack/score/api.yaml": source})
+
+
+def test_two_workloads_toggling_one_service_refuse_at_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _bundle_config(workloads=["api.yaml", "api2.yaml"])
+
+    with pytest.raises(SystemExit, match=r"both declare.*dev-toggles.*api"):
+        _compose_init_templates(
+            monkeypatch,
+            tmp_path,
+            config,
+            {},
+            {
+                "stack/score/api.yaml": _toggles_workload("RELOAD=true"),
+                "stack/score/api2.yaml": _toggles_workload("DEBUG=false"),
+            },
+        )
+
+
+def test_a_rendering_defining_the_door_service_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _bundle_config()
+
+    with pytest.raises(SystemExit, match=r"reserved service 'door'"):
+        _compose_init_templates(
+            monkeypatch,
+            tmp_path,
+            config,
+            {},
+            {"stack/score/api.yaml": "metadata:\n  name: api\ncontainers: {}\n"},
+            generated="services:\n  door:\n    image: example/caddy:1\n",
+        )
+
+
+def test_dev_toggles_on_a_k8s_only_workload_refuses(tmp_path: Path) -> None:
+    config = _root_config(k8s={"workloads": ["k8s-only.yaml"]})
+    source = tmp_path / "stack" / "score" / "k8s-only.yaml"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(_toggles_workload("RELOAD=true"), encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="renders k8s-only"):
+        score_generate.generate_k8s(tmp_path, config, Path("stack/generated/k8s/manifests.yaml"), {})
 
 
 def test_consumer_interpolated_names_must_match_declared_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
