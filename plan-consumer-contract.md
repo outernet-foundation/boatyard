@@ -132,8 +132,13 @@ system.)
    direct read with plain `yaml.safe_load` (the env-line format that forced
    `parse_env_file` imports dies here). install-zed selects its arm64 dish by
    reading `images.<NAME>.platforms[linux/arm64]` directly.
-3. The facts verb — one JSON document of tree-derived facts (services, sha
-   keys, `tree-` tags; repository/platforms echo). **Open — see O1.**
+3. The tag-lookup verb — `uv run <verb> <service>…`: positional service
+   names, one bare `tree-` tag per line on stdout, unknown names refuse
+   loudly listing the vocabulary. The whole contract is a string, not a
+   schema: no JSON document, no service-list endpoint, no `{SERVICE}_SHA`
+   names — consumers that write `.env` lines own those names where they
+   author the compose holes. Deterministic function of HEAD, never cached,
+   never committed. Exact verb name is plan-session material.
 4. `lock-env` — the env-grammar projection of the lock for the compose/bake/
    raw-`docker compose` valves (absorbed Part 0 design).
 
@@ -164,7 +169,7 @@ placeframe's `scripts/preflight.py` drops its four imports and the
 `VERSION_COUPLINGS` list; its two score-generation test modules rewrite to
 assert against committed artifacts (freshness is already gated by
 `generate-score --check` in CI); install-zed rewrites onto YAML-lock reads,
-the facts verb, and `build --registry`; `platforms` declarations complete
+the tag-lookup verb, and `build --registry`; `platforms` declarations complete
 (placeframe amd64, Make-it-Sing) under Part 0's config refusal; placeframe
 runs one deliberate `stack/generated/**` regeneration cycle after the Part 1
 re-key. The full dev165→final contract diff (CLI, schema, lock format,
@@ -178,8 +183,8 @@ tree-hash precision (Part 1) — implementation phases 1–7 of
 `plan-artifact-identity-implementation.md` — are absorbed into this
 initiative. Rationale: the session already owes consumers exactly one
 relock-and-catch-up wave; riding P0+P1 on it costs zero additional waves and
-lands every read-surface change (YAML lock, `lock-env`, facts verb,
-templates) in the single release consumers pin once. Part 0 also fixes
+lands every read-surface change (YAML lock, `lock-env`,
+tag lookup, templates) in the single release consumers pin once. Part 0 also fixes
 capture-tool's live per-arch defect (index digests vs arm64 dishes — boxes
 currently ship unexecutable amd64 loki/alloy).
 
@@ -213,17 +218,11 @@ invariant check survives anywhere in the design.
 These are answered in follow-up sessions before the implementation plan is
 written; the design is not locked until they close.
 
-- **O1 — the facts verb.** The operator has not signed off on this item: the
-  contents of the facts verb are not yet understood well enough to lock, and
-  a follow-up session must build that mental model (what exactly the document
-  carries, which consumers read which fields, whether any need dissolves into
-  the other three homes) before D6's third home is final. D6 stands as
-  designed but explicitly unsigned on this leg.
-- **O2 — the `.env` reader home.** D8's consumer-owned-module recommendation
+- **O1 — the `.env` reader home.** D8's consumer-owned-module recommendation
   is favored but was not explicitly locked in-session.
-- **O3 — `build --registry` spelling.** Direction locked (D7); flag name,
+- **O2 — `build --registry` spelling.** Direction locked (D7); flag name,
   interaction with `--push`/cache refs, and the host-vs-box address split are
   plan-session details.
-- **O4 — catch-up archaeology.** The dev165→final diff across CLI, schema,
+- **O3 — catch-up archaeology.** The dev165→final diff across CLI, schema,
   lock format, and artifact shapes may surface consumer edits beyond D9's
   enumeration; findings fold back into the plan.
