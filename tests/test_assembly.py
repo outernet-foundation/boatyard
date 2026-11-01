@@ -57,7 +57,7 @@ def _assembly_document(
         yaml.safe_dump(
             {
                 "requires": ">=0.0",
-                "project_name": "door-demo",
+                "project_name": "edge-demo",
                 "platforms": ["linux/amd64"],
                 "gateway": gateway,
                 "services": services,
@@ -105,15 +105,15 @@ def _probe_present_and_services(command: str) -> str:
     if "imagetools inspect" in command:
         return ""
     assert "config --services" in command
-    return "livekit\nkeycloak\ngrafana\napi\nx\ndoor\n"
+    return "livekit\nkeycloak\ngrafana\napi\nx\nedge\n"
 
 
 def _caddyfile(document: dict[str, Any]) -> str:
-    return document["configs"]["devkit-door-caddyfile"]["content"]
+    return document["configs"]["devkit-edge-caddyfile"]["content"]
 
 
 class TestRenderCaddyfile:
-    def test_the_site_listens_on_the_door_port(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_the_site_listens_on_the_edge_port(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         document = _assembly_document(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
 
         assert _caddyfile(document).startswith(":8443 {\n")
@@ -194,21 +194,21 @@ class TestPublicUrlDerivation:
             tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], auth=True, public_url=public_url
         )
 
-        assert document["services"]["door"]["environment"] == {
+        assert document["services"]["edge"]["environment"] == {
             "FORWARDED_PROTO": expected[0],
             "FORWARDED_PORT": expected[1],
         }
 
 
-class TestDoorStanza:
+class TestEdgeStanza:
     def test_the_stanza_carries_the_caddy_hole_config_mount_and_port(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         document = _assembly_document(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
 
-        assert document["services"]["door"] == {
+        assert document["services"]["edge"] == {
             "image": "${CADDY_IMAGE:?err}",
-            "configs": [{"source": "devkit-door-caddyfile", "target": "/etc/caddy/Caddyfile"}],
+            "configs": [{"source": "devkit-edge-caddyfile", "target": "/etc/caddy/Caddyfile"}],
             "ports": [{"target": "8443", "published": "${GATEWAY_PORT:?err}", "protocol": "tcp"}],
         }
 
@@ -217,7 +217,7 @@ class TestDoorStanza:
             tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], gateway="8080"
         )
 
-        assert document["services"]["door"]["ports"] == [{"target": "8443", "published": "8080", "protocol": "tcp"}]
+        assert document["services"]["edge"]["ports"] == [{"target": "8443", "published": "8080", "protocol": "tcp"}]
 
 
 class TestParseEnvFile:

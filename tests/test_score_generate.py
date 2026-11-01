@@ -973,17 +973,17 @@ def test_two_workloads_toggling_one_service_refuse_at_generation(
         )
 
 
-def test_a_rendering_defining_the_door_service_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_rendering_defining_the_edge_service_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _bundle_config()
 
-    with pytest.raises(SystemExit, match=r"reserved service 'door'"):
+    with pytest.raises(SystemExit, match=r"reserved service 'edge'"):
         _compose_init_templates(
             monkeypatch,
             tmp_path,
             config,
             {},
             {"stack/score/api.yaml": "metadata:\n  name: api\ncontainers: {}\n"},
-            generated="services:\n  door:\n    image: example/caddy:1\n",
+            generated="services:\n  edge:\n    image: example/caddy:1\n",
         )
 
 

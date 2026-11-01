@@ -36,7 +36,7 @@ def write_lock(tmp_path: Path, entries: dict[str, str] | None = None) -> None:
     )
 
 
-def write_door_lock(tmp_path: Path) -> None:
+def write_edge_lock(tmp_path: Path) -> None:
     reference = "ghcr.io/outernet-foundation/mirror/docker.io/library/caddy:2.8.4-alpine@" + DIGEST
     write_lock(tmp_path, {"CADDY_IMAGE": reference})
 
@@ -517,7 +517,7 @@ class TestK8sSection:
 
 class TestServices:
     def test_groups_options_and_bare_entries_load(self, tmp_path: Path) -> None:
-        write_door_lock(tmp_path)
+        write_edge_lock(tmp_path)
         write_config(
             tmp_path,
             {
@@ -658,7 +658,7 @@ class TestServices:
             load_config(tmp_path)
 
     def test_remote_only_services_need_no_repository(self, tmp_path: Path) -> None:
-        write_door_lock(tmp_path)
+        write_edge_lock(tmp_path)
         write_config(
             tmp_path,
             {
@@ -721,7 +721,7 @@ class TestAuthGroup:
         }
 
     def test_an_auth_option_with_exactly_one_route_loads(self, tmp_path: Path) -> None:
-        write_door_lock(tmp_path)
+        write_edge_lock(tmp_path)
         write_config(
             tmp_path,
             self._auth_config({
@@ -783,7 +783,7 @@ class TestRoutes:
             "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x@" + DIGEST, "routes": routes}},
         }
 
-    def test_door_wide_path_uniqueness_refuses_duplicates(self, tmp_path: Path) -> None:
+    def test_edge_wide_path_uniqueness_refuses_duplicates(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,
             {
@@ -811,7 +811,7 @@ class TestRoutes:
             },
         )
 
-        with pytest.raises(ValidationError, match="door-wide unique"):
+        with pytest.raises(ValidationError, match="edge-wide unique"):
             load_config(tmp_path)
 
     @pytest.mark.parametrize(
@@ -825,7 +825,7 @@ class TestRoutes:
             load_config(tmp_path)
 
     def test_plain_and_wildcard_paths_load(self, tmp_path: Path) -> None:
-        write_door_lock(tmp_path)
+        write_edge_lock(tmp_path)
         write_config(
             tmp_path,
             self._routed([
@@ -854,7 +854,7 @@ class TestRoutes:
             load_config(tmp_path)
 
     def test_a_raw_route_loads(self, tmp_path: Path) -> None:
-        write_door_lock(tmp_path)
+        write_edge_lock(tmp_path)
         write_config(
             tmp_path,
             self._routed([{"path": "/x/*", "upstream": "x:1", "raw": 'respond "hi" 200'}]),
@@ -918,7 +918,7 @@ class TestGatewayKey:
             load_config(tmp_path)
 
     def test_a_literal_port_loads(self, tmp_path: Path) -> None:
-        write_door_lock(tmp_path)
+        write_edge_lock(tmp_path)
         write_config(
             tmp_path,
             {
@@ -967,7 +967,7 @@ class TestPorts:
         }
 
     def test_string_form_names_the_entry_service_with_tcp_default(self, tmp_path: Path) -> None:
-        write_door_lock(tmp_path)
+        write_edge_lock(tmp_path)
         write_config(
             tmp_path,
             self._ports_config({
@@ -990,7 +990,7 @@ class TestPorts:
         ]
 
     def test_option_level_string_form_names_the_option(self, tmp_path: Path) -> None:
-        write_door_lock(tmp_path)
+        write_edge_lock(tmp_path)
         write_config(
             tmp_path,
             self._ports_config({
@@ -1008,7 +1008,7 @@ class TestPorts:
                 },
             }),
         )
-        write_door_lock(tmp_path)
+        write_edge_lock(tmp_path)
 
         config = load_config(tmp_path)
 
@@ -1031,7 +1031,7 @@ class TestPorts:
             load_config(tmp_path)
 
     def test_the_mapping_form_spells_the_owning_service_and_host_ip(self, tmp_path: Path) -> None:
-        write_door_lock(tmp_path)
+        write_edge_lock(tmp_path)
         write_config(
             tmp_path,
             self._ports_config({
@@ -1052,7 +1052,7 @@ class TestPorts:
                 },
             }),
         )
-        write_door_lock(tmp_path)
+        write_edge_lock(tmp_path)
 
         config = load_config(tmp_path)
 
@@ -1344,4 +1344,4 @@ class TestImageLockParse:
         lock = parse_image_lock(_write_raw_lock(tmp_path, "{}\n"))
 
         with pytest.raises(RuntimeError, match=r"lacks the CADDY_IMAGE entry.*lock verb writes it"):
-            lock.require("CADDY_IMAGE", "routes are declared, so the door rides")
+            lock.require("CADDY_IMAGE", "routes are declared, so the edge rides")

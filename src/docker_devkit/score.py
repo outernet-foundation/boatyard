@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from docker_devkit.config import (
     DEV_TOGGLES_ANNOTATION,
-    DOOR_SERVICE_NAME,
+    EDGE_SERVICE_NAME,
     ImageLock,
     K8sConfig,
     Target,
@@ -229,10 +229,10 @@ def generate_compose(config: DockerDevkitConfig, images: dict[str, str]) -> None
                             ]
 
                 # compose merges same-name services across includes silently, and the emitted
-                # front door owns the reserved name — a rendering squatting on it refuses here.
-                if DOOR_SERVICE_NAME in collapsed:
+                # edge service owns the reserved name — a rendering squatting on it refuses here.
+                if EDGE_SERVICE_NAME in collapsed:
                     raise SystemExit(
-                        f"bundle {bundle.name!r} rendering defines the reserved service {DOOR_SERVICE_NAME!r}"
+                        f"bundle {bundle.name!r} rendering defines the reserved service {EDGE_SERVICE_NAME!r}"
                     )
 
                 # Inline every bind as configs.content with $ doubled, leaving zero host-filesystem references.

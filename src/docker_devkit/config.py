@@ -70,7 +70,7 @@ ENV_HOLE_PATTERN = re.compile(r"^\$\{[A-Z][A-Z0-9_]*(?::[^{}]*)?\}$")
 PORT_PATTERN = re.compile(r"^[0-9]+$")
 
 AUTH_GROUP_NAME = "auth"
-DOOR_SERVICE_NAME = "door"
+EDGE_SERVICE_NAME = "edge"
 CADDY_IMAGE = "CADDY_IMAGE"
 DEV_TOGGLES_ANNOTATION = "outernet.internal/dev-toggles"
 
@@ -437,12 +437,12 @@ class DockerDevkitConfig(BaseModel):
             )
         return requirements
 
-    def build_legs(self) -> list[dict[str, str]]:
-        # The CI fanout closures: a union-find over the derived context edges groups
+    def build_partitions(self) -> list[dict[str, str]]:
+        # The CI fanout partitions: a union-find over the derived context edges groups
         # dependency closures, and load-time coherence guarantees one variant set per
-        # closure, so one leg builds a whole closure group in a single bake invocation;
-        # one leg per closure × variant cell. The leg schema (targets, variant) is a
-        # named contract with the toolkit binding.
+        # closure, so one partition builds a whole closure group in a single bake
+        # invocation; one partition per closure × variant cell. The cell schema
+        # (targets, variant) is a named contract with the toolkit binding.
         services = self.service_builds
         parent = {service: service for service in services}
 
@@ -611,13 +611,13 @@ class DockerDevkitConfig(BaseModel):
 
     @model_validator(mode="after")
     def _require_unique_route_paths(self) -> Self:
-        # Route paths are door-wide unique.
+        # Route paths are edge-wide unique.
         owner: dict[str, str] = {}
         for where, route in self._route_sites():
             if route.path in owner:
                 raise ValueError(
                     f"{where}: route path {route.path} is already declared at {owner[route.path]}; "
-                    "paths are door-wide unique"
+                    "paths are edge-wide unique"
                 )
             owner[route.path] = where
         return self
@@ -625,7 +625,7 @@ class DockerDevkitConfig(BaseModel):
     @model_validator(mode="after")
     def _require_auth_shape(self) -> Self:
         # Auth is a reserved group name; an auth option declares exactly one route — its
-        # upstream is the auth entry point the door forwards headers for.
+        # upstream is the auth entry point the edge forwards headers for.
         if AUTH_GROUP_NAME in self.services:
             auth = self.services[AUTH_GROUP_NAME]
             if not isinstance(auth, ServiceGroup):
@@ -634,18 +634,18 @@ class DockerDevkitConfig(BaseModel):
                 if len(option.routes) != 1:
                     raise ValueError(
                         f"services.{AUTH_GROUP_NAME}.options.{option_name}: an auth option declares exactly one "
-                        "route; its upstream is the auth entry point the door forwards headers for"
+                        "route; its upstream is the auth entry point the edge forwards headers for"
                     )
         return self
 
     @model_validator(mode="after")
     def _require_gateway_pairing(self) -> Self:
-        # The door emits iff any route rides anywhere.
+        # The edge emits iff any route rides anywhere.
         any_route = any(self._route_sites())
         if any_route and self.gateway is None:
-            raise ValueError("routes are declared; gateway (the door's host port) is required")
+            raise ValueError("routes are declared; gateway (the edge's host port) is required")
         if not any_route and self.gateway is not None:
-            raise ValueError("gateway is declared but no route exists anywhere; the door would never emit")
+            raise ValueError("gateway is declared but no route exists anywhere; the edge would never emit")
         return self
 
     @model_validator(mode="after")
@@ -713,7 +713,7 @@ class DockerDevkitConfig(BaseModel):
             if entries is not None:
                 entries.require(
                     CADDY_IMAGE,
-                    "routes are declared, so the door rides",
+                    "routes are declared, so the edge rides",
                     hint="declare CADDY_IMAGE in base_images and run lock",
                 )
         for chart in declared_charts:

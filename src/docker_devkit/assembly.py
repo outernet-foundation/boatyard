@@ -14,8 +14,8 @@ from docker_devkit.config import (
     AUTH_GROUP_NAME,
     CADDY_IMAGE,
     DEV_TOGGLES_ANNOTATION,
-    DOOR_SERVICE_NAME,
     DockerDevkitConfig,
+    EDGE_SERVICE_NAME,
     LOCK_PATH,
     PortDeclaration,
     RouteConfig,
@@ -34,9 +34,9 @@ PROFILES_VARIABLE = "COMPOSE_PROFILES"
 
 DEV_MOUNT_TARGET = "/app"
 
-DOOR_LISTEN_PORT = 8443
-DOOR_CONFIG_NAME = "devkit-door-caddyfile"
-DOOR_CONFIG_TARGET = "/etc/caddy/Caddyfile"
+EDGE_LISTEN_PORT = 8443
+EDGE_CONFIG_NAME = "devkit-edge-caddyfile"
+EDGE_CONFIG_TARGET = "/etc/caddy/Caddyfile"
 CADDY_IMAGE_HOLE = f"${{{CADDY_IMAGE}:?err}}"
 
 
@@ -201,15 +201,15 @@ class Assembly:
             self.lock_env_file.unlink(missing_ok=True)
 
     def _render_root_document(self) -> dict[str, object]:
-        # The per-run root compose file: name, includes, the door, parent port stanzas, Caddyfile.
+        # The per-run root compose file: name, includes, the edge, parent port stanzas, Caddyfile.
         assert self.config.project_name is not None
         services: dict[str, object] = {}
         if self.routes:
             assert self.config.gateway is not None
-            services[DOOR_SERVICE_NAME] = {
+            services[EDGE_SERVICE_NAME] = {
                 "image": CADDY_IMAGE_HOLE,
-                "configs": [{"source": DOOR_CONFIG_NAME, "target": DOOR_CONFIG_TARGET}],
-                "ports": [{"target": str(DOOR_LISTEN_PORT), "published": self.config.gateway, "protocol": "tcp"}],
+                "configs": [{"source": EDGE_CONFIG_NAME, "target": EDGE_CONFIG_TARGET}],
+                "ports": [{"target": str(EDGE_LISTEN_PORT), "published": self.config.gateway, "protocol": "tcp"}],
                 **({"environment": self.forwarded} if self.forwarded is not None else {}),
             }
         ordered_ports = sorted(self.ports, key=lambda port: port.service)
@@ -233,13 +233,13 @@ class Assembly:
         if services:
             document["services"] = services
         if self.routes:
-            document["configs"] = {DOOR_CONFIG_NAME: {"content": self._render_caddyfile()}}
+            document["configs"] = {EDGE_CONFIG_NAME: {"content": self._render_caddyfile()}}
         return document
 
     def _render_caddyfile(self) -> str:
         # One site on the internal port; each route one handle block, in declaration order
         # (caddy sorts them longest-path-first, so the order cannot shadow).
-        lines = [f":{DOOR_LISTEN_PORT} {{"]
+        lines = [f":{EDGE_LISTEN_PORT} {{"]
         for route in self.routes:
             matcher = "" if route.path == "/*" else f" {route.path}"
             if route.raw is not None:
@@ -396,7 +396,7 @@ def forwarded_pair(environment: dict[str, str]) -> dict[str, str]:
     public_url = environment.get("PUBLIC_URL", "").strip()
     if not public_url:
         raise RuntimeError(
-            "an auth option is selected, so the door derives the forwarded scheme and port from PUBLIC_URL; "
+            "an auth option is selected, so the edge derives the forwarded scheme and port from PUBLIC_URL; "
             "PUBLIC_URL is missing from the environment"
         )
     scheme, _, rest = public_url.partition("://")

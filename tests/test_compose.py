@@ -380,7 +380,7 @@ class TestSelectionLaw:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         bundles: str | None = "cuda,keycloak",
-        services: str = "api grafana door livekit keycloak",
+        services: str = "api grafana edge livekit keycloak",
     ) -> AssemblyRecorder:
         _write_consumer_tree(tmp_path, bundles=bundles)
         monkeypatch.delenv("BUNDLES", raising=False)
@@ -427,7 +427,7 @@ class TestSelectionLaw:
         (tmp_path / ".env").write_text("BUNDLES=\n", encoding="utf-8")
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
-        handler = PresentProbeAndServices("livekit", "door").run
+        handler = PresentProbeAndServices("livekit", "edge").run
         monkeypatch.setattr(assembly, "bash_output", handler)
         monkeypatch.setattr(up, "bash_output", handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
@@ -464,7 +464,7 @@ class TestSelectionLaw:
         _write_workload(tmp_path, "api.yaml", "api")
         (tmp_path / ".env").write_text("BUNDLES=\n", encoding="utf-8")
         monkeypatch.delenv("BUNDLES", raising=False)
-        monkeypatch.setattr(up, "bash_output", ServicesOutput("api", "door").run)
+        monkeypatch.setattr(up, "bash_output", ServicesOutput("api", "edge").run)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(up.app, [])
@@ -558,13 +558,13 @@ class TestSelectionLaw:
 
 
 class TestUpMaterialization:
-    def test_root_file_carries_name_includes_door_and_port_stanzas(
+    def test_root_file_carries_name_includes_edge_and_port_stanzas(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         _write_consumer_tree(tmp_path)
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
-        handler = PresentProbeAndServices("api", "grafana", "door", "livekit", "keycloak").run
+        handler = PresentProbeAndServices("api", "grafana", "edge", "livekit", "keycloak").run
         monkeypatch.setattr(assembly, "bash_output", handler)
         monkeypatch.setattr(up, "bash_output", handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
@@ -580,10 +580,10 @@ class TestUpMaterialization:
             (tmp_path / "stack/generated/compose/compose.cuda.yaml").resolve().as_posix(),
             LIVEKIT_REF,
         ]
-        door = document["services"]["door"]
-        assert door["image"] == "${CADDY_IMAGE:?err}"
-        assert door["ports"] == [{"target": "8443", "published": "${GATEWAY_PORT:?err}", "protocol": "tcp"}]
-        assert door["environment"] == {
+        edge = document["services"]["edge"]
+        assert edge["image"] == "${CADDY_IMAGE:?err}"
+        assert edge["ports"] == [{"target": "8443", "published": "${GATEWAY_PORT:?err}", "protocol": "tcp"}]
+        assert edge["environment"] == {
             "FORWARDED_PROTO": "http",
             "FORWARDED_PORT": "58080",
         }
@@ -594,7 +594,7 @@ class TestUpMaterialization:
                 "protocol": "tcp",
             }
         ]
-        content = document["configs"]["devkit-door-caddyfile"]["content"]
+        content = document["configs"]["devkit-edge-caddyfile"]["content"]
         assert "handle_path /auth/*" in content
         assert "header_up X-Forwarded-Proto {$$FORWARDED_PROTO}" in content
         assert "reverse_proxy grafana:3000" in content
@@ -606,7 +606,7 @@ class TestUpMaterialization:
         _write_consumer_tree(tmp_path, bundles="cuda")
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
-        handler = PresentProbeAndServices("api", "grafana", "door", "livekit").run
+        handler = PresentProbeAndServices("api", "grafana", "edge", "livekit").run
         monkeypatch.setattr(assembly, "bash_output", handler)
         monkeypatch.setattr(up, "bash_output", handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
@@ -616,12 +616,12 @@ class TestUpMaterialization:
 
         assert result.exit_code == 0, result.output
         [document] = recorder.documents
-        door = document["services"]["door"]
-        assert "environment" not in door
-        content = document["configs"]["devkit-door-caddyfile"]["content"]
+        edge = document["services"]["edge"]
+        assert "environment" not in edge
+        content = document["configs"]["devkit-edge-caddyfile"]["content"]
         assert "/auth/*" not in content
 
-    def test_the_door_refuses_without_the_caddy_lock_entry(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_the_edge_refuses_without_the_caddy_lock_entry(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_consumer_tree(tmp_path)
         _write_lock(tmp_path, entries={"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST})
         monkeypatch.delenv("BUNDLES", raising=False)
@@ -659,7 +659,7 @@ class TestUpValidation:
         return runner.invoke(up.app, [])
 
     def test_a_route_upstream_absent_from_the_assembly_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        result = self._invoke_up(tmp_path, monkeypatch, "api door livekit keycloak")
+        result = self._invoke_up(tmp_path, monkeypatch, "api edge livekit keycloak")
 
         assert result.exit_code != 0
         assert isinstance(result.exception, RuntimeError)
@@ -668,7 +668,7 @@ class TestUpValidation:
     def test_the_selected_auth_upstream_absent_from_the_assembly_refuses(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        result = self._invoke_up(tmp_path, monkeypatch, "api grafana door livekit")
+        result = self._invoke_up(tmp_path, monkeypatch, "api grafana edge livekit")
 
         assert result.exit_code != 0
         assert isinstance(result.exception, RuntimeError)
@@ -677,7 +677,7 @@ class TestUpValidation:
     def test_a_port_owning_service_absent_from_the_assembly_refuses(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        result = self._invoke_up(tmp_path, monkeypatch, "api grafana door keycloak")
+        result = self._invoke_up(tmp_path, monkeypatch, "api grafana edge keycloak")
 
         assert result.exit_code != 0
         assert isinstance(result.exception, RuntimeError)

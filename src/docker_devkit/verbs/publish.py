@@ -16,8 +16,8 @@ from docker_devkit.lock import env_entries
 from docker_devkit.publish import (
     STUB_VALUE,
     VAR_PATTERN,
-    PublishLeg,
-    PublishedLeg,
+    PublishEntry,
+    PublishedEntry,
     bake_sources,
     finalize_baked,
 )
@@ -31,7 +31,7 @@ def publish_compose(
         str | None,
         typer.Option(
             "--bundle",
-            help="Publish this bundle leg (one leg per bundle x gpu variant); a bare invocation publishes every leg.",
+            help="Publish this bundle's entry (one artifact per workload-bearing entry or option); a bare invocation publishes every entry.",
         ),
     ] = None,
     branch: Annotated[
@@ -40,7 +40,7 @@ def publish_compose(
     ] = None,
     plan: Annotated[
         bool,
-        typer.Option("--plan", help="Print the publish legs as a bare JSON array (empty when no section); no publish."),
+        typer.Option("--plan", help="Print the publish entries as a bare JSON array (empty when no section); no publish."),
     ] = False,
 ) -> None:
     root = Path.cwd()
@@ -57,15 +57,15 @@ def publish_compose(
     bundles = config.compose_bundles()
 
     if plan:
-        legs = [{"bundle": entry.name} for entry in bundles]
-        print(json.dumps(legs))
+        entries = [{"bundle": entry.name} for entry in bundles]
+        print(json.dumps(entries))
         return
 
     names = [entry.name for entry in bundles]
     if bundle is not None and bundle not in names:
         raise typer.BadParameter(f"unknown --bundle {bundle!r}; declared bundles: {names}")
     selected = [
-        PublishLeg(entry.name, [entry.output.as_posix()]) for entry in bundles if bundle is None or entry.name == bundle
+        PublishEntry(entry.name, [entry.output.as_posix()]) for entry in bundles if bundle is None or entry.name == bundle
     ]
 
     username = os.environ.get("REGISTRY_USERNAME", "")
@@ -87,11 +87,11 @@ def publish_compose(
         **env_entries(parse_image_lock(root / LOCK_PATH)),
     }
 
-    published: list[PublishedLeg] = []
-    for leg in selected:
+    published: list[PublishedEntry] = []
+    for publish_entry in selected:
         with TemporaryDirectory(prefix="compose-bundle-") as baked_directory_string:
             baked_directory = Path(baked_directory_string)
-            baked_paths = bake_sources(baked_directory, leg.files, substitutions)
+            baked_paths = bake_sources(baked_directory, publish_entry.files, substitutions)
 
             # Publish validates ${VAR} holes against the environment but embeds the file
             # uninterpolated (verified against a live registry — no env value enters the
@@ -108,19 +108,19 @@ def publish_compose(
             finalize_baked(baked_paths, config.repository)
 
             compose_files = " ".join(f"-f {shlex.quote(str(baked_path))}" for baked_path in baked_paths)
-            # One publish per leg: compose stamps wall-clock created per invocation, so a
+            # One publish per entry: compose stamps wall-clock created per invocation, so a
             # second publish of identical files yields a different digest — the branch tag
             # aliases the published manifest instead of re-publishing it.
-            sha_reference = f"{config.repository}/{leg.artifact}:{sha}"
+            sha_reference = f"{config.repository}/{publish_entry.artifact}:{sha}"
             print(f"Publish {sha_reference}")
             bash(f"docker compose {compose_files} publish {shlex.quote(sha_reference)} --yes")
-            branch_reference = f"{config.repository}/{leg.artifact}:{branch_tag}"
+            branch_reference = f"{config.repository}/{publish_entry.artifact}:{branch_tag}"
             print(f"Tag {branch_reference}")
             bash(f"crane tag {shlex.quote(sha_reference)} {shlex.quote(branch_tag)}")
             digest = bash_output(f"crane digest {shlex.quote(sha_reference)}").strip()
             print(f"Digest {sha_reference} {digest}")
             print(f"Digest {branch_reference} {digest}")
-            published.append(PublishedLeg(leg.artifact, sha_reference, branch_reference, digest))
+            published.append(PublishedEntry(publish_entry.artifact, sha_reference, branch_reference, digest))
 
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path is not None and published:

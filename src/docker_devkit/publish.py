@@ -13,12 +13,12 @@ VAR_PATTERN = re.compile(r"\$\{([A-Z][A-Z0-9_]*)(:[?\-+][^}]*)?\}")
 STUB_VALUE = "publish-stub"
 
 
-class PublishLeg(NamedTuple):
+class PublishEntry(NamedTuple):
     artifact: str
     files: list[str]
 
 
-class PublishedLeg(NamedTuple):
+class PublishedEntry(NamedTuple):
     artifact: str
     sha_reference: str
     branch_reference: str
