@@ -5,11 +5,12 @@ import re
 from pathlib import Path
 from typing import Literal, NamedTuple, Self, TypeIs
 
+import yaml
 from packaging.specifiers import SpecifierSet
 from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidationInfo, field_validator, model_validator
 from strictyaml import load as load_strict_yaml
 
-from docker_devkit.service_builds import ServiceBuild, derive_services
+from docker_devkit.service_builds import FAN_ARG, ServiceBuild, derive_services, service_sha_env
 
 DEFAULT_CONFIG_PATH = Path("docker-devkit.yaml")
 DEV_SENTINEL = "0.0.0.dev0"
@@ -59,6 +60,8 @@ AUTH_GROUP_NAME = "auth"
 DOOR_SERVICE_NAME = "door"
 CADDY_IMAGE = "CADDY_IMAGE"
 DEV_TOGGLES_ANNOTATION = "outernet.internal/dev-toggles"
+
+type BakeValue = str | list[str] | dict[str, str]
 
 
 def chart_lock_key(name: str) -> str:
@@ -302,6 +305,47 @@ class DockerDevkitConfig(BaseModel):
             elif not entry.remote:
                 bundles.append(ComposeBundle(name, self.bundle_output(name), list(entry.workloads), dict(entry.vars)))
         return bundles
+
+    def render_bake(self, *, push: bool, host: str, dev: bool = False) -> str:
+        # The per-run temp bake file: bake validates its own input by failing on it, so no
+        # document model sits behind the render. Identical configs render byte-identical files.
+        services: dict[str, dict[str, dict[str, BakeValue]]] = {}
+        for service in self.service_builds.values():
+            for target, variant in service.target_variants:
+                args: dict[str, str] = {key: f"${{{key}:-}}" for key in self.base_images}
+                if variant is not None:
+                    args[FAN_ARG] = variant
+                args.update({sha: f"${{{sha}:?err}}" for sha in service.sha_args})
+                build: dict[str, BakeValue] = {"dockerfile": service.dockerfile}
+                if dev:
+                    build["target"] = "dev"
+                if self.platforms:
+                    # A --load run writes a single arch, so a multi-arch declaration collapses
+                    # to the host; a single declared platform rides through in both modes.
+                    build["platforms"] = [host] if not push and len(self.platforms) > 1 else list(self.platforms)
+                build["args"] = args
+                if dev:
+                    # The dev tag is per service, not per target: whichever gpu variant a host
+                    # builds, the overlay references one {repository}/{service}:dev image.
+                    build["tags"] = [f"{self.repository}/{service.name}:dev"]
+                else:
+                    build["tags"] = [
+                        f"{self.repository}/{target}:latest",
+                        f"{self.repository}/{target}:${{{service_sha_env(service.name)}}}",
+                    ]
+                if service.contexts:
+                    build["additional_contexts"] = {
+                        context: f"target:{context}-{variant}" if variant is not None else f"target:{context}"
+                        for context in service.contexts
+                    }
+                if push:
+                    cache = f"{self.repository}/build-cache"
+                    build["cache_to"] = [
+                        f"type=registry,ref={cache}:{target},mode=max,image-manifest=true,oci-mediatypes=true"
+                    ]
+                    build["cache_from"] = [f"type=registry,ref={cache}:{target}"]
+                services[target] = {"build": build}
+        return yaml.safe_dump({"services": services}, sort_keys=False)
 
     def _route_sites(self) -> list[tuple[str, RouteConfig]]:
         # Every route with its declaration site, in services declaration order — a group's

@@ -14,7 +14,6 @@ from tempfile import TemporaryDirectory
 from typing import Any, Literal, Self, TypedDict, get_args
 
 import typer
-import yaml
 from bashrun.bash import bash, bash_check, bash_output
 from build_artifact_registry.builds import push_build
 from build_artifact_registry.setup_oras import install_oras
@@ -32,7 +31,7 @@ from docker_devkit.config import (
 )
 from docker_devkit.daemon_gc import check_gc_limits
 from docker_devkit.image_refs import ImageReference, resolve_remote_digest
-from docker_devkit.service_builds import FAN_ARG, GpuFamily, compute_service_shas, service_sha_env
+from docker_devkit.service_builds import GpuFamily, compute_service_shas
 
 
 METADATA_PATH = Path("metadata.json")
@@ -42,8 +41,6 @@ DIGEST_PLATFORM = "all"
 DIGEST_FILE_NAME = "images-digests.json"
 
 DIGEST_TAIL_PATTERN = re.compile(r"@sha256:[a-f0-9]{64}$")
-
-type BakeValue = str | list[str] | dict[str, str]
 
 # A flat Literal: typer cannot annotate unions and pyright cannot type a star-unpacked
 # subscript, so the family membership pins by test instead of by derivation.
@@ -250,7 +247,7 @@ def run_build(
                 f"name targets with --targets to cross-build. Services: {sorted(target_variants)}"
             )
 
-    rendered = render_bake(config, push=push, host=host, dev=dev)
+    rendered = config.render_bake(push=push, host=host, dev=dev)
 
     # Drop stale metadata so the coverage check cannot pass against a previous run.
     METADATA_PATH.unlink(missing_ok=True)
@@ -324,48 +321,6 @@ def detect_gpu() -> Gpu:
     if shutil.which("rocminfo") and bash_check("rocminfo"):
         return "rocm"
     raise RuntimeError("Could not detect GPU type.")
-
-
-def render_bake(config: DockerDevkitConfig, *, push: bool, host: str, dev: bool = False) -> str:
-    # The per-run temp bake file: bake validates its own input by failing on it, so no
-    # model sits behind the render. Identical configs render byte-identical files.
-    services: dict[str, dict[str, dict[str, BakeValue]]] = {}
-    for service in config.service_builds.values():
-        for target, variant in service.target_variants:
-            args: dict[str, str] = {key: f"${{{key}:-}}" for key in config.base_images}
-            if variant is not None:
-                args[FAN_ARG] = variant
-            args.update({sha: f"${{{sha}:?err}}" for sha in service.sha_args})
-            build: dict[str, BakeValue] = {"dockerfile": service.dockerfile}
-            if dev:
-                build["target"] = "dev"
-            if config.platforms:
-                # A --load run writes a single arch, so a multi-arch declaration collapses
-                # to the host; a single declared platform rides through in both modes.
-                build["platforms"] = [host] if not push and len(config.platforms) > 1 else list(config.platforms)
-            build["args"] = args
-            if dev:
-                # The dev tag is per service, not per target: whichever gpu variant a host
-                # builds, the overlay references one {repository}/{service}:dev image.
-                build["tags"] = [f"{config.repository}/{service.name}:dev"]
-            else:
-                build["tags"] = [
-                    f"{config.repository}/{target}:latest",
-                    f"{config.repository}/{target}:${{{service_sha_env(service.name)}}}",
-                ]
-            if service.contexts:
-                build["additional_contexts"] = {
-                    context: f"target:{context}-{variant}" if variant is not None else f"target:{context}"
-                    for context in service.contexts
-                }
-            if push:
-                cache = f"{config.repository}/build-cache"
-                build["cache_to"] = [
-                    f"type=registry,ref={cache}:{target},mode=max,image-manifest=true,oci-mediatypes=true"
-                ]
-                build["cache_from"] = [f"type=registry,ref={cache}:{target}"]
-            services[target] = {"build": build}
-    return yaml.safe_dump({"services": services}, sort_keys=False)
 
 
 def _run_bake(bake_file: Path, command_arguments: list[str], rendered: str) -> None:

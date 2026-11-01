@@ -14,7 +14,7 @@ from typer.testing import CliRunner
 
 from docker_devkit import bake as bake_module
 from docker_devkit.verbs import build
-from docker_devkit.bake import DIGEST_FILE_NAME, render_bake
+from docker_devkit.bake import DIGEST_FILE_NAME
 from docker_devkit.config import LOCK_PATH, DockerDevkitConfig
 from docker_devkit.service_builds import ServiceBuild
 
@@ -952,18 +952,16 @@ class TestRenderBakeDeterminism:
                 base_images={"UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"},
             )
 
-        assert render_bake(build(), push=False, host="linux/amd64") == render_bake(
-            build(), push=False, host="linux/amd64"
+        assert build().render_bake(push=False, host="linux/amd64") == build().render_bake(
+            push=False, host="linux/amd64"
         )
 
 
 class TestRenderBakeTagDerivation:
     def test_unfanned_service_carries_one_target_with_latest_and_sha_tags(self):
         services = _rendered_services(
-            render_bake(
-                _render_config({"api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile")}),
-                push=False,
-                host="linux/amd64",
+            _render_config({"api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile")}).render_bake(
+                push=False, host="linux/amd64"
             )
         )
 
@@ -975,17 +973,13 @@ class TestRenderBakeTagDerivation:
 
     def test_variant_fans_derive_per_variant_targets_sharing_one_sha_env(self):
         services = _rendered_services(
-            render_bake(
-                _render_config({
-                    "localizer": ServiceBuild(
-                        name="localizer",
-                        dockerfile="workloads/localizer/Dockerfile",
-                        variants=["cuda", "rocm"],
-                    )
-                }),
-                push=False,
-                host="linux/amd64",
-            )
+            _render_config({
+                "localizer": ServiceBuild(
+                    name="localizer",
+                    dockerfile="workloads/localizer/Dockerfile",
+                    variants=["cuda", "rocm"],
+                )
+            }).render_bake(push=False, host="linux/amd64")
         )
 
         assert list(services) == ["localizer-cuda", "localizer-rocm"]
@@ -1002,14 +996,10 @@ class TestRenderBakeTagDerivation:
 class TestRenderBakeArgs:
     def test_every_base_image_key_is_injected_on_every_service(self):
         services = _rendered_services(
-            render_bake(
-                _render_config(
-                    {"api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile")},
-                    base_images={"UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:0.12.15", "ALPINE_IMAGE": "alpine:3.20"},
-                ),
-                push=False,
-                host="linux/amd64",
-            )
+            _render_config(
+                {"api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile")},
+                base_images={"UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:0.12.15", "ALPINE_IMAGE": "alpine:3.20"},
+            ).render_bake(push=False, host="linux/amd64")
         )
 
         assert services["api"]["build"]["args"] == {
@@ -1019,18 +1009,14 @@ class TestRenderBakeArgs:
 
     def test_sha_args_render_only_for_declaring_dockerfiles(self):
         services = _rendered_services(
-            render_bake(
-                _render_config({
-                    "api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile"),
-                    "localizer": ServiceBuild(
-                        name="localizer",
-                        dockerfile="workloads/localizer/Dockerfile",
-                        sha_args=["LOCALIZER_SHA"],
-                    ),
-                }),
-                push=False,
-                host="linux/amd64",
-            )
+            _render_config({
+                "api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile"),
+                "localizer": ServiceBuild(
+                    name="localizer",
+                    dockerfile="workloads/localizer/Dockerfile",
+                    sha_args=["LOCALIZER_SHA"],
+                ),
+            }).render_bake(push=False, host="linux/amd64")
         )
 
         assert "LOCALIZER_SHA" not in services["api"]["build"]["args"]
@@ -1038,17 +1024,13 @@ class TestRenderBakeArgs:
 
     def test_fanned_targets_carry_the_torch_device_literal(self):
         services = _rendered_services(
-            render_bake(
-                _render_config({
-                    "localizer": ServiceBuild(
-                        name="localizer",
-                        dockerfile="workloads/localizer/Dockerfile",
-                        variants=["cuda", "rocm"],
-                    )
-                }),
-                push=False,
-                host="linux/amd64",
-            )
+            _render_config({
+                "localizer": ServiceBuild(
+                    name="localizer",
+                    dockerfile="workloads/localizer/Dockerfile",
+                    variants=["cuda", "rocm"],
+                )
+            }).render_bake(push=False, host="linux/amd64")
         )
 
         assert services["localizer-cuda"]["build"]["args"]["TORCH_DEVICE"] == "cuda"
@@ -1058,23 +1040,19 @@ class TestRenderBakeArgs:
 class TestRenderBakeContexts:
     def test_contexts_render_target_prefixed_and_variant_matched(self):
         services = _rendered_services(
-            render_bake(
-                _render_config({
-                    "neural-networks-base": ServiceBuild(
-                        name="neural-networks-base",
-                        dockerfile="workloads/neural-networks-base/Dockerfile",
-                        variants=["cuda", "rocm"],
-                    ),
-                    "localizer": ServiceBuild(
-                        name="localizer",
-                        dockerfile="workloads/localizer/Dockerfile",
-                        contexts=["neural-networks-base"],
-                        variants=["cuda", "rocm"],
-                    ),
-                }),
-                push=False,
-                host="linux/amd64",
-            )
+            _render_config({
+                "neural-networks-base": ServiceBuild(
+                    name="neural-networks-base",
+                    dockerfile="workloads/neural-networks-base/Dockerfile",
+                    variants=["cuda", "rocm"],
+                ),
+                "localizer": ServiceBuild(
+                    name="localizer",
+                    dockerfile="workloads/localizer/Dockerfile",
+                    contexts=["neural-networks-base"],
+                    variants=["cuda", "rocm"],
+                ),
+            }).render_bake(push=False, host="linux/amd64")
         )
 
         assert services["localizer-cuda"]["build"]["additional_contexts"] == {
@@ -1086,14 +1064,10 @@ class TestRenderBakeContexts:
 
     def test_unfanned_context_references_the_bare_target(self):
         services = _rendered_services(
-            render_bake(
-                _render_config({
-                    "base": ServiceBuild(name="base", dockerfile="workloads/base/Dockerfile"),
-                    "app": ServiceBuild(name="app", dockerfile="workloads/app/Dockerfile", contexts=["base"]),
-                }),
-                push=False,
-                host="linux/amd64",
-            )
+            _render_config({
+                "base": ServiceBuild(name="base", dockerfile="workloads/base/Dockerfile"),
+                "app": ServiceBuild(name="app", dockerfile="workloads/app/Dockerfile", contexts=["base"]),
+            }).render_bake(push=False, host="linux/amd64")
         )
 
         assert services["app"]["build"]["additional_contexts"] == {"base": "target:base"}
@@ -1102,17 +1076,13 @@ class TestRenderBakeContexts:
 class TestRenderBakeCache:
     def test_push_mode_renders_registry_cache_refs_per_target(self):
         services = _rendered_services(
-            render_bake(
-                _render_config({
-                    "localizer": ServiceBuild(
-                        name="localizer",
-                        dockerfile="workloads/localizer/Dockerfile",
-                        variants=["cuda"],
-                    )
-                }),
-                push=True,
-                host="linux/amd64",
-            )
+            _render_config({
+                "localizer": ServiceBuild(
+                    name="localizer",
+                    dockerfile="workloads/localizer/Dockerfile",
+                    variants=["cuda"],
+                )
+            }).render_bake(push=True, host="linux/amd64")
         )
 
         assert services["localizer-cuda"]["build"]["cache_to"] == [
@@ -1127,10 +1097,8 @@ class TestRenderBakeCache:
 
     def test_load_mode_renders_no_cache_refs(self):
         services = _rendered_services(
-            render_bake(
-                _render_config({"api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile")}),
-                push=False,
-                host="linux/amd64",
+            _render_config({"api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile")}).render_bake(
+                push=False, host="linux/amd64"
             )
         )
 
@@ -1141,11 +1109,8 @@ class TestRenderBakeCache:
 class TestRenderBakeDev:
     def test_dev_targets_the_dev_stage_under_one_service_dev_tag(self):
         services = _rendered_services(
-            render_bake(
-                _render_config({"api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile")}),
-                push=False,
-                host="linux/amd64",
-                dev=True,
+            _render_config({"api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile")}).render_bake(
+                push=False, host="linux/amd64", dev=True
             )
         )
 
@@ -1154,18 +1119,13 @@ class TestRenderBakeDev:
 
     def test_fanned_variants_share_the_service_dev_tag(self):
         services = _rendered_services(
-            render_bake(
-                _render_config({
-                    "localizer": ServiceBuild(
-                        name="localizer",
-                        dockerfile="workloads/localizer/Dockerfile",
-                        variants=["cuda", "rocm"],
-                    )
-                }),
-                push=False,
-                host="linux/amd64",
-                dev=True,
-            )
+            _render_config({
+                "localizer": ServiceBuild(
+                    name="localizer",
+                    dockerfile="workloads/localizer/Dockerfile",
+                    variants=["cuda", "rocm"],
+                )
+            }).render_bake(push=False, host="linux/amd64", dev=True)
         )
 
         assert services["localizer-cuda"]["build"]["tags"] == [f"{REPOSITORY}/localizer:dev"]
@@ -1175,52 +1135,38 @@ class TestRenderBakeDev:
 class TestRenderBakePlatforms:
     def test_multi_arch_declaration_collapses_to_the_host_in_load_mode(self):
         services = _rendered_services(
-            render_bake(
-                _render_config(
-                    {"api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile")},
-                    platforms=["linux/amd64", "linux/arm64"],
-                ),
-                push=False,
-                host="linux/amd64",
-            )
+            _render_config(
+                {"api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile")},
+                platforms=["linux/amd64", "linux/arm64"],
+            ).render_bake(push=False, host="linux/amd64")
         )
 
         assert services["api"]["build"]["platforms"] == ["linux/amd64"]
 
     def test_multi_arch_declaration_rides_through_in_push_mode(self):
         services = _rendered_services(
-            render_bake(
-                _render_config(
-                    {"api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile")},
-                    platforms=["linux/amd64", "linux/arm64"],
-                ),
-                push=True,
-                host="linux/amd64",
-            )
+            _render_config(
+                {"api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile")},
+                platforms=["linux/amd64", "linux/arm64"],
+            ).render_bake(push=True, host="linux/amd64")
         )
 
         assert services["api"]["build"]["platforms"] == ["linux/amd64", "linux/arm64"]
 
     def test_single_declared_platform_rides_through_in_load_mode(self):
         services = _rendered_services(
-            render_bake(
-                _render_config(
-                    {"zed-capture": ServiceBuild(name="zed-capture", dockerfile="workloads/zed-capture/Dockerfile")},
-                    platforms=["linux/arm64"],
-                ),
-                push=False,
-                host="linux/amd64",
-            )
+            _render_config(
+                {"zed-capture": ServiceBuild(name="zed-capture", dockerfile="workloads/zed-capture/Dockerfile")},
+                platforms=["linux/arm64"],
+            ).render_bake(push=False, host="linux/amd64")
         )
 
         assert services["zed-capture"]["build"]["platforms"] == ["linux/arm64"]
 
     def test_undeclared_platforms_render_no_key(self):
         services = _rendered_services(
-            render_bake(
-                _render_config({"api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile")}),
-                push=False,
-                host="linux/amd64",
+            _render_config({"api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile")}).render_bake(
+                push=False, host="linux/amd64"
             )
         )
 
@@ -1228,22 +1174,18 @@ class TestRenderBakePlatforms:
 
 
 def test_render_bake_carries_only_bake_read_keys():
-    rendered = render_bake(
-        _render_config(
-            {
-                "api": ServiceBuild(
-                    name="api",
-                    dockerfile="workloads/api/Dockerfile",
-                    contexts=["base"],
-                    sha_args=["API_SHA"],
-                ),
-                "base": ServiceBuild(name="base", dockerfile="workloads/base/Dockerfile"),
-            },
-            base_images={"UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"},
-        ),
-        push=False,
-        host="linux/amd64",
-    )
+    rendered = _render_config(
+        {
+            "api": ServiceBuild(
+                name="api",
+                dockerfile="workloads/api/Dockerfile",
+                contexts=["base"],
+                sha_args=["API_SHA"],
+            ),
+            "base": ServiceBuild(name="base", dockerfile="workloads/base/Dockerfile"),
+        },
+        base_images={"UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"},
+    ).render_bake(push=False, host="linux/amd64")
 
     document = yaml.safe_load(rendered)
     assert list(document) == ["services"]
@@ -1260,7 +1202,7 @@ def test_render_bake_carries_only_bake_read_keys():
 
 
 def test_render_bake_with_no_services_renders_an_empty_document():
-    assert _rendered_services(render_bake(_render_config({}), push=False, host="linux/amd64")) == {}
+    assert _rendered_services(_render_config({}).render_bake(push=False, host="linux/amd64")) == {}
 
 
 def _nvidia_smi_present(name: str) -> str | None:
