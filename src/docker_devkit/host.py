@@ -7,7 +7,7 @@ from typing import Literal, get_args
 
 from bashrun.bash import bash_check
 
-from .config import GpuFamily
+from .service_builds import GpuFamily
 
 # A flat Literal: typer cannot annotate unions and pyright cannot type a star-unpacked
 # subscript, so the family membership pins by test instead of by derivation.

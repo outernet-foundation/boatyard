@@ -14,8 +14,8 @@ from docker_devkit.config import (
     DockerDevkitConfig,
     ServiceEntry,
     compose_bundles,
-    derive_services,
     load_config,
+    parse_image_lock,
 )
 
 DIGEST = "sha256:" + "a" * 64
@@ -971,111 +971,6 @@ class TestLockPairing:
 
 
 class TestServiceDerivation:
-    def test_dockerfile_dirs_derive_bare_services(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "api", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\n")
-        write_dockerfile(tmp_path, "database-manager", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\n")
-
-        services = derive_services(tmp_path)
-
-        # The service name IS the directory name — the old manifest's create-database key
-        # renames to database-manager under directory-derived naming.
-        assert sorted(services) == ["api", "database-manager"]
-        assert services["api"].targets == ["api"]
-        assert services["api"].dockerfile == "workloads/api/Dockerfile"
-        assert services["api"].contexts == []
-
-    def test_bare_identifier_from_declares_a_context_edge(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\n")
-        write_dockerfile(tmp_path, "localizer", "FROM neural-networks-base AS dev\nARG LOCALIZER_SHA\n")
-
-        services = derive_services(tmp_path)
-
-        assert services["localizer"].contexts == ["neural-networks-base"]
-        assert services["localizer"].sha_args == ["LOCALIZER_SHA"]
-
-    def test_stage_names_are_not_context_edges(self, tmp_path: Path) -> None:
-        write_dockerfile(
-            tmp_path,
-            "api",
-            "ARG UV_IMAGE\nFROM ${UV_IMAGE} AS base\nFROM base AS dev\nFROM base AS prod\n",
-        )
-
-        services = derive_services(tmp_path)
-
-        assert services["api"].contexts == []
-
-    def test_multi_stage_dockerfile_declares_a_dev_stage(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "api", "FROM docker.io/library/python:3.13-slim AS base\nFROM base AS dev\n")
-
-        services = derive_services(tmp_path)
-
-        assert services["api"].dev_stage
-
-    def test_single_stage_dev_label_is_not_a_dev_stage(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "api", "FROM docker.io/library/python:3.13-slim AS dev\n")
-
-        services = derive_services(tmp_path)
-
-        assert not services["api"].dev_stage
-
-    def test_bare_identifier_naming_no_sibling_refuses(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "api", "FROM python\n")
-
-        with pytest.raises(RuntimeError, match="FROM python names no service directory"):
-            derive_services(tmp_path)
-
-    def test_tagged_and_registry_refs_stay_external(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "migrator", "FROM golang:1.22-alpine AS build\nFROM ghcr.io/org/base:1\n")
-
-        services = derive_services(tmp_path)
-
-        assert services["migrator"].contexts == []
-
-    def test_torch_device_arg_fans_over_the_gpu_family(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
-
-        services = derive_services(tmp_path)
-
-        assert services["neural-networks-base"].variants == ["cuda", "rocm"]
-        assert services["neural-networks-base"].targets == ["neural-networks-base-cuda", "neural-networks-base-rocm"]
-
-    def test_the_fan_propagates_along_context_edges(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
-        write_dockerfile(tmp_path, "localizer", "FROM neural-networks-base AS dev\n")
-
-        services = derive_services(tmp_path)
-
-        assert services["localizer"].variants == ["cuda", "rocm"]
-        assert services["localizer"].targets == ["localizer-cuda", "localizer-rocm"]
-
-    def test_an_independent_fan_over_a_fanned_base_refuses(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
-        write_dockerfile(tmp_path, "localizer", "FROM neural-networks-base AS dev\nARG TORCH_DEVICE\n")
-
-        with pytest.raises(RuntimeError, match="inherits its base's variant set"):
-            derive_services(tmp_path)
-
-    def test_parents_disagreeing_on_variants_refuse(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "fanned-base", "FROM alpine:3.21\nARG TORCH_DEVICE\n")
-        write_dockerfile(tmp_path, "plain-base", "FROM alpine:3.21\n")
-        write_dockerfile(tmp_path, "dependent", "FROM fanned-base AS a\nFROM plain-base AS b\n")
-
-        with pytest.raises(RuntimeError, match="disagree on gpu variants"):
-            derive_services(tmp_path)
-
-    def test_sha_arg_naming_no_service_refuses(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "api", "FROM alpine:3.21\nARG GHOST_SHA\n")
-
-        with pytest.raises(RuntimeError, match="ARG GHOST_SHA names no derived service"):
-            derive_services(tmp_path)
-
-    def test_dockerfiles_spanning_multiple_top_level_dirs_refuse(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "api", "FROM alpine:3.21\n")
-        write_dockerfile(tmp_path, "bridge", "FROM alpine:3.21\n", top="docker")
-
-        with pytest.raises(RuntimeError, match="span multiple top-level directories"):
-            derive_services(tmp_path)
-
     def test_repository_required_when_services_exist(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "FROM alpine:3.21\n")
         write_config(tmp_path, {"requires": ">=0.1"})
@@ -1102,3 +997,11 @@ def test_direct_model_construction_is_valid_for_tests() -> None:
     })
 
     assert compose_bundles(config)[0].name == "core"
+
+
+def test_parse_image_lock_rejects_entries_without_a_digest(tmp_path: Path) -> None:
+    lock = tmp_path / "images.lock"
+    lock.write_text("LOKI_IMAGE=ghcr.io/example/loki:3.5.0\n", encoding="utf-8")
+
+    with pytest.raises(ValidationError, match="not digest-pinned"):
+        parse_image_lock(lock)

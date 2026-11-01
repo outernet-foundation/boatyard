@@ -8,12 +8,14 @@ import re
 from pathlib import Path
 from subprocess import CalledProcessError
 from tempfile import TemporaryDirectory
-from typing import Annotated, Any, TypedDict
+from typing import Annotated, Any, Self, TypedDict
 
 import typer
+import yaml
 from bashrun.bash import bash, bash_output
 from build_artifact_registry.builds import push_build
 from build_artifact_registry.setup_oras import install_oras
+from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
 from .config import (
     CHART_REFERENCE_PREFIX,
@@ -25,14 +27,10 @@ from .config import (
     optional_lock_entries,
 )
 from .daemon_gc import check_gc_limits
-from .documents import (
-    BakeMetadata,
-    compute_service_shas,
-    render_bake,
-)
 from .host import GPU_TYPES, Gpu, detect_gpu, host_platform
 from .image_refs import ImageReference, bake_base_image_refs, resolve_remote_digest
 from .mirror import mirrored_ref
+from .service_builds import FAN_ARG, compute_service_shas, service_sha_env
 
 
 METADATA_PATH = Path("metadata.json")
@@ -43,11 +41,43 @@ DIGEST_FILE_NAME = "images-digests.json"
 
 DIGEST_TAIL_PATTERN = re.compile(r"@sha256:[a-f0-9]{64}$")
 
+type BakeValue = str | list[str] | dict[str, str]
+
 
 class DigestEntry(TypedDict):
     ref: str
     digest: str
     tags: list[str]
+
+
+class BakedImage(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    image_name: str = Field(default="", alias="image.name")
+    digest: str = Field(default="", alias="containerimage.digest")
+    ref: str = ""
+    tags: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _extract_references(self) -> Self:
+        for reference in self.image_name.split(","):
+            reference = reference.strip()
+            if not reference:
+                continue
+            repository, separator, tag = reference.split("@", 1)[0].rpartition(":")
+            if separator:
+                self.ref = repository
+                self.tags.append(tag)
+        return self
+
+
+class BakeMetadata(RootModel[dict[str, BakedImage]]):
+    @model_validator(mode="after")
+    def _require_tagged_references(self) -> Self:
+        for target, image in self.root.items():
+            if not image.tags:
+                raise ValueError(f"target '{target}' produced no tagged image references from '{image.image_name}'")
+        return self
 
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
@@ -126,7 +156,7 @@ def run_build(
     lock_file = root / LOCK_PATH
     mirror_prefix = config.mirror.prefix if config.mirror is not None else DEFAULT_MIRROR_PREFIX
 
-    service_shas = compute_service_shas(root, config)
+    service_shas = compute_service_shas(root, config.service_builds)
     os.environ.update(service_shas)
 
     lock_data = optional_lock_entries(root)
@@ -310,6 +340,48 @@ def run_build(
                 Path(staging),
                 [DIGEST_FILE_NAME],
             )
+
+
+def render_bake(config: DockerDevkitConfig, *, push: bool, host: str, dev: bool = False) -> str:
+    # The per-run temp bake file: bake validates its own input by failing on it, so no
+    # model sits behind the render. Identical configs render byte-identical files.
+    services: dict[str, dict[str, dict[str, BakeValue]]] = {}
+    for service in config.service_builds.values():
+        for target, variant in service.target_variants:
+            args: dict[str, str] = {key: f"${{{key}:-}}" for key in config.base_images}
+            if variant is not None:
+                args[FAN_ARG] = variant
+            args.update({sha: f"${{{sha}:?err}}" for sha in service.sha_args})
+            build: dict[str, BakeValue] = {"dockerfile": service.dockerfile}
+            if dev:
+                build["target"] = "dev"
+            if config.platforms:
+                # A --load run writes a single arch, so a multi-arch declaration collapses
+                # to the host; a single declared platform rides through in both modes.
+                build["platforms"] = [host] if not push and len(config.platforms) > 1 else list(config.platforms)
+            build["args"] = args
+            if dev:
+                # The dev tag is per service, not per target: whichever gpu variant a host
+                # builds, the overlay references one {repository}/{service}:dev image.
+                build["tags"] = [f"{config.repository}/{service.name}:dev"]
+            else:
+                build["tags"] = [
+                    f"{config.repository}/{target}:latest",
+                    f"{config.repository}/{target}:${{{service_sha_env(service.name)}}}",
+                ]
+            if service.contexts:
+                build["additional_contexts"] = {
+                    context: f"target:{context}-{variant}" if variant is not None else f"target:{context}"
+                    for context in service.contexts
+                }
+            if push:
+                cache = f"{config.repository}/build-cache"
+                build["cache_to"] = [
+                    f"type=registry,ref={cache}:{target},mode=max,image-manifest=true,oci-mediatypes=true"
+                ]
+                build["cache_from"] = [f"type=registry,ref={cache}:{target}"]
+            services[target] = {"build": build}
+    return yaml.safe_dump({"services": services}, sort_keys=False)
 
 
 def _run_bake(bake_file: Path, command_arguments: list[str], rendered: str) -> None:

@@ -14,8 +14,9 @@ from bashrun.bash import bash, bash_output
 
 from .config import LOCK_PATH, compose_bundles, load_config, parse_image_lock
 from .crane import install_crane
-from .documents import ComposeDocument, compute_service_shas
+from .documents import ComposeDocument
 from .image_refs import resolve_remote_digest
+from .service_builds import compute_service_shas
 
 _VAR_PATTERN = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)(:[?\-+][^}]*)?\}")
 STUB_VALUE = "publish-stub"
@@ -95,7 +96,7 @@ def publish_compose(
     branch_tag = (branch or bash_output("git rev-parse --abbrev-ref HEAD").strip()).replace("/", "-")
 
     substitutions = {
-        **compute_service_shas(root, config),
+        **compute_service_shas(root, config.service_builds),
         **parse_image_lock(root / LOCK_PATH).root,
     }
 

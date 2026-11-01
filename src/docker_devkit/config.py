@@ -3,11 +3,13 @@ from __future__ import annotations
 import importlib.metadata
 import re
 from pathlib import Path
-from typing import Literal, NamedTuple, Self, TypeIs, get_args
+from typing import Literal, NamedTuple, Self, TypeIs
 
 from packaging.specifiers import SpecifierSet
 from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidationInfo, field_validator, model_validator
 from strictyaml import load as load_strict_yaml
+
+from .service_builds import ServiceBuild, derive_services
 
 DEFAULT_CONFIG_PATH = Path("docker-devkit.yaml")
 DEV_SENTINEL = "0.0.0.dev0"
@@ -19,8 +21,6 @@ DEFAULT_MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
 LOCK_PATH = Path("docker-devkit.lock")
 LEFTOVER_MANIFEST_PATH = Path("workloads/images.yml")
 LEFTOVER_LOCK_PATH = Path("workloads/images.lock")
-
-GpuFamily = Literal["cuda", "rocm"]
 
 ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 PLATFORM_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$")
@@ -44,12 +44,6 @@ SECRETS_OUTPUT = Path("stack/generated/secrets.txt")
 
 BUNDLE_OUTPUT_DIR = Path("stack/generated/compose")
 
-DOCKERFILE_NAME = "Dockerfile"
-FAN_ARG = "TORCH_DEVICE"
-FROM_LINE_PATTERN = re.compile(r"^FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?", re.IGNORECASE)
-ARG_LINE_PATTERN = re.compile(r"^ARG\s+([A-Za-z_][A-Za-z0-9_]*)")
-BARE_IDENTIFIER_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
-
 # A route path is a /-rooted segment chain, optionally wildcarded by a trailing /*; the
 # root catch-all is exactly /*.
 ROUTE_PATH_PATTERN = re.compile(r"^(?:/\*|/(?:[^/\s*]+(?:/[^/\s*]+)*)?(?:/\*)?)$")
@@ -65,10 +59,6 @@ AUTH_GROUP_NAME = "auth"
 DOOR_SERVICE_NAME = "door"
 CADDY_IMAGE = "CADDY_IMAGE"
 DEV_TOGGLES_ANNOTATION = "outernet.internal/dev-toggles"
-
-
-def service_sha_env(name: str) -> str:
-    return name.upper().replace("-", "_") + "_SHA"
 
 
 def chart_lock_key(name: str) -> str:
@@ -260,27 +250,6 @@ class K8sConfig(BaseModel):
         if not self.rendering:
             raise ValueError("the k8s section declares neither workloads nor charts; remove it")
         return self
-
-
-class ServiceBuild(BaseModel):
-    # Derived by load_config from the Dockerfile tree; never authored.
-    model_config = ConfigDict(extra="forbid")
-
-    name: str
-    dockerfile: str
-    contexts: list[str] = Field(default_factory=list)
-    variants: list[GpuFamily] = Field(default_factory=list)
-    sha_args: list[str] = Field(default_factory=list)
-    dev_stage: bool = False
-
-    @property
-    def target_variants(self) -> list[tuple[str, GpuFamily | None]]:
-        variants: list[GpuFamily | None] = list(self.variants) or [None]
-        return [(f"{self.name}-{variant}" if variant is not None else self.name, variant) for variant in variants]
-
-    @property
-    def targets(self) -> list[str]:
-        return [target for target, _variant in self.target_variants]
 
 
 class DockerDevkitConfig(BaseModel):
@@ -569,136 +538,6 @@ def compose_bundles(config: DockerDevkitConfig) -> list[ComposeBundle]:
         elif not entry.remote:
             bundles.append(ComposeBundle(name, bundle_output(name), list(entry.workloads), dict(entry.vars)))
     return bundles
-
-
-class ParsedDockerfile(NamedTuple):
-    # The pre-resolution parse of one service Dockerfile; the gpu-variant graph resolves
-    # over these records before any ServiceBuild is constructed.
-    name: str
-    dockerfile: str
-    contexts: list[str]
-    sha_args: list[str]
-    dev_stage: bool
-    own_fan: bool
-
-
-def derive_services(root: Path) -> dict[str, ServiceBuild]:
-    # Every Dockerfile-bearing directory one level below a top-level directory is a
-    # service; the graph (context edges, gpu fans, SHA args) derives from the
-    # Dockerfiles themselves. Parsing and variant resolution complete before any
-    # ServiceBuild is constructed — each record is built once, fully resolved.
-    parsed = _parse_dockerfiles(root)
-
-    computable = {service_sha_env(name) for name in parsed}
-    for service in parsed.values():
-        unknown = [arg for arg in service.sha_args if arg not in computable]
-        if unknown:
-            raise RuntimeError(
-                f"workloads/{service.name}/{DOCKERFILE_NAME}: ARG {', '.join(unknown)} names no derived service; "
-                "the stamp receiver must match a service directory"
-            )
-
-    resolved_variants: dict[str, list[GpuFamily]] = {}
-    return {
-        name: ServiceBuild(
-            name=name,
-            dockerfile=service.dockerfile,
-            contexts=service.contexts,
-            variants=_resolve_variants(name, (), parsed, resolved_variants),
-            sha_args=service.sha_args,
-            dev_stage=service.dev_stage,
-        )
-        for name, service in parsed.items()
-    }
-
-
-def _parse_dockerfiles(root: Path) -> dict[str, ParsedDockerfile]:
-    service_dirs: dict[str, Path] = {}
-    tops: set[str] = set()
-    for top in sorted(root.iterdir()):
-        if not top.is_dir() or top.name.startswith("."):
-            continue
-        for child in sorted(top.iterdir()):
-            if child.is_dir() and (child / DOCKERFILE_NAME).is_file():
-                service_dirs[child.name] = child
-                tops.add(top.name)
-    require_single_top(tops, "Dockerfile service directories")
-
-    parsed: dict[str, ParsedDockerfile] = {}
-    for name, directory in service_dirs.items():
-        dockerfile = directory / DOCKERFILE_NAME
-        from_images: list[str] = []
-        stages: set[str] = set()
-        args: list[str] = []
-        for line in dockerfile.read_text(encoding="utf-8").splitlines():
-            from_match = FROM_LINE_PATTERN.match(line.strip())
-            if from_match is not None:
-                from_images.append(from_match.group(1))
-                if from_match.group(2) is not None:
-                    stages.add(from_match.group(2))
-                continue
-            arg_match = ARG_LINE_PATTERN.match(line.strip())
-            if arg_match is not None:
-                args.append(arg_match.group(1))
-        contexts: list[str] = []
-        for image in from_images:
-            if BARE_IDENTIFIER_PATTERN.fullmatch(image) is None or image in stages:
-                continue
-            if image not in service_dirs:
-                raise RuntimeError(
-                    f"{dockerfile.relative_to(root).as_posix()}: FROM {image} names no service directory; "
-                    "external bases must be registry references or base_images build args"
-                )
-            contexts.append(image)
-        parsed[name] = ParsedDockerfile(
-            name=name,
-            dockerfile=dockerfile.relative_to(root).as_posix(),
-            contexts=sorted(set(contexts)),
-            sha_args=sorted({arg for arg in args if arg.endswith("_SHA")}),
-            # A genuine dev stage is one of several stages; a single-stage AS dev label
-            # names the published image and is not a dev shape.
-            dev_stage="dev" in stages and len(stages) > 1,
-            own_fan=FAN_ARG in args,
-        )
-    return parsed
-
-
-def require_single_top(tops: set[str], subject: str) -> None:
-    if len(tops) > 1:
-        raise RuntimeError(f"{subject} span multiple top-level directories: {sorted(tops)}")
-
-
-def _resolve_variants(
-    name: str,
-    seen: tuple[str, ...],
-    parsed: dict[str, ParsedDockerfile],
-    resolved: dict[str, list[GpuFamily]],
-) -> list[GpuFamily]:
-    if name in resolved:
-        return resolved[name]
-    if name in seen:
-        raise RuntimeError(f"FROM context cycle: {' -> '.join((*seen, name))}")
-    parent_sets = [
-        _resolve_variants(parent, (*seen, name), parsed, resolved) for parent in parsed[name].contexts
-    ]
-    distinct = {tuple(variants) for variants in parent_sets}
-    if len(distinct) > 1:
-        parents = ", ".join(parsed[name].contexts)
-        raise RuntimeError(
-            f"workloads/{name}/{DOCKERFILE_NAME}: parents ({parents}) disagree on gpu variants; "
-            "a dependent inherits its base's variant set"
-        )
-    if parent_sets:
-        if parsed[name].own_fan:
-            raise RuntimeError(
-                f"workloads/{name}/{DOCKERFILE_NAME}: declares ARG {FAN_ARG} over a fanned base; "
-                "a dependent inherits its base's variant set"
-            )
-        variants = parent_sets[0]
-    else:
-        variants = list(get_args(GpuFamily)) if parsed[name].own_fan else []
-    resolved[name] = variants
-    return variants
 
 
 def parse_image_lock(path: Path) -> ImageLock:

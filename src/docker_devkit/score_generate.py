@@ -15,6 +15,7 @@ from typing import Annotated, Any, Literal, NamedTuple
 import typer
 import yaml
 from bashrun.bash import bash, bash_output
+from pydantic import BaseModel, ConfigDict, Field
 
 from .config import (
     DEV_TOGGLES_ANNOTATION,
@@ -36,14 +37,12 @@ from .config import (
 from .documents import (
     BindVolume,
     ComposeDocument,
-    ManifestDocument,
-    ScoreState,
     WorkloadDocument,
-    compute_service_shas,
 )
 from .markers import contains_marker, resolve_includes, resolve_lock_refs
 from .provisioners import compiled_provisioners, dump_compose
 from .secrets import SecretsDeclaration, collect_secret_keys, validate_consumed
+from .service_builds import compute_service_shas
 
 # Match only ALL-CAPS placeholders so Score's lowercase dotted references never collide.
 PLACEHOLDER = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
@@ -93,6 +92,32 @@ class ToolRequirement(NamedTuple):
     release: str
     archive: str
     extract: str
+
+
+class ManifestMetadata(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    namespace: str = ""
+    name: str = ""
+
+
+class ManifestDocument(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    kind: str = ""
+    metadata: ManifestMetadata = Field(default_factory=ManifestMetadata)
+
+
+class WorkloadState(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    instance_suffix: str = ""
+
+
+class ScoreState(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    workloads: dict[str, WorkloadState] = {}
 
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
@@ -175,7 +200,7 @@ def _generate_artifacts(root: Path, config: DockerDevkitConfig, target: Target, 
             "the build keys (repository or base_images) are required in docker-devkit.yaml — "
             "score artifacts embed the tree tags they derive"
         )
-    os.environ.update(compute_service_shas(root, config))
+    os.environ.update(compute_service_shas(root, config.service_builds))
     if config.k8s is not None:
         os.environ[STORAGE_CLASS_VAR] = LOCAL_STORAGE_CLASS if local else CLOUD_STORAGE_CLASS
     # The lock beside the manifest is the single digest source for authored lock markers.
