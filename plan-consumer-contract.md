@@ -156,10 +156,19 @@ the direction (one pipeline, configurable destination) is locked.
 
 ### D8 — Consumers own their env-line reading
 
-`.env` reading becomes a tiny consumer-local module (the repo's own file
-convention; hardcode the filename exactly as consumers already do for
-`.env`). No shared micro-package, no dotenv dependency. Lock reading after
-Part 0 is plain YAML and needs nothing.
+`.env` wears two hats: the devkit's interpolation input at bring-up, and the
+repo's single per-machine home for deployment facts (`PUBLIC_URL`, S3
+credentials) that client tooling reads directly — calibration scripts hitting
+the API, helper containers on the stack network. Reading the one home is
+single-sourcing, not restating. The parser is a tiny consumer-local module
+implementing compose's env-file grammar (`KEY=VALUE`, `#` comments, no
+interpolation — compose is the file's authoritative reader, so its rules are
+the spec), filename hardcoded exactly as consumers already do for `.env`. No
+shared micro-package, no dotenv dependency (its interpolation and `export`
+semantics diverge from compose). Lock reading after Part 0 is plain YAML and
+needs nothing. Post-dissolution inventory: placeframe's `api_auth.py` and
+`sweep_postprocess.py`; the devkit's own `parse_env_file` stays internal to
+`assembly.py`.
 
 ### D9 — Consumer catch-up: one wave
 
@@ -218,11 +227,9 @@ invariant check survives anywhere in the design.
 These are answered in follow-up sessions before the implementation plan is
 written; the design is not locked until they close.
 
-- **O1 — the `.env` reader home.** D8's consumer-owned-module recommendation
-  is favored but was not explicitly locked in-session.
-- **O2 — `build --registry` spelling.** Direction locked (D7); flag name,
+- **O1 — `build --registry` spelling.** Direction locked (D7); flag name,
   interaction with `--push`/cache refs, and the host-vs-box address split are
   plan-session details.
-- **O3 — catch-up archaeology.** The dev165→final diff across CLI, schema,
+- **O2 — catch-up archaeology.** The dev165→final diff across CLI, schema,
   lock format, and artifact shapes may surface consumer edits beyond D9's
   enumeration; findings fold back into the plan.
