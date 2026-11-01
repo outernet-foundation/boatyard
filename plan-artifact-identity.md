@@ -1,23 +1,23 @@
 # Artifact identity: images and compose bundles
 
-Pre-implementation ADR, five linked initiatives: give `docker-devkit.lock` a
-platform-resolved, structured-YAML shape (Part 0); give `tree-` tags a
-precise, fail-closed input closure in docker-devkit (Part 1); give images and
-compose bundles per-unit semver release lines in github-actions-toolkit
-(Part 2); let consumers pin external compose bundles by version tag through
+Pre-implementation ADR, three linked initiatives: give images and compose
+bundles per-unit semver release lines in github-actions-toolkit (Part 2); let
+consumers pin external compose bundles by version tag through
 `docker-devkit.lock` (Part 3); and give consumers a per-machine
 local-override surface for iterating on producer checkouts (Part 4). This
 file absorbs and replaces `plan-image-identity.md` and
 `plan-platform-resolved-lock.md` (both deleted in absorbing commits; git is
-the history), capturing investigation sessions 2026-10-15 and 2026-10-22,
-the consumer-consumption rulings of 2026-10-30, and the platform-resolved
-lock rulings of 2026-10-31. Parts 0–1 are absorbed into and execute inside
-`plan-consumer-contract.md` (2026-11-01, amendments recorded there); this
-file remains the decision record for Parts 2–4 and the sequencing between
-them. All open questions are closed and
-recorded at the end. The compose consumer model's present truth lives in this
-repo's `AGENTS.md`; this ADR records the changes to it. Code anchors are as of
-their capture date and may drift.
+the history), capturing investigation sessions 2026-10-15 and 2026-10-22 and
+the consumer-consumption rulings of 2026-10-30. Parts 0–1 — the
+platform-resolved structured lock and the precise `tree-` input closure —
+are absorbed into and execute inside `plan-consumer-contract.md` (2026-11-01,
+amendments recorded there; implementation
+`plan-consumer-contract-implementation.md`); this file remains the decision
+record for Parts 2–4 and the sequencing between them, executed by
+`plan-artifact-identity-implementation.md` (phases 8–21). All open questions
+are closed and recorded at the end. The compose consumer model's present
+truth lives in this repo's `AGENTS.md`; this ADR records the changes to it.
+Code anchors are as of their capture date and may drift.
 
 ## Orientation: the tagging system this completes
 
@@ -55,268 +55,11 @@ forces one (npm dist-tag; image and bundle dev spellings). Post-Part-2 every
 consumable artifact type carries a per-unit semver line; the CalVer git tag
 stays the release-event grouping label. Post-Part-3 every org-internal
 artifact a consumer declares resolves by tag in config to a digest in the
-lock — the same law for base images, charts, and bundles. Post-Part-0 the
-lock is structured YAML recording, per image, the index digest plus one
-concrete manifest digest per declared platform — arch is never resolved by
-whichever machine touches an image.
-
-## Part 0 — docker-devkit: platform-resolved lock
-
-### The defect being fixed
-
-`build`'s lock writer resolves a declared tag to its top-level digest — for a
-multi-platform tag the **index** digest (the manifest list), not a
-per-platform manifest. A consumer that pulls the pinned ref without a
-platform expression gets whichever platform the *resolving machine* runs:
-capture-tool's save/load ship path resolves on the amd64 build host and
-delivers amd64 loki/alloy to the arm64 ZED box (`exec format error` on every
-boot since first deploy; diagnosis in placeframe-capture-tool's
-`zed-aoa-diagnosis-handoff.md`). Pull-on-target consumers are unaffected —
-the receiving daemon resolves the index for its own arch — so the defect
-stays invisible until a middleman ships across arches. The keycloak incident
-(`plan-mirror-digest-retention.md`) independently recorded the same fact:
-lock digests are list digests.
-
-### The law
-
-Same inputs (config + lock) produce the same bytes on any machine, any arch,
-any day. A machine's own architecture participates only in the final act of
-executing bytes. The defect is the one place resolution consults the
-resolving machine implicitly; this part removes the last implicit arch
-decision.
-
-### Design
-
-1. **`platforms` is required whenever `base_images` is declared** — refuse at
-   `load_config`. It stops being an optional build hint and becomes the
-   explicit deploy-target declaration. Charts are exempt (arch-neutral OCI
-   artifacts); bundles, when Part 3 adds them, are exempt likewise.
-2. **The lock becomes structured YAML** — per image the index digest plus one
-   concrete manifest digest per declared platform; charts and bundles stay
-   flat refs:
-
-   ```yaml
-   images:
-     LOKI_IMAGE:
-       index: ghcr.io/outernet-foundation/mirror/docker.io/grafana/loki:3.5.0@sha256:…
-       platforms:
-         linux/arm64: ghcr.io/outernet-foundation/mirror/docker.io/grafana/loki:3.5.0@sha256:…
-   charts:
-     KEYCLOAK_CHART: oci://ghcr.io/…@sha256:…
-   ```
-
-   The platform axis cannot live in env-var grammar: flat compound keys
-   (`LOKI_IMAGE_LINUX_ARM64`) encode schema as string discipline, scatter
-   selection into every consumer, and cannot express index-vs-dish
-   distinctions. The env-line format was adequate at one axis; its two
-   documented virtues — native `--env-file` consumption at the `up` handoff
-   and the raw-`docker compose` valve — are preserved by synthesis (below).
-   The committed lock becomes the complete truth: every exact byte-stream the
-   system can run, and for which machines, readable without touching a
-   registry.
-3. **The resolver records the complete resolution** against the upstream
-   reference: index digest plus one concrete manifest digest per declared
-   platform. Selection rules: exact `os`/`architecture` match;
-   `unknown/unknown` and attestation-annotated entries skipped; multiple
-   matches refuse loudly naming the entry; single-manifest refs and
-   `@digest` declarations record the manifest uniformly as index and sole
-   platform entry. Resolution is a pure function of config — the writing
-   machine's arch is never consulted.
-4. **Selection centralizes in one function** (an `entry_for(lock, name,
-   platform)` shape): the compose/bake edges, `install-zed`, and the markers
-   all call it; no consumer constructs keys or picks digests itself.
-5. **Env synthesis at the consumption edges**: `up`/`down` materialize a
-   per-run env file (the selected platform entries) attached as the second
-   `--env-file` — same temp lifecycle as the materialized root compose file,
-   printed and kept on failure like the bake file. Bake receives the same
-   synthesis in-process. A `lock-env` verb emits the synthesized env on
-   stdout for the raw-`docker compose` pressure valve. Part 4's
-   producer-lock attachment consumes the same synthesis instead of attaching
-   the lock file raw.
-6. **Platform selection at the up edge is declaration-driven**: a config
-   `platforms` singleton selects itself; a multi-platform repo's `.env`
-   names `PLATFORM=` (committed per deploy target). Never host introspection.
-7. **Markers resolve by substrate**: `lock:`/`lock-image:` under k8s resolve
-   the **index** (kubelet resolves per node — architecturally correct);
-   compose-side resolution selects the platform dish.
-8. **The mirror verb probes every recorded digest** (index plus dishes) —
-   presence by exact bytes. The copy itself is unchanged: whole index, dishes
-   ride along; `crane copy` byte-identity keeps upstream and mirror digests
-   equal. The retention fix sketch's digest-aliases
-   (`plan-mirror-digest-retention.md`) compose with this rule — adopted, they
-   would keep dishes GC-safe the same way they keep indexes.
-9. **The writer is deterministic**: sorted images/charts and platform keys,
-   byte-stable across machines — the `--lock-only --check` gate stays
-   hermetic on any-arch runner.
-
-### Migration
-
-No dual-read: the typed loader swaps wholesale, and the devkit version bump
-turns every consumer's `--check` gate red until each repo relocks once — the
-YAML rewrite re-resolves every entry, so the declaration-freeze/`--upgrade`
-migration question dissolves in the cutover. capture-tool relocks to arm64
-dishes and deploys the ZED box; placeframe adds `platforms: [linux/amd64]`
-and Make-it-Sing declares its platform at the same relock (the config
-refusal forces the one line). Ships inside the cluster-P1 release (see
-Sequencing) so Part 1's hasher and every later consumer build against the
-final lock shape — one format migration, one relock wave, not two.
-
-### Verification owed
-
-- ghcr serves child manifests by digest — a pull and a `crane digest`
-  against the mirror by a recorded dish digest. Children's existence inside
-  the copied index is verified; per-digest retrieval is not.
-- Spot-check a relocked entry: `buildx imagetools inspect --raw <digest>`
-  answers a manifest, not an index.
-
-## Part 1 — docker-devkit: precise input closure for `tree-` tags
-
-### The defect being fixed
-
-`compute_service_shas` (`documents.py`) hashes per-service synthetic git trees
-over the `.dockerignore`-allowlisted committed tree. The partition rule drops
-leftover manifest files and `.dockerignore` from every hash, excludes
-`additional_contexts` dependency dirs from dependents' hashes, and nothing
-forbids a cross-service `COPY`. Concrete harms: a base-image bump produces a
-numerically different localizer with the same `pipeline_version` (silent
-calibration-corpus contamination); movable `tree-` pins; a tag that presents
-as content-addressed but omits real inputs.
-
-### The design: attribution, not buckets
-
-The hash input set is computed per service by attributing the Dockerfile's
-actual consumption — the Dockerfile is the declaration; no input declarations
-in `docker-devkit.yaml` (a config-declared input list is a second source of
-truth that drifts, and verifying it against the Dockerfile requires the
-parser anyway).
-
-Per-service hash inputs:
-
-1. The service's Dockerfile itself. Any recipe change re-keys, which keeps the
-   closure self-consistent: a new `COPY` line moves the hash at the same
-   moment the newly copied files enter the resolved set.
-2. The resolved `COPY`/`ADD` source set — every context path or glob the
-   Dockerfile actually copies, resolved against the allowlisted tree. Shared
-   roots enter a service's hash only when copied (`packages/python/common/**`
-   for the api; nothing for the gateway).
-3. The ARG-consumed image-lock lines — intersect the Dockerfile's `ARG`
-   declarations with lock names; hash only those lines. Conservative in the
-   safe direction: declared-but-unused args still hash their lines. Lock lines
-   consumed only at runtime by compose (never declared as build args) drop
-   out of build hashes entirely.
-4. The service's own `build` mapping from the bake manifest, serialized from
-   the parsed document (YAML anchors already resolved) — not the whole file,
-   so another service's edit cannot re-key. Tag lists do not affect bits and
-   stop re-keying anything.
-5. Dependency inputs as embedded tree hashes — instead of re-listing a
-   dependency's files inside dependents' hashes, embed the dependency's own
-   computed tree hash as a synthetic entry (hash-of-hash; the
-   `additional_contexts` graph is a DAG, no circularity). The union-find walk
-   exists as `dependency_groups` (`matrix.py`); lift it to the shared
-   documents layer and consume it here.
-
-`.dockerignore` drops out of the hash entirely: an edit that changes what a
-`COPY` glob matches changes the resolved set and re-keys exactly the affected
-services; an edit that changes nothing matched changed no bits, so no re-key
-is correct. The resolved set absorbs it.
-
-### The fail-closed construct guard
-
-Precision is safe only if the construct inventory is complete, so the parser
-fails closed: any Dockerfile or manifest construct that could read the build
-context and cannot be fully attributed is a loud build failure, never a silent
-gap. The context-reading constructs to enumerate: `COPY` from context, `ADD`
-with a local path (URL-form `ADD` is network, out of scope like apt), `RUN
---mount=type=bind,source=…` (reject), path-form `additional_contexts`
-(reject; only `target:` form is attributed). Unknown syntax, heredoc `COPY`,
-and unresolvable globs fail loudly. The same scan rejects cross-service `COPY`
-sources outside {own dir} ∪ {copied shared roots} ∪ {declared dependency
-outputs} — the G5 guard, absorbed into the attribution pass.
-
-### Dirty-tree guard
-
-The hash is over the committed tree while builds compile the working tree.
-Post-fix this is the only remaining way the tag can lie, so content-addressed
-build paths refuse a dirty tree: `build` and `up --build` run `git status
---porcelain` filtered to the allowlisted set (modified and untracked
-allowlisted files both count) and fail loudly listing the offending paths.
-`build --dev` is exempt: `:dev` tags are not content-addressed, so the
-lie-risk the guard kills does not apply, and the bind-mount dev workflow
-inherently runs against a dirty tree. Bare `up` (no build) stays permitted —
-it pulls images by committed-tree tag and is self-consistent.
-`generate-score` and `publish-compose` run in CI on clean checkouts; the
-guard there is a no-op.
-
-### Over-inclusion fates
-
-- Lock bump: re-keys only services declaring that base's arg. A torch bump no
-  longer patch-bumps the gateway.
-- Manifest edit: re-keys only the edited service. Global non-bit keys
-  (`x-cross-compile-targets`, `x-registry-cache`, tag lists) re-key nothing.
-- Shared roots: re-key exactly the copying services.
-- Allowlist extras (placeframe's `packages/generated/csharp/api-client/` is
-  copied by zero of 47 COPY lines): re-key nothing; cost is context upload
-  size only.
-- Docs inside service dirs: not over-inclusion — most Dockerfiles copy the
-  service dir wholesale, so the doc is in the bits; the fix is selective
-  COPYs, not hash machinery.
-
-### Soundness argument
-
-Context files reach image bits only through `COPY`/`ADD` (both resolved),
-declared args (hashed conservatively), `FROM` bases (lock lines,
-digest-pinned so upstream drift cannot change bits without a lock edit, which
-re-keys), and `additional_contexts` outputs (embedded dep hashes). The guard
-converts any unattributable construct into a loud failure. Environment
-channels are deliberately uncovered: buildx/docker engine version, runner
-quirks, network fetches during build (apt mirror drift). Consequence: a
-same-tree rebuild can yield a different digest, and ghcr tags are mutable, so
-a rebuild can overwrite a `tree-` tag onto fresh bytes — accepted residual;
-the mitigation that matters is Part 2's release-time semver alias, which
-points at the certified digest and never moves.
-
-Variant subtlety: `reconstructor-cuda` and `reconstructor-rocm` share one
-Dockerfile dir and therefore one tree tag — the variant difference is a
-manifest arg, covered by the manifest-mapping input, so both variants hash
-identically. Sound because tree tags are per-repository unique (the full ref
-disambiguates), a variant-arg edit re-keys both, and Part 2 gives variants
-one shared version line, so advancement stays variant-synced.
-
-### One-time re-key choreography
-
-- Every image gets a fresh `tree-` tag at its next build; old tags freeze in
-  place (CI never re-pushes them) — existing pins convert from movable to
-  actually-immutable.
-- placeframe's committed `stack/generated/**` embed old tags: one deliberate
-  regeneration cycle after relocking docker-devkit (commit the devkit bump,
-  regenerate, commit artifacts; the score staleness gate is disabled there,
-  so this is operator discipline).
-- infra's three `tree-` pins keep resolving to frozen old digests; re-point
-  at leisure (or adopt Part 2 version tags).
-- Calibration corpus rows keep their old `pipeline_version` values; the
-  mismatch hard-fail on redeploy is existing behavior for any re-key.
-- Refresh the stale comment in `matrix.py` claiming `neural-networks-base-*`
-  are tagless.
-
-### Delivery
-
-One docker-devkit patch release (pre-1.0, breaking rides the patch flow),
-then relock in placeframe, placeframe-capture-tool, Make-it-Sing. Precision
-must land as Part 1 directly — coarse-then-precise would mean two input-set
-changes, two re-key events, two regeneration cycles. Estimated 3–5 days
-including the test battery.
-
-### Tests
-
-The over-inclusion list becomes the negative-test list: lock line for an
-undeclared base edited → unaffected services unchanged; other service's
-manifest arg edited → this service unchanged; shared-root file not copied by
-a service edited → that service unchanged; `.dockerignore` edit that matches
-nothing → no re-key; own-dir edit → re-key; dependency dir edit → dependent
-re-keys; declared-arg lock edit → re-key; cross-service COPY → loud failure;
-`RUN --mount=type=bind` → loud failure; path-form `additional_contexts` →
-loud failure; dirty tree on `build`/`up --build` → loud failure listing
-paths; dirty tree on bare `up` and on `build --dev` → permitted.
+lock — the same law for base images, charts, and bundles. Part 0's
+contribution — delivered by the consumer-contract initiative — makes the lock
+structured YAML recording, per image, the index digest plus one concrete
+manifest digest per declared platform — arch is never resolved by whichever
+machine touches an image.
 
 ## Part 2 — github-actions-toolkit: per-unit semver image and bundle lines
 
@@ -368,7 +111,8 @@ image inputs (promotion cadence is operator-controlled; this matches the
 package discipline). Dev tightens from manifest-presence to the same
 change-based gate; a docs-only landing in an images-only repo cuts nothing.
 Digest-based detection was rejected: rebuild churn re-digests unchanged trees
-and would bump versions on noise; tree tags are source-precise post-Part-1.
+and would bump versions on noise; tree tags are source-precise once the
+prerequisite initiative lands.
 
 ### Channels and spellings
 
@@ -629,16 +373,18 @@ implementation-plan session descopes it if the loop turns out fast enough.
   cuda/rocm, compose sources) to `publish.yml`; stop pushing derived
   `:latest` on PR builds; `publish-compose` drops branch tags and the
   `--branch` flag; `.env` `BUNDLES=` flips to qualified spelling
-  (`core-cuda,auth-keycloak,tunnel-ngrok`); one-time `stack/generated/**`
-  regeneration after the Part 1 relock.
+  (`core-cuda,auth-keycloak,tunnel-ngrok`). The P0+P1 relock and the one-time
+  `stack/generated/**` regeneration ride the consumer-contract catch-up wave
+  (`plan-consumer-contract-implementation.md`, phase 12) — the items here are
+  strictly the Part 2–3 additions.
 - Make-it-Sing: `images:` for `livekit-token`; `:latest` removal; `.env`
   flips (`BUNDLES=placeframe-cuda,tunnel-rathole`); yaml digest refs flip to
   version refs with lock entries in the one adoption wave after Part 2;
   overrides adopted as needed.
 - placeframe-capture-tool: `images:` for its workloads; `:latest` removal;
   `.env` flip.
-- infra: switch the three `tree-` pins to version tags at leisure —
-  post-Part-1 tree pins freeze and remain valid.
+- infra: switch the three `tree-` pins to version tags at leisure — after
+  the consumer-contract re-key the old tree pins freeze and remain valid.
 
 ## Sequencing
 
@@ -647,9 +393,11 @@ dead-code windows, and consumer migration waves. Pain-relief timing is
 explicitly a non-goal.
 
 ```
-1. P0 + P1  platform-resolved lock + tree-tag precision as ONE
-      docker-devkit release → relock + regeneration cycle;
-      capture-tool's relock unblocks the ZED-box AOA deploy
+1. P0 + P1 — delivered by the consumer-contract initiative
+      (`plan-consumer-contract.md` + `plan-consumer-contract-implementation.md`):
+      platform-resolved lock + tree-tag precision ship there in its single
+      release, riding its consumer catch-up wave — one lock-format migration,
+      one relock wave, and capture-tool's relock unblocks the ZED-box AOA deploy
 2. P2  semver lines + {sha}-only publishes (github-actions-toolkit
       + build-artifact-registry) → versions exist
 3. P3 + P4a as ONE docker-devkit consumer-surface release
@@ -662,13 +410,13 @@ The three derivations behind it:
 
 1. No rework: an override shipped before Part 3 would be built, tested, and
    documented against digest-ref yaml — a spelling Part 3 deletes — then
-   partially reworked. Everything ships once, against final shapes. Part 0
-   rides the step-1 release for the same reason: a separate platform-lock
-   release would force two lock-format migrations and two relock waves, and
-   Part 1's hasher would build against a format that dies weeks later.
+   partially reworked. Everything ships once, against final shapes. The same
+   ruling drove the absorption: P0+P1 ride the consumer-contract initiative's
+   single release so there is one lock-format migration and one relock wave,
+   not two.
 2. Entangled changes ship together, independent ones separately: qualified
    names → lock keys → override names → `BUNDLES=` parsing are one cluster in
-   the selection machinery; Part 1 is the hash/build side and touches none of
+   the selection machinery; the prerequisite's hash/build side touches none of
    it; Part 2 is a different repo. Each release is independently testable,
    none carries machinery it cannot exercise (the lock writer ships only when
    versions exist to resolve).
@@ -678,21 +426,18 @@ The three derivations behind it:
 
 The order and the release boundaries are ruled here;
 `plan-artifact-identity-implementation.md` owns the phase-level work breakdown
-that implementing sessions execute.
+that implementing sessions execute (phases 8–21; the step-1 breakdown lives in
+`plan-consumer-contract-implementation.md`).
 
 ## Closed decisions
 
-1. Tree-tag identity: precision attribution (the Dockerfile is the
-   declaration), fail-closed construct guard, dirty-tree refusal on
-   content-addressed build paths; `build --dev` exempt (dev tags are not
-   content-addressed; the bind-mount workflow inherently runs dirty); bare
-   `up` permitted.
 2. Version space: per-unit semver lines with tag-everything; CalVer git tag
    stays the release-event grouping label. Flip-away conditions: none known —
    contract-coupling consumers would strengthen, not weaken, it.
 3. Images count as shippable; the release gate is tree-tag change
-   (post-Part-1), not digest change (rebuild churn) or presence (release
-   spam); the dev gate tightens to match.
+   (source-precise once the prerequisite's attribution lands), not digest
+   change (rebuild churn) or presence (release spam); the dev gate tightens to
+   match.
 4. Origin axis, uniform: third-party upstreams ride the mirror; org-internal
    artifacts (bundles now, org images if ever declared) resolve direct,
    digest-pinned through the lock. This reverses the absorbed plan's standing
@@ -722,8 +467,7 @@ that implementing sessions execute.
    local-output teeth; the producer's lock attaches beneath the consumer's
    own (path form only).
 10. Stage 2 (cross-repo dev overlay) is staged, trigger-gated, design
-    recorded in Part 4; the dirty-tree `--dev` carve-out rides Part 1
-    regardless.
+     recorded in Part 4.
 11. Bundle channel spellings: branch tags retire, `--branch` dies, publishes
     are `{sha}`-only, release-verb aliases carry all channel meaning;
     PR-channel image tags ruled out permanently (ghcr version-deletion
@@ -732,26 +476,9 @@ that implementing sessions execute.
 12. The `up` fail-closed probe stays one law over every lock entry; bundle
     entries probe via `crane digest` (artifact media types).
 13. Sequencing optimizes for least error-proneness (ruling out a
-    pain-first ordering); three releases plus a trigger-gated stage 2;
-    consumers adopt in one wave.
-14. Lock records platform resolution (Part 0): `platforms` required
-    wherever `base_images` is declared; per image the lock stores the index
-    digest plus one concrete manifest digest per declared platform — exact
-    os/arch selection, attestations skipped, ambiguity refused; machine arch
-    is never consulted during resolution.
-15. Lock format is structured YAML (images carry index plus a platforms
-    map; charts and bundles stay flat); env consumption is synthesized
-    per-run at the compose/bake edges, with a `lock-env` verb preserving the
-    raw-compose valve; markers resolve the index under k8s and the platform
-    dish under compose; selection centralizes in one devkit function.
-16. Part 0 ships inside the cluster-P1 docker-devkit release — one
-    lock-format migration and one consumer relock wave, with Parts 1-4
-    building against the final lock shape.
-
-Course adjustment (2026-10-22, absorbed): precision attribution replaced the
-original coarse-bucket Part 1 because per-unit semver made precision
-load-bearing (every over-inclusion is a spurious version bump) and the G5
-parser — already required — makes it cheap.
+     pain-first ordering); step 1 is the consumer-contract initiative's
+     release, steps 2–3 carry two devkit releases, and stage 2 stays
+     trigger-gated; consumers adopt in one wave.
 
 ## Dismissed and deferred
 
