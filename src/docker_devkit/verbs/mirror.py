@@ -12,7 +12,6 @@ from docker_devkit.config import (
     mirrored_ref,
 )
 from docker_devkit.crane import install_crane
-from docker_devkit.lock import env_entries
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
@@ -26,14 +25,14 @@ def mirror() -> None:
     prefix = config.mirror.prefix if config.mirror is not None else DEFAULT_MIRROR_PREFIX
 
     lock = config.lock_entries()
-    entries = env_entries(lock)
-    mirror_targets = [
-        (reference, entries.get(name))
-        for name, reference in sorted(config.base_images.items(), key=lambda item: item[1])
-    ]
+    mirror_targets: list[tuple[str, list[str]]] = []
+    for name, reference in sorted(config.base_images.items(), key=lambda item: item[1]):
+        entry = lock.images.get(name)
+        recorded = [] if entry is None else [entry.index, *entry.platforms.values()]
+        mirror_targets.append((reference, recorded))
     for chart_name, chart_ref in sorted((config.k8s.charts if config.k8s is not None else {}).items()):
         entry = lock.require(chart_lock_key(chart_name), f"chart {chart_name!r}")
-        mirror_targets.append((chart_ref.removeprefix("oci://"), entry))
+        mirror_targets.append((chart_ref.removeprefix("oci://"), [entry]))
 
     if not mirror_targets:
         raise RuntimeError("nothing is declared to mirror (base_images and k8s.charts are empty)")
@@ -41,9 +40,13 @@ def mirror() -> None:
     install_crane()
     copied = 0
     already_present = 0
-    for reference, presence in mirror_targets:
-        if presence is not None and bash_check(f"crane digest {presence}"):
-            print(f"Already mirrored {presence}")
+    for reference, recorded in mirror_targets:
+        # Presence is probed by every recorded digest — the index plus the platform
+        # manifests — so a partially mirrored reference still triggers the copy.
+        probes = sorted(set(recorded))
+        if probes and all(bash_check(f"crane digest {probe}") for probe in probes):
+            for probe in probes:
+                print(f"Already mirrored {probe}")
             already_present += 1
             continue
         destination = mirrored_ref(reference, prefix)

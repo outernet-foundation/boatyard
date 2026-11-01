@@ -78,8 +78,10 @@ def up(
 def _probe_lock_entries(config: DockerDevkitConfig) -> None:
     lock = config.lock_entries()
     references = sorted(
-        [reference for entry in lock.images.values() for reference in (entry.index, *entry.platforms.values())]
-        + list(lock.charts.values())
+        set(
+            [reference for entry in lock.images.values() for reference in (entry.index, *entry.platforms.values())]
+            + list(lock.charts.values())
+        )
     )
     for value in references:
         reference, _, digest = value.rpartition("@")

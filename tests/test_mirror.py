@@ -11,6 +11,8 @@ from docker_devkit.config import LOCK_PATH, mirrored_ref
 
 MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
 FAKE_DIGEST = "sha256:" + "a" * 64
+DIGEST_AMD64 = "sha256:" + "c" * 64
+DIGEST_ARM64 = "sha256:" + "d" * 64
 
 MANIFEST = (
     "x-base-images:\n"
@@ -36,8 +38,15 @@ def _write_config(root: Path, sections: dict[str, object] | None = None) -> None
     )
 
 
-def _write_lock(root: Path, images: dict[str, str], charts: dict[str, str] | None = None) -> None:
-    document: dict[str, object] = {"images": {name: {"index": reference} for name, reference in images.items()}}
+def _write_lock(
+    root: Path,
+    images: dict[str, object],
+    charts: dict[str, str] | None = None,
+) -> None:
+    entries: dict[str, object] = {}
+    for name, value in images.items():
+        entries[name] = {"index": value} if isinstance(value, str) else value
+    document: dict[str, object] = {"images": entries}
     if charts:
         document["charts"] = charts
     (root / LOCK_PATH).write_text(yaml.safe_dump(document), encoding="utf-8")
@@ -94,6 +103,64 @@ class TestMirrorVerb:
         monkeypatch.setattr(mirror, "bash_check", recorder.check)
         monkeypatch.chdir(tmp_path)
         return runner.invoke(mirror.app, [])
+
+    def test_probes_every_recorded_digest_index_and_platforms(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        self._write_tree(tmp_path)
+        uv_base = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15"
+        api_base = f"{MIRROR_PREFIX}/ghcr.io/outernet-foundation/placeframe/api:1.2.3"
+        index = f"{uv_base}@{FAKE_DIGEST}"
+        amd64 = f"{uv_base}@{DIGEST_AMD64}"
+        arm64 = f"{uv_base}@{DIGEST_ARM64}"
+        api_index = f"{api_base}@{FAKE_DIGEST}"
+        api_amd64 = f"{api_base}@{DIGEST_AMD64}"
+        _write_lock(
+            tmp_path,
+            {
+                "UV_IMAGE": {"index": index, "platforms": {"linux/amd64": amd64, "linux/arm64": arm64}},
+                "API_IMAGE": {"index": api_index, "platforms": {"linux/amd64": api_amd64}},
+            },
+        )
+        recorder = CommandRecorder(present_refs={index, amd64, arm64, api_index, api_amd64})
+
+        result = self._invoke(tmp_path, monkeypatch, recorder)
+
+        assert result.exit_code == 0
+        probes = [command.removeprefix("crane digest ") for command in recorder.commands if "crane digest" in command]
+        assert probes == [index, amd64, arm64, api_index, api_amd64]
+        assert not [command for command in recorder.commands if command.startswith("crane copy")]
+        assert "Mirrored references: 0 copied, 2 already present" in result.stdout
+
+    def test_a_missing_platform_manifest_triggers_the_copy_again(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        self._write_tree(tmp_path)
+        uv_base = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15"
+        index = f"{uv_base}@{FAKE_DIGEST}"
+        amd64 = f"{uv_base}@{DIGEST_AMD64}"
+        missing_arm64 = f"{uv_base}@{DIGEST_ARM64}"
+        _write_lock(
+            tmp_path, {"UV_IMAGE": {"index": index, "platforms": {"linux/amd64": amd64, "linux/arm64": missing_arm64}}}
+        )
+        recorder = CommandRecorder(present_refs={index, amd64})
+
+        result = self._invoke(tmp_path, monkeypatch, recorder)
+
+        assert result.exit_code == 0
+        upstream_uv = "ghcr.io/astral-sh/uv:0.12.15"
+        assert [command for command in recorder.commands if command.startswith("crane copy")] == [
+            f"crane copy {upstream_uv} {MIRROR_PREFIX}/{upstream_uv}",
+            f"crane copy ghcr.io/outernet-foundation/placeframe/api:1.2.3 {MIRROR_PREFIX}/ghcr.io/outernet-foundation/placeframe/api:1.2.3",
+        ]
+        assert "Mirrored references: 2 copied, 0 already present" in result.stdout
+
+    def test_probes_a_digest_once_when_index_and_platform_agree(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        self._write_tree(tmp_path)
+        uv_base = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{FAKE_DIGEST}"
+        _write_lock(tmp_path, {"UV_IMAGE": {"index": uv_base, "platforms": {"linux/amd64": uv_base}}})
+        recorder = CommandRecorder(present_refs={uv_base})
+
+        result = self._invoke(tmp_path, monkeypatch, recorder)
+
+        assert result.exit_code == 0
+        assert recorder.commands.count(f"crane digest {uv_base}") == 1
 
     def test_copies_every_declared_reference(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         recorder = CommandRecorder()
