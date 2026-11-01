@@ -18,15 +18,16 @@ from docker_devkit.config import (
     mirrored_ref,
     parse_image_lock,
 )
-from docker_devkit.image_refs import resolve_remote_digest
+from docker_devkit.image_refs import resolve_remote_digest, resolve_remote_manifests
 
 DIGEST_TAIL_PATTERN = re.compile(r"@sha256:[a-f0-9]{64}$")
 
 
 def relock(config: DockerDevkitConfig, *, upgrade: bool = False) -> ImageLock:
-    # One structured entry per declaration: the mirror-prefixed reference, digest resolved
-    # against upstream — crane copies are byte-identical, so the digest holds under both
-    # names. The declared tag rides the index reference, so a tag bump breaks the prefix
+    # One structured entry per declaration: the mirror-prefixed reference carrying the
+    # index digest plus one platform-manifest digest per declared platform, resolved
+    # against upstream — crane copies are byte-identical, so the digests hold under both
+    # names. The declared tag rides both reference forms, so a tag bump breaks the prefix
     # match and re-resolves while an unchanged declaration copies its frozen entry forward.
     # The computed lock owns exactly the declared names — orphans prune by construction.
     assert config.root is not None
@@ -37,11 +38,17 @@ def relock(config: DockerDevkitConfig, *, upgrade: bool = False) -> ImageLock:
     for name, reference in config.base_images.items():
         base = mirrored_ref(reference, prefix)
         if DIGEST_TAIL_PATTERN.search(reference):
-            images[name] = ImageLockEntry(index=base)
-        elif not upgrade and name in committed.images and committed.images[name].index.startswith(base + "@"):
+            # A digest declaration names its exact bytes; it passes through prefixed-but-
+            # unresolved and records uniformly as the index and every platform entry.
+            images[name] = ImageLockEntry(index=base, platforms=dict.fromkeys(config.platforms, base))
+        elif not upgrade and _declaration_frozen(committed.images.get(name), base, config.platforms):
             images[name] = committed.images[name]
         else:
-            images[name] = ImageLockEntry(index=f"{base}@{resolve_remote_digest(reference)}")
+            resolved = resolve_remote_manifests(reference, config.platforms, f"base_images entry {name}")
+            images[name] = ImageLockEntry(
+                index=f"{base}@{resolved.index_digest}",
+                platforms={platform: f"{base}@{digest}" for platform, digest in resolved.platforms.items()},
+            )
 
     charts: dict[str, str] = {}
     declared_charts = config.k8s.charts if config.k8s is not None else {}
@@ -140,3 +147,11 @@ def _committed_lock(root: Path) -> ImageLock:
     except (TypeError, ValueError):
         print(f"{LOCK_PATH.as_posix()}: not the structured YAML format; re-resolving every entry")
         return ImageLock()
+
+
+def _declaration_frozen(entry: ImageLockEntry | None, base: str, platforms: list[str]) -> bool:
+    # The freeze key is the whole declaration the entry resolves under — the prefixed
+    # reference and the declared platform set. Either changing re-resolves the entry.
+    if entry is None:
+        return False
+    return entry.index.startswith(base + "@") and sorted(entry.platforms) == sorted(platforms)

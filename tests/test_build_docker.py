@@ -16,6 +16,7 @@ from docker_devkit import config as config_module
 from docker_devkit.verbs import build
 from docker_devkit.bake import DIGEST_FILE_NAME
 from docker_devkit.config import LOCK_PATH, DockerDevkitConfig
+from docker_devkit.image_refs import UpstreamManifests
 from docker_devkit.service_builds import ServiceBuild
 
 DIGEST_A = "sha256:" + "a" * 64
@@ -110,8 +111,8 @@ def _amd64_host() -> str:
     return "linux/amd64"
 
 
-def _fixed_digest(reference: str) -> str:
-    return DIGEST_A
+def _fixed_manifests(reference: str, platforms: list[str], subject: str) -> UpstreamManifests:
+    return UpstreamManifests(DIGEST_A, dict.fromkeys(platforms, DIGEST_A))
 
 
 def _head_sha(command: str) -> str:
@@ -599,7 +600,7 @@ class TestBakeSeesLockValues:
         probe = BakeEnvProbe()
         monkeypatch.setattr(bake_module, "bash", probe.run)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
-        monkeypatch.setattr("docker_devkit.lock.resolve_remote_digest", _fixed_digest)
+        monkeypatch.setattr("docker_devkit.lock.resolve_remote_manifests", _fixed_manifests)
         monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles=LOCK_DOCKERFILES, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
