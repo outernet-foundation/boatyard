@@ -7,8 +7,26 @@ modules to 10. Work phase by phase — each phase is sized for one agent
 session; if the context window fills, stop at a phase boundary and hand off
 to the next session with this file. Never merge commits across phases.
 Yield between phases: once a phase's final commit lands and the verification
-trio passes, report and stop — the next phase starts only on the operator's
-go-ahead, never on the agent's own momentum.
+trio passes, tick the phase in Progress below (its own prose commit), report,
+and stop — the next phase starts only on the operator's go-ahead, never on
+the agent's own momentum.
+
+## Progress
+
+Tick a phase only after its final commit and a green verification trio;
+`git log` carries the commit-level detail.
+
+- [x] Phase 0 — AGENTS.md to target shape
+- [x] Phase 1 — score.py folds
+- [x] Phase 2 — service_builds → config
+- [ ] Phase 3 — image_refs → lock + 2.3
+- [ ] Phase 4 — daemon_gc → bake
+- [ ] Phase 5 — mirror flatten, 2.6
+- [ ] Phase 6 — dedup: record members + lock/assembly/verbs
+- [ ] Phase 7 — dedup: score/publish/config + 2.5 + 2.7
+- [ ] Phase 8 — inline wave + 2.9
+- [ ] Phase 9 — dead code + validation timing
+- [ ] Phase 10 — ordering, naming, micro
 
 The import graph after all folds is verified cycle-free: `service_builds.py`,
 `image_refs.py`, `markers.py` have zero internal imports today;
