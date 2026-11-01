@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Self
+from typing import Self
 
 from pydantic import (
     BaseModel,
@@ -38,8 +38,8 @@ class SecretKey(BaseModel):
 class SecretsDeclaration(RootModel[dict[str, SecretKey]]):
     @model_validator(mode="before")
     @classmethod
-    def _coerce_string_specs(cls, value: Any, info: ValidationInfo) -> Any:
-        context: dict[str, Any] = info.context or {}
+    def _coerce_string_specs(cls, value: object, info: ValidationInfo) -> object:
+        context: dict[str, object] = info.context or {}
         source = context.get("source", "the secrets declaration")
         if not is_mapping(value) or not value:
             raise ValueError(f"{source}: the secrets declaration is a non-empty KEY: description mapping")
@@ -47,7 +47,7 @@ class SecretsDeclaration(RootModel[dict[str, SecretKey]]):
 
     @model_validator(mode="after")
     def _require_all_caps_keys(self, info: ValidationInfo) -> Self:
-        context: dict[str, Any] = info.context or {}
+        context: dict[str, object] = info.context or {}
         source = context.get("source", "the secrets declaration")
         for name in self.root:
             if not DECLARED_KEY.match(name):
@@ -64,7 +64,7 @@ def validate_consumed(consumed: set[str], declared: dict[str, SecretKey], render
         )
 
 
-def collect_secret_keys(node: Any, secret_name: str, consumed: set[str]) -> None:
+def collect_secret_keys(node: object, secret_name: str, consumed: set[str]) -> None:
     if is_mapping(node):
         reference = node.get("secretKeyRef")
         if is_mapping(reference) and reference.get("name") == secret_name:
