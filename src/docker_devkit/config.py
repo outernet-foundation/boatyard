@@ -34,9 +34,11 @@ ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 PLATFORM_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$")
 VARIANT_VALUE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
+SHA256_DIGEST_REGEX = r"sha256:[a-f0-9]{64}"
+
 # path:tag or path@digest — upstream-native, never a bare path or a ${…} hole.
 DECLARED_REFERENCE_PATTERN = re.compile(
-    r"^(?P<path>[^:@\s$]+)(?::(?P<tag>[^@\s$]+))?(?:@(?P<digest>sha256:[a-f0-9]{64}))?$"
+    rf"^(?P<path>[^:@\s$]+)(?::(?P<tag>[^@\s$]+))?(?:@(?P<digest>{SHA256_DIGEST_REGEX}))?$"
 )
 
 # base_images values may template the repo's toolchain pins: {uv} resolves from
@@ -62,7 +64,7 @@ ROUTE_PATH_PATTERN = re.compile(r"^(?:/\*|/(?:[^/\s*]+(?:/[^/\s*]+)*)?(?:/\*)?)$
 # An upstream is a compose service name and a literal port.
 ROUTE_UPSTREAM_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*:[0-9]+$")
 # A remote include is an OCI reference pinned by digest.
-REMOTE_REF_PATTERN = re.compile(r"^oci://\S+@sha256:[a-f0-9]{64}$")
+REMOTE_REF_PATTERN = re.compile(rf"^oci://\S+@{SHA256_DIGEST_REGEX}$")
 # A compose env hole: ${NAME}, ${NAME:?err}, ${NAME:-default}.
 ENV_HOLE_PATTERN = re.compile(r"^\$\{[A-Z][A-Z0-9_]*(?::[^{}]*)?\}$")
 PORT_PATTERN = re.compile(r"^[0-9]+$")

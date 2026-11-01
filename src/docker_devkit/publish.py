@@ -7,7 +7,7 @@ from typing import Any, NamedTuple
 import yaml
 
 from docker_devkit.documents import ComposeDocument
-from docker_devkit.image_refs import resolve_remote_digest
+from docker_devkit.lock import resolve_remote_digest
 
 VAR_PATTERN = re.compile(r"\$\{([A-Z][A-Z0-9_]*)(:[?\-+][^}]*)?\}")
 STUB_VALUE = "publish-stub"

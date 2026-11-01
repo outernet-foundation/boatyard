@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 from docker_devkit import bake as bake_module
 from docker_devkit import config as config_module
 from docker_devkit.config import LOCK_PATH, DockerDevkitConfig
-from docker_devkit.image_refs import UpstreamManifests
+from docker_devkit.lock import UpstreamManifests
 from docker_devkit.config import ServiceBuild
 from docker_devkit.verbs import build
 

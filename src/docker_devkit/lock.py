@@ -1,27 +1,84 @@
 from __future__ import annotations
 
 import difflib
+import json
 import re
+import shlex
 from collections.abc import Mapping
 from pathlib import Path
+from typing import NamedTuple
 
 import yaml
+from bashrun.bash import bash_output
 
 from docker_devkit.config import (
     CHART_REFERENCE_PREFIX,
     DEFAULT_MIRROR_PREFIX,
     DockerDevkitConfig,
     LOCK_PATH,
+    SHA256_DIGEST_REGEX,
     ImageLock,
     ImageLockEntry,
     chart_lock_key,
+    is_list,
+    is_mapping,
     load_config,
     mirrored_ref,
     parse_image_lock,
 )
-from docker_devkit.image_refs import resolve_remote_digest, resolve_remote_manifests
 
-DIGEST_TAIL_PATTERN = re.compile(r"@sha256:[a-f0-9]{64}$")
+DIGEST_TAIL_PATTERN = re.compile(rf"@{SHA256_DIGEST_REGEX}$")
+DIGEST_PATTERN = re.compile(r"^Digest:\s+(sha256:[a-f0-9]+)", re.MULTILINE)
+
+
+class UpstreamManifests(NamedTuple):
+    index_digest: str
+    platforms: dict[str, str]
+
+
+def run_lock(
+    *,
+    root: Path | None = None,
+    config: DockerDevkitConfig | None = None,
+    upgrade: bool = False,
+    check: bool = False,
+) -> None:
+    root = root if root is not None else Path.cwd()
+    config = config if config is not None else load_config(root)
+    if config is None:
+        print("no docker-devkit.yaml; no lock declarations to relock")
+        return
+    declared_charts = config.k8s.charts if config.k8s is not None else {}
+    if not config.base_images and not declared_charts:
+        print("no lock declarations (neither base_images nor k8s.charts); nothing to relock")
+        return
+
+    computed = render_lock(relock(config, upgrade=upgrade))
+    assert config.root is not None
+    lock_file = config.root / LOCK_PATH
+    if check:
+        committed = lock_file.read_text(encoding="utf-8") if lock_file.exists() else ""
+        if committed != computed:
+            print(
+                "".join(
+                    difflib.unified_diff(
+                        committed.splitlines(keepends=True),
+                        computed.splitlines(keepends=True),
+                        fromfile=f"committed {LOCK_PATH.as_posix()}",
+                        tofile=f"computed {LOCK_PATH.as_posix()}",
+                    )
+                )
+            )
+            raise SystemExit("image lock is stale. Run 'lock' and commit the result.")
+        return
+    lock_file.write_text(computed, encoding="utf-8")
+
+
+def write_lock(config: DockerDevkitConfig, *, upgrade: bool = False) -> ImageLock:
+    lock = relock(config, upgrade=upgrade)
+    assert config.root is not None
+    (config.root / LOCK_PATH).write_text(render_lock(lock), encoding="utf-8")
+    return lock
 
 
 def relock(config: DockerDevkitConfig, *, upgrade: bool = False) -> ImageLock:
@@ -85,6 +142,105 @@ def render_lock(lock: ImageLock) -> str:
     return yaml.safe_dump(document, sort_keys=False, default_flow_style=False, width=10_000_000)
 
 
+def resolve_remote_manifests(reference: str, platforms: list[str], subject: str) -> UpstreamManifests:
+    # The complete resolution against the upstream reference: the index digest plus one
+    # concrete manifest digest per declared platform. Selection reads the declared
+    # platforms only — the writing machine's arch never participates.
+    print(f"Resolving digests for: {reference}")
+    raw = bash_output(f"docker buildx imagetools inspect --raw {shlex.quote(reference)}")
+    document: object = json.loads(raw)
+    index_digest = resolve_remote_digest(reference)
+    children = document.get("manifests") if is_mapping(document) else None
+    if not is_list(children):
+        # A reference that answers a manifest rather than an index has one concrete
+        # byte-stream; it records uniformly as the index and every platform entry.
+        return UpstreamManifests(index_digest, dict.fromkeys(platforms, index_digest))
+    selected: dict[str, str] = {}
+    for platform in platforms:
+        os_name, _, architecture = platform.partition("/")
+        matches = [
+            child
+            for child in children
+            if not (
+                is_mapping(child)
+                and is_mapping(annotations := child.get("annotations"))
+                and annotations.get("vnd.docker.reference.type") == "attestation-manifest"
+            )
+            if _concrete_platform(child) == (os_name, architecture)
+        ]
+        if len(matches) > 1:
+            digests = ", ".join(_child_digest(child, subject) for child in matches)
+            raise RuntimeError(f"{subject}: platform {platform} matches multiple upstream manifests ({digests})")
+        if not matches:
+            available = sorted({
+                f"{os_name}/{architecture}"
+                for child in children
+                if (concrete := _concrete_platform(child)) is not None
+                for os_name, architecture in (concrete,)
+            })
+            raise RuntimeError(
+                f"{subject}: the upstream index carries no {platform} manifest "
+                f"(declared platforms: {sorted(platforms)}; index platforms: {available})"
+            )
+        selected[platform] = _child_digest(matches[0], subject)
+    return UpstreamManifests(index_digest, selected)
+
+
+def resolve_remote_digest(reference: str) -> str:
+    print(f"Resolving digest for: {reference}")
+    output = bash_output(f"docker buildx imagetools inspect {shlex.quote(reference)}")
+    match = DIGEST_PATTERN.search(output)
+    if match is None:
+        raise RuntimeError(f"Could not parse digest for image reference: {reference}")
+    return match.group(1)
+
+
+def _concrete_platform(child: object) -> tuple[str, str] | None:
+    # The (os, architecture) pair of an index child; None for entries carrying no
+    # concrete platform — unknown/unknown descriptors and platform-less entries never match.
+    if not is_mapping(child):
+        return None
+    platform = child.get("platform")
+    if not is_mapping(platform):
+        return None
+    os_name = platform.get("os")
+    architecture = platform.get("architecture")
+    if not isinstance(os_name, str) or not isinstance(architecture, str):
+        return None
+    if os_name == "unknown" or architecture == "unknown":
+        return None
+    return (os_name, architecture)
+
+
+def _child_digest(child: object, subject: str) -> str:
+    if not is_mapping(child):
+        raise RuntimeError(f"{subject}: upstream index child {child!r} is not a manifest descriptor")
+    digest = child.get("digest")
+    if not isinstance(digest, str) or not digest.startswith("sha256:"):
+        raise RuntimeError(f"{subject}: upstream index child carries no digest ({child!r})")
+    return digest
+
+
+def compose_env_entries(lock: ImageLock, config: DockerDevkitConfig, environment: Mapping[str, str]) -> dict[str, str]:
+    # The compose-edge projection: the platform manifests of the declaration-selected
+    # platform. A lock recording images against a config declaring no platforms is a
+    # desync the construction rules out — the refusal names the rewrite.
+    platform = config.select_platform(environment)
+    if platform is None and lock.images:
+        raise RuntimeError(
+            f"{LOCK_PATH.as_posix()}: records image entries but docker-devkit.yaml declares no platforms; "
+            "the compose edge selects platform manifests — run lock to rewrite the lock against the declarations"
+        )
+    return env_entries(lock, platform)
+
+
+def env_entries(lock: ImageLock, platform: str | None = None) -> dict[str, str]:
+    # The env projection of the lock through the one selector: the flat NAME=reference
+    # vocabulary compose and bake consume — images answer by the selected form (platform
+    # manifest when a platform is given, the index otherwise), charts flat.
+    return {**{name: entry_for(lock, name, platform) for name in lock.images}, **lock.charts}
+
+
 def entry_for(lock: ImageLock, name: str, platform: str | None = None) -> str:
     # The one selector over the structured lock: None names the index (the build edge,
     # where buildx resolves a multi-arch index per target platform), a platform names its
@@ -106,74 +262,9 @@ def entry_for(lock: ImageLock, name: str, platform: str | None = None) -> str:
     raise RuntimeError(f"{LOCK_PATH.as_posix()}: lacks the {name} entry (the lock verb writes it)")
 
 
-def env_entries(lock: ImageLock, platform: str | None = None) -> dict[str, str]:
-    # The env projection of the lock through the one selector: the flat NAME=reference
-    # vocabulary compose and bake consume — images answer by the selected form (platform
-    # manifest when a platform is given, the index otherwise), charts flat.
-    return {**{name: entry_for(lock, name, platform) for name in lock.images}, **lock.charts}
-
-
-def compose_env_entries(lock: ImageLock, config: DockerDevkitConfig, environment: Mapping[str, str]) -> dict[str, str]:
-    # The compose-edge projection: the platform manifests of the declaration-selected
-    # platform. A lock recording images against a config declaring no platforms is a
-    # desync the construction rules out — the refusal names the rewrite.
-    platform = config.select_platform(environment)
-    if platform is None and lock.images:
-        raise RuntimeError(
-            f"{LOCK_PATH.as_posix()}: records image entries but docker-devkit.yaml declares no platforms; "
-            "the compose edge selects platform manifests — run lock to rewrite the lock against the declarations"
-        )
-    return env_entries(lock, platform)
-
-
 def render_env_entries(entries: Mapping[str, str]) -> str:
     # The env-grammar render both the per-run --env-file writer and the lock-env verb emit.
     return "".join(f"{name}={reference}\n" for name, reference in sorted(entries.items()))
-
-
-def write_lock(config: DockerDevkitConfig, *, upgrade: bool = False) -> ImageLock:
-    lock = relock(config, upgrade=upgrade)
-    assert config.root is not None
-    (config.root / LOCK_PATH).write_text(render_lock(lock), encoding="utf-8")
-    return lock
-
-
-def run_lock(
-    *,
-    root: Path | None = None,
-    config: DockerDevkitConfig | None = None,
-    upgrade: bool = False,
-    check: bool = False,
-) -> None:
-    root = root if root is not None else Path.cwd()
-    config = config if config is not None else load_config(root)
-    if config is None:
-        print("no docker-devkit.yaml; no lock declarations to relock")
-        return
-    declared_charts = config.k8s.charts if config.k8s is not None else {}
-    if not config.base_images and not declared_charts:
-        print("no lock declarations (neither base_images nor k8s.charts); nothing to relock")
-        return
-
-    computed = render_lock(relock(config, upgrade=upgrade))
-    assert config.root is not None
-    lock_file = config.root / LOCK_PATH
-    if check:
-        committed = lock_file.read_text(encoding="utf-8") if lock_file.exists() else ""
-        if committed != computed:
-            print(
-                "".join(
-                    difflib.unified_diff(
-                        committed.splitlines(keepends=True),
-                        computed.splitlines(keepends=True),
-                        fromfile=f"committed {LOCK_PATH.as_posix()}",
-                        tofile=f"computed {LOCK_PATH.as_posix()}",
-                    )
-                )
-            )
-            raise SystemExit("image lock is stale. Run 'lock' and commit the result.")
-        return
-    lock_file.write_text(computed, encoding="utf-8")
 
 
 def _committed_lock(root: Path) -> ImageLock:

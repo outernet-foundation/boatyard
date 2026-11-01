@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from typing import Any
 
@@ -8,12 +9,14 @@ from typer.testing import CliRunner
 from docker_devkit import config as config_module
 from docker_devkit import lock as lock_module
 from docker_devkit.config import LOCK_PATH
-from docker_devkit.image_refs import UpstreamManifests
+from docker_devkit.lock import UpstreamManifests
 from docker_devkit.verbs import build, lock
 
 DIGEST_A = "sha256:" + "a" * 64
 DIGEST_B = "sha256:" + "b" * 64
 DIGEST_C = "sha256:" + "c" * 64
+DIGEST_D = "sha256:" + "d" * 64
+DIGEST_E = "sha256:" + "e" * 64
 MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
 
 LOKI_UPSTREAM = "ghcr.io/grafana/helm-charts/loki"
@@ -47,6 +50,43 @@ class ManifestRecorder:
     def resolve(self, reference: str, platforms: list[str], subject: str) -> UpstreamManifests:
         self.inspected.append(reference)
         return UpstreamManifests(self.index_digest, dict.fromkeys(platforms, self.platform_digest))
+
+
+def _inspect_output_with_digest(command: str) -> str:
+    assert "imagetools inspect" in command
+    return f"Name: x\nDigest: {DIGEST_A}\n"
+
+
+def _inspect_output_without_digest(command: str) -> str:
+    assert "imagetools inspect" in command
+    return "Name: x\n"
+
+
+def _child(
+    digest: str, os_name: str, architecture: str, annotations: dict[str, str] | None = None
+) -> dict[str, object]:
+    child: dict[str, object] = {
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "digest": digest,
+        "size": 1234,
+        "platform": {"os": os_name, "architecture": architecture},
+    }
+    if annotations is not None:
+        child["annotations"] = annotations
+    return child
+
+
+class RawInspectOutput:
+    def __init__(self, output: str) -> None:
+        self.output = output
+
+    def __call__(self, command: str) -> str:
+        assert "imagetools inspect" in command
+        return self.output
+
+
+def _fixed_digest(reference: str) -> str:
+    return DIGEST_A
 
 
 def _structured_entry(reference: str, *, index_digest: str, platforms: dict[str, str]) -> dict[str, object]:
@@ -353,6 +393,111 @@ class TestImageRecording:
                 )
             }
         }
+
+
+class TestResolveRemoteDigest:
+    def test_should_return_parsed_digest(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(lock_module, "bash_output", _inspect_output_with_digest)
+        assert lock_module.resolve_remote_digest("docker.io/library/alpine:3.20") == DIGEST_A
+
+    def test_should_raise_when_digest_missing(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(lock_module, "bash_output", _inspect_output_without_digest)
+        with pytest.raises(RuntimeError):
+            lock_module.resolve_remote_digest("docker.io/library/alpine:3.20")
+
+
+class TestSelectPlatformManifests:
+    def test_selects_one_manifest_per_declared_platform(self, monkeypatch: pytest.MonkeyPatch):
+        raw = json.dumps({
+            "manifests": [
+                _child(DIGEST_C, "linux", "amd64"),
+                _child(DIGEST_D, "linux", "arm64"),
+                _child(DIGEST_E, "unknown", "unknown", {"vnd.docker.reference.type": "attestation-manifest"}),
+            ],
+        })
+        monkeypatch.setattr(lock_module, "bash_output", RawInspectOutput(raw))
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
+
+        resolved = lock_module.resolve_remote_manifests(
+            "docker.io/library/alpine:3.20", ["linux/amd64", "linux/arm64"], "entry X"
+        )
+
+        assert resolved.platforms == {"linux/amd64": DIGEST_C, "linux/arm64": DIGEST_D}
+
+    def test_skips_attestation_entries_carrying_a_concrete_platform(self, monkeypatch: pytest.MonkeyPatch):
+        raw = json.dumps({
+            "manifests": [
+                _child(DIGEST_C, "linux", "amd64"),
+                _child(DIGEST_E, "linux", "amd64", {"vnd.docker.reference.type": "attestation-manifest"}),
+            ],
+        })
+        monkeypatch.setattr(lock_module, "bash_output", RawInspectOutput(raw))
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
+
+        resolved = lock_module.resolve_remote_manifests("docker.io/library/alpine:3.20", ["linux/amd64"], "entry X")
+
+        assert resolved.platforms == {"linux/amd64": DIGEST_C}
+
+    def test_ignores_variant_fields_and_platformless_descriptors(self, monkeypatch: pytest.MonkeyPatch):
+        raw = json.dumps({
+            "manifests": [
+                _child(DIGEST_D, "linux", "arm64"),
+                {"mediaType": "application/vnd.oci.image.manifest.v1+json", "digest": "sha256:" + "f" * 64},
+                "not-a-descriptor",
+            ],
+        })
+        monkeypatch.setattr(lock_module, "bash_output", RawInspectOutput(raw))
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
+
+        resolved = lock_module.resolve_remote_manifests("docker.io/library/alpine:3.20", ["linux/arm64"], "entry X")
+
+        assert resolved.platforms == {"linux/arm64": DIGEST_D}
+
+    def test_multiple_matches_refuse_naming_the_entry(self, monkeypatch: pytest.MonkeyPatch):
+        raw = json.dumps({"manifests": [_child(DIGEST_C, "linux", "amd64"), _child(DIGEST_D, "linux", "amd64")]})
+        monkeypatch.setattr(lock_module, "bash_output", RawInspectOutput(raw))
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
+
+        with pytest.raises(RuntimeError, match=f"entry X.*multiple upstream manifests.*{DIGEST_C}, {DIGEST_D}"):
+            lock_module.resolve_remote_manifests("docker.io/library/alpine:3.20", ["linux/amd64"], "entry X")
+
+    def test_a_declared_platform_no_index_child_covers_refuses_naming_the_entry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        raw = json.dumps({"manifests": [_child(DIGEST_C, "linux", "amd64")]})
+        monkeypatch.setattr(lock_module, "bash_output", RawInspectOutput(raw))
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
+
+        with pytest.raises(RuntimeError, match=r"entry X.*no linux/arm64 manifest.*index platforms: \['linux/amd64'\]"):
+            lock_module.resolve_remote_manifests("docker.io/library/alpine:3.20", ["linux/arm64"], "entry X")
+
+
+class TestResolveRemoteManifests:
+    def test_resolves_the_index_and_selects_declared_platforms(self, monkeypatch: pytest.MonkeyPatch):
+        raw = json.dumps({
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.index.v1+json",
+            "manifests": [_child(DIGEST_C, "linux", "amd64"), _child(DIGEST_D, "linux", "arm64")],
+        })
+        monkeypatch.setattr(lock_module, "bash_output", RawInspectOutput(raw))
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
+
+        resolved = lock_module.resolve_remote_manifests("docker.io/library/alpine:3.20", ["linux/arm64"], "entry X")
+
+        assert resolved.index_digest == DIGEST_A
+        assert resolved.platforms == {"linux/arm64": DIGEST_D}
+
+    def test_a_manifest_reference_records_uniformly(self, monkeypatch: pytest.MonkeyPatch):
+        raw = json.dumps({"schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json", "config": {}})
+        monkeypatch.setattr(lock_module, "bash_output", RawInspectOutput(raw))
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
+
+        resolved = lock_module.resolve_remote_manifests(
+            "docker.io/library/golang:1.24", ["linux/amd64", "linux/arm64"], "entry X"
+        )
+
+        assert resolved.index_digest == DIGEST_A
+        assert resolved.platforms == {"linux/amd64": DIGEST_A, "linux/arm64": DIGEST_A}
 
 
 class TestChartRecording:
