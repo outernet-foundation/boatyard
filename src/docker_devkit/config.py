@@ -276,6 +276,12 @@ class DockerDevkitConfig(BaseModel):
     # The repo root the config was loaded from; load-injected, never authored.
     root: Path | None = Field(default=None, exclude=True)
 
+    def lock_entries(self) -> ImageLock:
+        # The lock read where absence is legal; required-lock callers parse directly.
+        assert self.root is not None
+        lock_path = self.root / LOCK_PATH
+        return parse_image_lock(lock_path) if lock_path.is_file() else ImageLock.model_validate({})
+
     def score_dir_path(self) -> Path:
         assert self.root is not None
         return self.root / self.score_dir
@@ -613,8 +619,7 @@ class DockerDevkitConfig(BaseModel):
                 "required beside them (build writes it)"
             )
         if self.gateway is not None:
-            require_lock_entry(
-                optional_lock_entries(root),
+            self.lock_entries().require(
                 CADDY_IMAGE,
                 "routes are declared, so the door rides",
                 hint="declare CADDY_IMAGE in base_images and run build --lock-only",
@@ -696,6 +701,13 @@ class ImageLock(RootModel[dict[str, str]]):
                 )
         return self
 
+    def require(self, name: str, subject: str, hint: str = "build --lock-only writes it") -> str:
+        # The one "lock lacks NAME" refusal every lock consumer raises.
+        entry = self.root.get(name)
+        if entry is None:
+            raise RuntimeError(f"{subject}: {LOCK_PATH.as_posix()} lacks the {name} entry ({hint})")
+        return entry
+
 
 class ComposeBundle(NamedTuple):
     name: str
@@ -714,22 +726,6 @@ class ToolRequirement(NamedTuple):
 
 def parse_image_lock(path: Path) -> ImageLock:
     return ImageLock.model_validate(path.read_text(encoding="utf-8"), context={"path": path.as_posix()})
-
-
-def optional_lock_entries(root: Path) -> dict[str, str]:
-    # The lock read where absence is legal; required-lock callers parse it directly.
-    lock_path = root / LOCK_PATH
-    return parse_image_lock(lock_path).root if lock_path.is_file() else {}
-
-
-def require_lock_entry(
-    entries: dict[str, str], name: str, subject: str, hint: str = "build --lock-only writes it"
-) -> str:
-    # The one "lock lacks NAME" refusal every lock consumer raises.
-    entry = entries.get(name)
-    if entry is None:
-        raise RuntimeError(f"{subject}: {LOCK_PATH.as_posix()} lacks the {name} entry ({hint})")
-    return entry
 
 
 def mirrored_ref(reference: str, prefix: str) -> str:

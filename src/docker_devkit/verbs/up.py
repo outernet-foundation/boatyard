@@ -10,7 +10,7 @@ from bashrun.bash import CalledProcessError, bash_handoff, bash_output
 
 from docker_devkit.assembly import Assembly, compose_command
 from docker_devkit.bake import run_build
-from docker_devkit.config import load_config, optional_lock_entries
+from docker_devkit.config import DockerDevkitConfig, load_config
 
 _MANIFEST_ABSENT_PATTERN = re.compile(r"\b404\b|not found|manifest unknown", re.IGNORECASE)
 
@@ -47,7 +47,7 @@ def up(
 
     try:
         # Fail closed over every lock entry before bring-up.
-        _probe_lock_entries(root)
+        _probe_lock_entries(assembly.config)
 
         # Build local images; --dev builds both shapes.
         if build:
@@ -74,8 +74,8 @@ def up(
         assembly.cleanup()
 
 
-def _probe_lock_entries(root: Path) -> None:
-    for value in sorted(optional_lock_entries(root).values()):
+def _probe_lock_entries(config: DockerDevkitConfig) -> None:
+    for value in sorted(config.lock_entries().root.values()):
         reference, _, digest = value.rpartition("@")
         try:
             bash_output(f"docker buildx imagetools inspect {shlex.quote(value)}")

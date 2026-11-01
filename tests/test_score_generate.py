@@ -9,7 +9,7 @@ from bashrun.bash import CalledProcessError, bash, bash_output
 from pydantic import ValidationError
 
 from docker_devkit import score as score_generate_module
-from docker_devkit.config import DockerDevkitConfig
+from docker_devkit.config import DockerDevkitConfig, ImageLock
 from docker_devkit.documents import BindVolume, ComposeService
 from docker_devkit.score import (
     generate_k8s,
@@ -169,7 +169,7 @@ def _generate_with_chart(
     monkeypatch.setattr(score_generate_module, "bash_output", helm.run)
     assert config.k8s is not None
     config.root = tmp_path
-    generate_k8s(config, config.k8s, tmp_path / output, images)
+    generate_k8s(config, config.k8s, tmp_path / output, ImageLock.model_validate(images))
     return helm
 
 
@@ -902,7 +902,7 @@ def test_dev_toggles_on_a_k8s_only_workload_refuses(tmp_path: Path) -> None:
     config.root = tmp_path
     with pytest.raises(SystemExit, match="renders k8s-only"):
         score_generate_module.generate_k8s(
-            config, config.k8s, tmp_path / Path("stack/generated/k8s/manifests.yaml"), {}
+            config, config.k8s, tmp_path / Path("stack/generated/k8s/manifests.yaml"), ImageLock.model_validate({})
         )
 
 
@@ -1034,7 +1034,7 @@ def test_k8s_builtin_templates_register_on_every_init(tmp_path: Path, monkeypatc
     config.root = tmp_path
 
     assert config.k8s is not None
-    generate_k8s(config, config.k8s, tmp_path / output, {})
+    generate_k8s(config, config.k8s, tmp_path / output, ImageLock.model_validate({}))
 
     init = next(command for command in recorder.commands if command.startswith("score-k8s init"))
     assert [Path(token).name for token in init.split() if token.endswith(".tpl")] == [

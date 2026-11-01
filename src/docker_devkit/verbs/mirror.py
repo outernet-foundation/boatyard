@@ -10,8 +10,6 @@ from docker_devkit.config import (
     chart_lock_key,
     load_config,
     mirrored_ref,
-    optional_lock_entries,
-    require_lock_entry,
 )
 from docker_devkit.crane import install_crane
 
@@ -26,13 +24,13 @@ def mirror() -> None:
         raise RuntimeError("a docker-devkit.yaml with base_images (or k8s.charts) is required to mirror")
     prefix = config.mirror.prefix if config.mirror is not None else DEFAULT_MIRROR_PREFIX
 
-    lock_entries = optional_lock_entries(root)
+    lock = config.lock_entries()
     mirror_targets = [
-        (reference, lock_entries.get(name))
+        (reference, lock.root.get(name))
         for name, reference in sorted(config.base_images.items(), key=lambda item: item[1])
     ]
     for chart_name, chart_ref in sorted((config.k8s.charts if config.k8s is not None else {}).items()):
-        entry = require_lock_entry(lock_entries, chart_lock_key(chart_name), f"chart {chart_name!r}")
+        entry = lock.require(chart_lock_key(chart_name), f"chart {chart_name!r}")
         mirror_targets.append((chart_ref.removeprefix("oci://"), entry))
 
     if not mirror_targets:

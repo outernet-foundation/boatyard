@@ -27,7 +27,6 @@ from docker_devkit.config import (
     chart_lock_key,
     load_config,
     mirrored_ref,
-    optional_lock_entries,
 )
 from docker_devkit.daemon_gc import check_gc_limits
 from docker_devkit.image_refs import ImageReference, resolve_remote_digest
@@ -121,7 +120,7 @@ def run_build(
     service_shas = compute_service_shas(root, config.service_builds)
     os.environ.update(service_shas)
 
-    lock_data = optional_lock_entries(root)
+    lock_data = config.lock_entries().root
 
     if not config.service_builds and not lock_only:
         raise RuntimeError(

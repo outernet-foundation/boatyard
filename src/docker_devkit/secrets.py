@@ -54,14 +54,13 @@ class SecretsDeclaration(RootModel[dict[str, SecretKey]]):
                 raise ValueError(f"{source}: {name!r} is not an ALL_CAPS key")
         return self
 
-
-def validate_consumed(consumed: set[str], declared: dict[str, SecretKey], rendering: str, source: str) -> None:
-    undeclared = sorted(consumed - declared.keys())
-    if undeclared:
-        raise RuntimeError(
-            f"{source}: the {rendering} rendering consumes keys missing from the secrets declaration: "
-            + ", ".join(undeclared)
-        )
+    def validate_consumed(self, consumed: set[str], rendering: str, source: str) -> None:
+        undeclared = sorted(consumed - self.root.keys())
+        if undeclared:
+            raise RuntimeError(
+                f"{source}: the {rendering} rendering consumes keys missing from the secrets declaration: "
+                + ", ".join(undeclared)
+            )
 
 
 def collect_secret_keys(node: object, secret_name: str, consumed: set[str]) -> None:
