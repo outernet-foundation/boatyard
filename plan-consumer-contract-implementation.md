@@ -148,7 +148,7 @@ inventory.
 
 ## Phase 2 — Platform declarations and the structured lock model
 
-Cluster lock foundation · docker-devkit · ADR D6 home 2. Load: `config.py`
+Cluster lock foundation · docker-devkit · ADR D6 source 2. Load: `config.py`
 (`DockerDevkitConfig`, `load_config`, `ImageLock`, `parse_image_lock`, the
 filesystem-gated lock laws), `tests/test_config.py` (the lock-parsing
 battery).
@@ -187,11 +187,11 @@ End state:
   the vendor's tag grammar stays authored data in the template string. uv
   owns the range-versus-selection consistency between `requires-python` and
   `.python-version` natively — no coupling is reimposed anywhere.
-- Plain values stay plain (the golang/caddy/zed class — tags with no second
-  home have no drift surface). A literal value in place of a template is the
-  deliberate-skew escape hatch, visible in every diff. A template composing a
-  nonexistent tag fails at `build --lock-only` — fail-closed, same as a
-  mistyped literal today.
+- Plain values stay plain (the golang/caddy/zed class — a tag declared
+  nowhere else has no drift surface). A literal value in place of a template
+  is the deliberate-skew escape hatch, visible in every diff. A template
+  composing a nonexistent tag fails at `build --lock-only` — fail-closed,
+  same as a mistyped literal today.
 - `VersionCoupling`/`VersionSite` and `version_coupling_violations` are gone
   from `image_refs.py`; nothing replaces them — D3 eliminates every coupling
   they covered by construction, and policing an invariant construction makes
@@ -226,23 +226,25 @@ End state:
   cutover migration mechanism; no dual-read exists. The declaration-freeze/
   `--upgrade` migration question dissolves in the cutover: the YAML rewrite
   re-resolves every entry.
-- The `mirror` verb probes every recorded digest (index plus dishes) via
-  `crane digest`; the copy itself is unchanged — whole index, dishes ride
-  along, `crane copy` byte-identity keeps upstream and mirror digests equal.
+- The `mirror` verb probes every recorded digest (index plus platform
+  manifests) via `crane digest`; the copy itself is unchanged — whole index,
+  the platform manifests ride along, `crane copy` byte-identity keeps
+  upstream and mirror digests equal.
 
 Verify: fixture-index selection battery (arm64 child present; attestations
 skipped; multi-match refusal; single manifest; `@digest` declaration); freeze
 and `--upgrade` semantics over structured entries; `--check` unified diff
 including the env→YAML cutover; mirror probe enumeration covers every
 recorded digest. Owed from the absorbed investigation and closed here: pull
-and `crane digest` a dish digest against the mirror (ghcr serves child
-manifests by digest; per-dish retrieval was verified only inside the copied
-index), and `imagetools inspect --raw <dish>` answers a manifest, not an
-index.
+and `crane digest` a platform-manifest digest against the mirror (ghcr
+serves child manifests by digest; per-platform-manifest retrieval was
+verified only inside the copied index), and
+`imagetools inspect --raw <platform-manifest digest>` answers a manifest,
+not an index.
 
 ## Phase 5 — Env synthesis, `lock-env`, and `tree-tags`
 
-Cluster lock foundation · docker-devkit · ADR D6 homes 3–4, Part 0 design
+Cluster lock foundation · docker-devkit · ADR D6 sources 3–4, Part 0 design
 moves 4–7. Load: `assembly.py` (`Assembly`, `compose_command`, the
 `--env-file` attach), `verbs/up.py` (the fail-closed probe), `markers.py`
 (`lock:`/`lock-image:`), `bake.py` (bake environment assembly),
@@ -268,17 +270,17 @@ End state:
   document, no service-list endpoint, no `{SERVICE}_SHA` names (consumers
   that write `.env` lines own those names where they author the compose
   holes). A deterministic function of HEAD over `config.service_shas()`;
-  never cached, never committed — the tree-derived class has no home in any
+  never cached, never committed — the tree-derived class is recorded in no
   committed file.
 - The `up` fail-closed probe runs over every recorded digest (index plus
-  dishes) under the existing stderr-classification law.
+  platform manifests) under the existing stderr-classification law.
 - `lock:`/`lock-image:` markers resolve by substrate: the index under k8s
-  (kubelet resolves per node — architecturally correct), the platform dish
-  under compose.
+  (kubelet resolves per node — architecturally correct), the platform
+  manifest under compose.
 
 Verify: synthesis determinism; both selection forms (singleton and
-`PLATFORM=`); probe classification over dish digests; marker substrate
-resolution; `lock-env` output composes bring-up; `tree-tags`
+`PLATFORM=`); probe classification over platform-manifest digests; marker
+substrate resolution; `lock-env` output composes bring-up; `tree-tags`
 correct-by-HEAD, unknown-name vocabulary listing, one-tag-per-line shape.
 
 ## Phase 6 — Literal image references refused at derivation
@@ -297,7 +299,7 @@ End state:
   a literal `image:` (use `lock:` markers). A validity rule of the input
   format, the same category as `extra="forbid"` — strictly the file formats
   permit literals and docker builds them, but with literals banned there is
-  no pair of authored homes left to drift anywhere in the system.
+  no pair of authored sources left to drift anywhere in the system.
 - `unpinned_references` and the pinned-literals-allowed scan it implemented
   die: zero literal refs exist in any consumer tree today, so the class it
   permitted was empty. Consumer CI steps consuming its result die in
@@ -350,7 +352,7 @@ End state:
   `--env-file` consumption at the `up` handoff, the raw-`docker compose`
   valve). The `image_refs.py` row loses the coupling machinery and the scan;
   `tree-tags` and `lock-env` join the entry-point table; the D5 refusals
-  join their parse-boundary homes.
+  join the module rows that own those boundaries.
 - docker-devkit ships one release carrying phases 2–7 (pre-1.0; breaking
   rides the patch flow). This release is the pin target of the wave.
 
@@ -387,16 +389,17 @@ End state:
   `docker_devkit` module references. After the relock: one deliberate
   `stack/generated/**` regeneration cycle — the structured lock changes every
   marker-resolved image reference in the artifacts (compose-side resolution
-  now selects platform dishes) — commit the devkit bump, run
+  now selects platform manifests) — commit the devkit bump, run
   `generate-score`, commit the artifacts in a second commit (the score
   staleness gate is disabled there; operator discipline).
 - placeframe-capture-tool: install-zed (`orchestrator.py`, `box_install.py`,
   `constants.py`) drops its library imports and rewrites onto the read
-  surface — arm64 dishes by reading `images.<NAME>.platforms[linux/arm64]`
+  surface — arm64 manifests by reading `images.<NAME>.platforms[linux/arm64]`
   from the committed YAML lock with plain `yaml.safe_load`, service tags
   through `uv run tree-tags <service>…`, and its `--build` mode through
   `uv run build --registry <addr>` (the forked bake pipeline dissolves). Its
-  relock lands arm64 dish digests for loki/alloy — the box ships executable
+  relock lands arm64 platform-manifest digests for loki/alloy — the box
+  ships executable
   images and the ZED-box AOA deployment unblocks (its
   `zed-aoa-diagnosis-handoff.md` gates the deploy on exactly this).
 - infra-rathole and lbe-toolkit: repin and relock only — no imports to drop.
@@ -410,5 +413,6 @@ End state:
 
 Verify: consumer CI green end-to-end; grep over the five consumer repos
 returns zero `docker_devkit` imports; the placeframe regeneration diff is
-committed and reviewed; capture-tool's lock carries arm64 dishes; `up`
+committed and reviewed; capture-tool's lock carries arm64 platform
+manifests; `up`
 probes pass against the mirror.

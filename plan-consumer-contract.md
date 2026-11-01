@@ -41,13 +41,13 @@ Consumer inventory (the full blast radius):
 
 The lens every decision below follows:
 
-| Class | Examples | Home |
+| Class | Examples | Lives in |
 |---|---|---|
 | Authored | repository, platforms, `base_images` tags | `docker-devkit.yaml` |
 | Registry-resolved | digests | `docker-devkit.lock` |
 | Tree-derived | service set, `tree-` sha tags | computed on demand, recorded nowhere |
 
-Drift surface = independently-authored homes for one fact. Derived
+Drift surface = independently-authored sources for one fact. Derived
 restatement costs nothing (regeneration is deterministic). Classes never mix
 files: authored facts in the config, resolved facts in the lock, tree-derived
 facts computed. The tree-derived class can never live in a committed file —
@@ -83,7 +83,7 @@ during this initiative's work folds as ordinary work, not a reopened arc.
 base_images:
   UV_BASE_IMAGE: "ghcr.io/astral-sh/uv:{uv}-python{python}-trixie-slim"
   PYTHON_BASE_IMAGE: "docker.io/library/python:{python}-slim"
-  GOLANG_IMAGE: "docker.io/library/golang:1.22-alpine"   # plain — no second home
+  GOLANG_IMAGE: "docker.io/library/golang:1.22-alpine"   # plain — declared nowhere else
 ```
 
 `{uv}` resolves from `tool.uv.required-version` (operator-stripped; a range
@@ -94,7 +94,7 @@ range-versus-selection consistency between `requires-python` and
 grammar stays authored data (the template string); the devkit implements only
 generic substitution, extending the existing `lock:`/`lock-image:` marker
 philosophy from lock facts to toolchain facts. Plain values stay plain (the
-golang/caddy/zed class — tags with no second home have no drift surface).
+golang/caddy/zed class — a tag declared nowhere else has no drift surface).
 A literal value in place of a template is the deliberate-skew escape hatch,
 visible in every diff. A template composing a nonexistent tag fails at
 `build --lock-only` — fail-closed, same as a mistyped literal today.
@@ -104,7 +104,7 @@ misclassification — the uv image tag is a *function of* decisions already made
 in pyproject and `.python-version`, not an independent decision. It is why the
 registry only ever contained uv and python entries, why wiring it cost enough
 that four of five consumers never did, and why capture-tool quietly
-accumulated four authored homes for the python version.
+accumulated four authored sources for the python version.
 
 ### D4 — No version-coupling registry anywhere
 
@@ -124,15 +124,15 @@ uses. Enforcement lives at parse boundaries the devkit already owns
 `image:` line) — a validity rule of the input format, the same category as
 `extra="forbid"`, not drift policing. (Strictly, file formats permit literals
 and docker builds them; detection is logically forced — but with literals
-banned there is no pair of authored homes left to drift anywhere in the
+banned there is no pair of authored sources left to drift anywhere in the
 system.)
 
-### D6 — The read surface is four homes
+### D6 — The read surface is four sources
 
 1. `docker-devkit.yaml` — authored facts; direct read.
 2. `docker-devkit.lock` — resolved facts, structured YAML per absorbed Part 0;
    direct read with plain `yaml.safe_load` (the env-line format that forced
-   `parse_env_file` imports dies here). install-zed selects its arm64 dish by
+   `parse_env_file` imports dies here). install-zed selects its arm64 manifest by
    reading `images.<NAME>.platforms[linux/arm64]` directly.
 3. The tag-lookup verb — `uv run <verb> <service>…`: positional service
    names, one bare `tree-` tag per line on stdout, unknown names refuse
@@ -166,9 +166,9 @@ material.
 ### D8 — Consumers own their env-line reading
 
 `.env` wears two hats: the devkit's interpolation input at bring-up, and the
-repo's single per-machine home for deployment facts (`PUBLIC_URL`, S3
+repo's single per-machine location for deployment facts (`PUBLIC_URL`, S3
 credentials) that client tooling reads directly — calibration scripts hitting
-the API, helper containers on the stack network. Reading the one home is
+the API, helper containers on the stack network. Reading the one file is
 single-sourcing, not restating. The parser is a tiny consumer-local module
 implementing compose's env-file grammar (`KEY=VALUE`, `#` comments, no
 interpolation — compose is the file's authoritative reader, so its rules are
@@ -204,7 +204,8 @@ initiative. Rationale: the session already owes consumers exactly one
 relock-and-catch-up wave; riding P0 on it costs zero additional waves and
 lands every read-surface change (YAML lock, `lock-env`,
 tag lookup, templates) in the single release consumers pin once. Part 0 also fixes
-capture-tool's live per-arch defect (index digests vs arm64 dishes — boxes
+capture-tool's live per-arch defect (index digests vs arm64 platform
+manifests — boxes
 currently ship unexecutable amd64 loki/alloy).
 
 Amendments recorded against the absorbed material:
@@ -221,7 +222,7 @@ Amendments recorded against the absorbed material:
   glue; consumers read the committed YAML or `lock-env` (the D1 law over the
   ADR's "install-zed calls it" phrasing).
 - The implementation plan's module anchors predate the refactor
-  (`build_docker.py`, `compose.py`, `documents.py` homes have moved); the plan
+  (`build_docker.py`, `compose.py`, `documents.py` members have moved); the plan
   rewrite absorbs the renames.
 - The current AGENTS law "the env line format is the design, not a vestige" is
   reversed by this absorption; the AGENTS lock section is rewritten when Part
@@ -234,7 +235,7 @@ parent ADR.
 
 Every drift surface was presumed eliminable by construction; policing was
 admitted only where logically forced. Outcomes: uv and python versions —
-eliminated (D3); distro suffix — never a second home; floating uv tag
+eliminated (D3); distro suffix — authored in exactly one place; floating uv tag
 (lbe-toolkit) — intent stays authored, components derive; golang-class tags —
 no surface; literal refs — the escape-hatch class banned outright (D5), the
 one place detection remains, reframed as format validity. No cross-file
