@@ -285,6 +285,24 @@ class DockerDevkitConfig(BaseModel):
         assert self.root is not None
         return self.root / self.score_dir / "k8s" / "values" / f"{chart}.yaml"
 
+    def compose_bundles(self) -> list[ComposeBundle]:
+        # The local renderables: every workload-bearing option and bare entry, in declaration
+        # order. Remote refs never render here; consumers include them by digest.
+        bundles: list[ComposeBundle] = []
+        for name, entry in self.services.items():
+            if isinstance(entry, ServiceGroup):
+                for option_name, option in entry.options.items():
+                    if option.remote:
+                        continue
+                    bundles.append(
+                        ComposeBundle(
+                            option_name, self.bundle_output(option_name), list(option.workloads), dict(option.vars)
+                        )
+                    )
+            elif not entry.remote:
+                bundles.append(ComposeBundle(name, self.bundle_output(name), list(entry.workloads), dict(entry.vars)))
+        return bundles
+
     @field_validator("requires")
     @classmethod
     def _validate_requires(cls, value: str) -> str:
@@ -576,25 +594,6 @@ class ComposeBundle(NamedTuple):
     output: Path
     workloads: list[str]
     vars: dict[str, str]
-
-
-def compose_bundles(config: DockerDevkitConfig) -> list[ComposeBundle]:
-    # The local renderables: every workload-bearing option and bare entry, in declaration
-    # order. Remote refs never render here; consumers include them by digest.
-    bundles: list[ComposeBundle] = []
-    for name, entry in config.services.items():
-        if isinstance(entry, ServiceGroup):
-            for option_name, option in entry.options.items():
-                if option.remote:
-                    continue
-                bundles.append(
-                    ComposeBundle(
-                        option_name, config.bundle_output(option_name), list(option.workloads), dict(option.vars)
-                    )
-                )
-        elif not entry.remote:
-            bundles.append(ComposeBundle(name, config.bundle_output(name), list(entry.workloads), dict(entry.vars)))
-    return bundles
 
 
 def parse_image_lock(path: Path) -> ImageLock:

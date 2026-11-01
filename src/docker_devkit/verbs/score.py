@@ -9,7 +9,7 @@ from typing import Annotated
 import typer
 from bashrun.bash import bash, bash_output
 
-from docker_devkit.config import SECRETS_FILE, SECRETS_OUTPUT, compose_bundles, load_config
+from docker_devkit.config import SECRETS_FILE, SECRETS_OUTPUT, load_config
 from docker_devkit.score import Target, ensure_score_tools, generate_artifacts, tool_requirements
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
@@ -36,7 +36,7 @@ def generate_score(
         )
     root = Path.cwd()
     config = load_config(root)
-    if config is None or (not compose_bundles(config) and config.k8s is None):
+    if config is None or (not config.compose_bundles() and config.k8s is None):
         if not check:
             raise RuntimeError(
                 "docker-devkit.yaml declares no local service entries and no k8s section; nothing to generate"
@@ -59,7 +59,7 @@ def generate_score(
             ensure_score_tools(config, bin_dir, target)
             os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
             generate_artifacts(config, target, False)
-            outputs = [bundle.output for bundle in compose_bundles(config)]
+            outputs = [bundle.output for bundle in config.compose_bundles()]
             if k8s_rendering:
                 outputs.append(config.k8s_output_path(False))
             if (root / SECRETS_FILE).is_file():

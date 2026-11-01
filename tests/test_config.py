@@ -13,7 +13,6 @@ from docker_devkit.config import (
     LOCK_PATH,
     DockerDevkitConfig,
     ServiceEntry,
-    compose_bundles,
     load_config,
     parse_image_lock,
 )
@@ -329,7 +328,7 @@ class TestServices:
         config = load_config(tmp_path)
 
         assert config is not None
-        bundles = compose_bundles(config)
+        bundles = config.compose_bundles()
         assert [bundle.name for bundle in bundles] == ["cuda", "rocm"]
         assert bundles[0].output == tmp_path / "stack/generated/compose/compose.cuda.yaml"
         assert bundles[0].vars == {"GPU_VARIANT": "cuda"}
@@ -997,7 +996,7 @@ def test_direct_model_construction_is_valid_for_tests(tmp_path: Path) -> None:
     })
     config.root = tmp_path
 
-    assert compose_bundles(config)[0].name == "core"
+    assert config.compose_bundles()[0].name == "core"
 
 
 def test_parse_image_lock_rejects_entries_without_a_digest(tmp_path: Path) -> None:

@@ -10,7 +10,7 @@ from typing import Annotated
 import typer
 from bashrun.bash import bash, bash_output
 
-from docker_devkit.config import LOCK_PATH, compose_bundles, load_config, parse_image_lock
+from docker_devkit.config import LOCK_PATH, load_config, parse_image_lock
 from docker_devkit.crane import install_crane
 from docker_devkit.publish import (
     STUB_VALUE,
@@ -45,7 +45,7 @@ def publish_compose(
 ) -> None:
     root = Path.cwd()
     config = load_config(root)
-    if config is None or not compose_bundles(config):
+    if config is None or not config.compose_bundles():
         if plan:
             print(json.dumps([]))
             return
@@ -54,7 +54,7 @@ def publish_compose(
             "one artifact per workload-bearing entry or option, named under root repository"
         )
 
-    bundles = compose_bundles(config)
+    bundles = config.compose_bundles()
 
     if plan:
         legs = [{"bundle": entry.name} for entry in bundles]

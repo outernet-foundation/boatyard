@@ -21,7 +21,6 @@ from docker_devkit.config import (
     RouteConfig,
     ServiceEntry,
     ServiceGroup,
-    compose_bundles,
     is_mapping,
     parse_dev_toggles,
 )
@@ -265,7 +264,7 @@ class Assembly:
             for name, service in self.config.service_builds.items()
             if service.dev_stage and name in declared
         }
-        for bundle in compose_bundles(self.config):
+        for bundle in self.config.compose_bundles():
             for workload in bundle.workloads:
                 document = WorkloadDocument.model_validate(
                     yaml.safe_load((self.root / self.config.score_dir / workload).read_text(encoding="utf-8"))

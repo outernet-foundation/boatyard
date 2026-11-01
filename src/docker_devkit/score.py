@@ -28,7 +28,6 @@ from docker_devkit.config import (
     SECRETS_OUTPUT,
     DockerDevkitConfig,
     chart_lock_key,
-    compose_bundles,
     parse_image_lock,
     require_lock_entry,
 )
@@ -184,7 +183,7 @@ def tool_requirements(config: DockerDevkitConfig, target: Target) -> list[ToolRe
 def generate_compose(config: DockerDevkitConfig, images: dict[str, str]) -> None:
     assert config.root is not None
     root = config.root
-    bundles = compose_bundles(config)
+    bundles = config.compose_bundles()
     if not bundles:
         raise RuntimeError(
             "the compose target requires local service entries (workloads:) under docker-devkit.yaml's services key"
@@ -434,7 +433,7 @@ def generate_k8s(config: DockerDevkitConfig, k8s: K8sConfig, output: Path, image
     output_path.parent.mkdir(parents=True, exist_ok=True)
     score_dir = config.score_dir_path()
 
-    compose_workloads = {name for bundle in compose_bundles(config) for name in bundle.workloads}
+    compose_workloads = {name for bundle in config.compose_bundles() for name in bundle.workloads}
     for name in k8s.workloads:
         if name in compose_workloads:
             continue
@@ -547,7 +546,7 @@ def enforce_secret_contract(config: DockerDevkitConfig, target: Target, k8s_outp
 
     if target in ("both", "compose"):
         consumed: set[str] = set()
-        for bundle in compose_bundles(config):
+        for bundle in config.compose_bundles():
             artifact = bundle.output
             for match in COMPOSE_HOLE.finditer(artifact.read_text(encoding="utf-8")):
                 if len(match.group(1)) % 2 == 1:
