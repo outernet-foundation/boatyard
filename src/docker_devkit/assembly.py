@@ -193,11 +193,11 @@ def _split_names(value: str) -> list[str]:
 
 def _service_names(path: Path) -> set[str]:
     # Extract names only; authored files never promised the bind-law lens.
-    document: dict[str, object] = _mapping_or_empty(yaml.safe_load(path.read_text(encoding="utf-8")))
-    return set(_mapping_or_empty(document.get("services")))
+    document: dict[str, object] = mapping_or_empty(yaml.safe_load(path.read_text(encoding="utf-8")))
+    return set(mapping_or_empty(document.get("services")))
 
 
-def _mapping_or_empty(value: object) -> dict[str, object]:
+def mapping_or_empty(value: object) -> dict[str, object]:
     return value if _is_mapping(value) else {}
 
 

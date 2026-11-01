@@ -13,7 +13,7 @@ import typer
 import yaml
 from bashrun.bash import CalledProcessError, bash_handoff, bash_output
 
-from .assembly import Assembly, _mapping_or_empty, assert_known_profiles, require_compose_stack, require_env_file
+from .assembly import Assembly, assert_known_profiles, mapping_or_empty, require_compose_stack, require_env_file
 from .build_docker import run_build
 from .config import (
     CADDY_IMAGE,
@@ -254,11 +254,11 @@ def render_dev_overlay(root: Path, config: DockerDevkitConfig, assembly: Assembl
     }
     for bundle in compose_bundles(config):
         for workload in bundle.workloads:
-            workload_document: dict[str, object] = _mapping_or_empty(
+            workload_document: dict[str, object] = mapping_or_empty(
                 yaml.safe_load((root / config.score_dir / workload).read_text(encoding="utf-8"))
             )
-            metadata: dict[str, object] = _mapping_or_empty(workload_document.get("metadata"))
-            annotations: dict[str, object] = _mapping_or_empty(metadata.get("annotations"))
+            metadata: dict[str, object] = mapping_or_empty(workload_document.get("metadata"))
+            annotations: dict[str, object] = mapping_or_empty(metadata.get("annotations"))
             raw: object | None = annotations.get(DEV_TOGGLES_ANNOTATION)
             if not isinstance(raw, str) or not raw.strip():
                 continue
