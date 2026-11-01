@@ -12,8 +12,9 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
-from docker_devkit import build_docker
-from docker_devkit.build_docker import DIGEST_FILE_NAME, render_bake
+from docker_devkit import bake as bake_module
+from docker_devkit.verbs import build
+from docker_devkit.bake import DIGEST_FILE_NAME, render_bake
 from docker_devkit.config import LOCK_PATH, DockerDevkitConfig
 from docker_devkit.service_builds import ServiceBuild
 
@@ -192,11 +193,11 @@ class TestDefaultTargets:
         base_images: dict[str, str] | None = None,
         platforms: list[str] | None = None,
     ) -> list[str]:
-        bake = BakeRunner()
-        monkeypatch.setattr(build_docker, "bash", bake.run)
-        monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(build_docker, "check_gc_limits", _no_gc_limits)
-        monkeypatch.setattr(build_docker, "host_platform", _amd64_host)
+        recorder = BakeRunner()
+        monkeypatch.setattr(bake_module, "bash", recorder.run)
+        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
         _write_repo(
             tmp_path,
@@ -205,10 +206,10 @@ class TestDefaultTargets:
             platforms=platforms,
         )
 
-        result = runner.invoke(build_docker.app, arguments)
+        result = runner.invoke(build.app, arguments)
 
         assert result.exit_code == 0, result.output
-        return _bake_targets(bake.commands)
+        return _bake_targets(recorder.commands)
 
     def test_none_yields_common_partition(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         assert self._invoke(monkeypatch, tmp_path, ["--gpu", "none"]) == ["api", "postgres", "seaweedfs"]
@@ -236,14 +237,14 @@ class TestDefaultTargets:
         ]
 
     def test_foreign_arch_repo_refuses_bare_build(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(build_docker, "bash", BakeRunner().run)
-        monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(build_docker, "check_gc_limits", _no_gc_limits)
-        monkeypatch.setattr(build_docker, "host_platform", _amd64_host)
+        monkeypatch.setattr(bake_module, "bash", BakeRunner().run)
+        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL}, platforms=["linux/arm64"])
 
-        result = runner.invoke(build_docker.app, ["--gpu", "none"])
+        result = runner.invoke(build.app, ["--gpu", "none"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, RuntimeError)
@@ -261,14 +262,14 @@ class TestDefaultTargets:
 
     def test_multiarch_repo_pins_the_host_platform_in_load_mode(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         bake_runner = BakeRunner()
-        monkeypatch.setattr(build_docker, "bash", bake_runner.run)
-        monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(build_docker, "check_gc_limits", _no_gc_limits)
-        monkeypatch.setattr(build_docker, "host_platform", _amd64_host)
+        monkeypatch.setattr(bake_module, "bash", bake_runner.run)
+        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": EXTERNAL}, platforms=["linux/amd64", "linux/arm64"])
 
-        result = runner.invoke(build_docker.app, ["--gpu", "none"])
+        result = runner.invoke(build.app, ["--gpu", "none"])
 
         assert result.exit_code == 0, result.output
         assert _bake_targets(bake_runner.commands) == ["api"]
@@ -278,14 +279,14 @@ class TestDefaultTargets:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         bake_runner = BakeRunner()
-        monkeypatch.setattr(build_docker, "bash", bake_runner.run)
-        monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(build_docker, "check_gc_limits", _no_gc_limits)
-        monkeypatch.setattr(build_docker, "host_platform", _amd64_host)
+        monkeypatch.setattr(bake_module, "bash", bake_runner.run)
+        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": EXTERNAL})
 
-        result = runner.invoke(build_docker.app, ["--gpu", "none"])
+        result = runner.invoke(build.app, ["--gpu", "none"])
 
         assert result.exit_code == 0, result.output
         command = bake_runner.commands[0]
@@ -294,14 +295,14 @@ class TestDefaultTargets:
         assert "metadata.json" in command
 
     def test_unknown_targets_refuse(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(build_docker, "bash", BakeRunner().run)
-        monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(build_docker, "check_gc_limits", _no_gc_limits)
-        monkeypatch.setattr(build_docker, "host_platform", _amd64_host)
+        monkeypatch.setattr(bake_module, "bash", BakeRunner().run)
+        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": EXTERNAL})
 
-        result = runner.invoke(build_docker.app, ["--gpu", "none", "--targets", "missing"])
+        result = runner.invoke(build.app, ["--gpu", "none", "--targets", "missing"])
 
         assert result.exit_code != 0
         assert "Unknown targets" in result.output
@@ -309,45 +310,45 @@ class TestDefaultTargets:
     def test_missing_config_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(build_docker.app, ["--gpu", "none"])
+        result = runner.invoke(build.app, ["--gpu", "none"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, RuntimeError)
         assert "No docker-devkit.yaml" in str(result.exception)
 
     def test_explicit_targets_never_probe_the_host_gpu(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        bake = BakeRunner()
-        monkeypatch.setattr(build_docker, "bash", bake.run)
-        monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(build_docker, "check_gc_limits", _no_gc_limits)
-        monkeypatch.setattr(build_docker, "host_platform", _amd64_host)
+        recorder = BakeRunner()
+        monkeypatch.setattr(bake_module, "bash", recorder.run)
+        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
 
         def _refuse_probe() -> str:
             raise AssertionError("explicit --targets must not probe the host gpu")
 
-        monkeypatch.setattr(build_docker, "detect_gpu", _refuse_probe)
+        monkeypatch.setattr(bake_module, "detect_gpu", _refuse_probe)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": EXTERNAL})
 
-        result = runner.invoke(build_docker.app, ["--targets", "api"])
+        result = runner.invoke(build.app, ["--targets", "api"])
 
         assert result.exit_code == 0, result.output
-        assert _bake_targets(bake.commands) == ["api"]
+        assert _bake_targets(recorder.commands) == ["api"]
 
     def test_default_targets_resolve_auto_through_detection(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        bake = BakeRunner()
-        monkeypatch.setattr(build_docker, "bash", bake.run)
-        monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(build_docker, "check_gc_limits", _no_gc_limits)
-        monkeypatch.setattr(build_docker, "host_platform", _amd64_host)
-        monkeypatch.setattr(build_docker, "detect_gpu", lambda: "cuda")
+        recorder = BakeRunner()
+        monkeypatch.setattr(bake_module, "bash", recorder.run)
+        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
+        monkeypatch.setattr(bake_module, "detect_gpu", lambda: "cuda")
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles=DEFAULT_DOCKERFILES)
 
-        result = runner.invoke(build_docker.app, [])
+        result = runner.invoke(build.app, [])
 
         assert result.exit_code == 0, result.output
-        assert _bake_targets(bake.commands) == [
+        assert _bake_targets(recorder.commands) == [
             "api",
             "localizer-cuda",
             "neural-networks-base-cuda",
@@ -359,7 +360,7 @@ class TestDefaultTargets:
 
 class TestBuildKeysGuard:
     def _prepare(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(
             tmp_path,
@@ -371,7 +372,7 @@ class TestBuildKeysGuard:
     def test_build_without_derived_services_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._prepare(monkeypatch, tmp_path)
 
-        result = runner.invoke(build_docker.app, ["--gpu", "none"])
+        result = runner.invoke(build.app, ["--gpu", "none"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, RuntimeError)
@@ -379,10 +380,10 @@ class TestBuildKeysGuard:
 
     def test_lock_only_without_services_writes_the_lock(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         recorder = DigestRecorder()
-        monkeypatch.setattr(build_docker, "resolve_remote_digest", recorder.resolve)
+        monkeypatch.setattr(bake_module, "resolve_remote_digest", recorder.resolve)
         self._prepare(monkeypatch, tmp_path)
 
-        result = runner.invoke(build_docker.app, ["--lock-only"])
+        result = runner.invoke(build.app, ["--lock-only"])
 
         assert result.exit_code == 0, result.output
         lock = (tmp_path / LOCK_PATH).read_text(encoding="utf-8")
@@ -390,7 +391,7 @@ class TestBuildKeysGuard:
 
     def test_relock_prunes_entries_whose_declarations_died(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         recorder = DigestRecorder()
-        monkeypatch.setattr(build_docker, "resolve_remote_digest", recorder.resolve)
+        monkeypatch.setattr(bake_module, "resolve_remote_digest", recorder.resolve)
         self._prepare(monkeypatch, tmp_path)
         (tmp_path / LOCK_PATH).write_text(
             "DEAD_OPERATOR_IMAGE=ghcr.io/outernet-foundation/mirror/quay.io/op/operator:1.0@sha256:" + "b" * 64 + "\n"
@@ -400,7 +401,7 @@ class TestBuildKeysGuard:
             encoding="utf-8",
         )
 
-        result = runner.invoke(build_docker.app, ["--lock-only"])
+        result = runner.invoke(build.app, ["--lock-only"])
 
         assert result.exit_code == 0, result.output
         lock = (tmp_path / LOCK_PATH).read_text(encoding="utf-8")
@@ -415,18 +416,18 @@ class TestLockOnlySelfSkip:
     def test_lock_only_skips_without_a_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(build_docker.app, ["--lock-only"])
+        result = runner.invoke(build.app, ["--lock-only"])
 
         assert result.exit_code == 0, result.output
         assert "no lock declarations to relock" in result.output
         assert not (tmp_path / "workloads").exists()
 
     def test_lock_only_skips_without_declarations(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": EXTERNAL})
 
-        result = runner.invoke(build_docker.app, ["--lock-only"])
+        result = runner.invoke(build.app, ["--lock-only"])
 
         assert result.exit_code == 0, result.output
         assert "nothing to relock" in result.output
@@ -436,7 +437,7 @@ class TestLockOnlySelfSkip:
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles=None)
 
-        result = runner.invoke(build_docker.app, ["--lock-only"])
+        result = runner.invoke(build.app, ["--lock-only"])
 
         assert result.exit_code == 0, result.output
         assert not (tmp_path / LOCK_PATH).exists()
@@ -444,7 +445,7 @@ class TestLockOnlySelfSkip:
     def test_building_run_without_config_still_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(build_docker.app, ["--gpu", "none"])
+        result = runner.invoke(build.app, ["--gpu", "none"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, RuntimeError)
@@ -459,18 +460,18 @@ class TestDevBuilds:
         arguments: list[str],
         dockerfiles: dict[str, str] | None = None,
     ) -> tuple[list[str], str]:
-        bake = BakeRunner()
-        monkeypatch.setattr(build_docker, "bash", bake.run)
-        monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(build_docker, "check_gc_limits", _no_gc_limits)
-        monkeypatch.setattr(build_docker, "host_platform", _amd64_host)
+        recorder = BakeRunner()
+        monkeypatch.setattr(bake_module, "bash", recorder.run)
+        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles=dockerfiles or {"api": DEV_STAGE, "postgres": EXTERNAL})
 
-        result = runner.invoke(build_docker.app, arguments)
+        result = runner.invoke(build.app, arguments)
 
         assert result.exit_code == 0, result.output
-        return _bake_targets(bake.commands), bake.rendered
+        return _bake_targets(recorder.commands), recorder.rendered
 
     def test_dev_builds_only_dev_stage_services(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         targets, _rendered = self._invoke_dev(monkeypatch, tmp_path, ["--dev", "--gpu", "none"])
@@ -491,11 +492,11 @@ class TestDevBuilds:
 
     def test_dev_renders_target_dev_under_the_service_dev_tag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _targets, rendered = self._invoke_dev(monkeypatch, tmp_path, ["--dev", "--gpu", "none"])
-        build = yaml.safe_load(rendered)["services"]["api"]["build"]
+        build_block = yaml.safe_load(rendered)["services"]["api"]["build"]
 
-        assert build["target"] == "dev"
-        assert build["tags"] == [f"{REPOSITORY}/api:dev"]
-        assert "cache_to" not in build
+        assert build_block["target"] == "dev"
+        assert build_block["tags"] == [f"{REPOSITORY}/api:dev"]
+        assert "cache_to" not in build_block
 
     def test_fanned_dev_targets_share_one_service_dev_tag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _targets, rendered = self._invoke_dev(
@@ -510,44 +511,44 @@ class TestDevBuilds:
         assert services["localizer-rocm"]["build"]["tags"] == [f"{REPOSITORY}/localizer:dev"]
 
     def test_dev_refuses_push(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": DEV_STAGE})
 
-        result = runner.invoke(build_docker.app, ["--dev", "--push", "--gpu", "cuda"])
+        result = runner.invoke(build.app, ["--dev", "--push", "--gpu", "cuda"])
 
         assert result.exit_code != 0
         assert "local-only" in result.output
 
     def test_dev_refuses_lock_only(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": DEV_STAGE})
 
-        result = runner.invoke(build_docker.app, ["--dev", "--lock-only"])
+        result = runner.invoke(build.app, ["--dev", "--lock-only"])
 
         assert result.exit_code != 0
         assert "--lock-only" in _plain_output(result.output)
 
     def test_dev_without_any_dev_stage_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(build_docker, "check_gc_limits", _no_gc_limits)
-        monkeypatch.setattr(build_docker, "detect_gpu", lambda: "none")
+        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(bake_module, "detect_gpu", lambda: "none")
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": EXTERNAL, "liar": LYING_DEV_STAGE})
 
-        result = runner.invoke(build_docker.app, ["--dev"])
+        result = runner.invoke(build.app, ["--dev"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, RuntimeError)
         assert "no service declares a dev stage" in str(result.exception)
 
     def test_dev_explicit_target_without_dev_stage_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": EXTERNAL, "auth": DEV_STAGE})
 
-        result = runner.invoke(build_docker.app, ["--dev", "--targets", "api"])
+        result = runner.invoke(build.app, ["--dev", "--targets", "api"])
 
         assert result.exit_code != 0
         assert "no dev stage" in result.output
@@ -558,14 +559,14 @@ class TestBakeFailure:
         def _fail(command: str) -> None:
             raise CalledProcessError(returncode=1, cmd=command)
 
-        monkeypatch.setattr(build_docker, "bash", _fail)
-        monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(build_docker, "check_gc_limits", _no_gc_limits)
-        monkeypatch.setattr(build_docker, "host_platform", _amd64_host)
+        monkeypatch.setattr(bake_module, "bash", _fail)
+        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": EXTERNAL})
 
-        result = runner.invoke(build_docker.app, ["--gpu", "none"])
+        result = runner.invoke(build.app, ["--gpu", "none"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, RuntimeError)
@@ -578,12 +579,12 @@ class TestPushShelving:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, entries: dict[str, dict[str, str]]
     ) -> PushBuildRecorder:
         recorder = PushBuildRecorder()
-        monkeypatch.setattr(build_docker, "bash", BakeRunner(entries).run)
-        monkeypatch.setattr(build_docker, "bash_output", _head_sha)
-        monkeypatch.setattr(build_docker, "push_build", recorder)
-        monkeypatch.setattr(build_docker, "install_oras", _noop_install_oras)
-        monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(build_docker, "resolve_remote_digest", _fixed_digest)
+        monkeypatch.setattr(bake_module, "bash", BakeRunner(entries).run)
+        monkeypatch.setattr(bake_module, "bash_output", _head_sha)
+        monkeypatch.setattr(bake_module, "push_build", recorder)
+        monkeypatch.setattr(bake_module, "install_oras", _noop_install_oras)
+        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(bake_module, "resolve_remote_digest", _fixed_digest)
         monkeypatch.setenv("REGISTRY", "ghcr.io/owner")
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL, "aoa-bridge": EXTERNAL})
@@ -595,7 +596,7 @@ class TestPushShelving:
         entries = _baked("zed-capture", refs=f"{REPO_ZED}:tree-abc,{REPO_ZED}:latest", digest=DIGEST_A)
         recorder = self._prepare(monkeypatch, tmp_path, entries)
 
-        result = runner.invoke(build_docker.app, ["--push", "--gpu", "cuda", "--targets", "zed-capture"])
+        result = runner.invoke(build.app, ["--push", "--gpu", "cuda", "--targets", "zed-capture"])
 
         assert result.exit_code == 0, result.output
         assert len(recorder.calls) == 1
@@ -617,7 +618,7 @@ class TestPushShelving:
         recorder = self._prepare(monkeypatch, tmp_path, entries)
 
         result = runner.invoke(
-            build_docker.app, ["--push", "--gpu", "cuda", "--targets", "zed-capture", "--targets", "aoa-bridge"]
+            build.app, ["--push", "--gpu", "cuda", "--targets", "zed-capture", "--targets", "aoa-bridge"]
         )
 
         assert result.exit_code == 0, result.output
@@ -632,7 +633,7 @@ class TestPushShelving:
         entries = _baked("zed-capture", refs=f"{REPO_ZED}:tree-abc@{DIGEST_A}", digest=DIGEST_A)
         recorder = self._prepare(monkeypatch, tmp_path, entries)
 
-        result = runner.invoke(build_docker.app, ["--push", "--gpu", "cuda", "--targets", "zed-capture"])
+        result = runner.invoke(build.app, ["--push", "--gpu", "cuda", "--targets", "zed-capture"])
 
         assert result.exit_code == 0, result.output
         entry = recorder.manifests[0]["zed-capture"]
@@ -643,7 +644,7 @@ class TestPushShelving:
         entries = _baked("zed-capture", refs=f"{REPO_ZED}@{DIGEST_A}", digest=DIGEST_A)
         self._prepare(monkeypatch, tmp_path, entries)
 
-        result = runner.invoke(build_docker.app, ["--push", "--gpu", "cuda"])
+        result = runner.invoke(build.app, ["--push", "--gpu", "cuda"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
@@ -656,14 +657,14 @@ class TestPushShelving:
         first = self._prepare(monkeypatch, tmp_path, entries)
 
         result_first = runner.invoke(
-            build_docker.app, ["--push", "--gpu", "cuda", "--targets", "zed-capture aoa-bridge"]
+            build.app, ["--push", "--gpu", "cuda", "--targets", "zed-capture aoa-bridge"]
         )
 
         assert result_first.exit_code == 0, result_first.output
         second = self._prepare(monkeypatch, tmp_path, entries)
 
         result_second = runner.invoke(
-            build_docker.app, ["--push", "--gpu", "cuda", "--targets", "aoa-bridge", "--targets", "zed-capture"]
+            build.app, ["--push", "--gpu", "cuda", "--targets", "aoa-bridge", "--targets", "zed-capture"]
         )
 
         assert result_second.exit_code == 0, result_second.output
@@ -673,24 +674,24 @@ class TestPushShelving:
 
     def test_push_mode_renders_registry_cache_refs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         bake_runner = BakeRunner(_baked("zed-capture", refs=f"{REPO_ZED}:tree-abc", digest=DIGEST_A))
-        monkeypatch.setattr(build_docker, "bash", bake_runner.run)
-        monkeypatch.setattr(build_docker, "bash_output", _head_sha)
-        monkeypatch.setattr(build_docker, "push_build", PushBuildRecorder())
-        monkeypatch.setattr(build_docker, "install_oras", _noop_install_oras)
-        monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(build_docker, "resolve_remote_digest", _fixed_digest)
+        monkeypatch.setattr(bake_module, "bash", bake_runner.run)
+        monkeypatch.setattr(bake_module, "bash_output", _head_sha)
+        monkeypatch.setattr(bake_module, "push_build", PushBuildRecorder())
+        monkeypatch.setattr(bake_module, "install_oras", _noop_install_oras)
+        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(bake_module, "resolve_remote_digest", _fixed_digest)
         monkeypatch.setenv("REGISTRY", "ghcr.io/owner")
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL})
 
-        result = runner.invoke(build_docker.app, ["--push", "--gpu", "cuda", "--targets", "zed-capture"])
+        result = runner.invoke(build.app, ["--push", "--gpu", "cuda", "--targets", "zed-capture"])
 
         assert result.exit_code == 0, result.output
-        build = yaml.safe_load(bake_runner.rendered)["services"]["zed-capture"]["build"]
-        assert build["cache_to"] == [
+        build_block = yaml.safe_load(bake_runner.rendered)["services"]["zed-capture"]["build"]
+        assert build_block["cache_to"] == [
             f"type=registry,ref={REPOSITORY}/build-cache:zed-capture,mode=max,image-manifest=true,oci-mediatypes=true"
         ]
-        assert build["cache_from"] == [f"type=registry,ref={REPOSITORY}/build-cache:zed-capture"]
+        assert build_block["cache_from"] == [f"type=registry,ref={REPOSITORY}/build-cache:zed-capture"]
 
 
 LOCK_DOCKERFILES: dict[str, str] = {"api": EXTERNAL}
@@ -710,8 +711,8 @@ class TestLockRecording:
         charts: dict[str, str] | None = None,
     ) -> DigestRecorder:
         recorder = DigestRecorder()
-        monkeypatch.setattr(build_docker, "resolve_remote_digest", recorder.resolve)
-        monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(bake_module, "resolve_remote_digest", recorder.resolve)
+        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(
             tmp_path,
@@ -720,7 +721,7 @@ class TestLockRecording:
             charts=charts,
         )
 
-        result = runner.invoke(build_docker.app, arguments)
+        result = runner.invoke(build.app, arguments)
 
         assert result.exit_code == 0, result.output
         return recorder
@@ -782,12 +783,12 @@ class TestChartLockRecording:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         recorder = DigestRecorder()
-        monkeypatch.setattr(build_docker, "resolve_remote_digest", recorder.resolve)
-        monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(bake_module, "resolve_remote_digest", recorder.resolve)
+        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles=None, charts={"loki": f"oci://{LOKI_UPSTREAM}:7.3.0"})
 
-        result = runner.invoke(build_docker.app, ["--lock-only"])
+        result = runner.invoke(build.app, ["--lock-only"])
 
         assert result.exit_code == 0, result.output
         assert recorder.inspected == [f"{LOKI_UPSTREAM}:7.3.0"]
@@ -796,12 +797,12 @@ class TestChartLockRecording:
 
     def test_digest_declared_chart_passes_through_unresolved(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         recorder = DigestRecorder()
-        monkeypatch.setattr(build_docker, "resolve_remote_digest", recorder.resolve)
-        monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(bake_module, "resolve_remote_digest", recorder.resolve)
+        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles=None, charts={"loki": f"oci://{LOKI_UPSTREAM}@{DIGEST_B}"})
 
-        result = runner.invoke(build_docker.app, ["--lock-only"])
+        result = runner.invoke(build.app, ["--lock-only"])
 
         assert result.exit_code == 0, result.output
         assert recorder.inspected == []
@@ -812,15 +813,15 @@ class TestChartLockRecording:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         recorder = DigestRecorder()
-        monkeypatch.setattr(build_docker, "resolve_remote_digest", recorder.resolve)
-        monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(bake_module, "resolve_remote_digest", recorder.resolve)
+        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles=None, charts={"loki": f"oci://{LOKI_UPSTREAM}:7.3.0"})
         (tmp_path / LOCK_PATH).write_text(
             f"LOKI_CHART={MIRROR_PREFIX}/{LOKI_UPSTREAM}:7.3.0@{DIGEST_B}\n", encoding="utf-8"
         )
 
-        result = runner.invoke(build_docker.app, ["--lock-only"])
+        result = runner.invoke(build.app, ["--lock-only"])
 
         assert result.exit_code == 0, result.output
         assert recorder.inspected == []
@@ -829,15 +830,15 @@ class TestChartLockRecording:
 
     def test_chart_tag_bump_re_resolves(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         recorder = DigestRecorder()
-        monkeypatch.setattr(build_docker, "resolve_remote_digest", recorder.resolve)
-        monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(bake_module, "resolve_remote_digest", recorder.resolve)
+        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles=None, charts={"loki": f"oci://{LOKI_UPSTREAM}:7.3.1"})
         (tmp_path / LOCK_PATH).write_text(
             f"LOKI_CHART={MIRROR_PREFIX}/{LOKI_UPSTREAM}:7.3.0@{DIGEST_B}\n", encoding="utf-8"
         )
 
-        result = runner.invoke(build_docker.app, ["--lock-only"])
+        result = runner.invoke(build.app, ["--lock-only"])
 
         assert result.exit_code == 0, result.output
         assert recorder.inspected == [f"{LOKI_UPSTREAM}:7.3.1"]
@@ -848,14 +849,14 @@ class TestChartLockRecording:
 class TestBakeSeesLockValues:
     def test_bake_sees_mirror_prefixed_lock_values(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         probe = BakeEnvProbe()
-        monkeypatch.setattr(build_docker, "bash", probe.run)
-        monkeypatch.setattr(build_docker, "check_gc_limits", _no_gc_limits)
-        monkeypatch.setattr(build_docker, "resolve_remote_digest", _fixed_digest)
-        monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(bake_module, "bash", probe.run)
+        monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(bake_module, "resolve_remote_digest", _fixed_digest)
+        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles=LOCK_DOCKERFILES, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
 
-        result = runner.invoke(build_docker.app, ["--gpu", "none"])
+        result = runner.invoke(build.app, ["--gpu", "none"])
 
         assert result.exit_code == 0, result.output
         assert probe.uv_image == f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{DIGEST_A}"
@@ -871,15 +872,15 @@ class TestLockCheck:
         base_images: dict[str, str] | None = None,
     ) -> Any:
         recorder = DigestRecorder()
-        monkeypatch.setattr(build_docker, "resolve_remote_digest", recorder.resolve)
-        monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(bake_module, "resolve_remote_digest", recorder.resolve)
+        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(
             tmp_path,
             dockerfiles=LOCK_DOCKERFILES,
             base_images=LOCK_BASE_IMAGES if base_images is None else base_images,
         )
-        return runner.invoke(build_docker.app, arguments)
+        return runner.invoke(build.app, arguments)
 
     def test_fresh_lock_passes_and_writes_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         assert self._invoke(monkeypatch, tmp_path, ["--lock-only"]).exit_code == 0
@@ -1248,8 +1249,8 @@ def test_render_bake_carries_only_bake_read_keys():
 
     document = yaml.safe_load(rendered)
     assert list(document) == ["services"]
-    for build in (service["build"] for service in document["services"].values()):
-        assert set(build) <= {
+    for build_block in (service["build"] for service in document["services"].values()):
+        assert set(build_block) <= {
             "dockerfile",
             "platforms",
             "args",
@@ -1277,12 +1278,12 @@ def _always_true(_command: str) -> bool:
 
 
 def test_gpu_types_derive_the_concrete_families() -> None:
-    assert build_docker.GPU_TYPES == ("cuda", "rocm")
+    assert bake_module.GPU_TYPES == ("cuda", "rocm")
 
 
 def test_gpu_literal_derives_flat_over_the_families() -> None:
     # typer cannot annotate union types, so Gpu must flatten to one Literal.
-    assert get_args(build_docker.Gpu) == ("auto", "none", *build_docker.GPU_TYPES)
+    assert get_args(bake_module.Gpu) == ("auto", "none", *bake_module.GPU_TYPES)
 
 
 class TestHostPlatform:
@@ -1290,27 +1291,27 @@ class TestHostPlatform:
         for machine in ("x86_64", "AMD64"):
             monkeypatch.setattr(platform, "machine", lambda machine=machine: machine)
 
-            assert build_docker.host_platform() == "linux/amd64"
+            assert bake_module.host_platform() == "linux/amd64"
 
     def test_arm64_spellings_map_to_linux_arm64(self, monkeypatch: pytest.MonkeyPatch) -> None:
         for machine in ("aarch64", "ARM64"):
             monkeypatch.setattr(platform, "machine", lambda machine=machine: machine)
 
-            assert build_docker.host_platform() == "linux/arm64"
+            assert bake_module.host_platform() == "linux/arm64"
 
     def test_other_architectures_refuse(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(platform, "machine", lambda: "riscv64")
 
         with pytest.raises(RuntimeError, match="Unsupported host architecture"):
-            build_docker.host_platform()
+            bake_module.host_platform()
 
 
 class TestDetectGpu:
     def test_nvidia_smi_yields_cuda(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", _nvidia_smi_present)
-        monkeypatch.setattr("docker_devkit.build_docker.bash_check", _always_true)
+        monkeypatch.setattr("docker_devkit.bake.bash_check", _always_true)
 
-        gpu: build_docker.Gpu = build_docker.detect_gpu()
+        gpu: bake_module.Gpu = bake_module.detect_gpu()
 
         assert gpu == "cuda"
 
@@ -1318,4 +1319,4 @@ class TestDetectGpu:
         monkeypatch.setattr(shutil, "which", _nothing_present)
 
         with pytest.raises(RuntimeError, match="Could not detect GPU"):
-            build_docker.detect_gpu()
+            bake_module.detect_gpu()

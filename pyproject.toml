@@ -31,7 +31,7 @@ build-backend = "hatchling.build"
 [project.scripts]
 up = "docker_devkit.compose:up_app"
 down = "docker_devkit.compose:down_app"
-build = "docker_devkit.build_docker:app"
+build = "docker_devkit.verbs.build:app"
 mirror = "docker_devkit.mirror:app"
 publish-compose = "docker_devkit.publish_compose:app"
 generate-score = "docker_devkit.score_generate:app"

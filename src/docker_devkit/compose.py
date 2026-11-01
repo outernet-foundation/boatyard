@@ -15,7 +15,7 @@ from docker_devkit.assembly import (
     require_env_file,
     write_temp_compose_file,
 )
-from docker_devkit.build_docker import run_build
+from docker_devkit.bake import run_build
 from docker_devkit.config import load_config, optional_lock_entries
 
 _MANIFEST_ABSENT_PATTERN = re.compile(r"\b404\b|not found|manifest unknown", re.IGNORECASE)
