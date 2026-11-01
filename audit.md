@@ -23,7 +23,7 @@ before or with the code change. Prose and code never share a commit.
 | File | Fate |
 |---|---|
 | `config.py` | keeps the schema + record; absorbs `service_builds.py` whole; keeps `ImageLock` + lock reads |
-| `lock.py` | keeps the relock engine; absorbs `image_refs.py` whole (remote resolution); loses the read projections only if judgement 1 is taken |
+| `lock.py` | keeps the relock engine; absorbs `image_refs.py` whole (remote resolution); keeps the read projections (2.1 decided: stay) |
 | `score.py` | the rendering library; absorbs `secrets.py`, `provisioners.py`, `markers.py` whole; sheds `ensure_score_tools` to its verb |
 | `assembly.py` | the `Assembly` record, consolidated (renders inlined into the constructor); `.env` reading possibly to config (judgement 2) |
 | `bake.py` | `run_build` + metadata lens; absorbs `daemon_gc.py` whole |
@@ -303,7 +303,15 @@ surface with test-pinned signatures, the architecture rather than indirection;
 
 The architecturally correct answer is genuinely ambiguous in each of these;
 the lean is stated with reasons. Blast radius played no part in the
-classification.
+classification. All ten were decided this session; each entry records its
+decision.
+
+Session stance (recorded after 2.1): the record law — "every derivation over
+the declared world rides the record as a member function" — is regarded as a
+transitional organizing principle, not a permanent one. It is expected to
+yield to plain logical grouping as the repo's cleanup proceeds, but the
+outcome is not assumed in advance. Leans resting mainly on the record law are
+discounted accordingly; no call is resolved by record-law arguments alone.
 
 **2.1 The lock read projections: stay in `lock.py` or move to `config.py`?**
 Today the lock's *state* lives in config.py (`ImageLock`, `parse_image_lock`,
@@ -321,10 +329,9 @@ engine plus the folded remote resolution (1.1.5). The coherent alternative —
 all lock code in lock.py, state included — loses to a hard constraint: config's
 `finalize` CADDY check and `lock_entries` member need `parse_image_lock`, so
 moving state to lock.py cycles (config→lock→config) unless load-time
-validation is fragmented, which is worse. **Lean: move the projections to
-config.py members.** The genuine ambiguity is whether the projection split was
-itself an authored decision (AGENTS.md documents the current placement), so it
-is the user's call — spec-first either way.
+validation is fragmented, which is worse. **Decided (this session): the projections stay in `lock.py`.** The placement is
+authored intent, not drift; the AGENTS.md row stands and the record-law pull
+toward config members is discounted by the session stance above.
 
 **2.2 Where does `.env` reading live?** `merged_environment` (assembly.py:318)
 has four callers — assembly itself, `down`, `lock_env`, and `score.py`, which
@@ -339,18 +346,17 @@ verified end state), so it should not anchor the placement. Options:
 "environment selection" laws feeding the same members, score.py drops its
 assembly import, config.py gains the os.environ dependency; (b) keep it in
 assembly (the `.env` file is the runtime selection surface the assembly
-consumes) and accept score.py's cross-import. **Lean: (a)** — the function is
-a feeder of config members, not of the Assembly record — but the alternative
-reading is defensible, and AGENTS.md pins the current home.
+consumes) and accept score.py's cross-import. **Decided (this session): (b) — keep it in `assembly.py`.** The assembly owns
+its input surface; score.py's cross-import stands as accepted cost.
 
 **2.3 `select_platform_manifests` after the image_refs fold: named law or
 inlined?** It will have one src call site (`resolve_remote_manifests`) — the
 axiom says inline — but it encodes four distinct laws (attestation skip, exact
 os/arch match, multiple-match refusal, no-match listing with available
 platforms) and five direct tests exercise it without the `bash_output` seam;
-inlining forces those tests through the subprocess seam. **Lean: keep it as
-the one named selection law in lock.py.** Genuinely your call: the axiom and
-the test ergonomics pull opposite ways.
+inlining forces those tests through the subprocess seam. **Decided (this session): inline it** into
+`resolve_remote_manifests` as part of the 1.1.5 fold; the five direct tests
+rewrite through the `bash_output` seam.
 
 **2.4 score.py's four single-use state-lens classes** (`ManifestMetadata`,
 `ManifestDocument`, `WorkloadState`, `ScoreState`, score.py:82-105; zero test
@@ -360,9 +366,10 @@ deleting ~25 lines and 4 classes. The behavioral delta: pydantic currently
 refuses a malformed `workloads:` block in score-k8s's state.yaml loudly; dict
 access would silently skip the rewrite. Either keep a minimal shape check
 (loud) or accept the silent skip (the state file is tool output we already
-trust enough to rewrite). **Lean: replace with dict access plus one shape
-check on the workloads mapping.** AGENTS.md's score.py row documents the
-lenses — update with the decision.
+trust enough to rewrite). **Decided (this session): keep the classes.** The lenses parse a pinned
+third-party tool's output (score-k8s), not devkit-produced data — the pydantic
+refusal is the loud signal when the tool's shape drifts across a pin bump.
+AGENTS.md stands unchanged.
 
 **2.5 The dev-toggles annotation surface has two consumers.** assembly.py:280-293
 (`up --dev` overlay) and score.py:342-357 (generation validator) both do
@@ -371,25 +378,31 @@ shape checks → `parse_dev_toggles`. Options: (a) a `WorkloadDocument` member
 in documents.py returning the raw annotation + service name, each consumer
 keeping its own refuse/skip policy, with `parse_dev_toggles` staying in config
 beside `DEV_TOGGLES_ANNOTATION` (11 references); (b) leave the ~8 duplicated
-lines. **Lean: (a)** — documents.py is the documented home for two-consumer
-workload lenses — but the shared shape is small and the two consumers'
-policies genuinely differ (score refuses, the overlay skips), so the dedup
-yield is modest.
+lines. **Decided (this session): (a)** — add the
+`WorkloadDocument` member returning the raw annotation + service name; each
+consumer keeps its own refuse/skip policy. Rides with the 2.9 outcome on the
+skip branches.
 
 **2.6 `MirrorConfig` is a one-field model** (config.py:113-123) — collapsible
 to a root `mirror_prefix` field, deleting a class. It changes the authored
 YAML shape (`mirror: {prefix: …}`), i.e. the declaration schema: permitted
 pre-1.0 via the patch flow, but the phase 9 wave repins five consumers onto
 this release without budgeting config edits, and a schema change would tax
-every consumer's relock. **Lean: keep the section shape.**
+every consumer's relock. **Decided (this session): flatten.** Delete the class; root
+`mirror_prefix` (optional, absent ⇒ `DEFAULT_MIRROR_PREFIX`) carries the same
+validator. The five consumer config edits + relocks ride the phase-9 repin
+wave. 1.5's `mirror_prefix` record member is unaffected — it reads the flat
+field.
 
 **2.7 `PublishEntry.files` is a never-exercised multiplicity** (publish.py:16-18)
 — constructed exactly once with a single-element list (verbs/publish.py:68);
 `bake_sources` loops over a list that always holds one name; the one test also
 passes one. Dropping the record for a `(name, path)` pair (or shrinking to a
-`file: str`) deletes a shape nothing uses. **Lean: drop it** — a generalization
-with no second instance is exactly the kind of speculative surface the audit
-is against; kept as a judgement only because it reshapes publish's small API.
+`file: str`) deletes a shape nothing uses. **Decided (this session): delete `PublishEntry` outright.** It is a pure 1:1
+re-wrap of the bundle's `(name, output)` with zero test references; the verb
+loops over the filtered `compose_bundles()` list directly, `bake_sources`
+takes and returns a single path, and `PublishedEntry` (computed facts, not a
+re-wrap) stays.
 
 **2.8 The release-binary installer dance** — `crane.install_crane`
 (crane.py:15-17) and `ensure_score_tools` (score.py:536-538) spell the same
@@ -397,7 +410,7 @@ curl→tar→unlink three-step with different destinations and lifecycles
 (system bin with sudo at any verb runtime vs per-run temp bin in the check
 lane only). Splicing them couples the two lifecycles and drags a sudo axis
 through the check lane; leaving them costs three duplicated shell lines.
-**Lean: leave both** — this is structural similarity, not shared law.
+**Decided (this session): leave both** — structural similarity, not shared law.
 
 **2.9 `_render_dev_overlay`'s silent skips** (assembly.py:286-290): the
 `not isinstance(raw, str)` and `not service_name` branches duplicate
@@ -406,15 +419,17 @@ are unreachable absent post-generation drift — and then they silently drop
 toggles where the repo's ethos is loud refusal. The `service_name not in
 declared` skip (:289) is deliberate and test-pinned. Options: leave (leniency
 for hand-edited artifacts), or drop the two unreachable branches so drift
-surfaces as a KeyError instead of silence. **Lean: drop the two branches**
-(inlining per 1.3 makes the question concrete anyway). Small either way.
+surfaces as a KeyError instead of silence. **Decided (this session): drop the two branches** —
+drift surfaces loudly instead of silently dropping toggles; the
+absent-annotation and `not in declared` skips stay.
 
 **2.10 The `$`-doubling law is spelled three times** (assembly.py:260,
 publish.py:64, score.py:255) — one semantic law, and the exception case
 (consumer-interpolated files) exists only at the score site. Consolidating
 requires a new shared helper, which the session's no-new-decomposition rule
 bans; recorded so the duplication is known-law rather than accidental.
-**Lean: leave, with the law stated in AGENTS.md** (it partially is).
+**Decided (this session): leave the spellings.** Ensure AGENTS.md states
+the law once, across the sites it names (prose-only commit).
 
 ---
 
@@ -464,6 +479,9 @@ AGENTS.md prose commit describing the target shape (spec-first; prose and
 code never share a commit): (1) AGENTS.md, (2) secrets fold, (3)
 provisioners+markers fold, (4) service_builds fold, (5) image_refs fold,
 (6) daemon_gc fold, (7) dedup members + lock/verb cleanups, (8) inline wave,
-(9) dead code + guards + ordering + micro-cleanups, (10) the judgement-call
-commits as decided. Verify per session protocol: `uv run pytest`, `uv run
+(9) dead code + guards + ordering + micro-cleanups. The decided judgement
+calls distribute into that sequence: 2.10's AGENTS.md law statement rides (1),
+2.3 rides (5), 2.5 and 2.7 ride (7), 2.9 rides (8), 2.6 is its own prose+code
+pair (a declaration-schema change), and 2.1/2.2/2.4/2.8 need no action.
+Verify per session protocol: `uv run pytest`, `uv run
 ruff check`, `uv run basedpyright`.
