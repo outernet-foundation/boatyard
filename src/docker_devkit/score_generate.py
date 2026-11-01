@@ -464,10 +464,7 @@ def _validate_dev_toggles(name: str, document: Any, claimed: dict[str, str]) -> 
     service_name = workload.metadata.name
     if not isinstance(service_name, str) or not service_name:
         raise SystemExit(f"{name}: metadata.name is required to key the dev overlay service")
-    try:
-        parse_dev_toggles(name, raw)
-    except ValueError as error:
-        raise SystemExit(str(error)) from None
+    parse_dev_toggles(name, raw)
     if service_name in claimed:
         raise SystemExit(f"{claimed[service_name]} and {name} both declare {DEV_TOGGLES_ANNOTATION} for {service_name}")
     claimed[service_name] = name

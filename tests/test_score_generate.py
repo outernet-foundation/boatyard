@@ -833,7 +833,7 @@ def test_dev_toggles_spelling_refuses_at_generation(tmp_path: Path, monkeypatch:
     config = _bundle_config()
 
     for annotation in ("RELOAD", "reload=true", "RELOAD=", "RELOAD=true,RELOAD=false"):
-        with pytest.raises(SystemExit, match=r"api\.yaml.*dev-toggles"):
+        with pytest.raises(ValueError, match=r"dev-toggles"):
             _compose_init_templates(
                 monkeypatch, tmp_path, config, {}, {"stack/score/api.yaml": _toggles_workload(annotation)}
             )
