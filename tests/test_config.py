@@ -191,7 +191,10 @@ class TestVariants:
         assert config is not None
         assert config.service_builds["localizer"].axis == "TORCH_DEVICE"
         assert config.service_builds["localizer"].variants == ["cuda", "rocm"]
-        assert config.service_builds["localizer"].targets == ["localizer-cuda", "localizer-rocm"]
+        assert [target for target, _variant in config.service_builds["localizer"].target_variants] == [
+            "localizer-cuda",
+            "localizer-rocm",
+        ]
 
 
 class TestBaseImages:

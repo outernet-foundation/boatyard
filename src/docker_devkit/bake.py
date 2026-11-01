@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 from docker_devkit.config import DockerDevkitConfig, load_config
 from docker_devkit.daemon_gc import check_gc_limits
 from docker_devkit.lock import env_entries, write_lock
-from docker_devkit.service_builds import ServiceBuild
+from docker_devkit.config import ServiceBuild
 
 
 METADATA_PATH = Path("metadata.json")

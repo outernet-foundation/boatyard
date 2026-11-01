@@ -3,8 +3,8 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
-from docker_devkit import service_builds
-from docker_devkit.service_builds import ServiceBuild, compute_service_shas, derive_services
+from docker_devkit import config
+from docker_devkit.config import ServiceBuild, compute_service_shas, derive_services
 
 
 def write_dockerfile(tmp_path: Path, service: str, text: str, top: str = "workloads") -> None:
@@ -58,7 +58,7 @@ class TestDeriveServices:
         # The service name IS the directory name — the old manifest's create-database key
         # renames to database-manager under directory-derived naming.
         assert sorted(services) == ["api", "database-manager"]
-        assert services["api"].targets == ["api"]
+        assert [target for target, _variant in services["api"].target_variants] == ["api"]
         assert services["api"].dockerfile == "workloads/api/Dockerfile"
         assert services["api"].contexts == []
 
@@ -140,7 +140,10 @@ class TestDeriveServices:
 
         assert services["neural-networks-base"].axis == "TORCH_DEVICE"
         assert services["neural-networks-base"].variants == ["cuda", "rocm"]
-        assert services["neural-networks-base"].targets == ["neural-networks-base-cuda", "neural-networks-base-rocm"]
+        assert [target for target, _variant in services["neural-networks-base"].target_variants] == [
+            "neural-networks-base-cuda",
+            "neural-networks-base-rocm",
+        ]
 
     def test_an_arg_naming_no_declared_axis_stays_plain(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
@@ -149,7 +152,9 @@ class TestDeriveServices:
 
         assert services["neural-networks-base"].axis is None
         assert services["neural-networks-base"].variants == []
-        assert services["neural-networks-base"].targets == ["neural-networks-base"]
+        assert [target for target, _variant in services["neural-networks-base"].target_variants] == [
+            "neural-networks-base"
+        ]
 
     def test_declared_values_keep_their_declared_order(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
@@ -157,7 +162,7 @@ class TestDeriveServices:
         services = derive_services(tmp_path, {"TORCH_DEVICE": ["rocm", "cuda"]})
 
         assert services["api"].variants == ["rocm", "cuda"]
-        assert services["api"].targets == ["api-rocm", "api-cuda"]
+        assert [target for target, _variant in services["api"].target_variants] == ["api-rocm", "api-cuda"]
 
     def test_two_axis_args_on_one_service_refuse(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG ACCEL_FPGA\nARG ACCEL_TPU\n")
@@ -173,7 +178,10 @@ class TestDeriveServices:
 
         assert services["localizer"].axis == "TORCH_DEVICE"
         assert services["localizer"].variants == ["cuda", "rocm"]
-        assert services["localizer"].targets == ["localizer-cuda", "localizer-rocm"]
+        assert [target for target, _variant in services["localizer"].target_variants] == [
+            "localizer-cuda",
+            "localizer-rocm",
+        ]
 
     def test_an_independent_axis_over_a_variant_bearing_base_refuses(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
@@ -211,8 +219,8 @@ class TestComputeServiceShasZeroServices:
     def test_a_serviceless_repo_returns_empty_without_git_or_dockerignore_reads(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        monkeypatch.setattr(service_builds, "bash_output", self._fail_bash)
-        monkeypatch.setattr(service_builds, "bash", self._fail_bash)
+        monkeypatch.setattr(config, "bash_output", self._fail_bash)
+        monkeypatch.setattr(config, "bash", self._fail_bash)
 
         assert compute_service_shas(tmp_path, _service_builds()) == {}
 
