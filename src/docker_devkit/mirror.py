@@ -9,6 +9,7 @@ from .config import (
     DEFAULT_MIRROR_PREFIX,
     chart_lock_key,
     load_config,
+    mirrored_ref,
     optional_lock_entries,
     require_lock_entry,
 )
@@ -50,9 +51,3 @@ def mirror() -> None:
         bash(f"crane copy {reference} {destination}")
         copied += 1
     print(f"Mirrored references: {copied} copied, {already_present} already present")
-
-
-def mirrored_ref(reference: str, prefix: str) -> str:
-    if reference.startswith(f"{prefix}/"):
-        raise RuntimeError(f"declarations are upstream-native; {reference} already carries the mirror prefix {prefix}")
-    return f"{prefix}/{reference}"

@@ -563,6 +563,14 @@ def require_lock_entry(
     return entry
 
 
+def mirrored_ref(reference: str, prefix: str) -> str:
+    # The only prefix join: it rejects an already-prefixed reference (the double-prefix
+    # guard — drift toward the mirror namespace is a loud error, never a silent skip).
+    if reference.startswith(f"{prefix}/"):
+        raise RuntimeError(f"declarations are upstream-native; {reference} already carries the mirror prefix {prefix}")
+    return f"{prefix}/{reference}"
+
+
 def load_config(root: Path) -> DockerDevkitConfig | None:
     path = root / DEFAULT_CONFIG_PATH
     if not path.exists():

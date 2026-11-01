@@ -27,11 +27,11 @@ from .config import (
     LOCK_PATH,
     chart_lock_key,
     load_config,
+    mirrored_ref,
     optional_lock_entries,
 )
 from .daemon_gc import check_gc_limits
 from .image_refs import ImageReference, resolve_remote_digest
-from .mirror import mirrored_ref
 from .service_builds import FAN_ARG, GpuFamily, compute_service_shas, service_sha_env
 
 

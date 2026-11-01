@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from typer.testing import CliRunner, Result
 
 from docker_devkit import crane, mirror
-from docker_devkit.config import LOCK_PATH
+from docker_devkit.config import LOCK_PATH, mirrored_ref
 
 MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
 FAKE_DIGEST = "sha256:" + "a" * 64
@@ -52,13 +52,13 @@ class CommandRecorder:
 
 class TestMirroredRef:
     def test_prefixes_upstream_native_references(self):
-        assert mirror.mirrored_ref("ghcr.io/astral-sh/uv:0.12.15", MIRROR_PREFIX) == (
+        assert mirrored_ref("ghcr.io/astral-sh/uv:0.12.15", MIRROR_PREFIX) == (
             f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15"
         )
 
     def test_rejects_already_prefixed_references(self):
         with pytest.raises(RuntimeError, match="upstream-native"):
-            mirror.mirrored_ref(f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15", MIRROR_PREFIX)
+            mirrored_ref(f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15", MIRROR_PREFIX)
 
 
 class TestMirrorVerb:
