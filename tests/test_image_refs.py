@@ -3,12 +3,9 @@ from pathlib import Path
 import pytest
 
 from docker_devkit import image_refs
-from docker_devkit.config import DockerDevkitConfig
 from docker_devkit.image_refs import (
-    ImageReference,
     VersionCoupling,
     VersionSite,
-    bake_base_image_refs,
     resolve_remote_digest,
     unpinned_references,
     version_coupling_violations,
@@ -42,16 +39,6 @@ def _inspect_output_with_digest(command: str) -> str:
 def _inspect_output_without_digest(command: str) -> str:
     assert "imagetools inspect" in command
     return "Name: x\n"
-
-
-class TestBakeBaseImageRefs:
-    def test_should_yield_base_images(self):
-        config = DockerDevkitConfig.model_construct(requires=">=0", base_images={"ALPINE_IMAGE": "alpine:3.20"})
-        assert bake_base_image_refs(config) == [ImageReference("ALPINE_IMAGE", "alpine:3.20")]
-
-    def test_should_return_empty_when_no_base_images(self):
-        config = DockerDevkitConfig.model_construct(requires=">=0", base_images={})
-        assert bake_base_image_refs(config) == []
 
 
 class TestUnpinnedReferences:

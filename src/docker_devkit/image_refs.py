@@ -5,14 +5,11 @@ import re
 import shlex
 import tomllib
 from dataclasses import dataclass
-from itertools import starmap
 from pathlib import Path
 from typing import Any
 
 import yaml
 from bashrun.bash import bash_output
-
-from .config import DockerDevkitConfig
 
 BUILD_ARG_PATTERN = re.compile(r"\$\{[A-Za-z0-9_]+\}")
 FROM_PATTERN = re.compile(r"^FROM\s+(?:--platform=\S+\s+)?(\S+)", re.MULTILINE)
@@ -118,7 +115,3 @@ def resolve_remote_digest(reference: str) -> str:
     if match is None:
         raise RuntimeError(f"Could not parse digest for image reference: {reference}")
     return match.group(1)
-
-
-def bake_base_image_refs(config: DockerDevkitConfig) -> list[ImageReference]:
-    return list(starmap(ImageReference, config.base_images.items()))

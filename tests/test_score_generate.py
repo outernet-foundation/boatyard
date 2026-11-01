@@ -892,8 +892,8 @@ def test_dev_toggles_on_a_k8s_only_workload_refuses(tmp_path: Path) -> None:
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text(_toggles_workload("RELOAD=true"), encoding="utf-8")
 
+    assert config.k8s is not None
     with pytest.raises(SystemExit, match="renders k8s-only"):
-        assert config.k8s is not None
         score_generate.generate_k8s(tmp_path, config, config.k8s, Path("stack/generated/k8s/manifests.yaml"), {})
 
 

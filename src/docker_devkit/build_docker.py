@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+from itertools import starmap
 from pathlib import Path
 from subprocess import CalledProcessError
 from tempfile import TemporaryDirectory
@@ -28,7 +29,7 @@ from .config import (
 )
 from .daemon_gc import check_gc_limits
 from .host import GPU_TYPES, Gpu, detect_gpu, host_platform
-from .image_refs import ImageReference, bake_base_image_refs, resolve_remote_digest
+from .image_refs import ImageReference, resolve_remote_digest
 from .mirror import mirrored_ref
 from .service_builds import FAN_ARG, compute_service_shas, service_sha_env
 
@@ -138,8 +139,7 @@ def run_build(
     # root/config inject for callers that already loaded them (up --build); the CLI
     # derives both from the working directory.
     root = root if root is not None else Path.cwd()
-    if config is None:
-        config = load_config(root)
+    config = config if config is not None else load_config(root)
     if config is None:
         if not lock_only:
             raise RuntimeError("No docker-devkit.yaml at the repo root; build derives its targets from it")
@@ -181,7 +181,7 @@ def run_build(
     # against upstream — crane copies are byte-identical, so the digest holds under both
     # names. The declared tag rides the entry, so a tag bump breaks the prefix match and
     # re-resolves while an unchanged declaration copies its frozen digest forward.
-    declarations: list[ImageReference] = bake_base_image_refs(config)
+    declarations: list[ImageReference] = list(starmap(ImageReference, config.base_images.items()))
     if config.k8s is not None:
         declarations += [
             ImageReference(chart_lock_key(name), reference.removeprefix(CHART_REFERENCE_PREFIX))
