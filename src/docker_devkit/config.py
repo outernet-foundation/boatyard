@@ -12,7 +12,7 @@ from packaging.specifiers import SpecifierSet
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 from strictyaml import load as load_strict_yaml
 
-from docker_devkit.service_builds import FAN_ARG, ServiceBuild, compute_service_shas, derive_services, service_sha_env
+from docker_devkit.service_builds import ServiceBuild, compute_service_shas, derive_services, service_sha_env
 
 DEFAULT_CONFIG_PATH = Path("docker-devkit.yaml")
 DEV_SENTINEL = "0.0.0.dev0"
@@ -31,6 +31,7 @@ PYTHON_VERSION_PATH = Path(".python-version")
 
 ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 PLATFORM_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$")
+VARIANT_VALUE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 # path:tag or path@digest — upstream-native, never a bare path or a ${…} hole.
 DECLARED_REFERENCE_PATTERN = re.compile(
@@ -274,6 +275,7 @@ class DockerDevkitConfig(BaseModel):
     gateway: str | None = None
     repository: str | None = None
     base_images: dict[str, str] = Field(default_factory=dict)
+    variants: dict[str, list[str]] = Field(default_factory=dict)
     platforms: list[str] = Field(default_factory=list)
     project_name: str | None = None
     services: dict[str, ServiceGroup | ServiceEntry] = Field(default_factory=dict)
@@ -312,8 +314,7 @@ class DockerDevkitConfig(BaseModel):
         if selected:
             if selected not in self.platforms:
                 raise RuntimeError(
-                    f"{PLATFORM_VARIABLE}={selected!r} matches none of this repo's declared platforms "
-                    f"{self.platforms}"
+                    f"{PLATFORM_VARIABLE}={selected!r} matches none of this repo's declared platforms {self.platforms}"
                 )
             return selected
         if not self.platforms:
@@ -359,15 +360,19 @@ class DockerDevkitConfig(BaseModel):
                 bundles.append(ComposeBundle(name, self.bundle_output(name), list(entry.workloads), dict(entry.vars)))
         return bundles
 
-    def render_bake(self, *, push: bool, host: str, dev: bool = False) -> str:
+    def render_bake(self, *, push: bool, host: str, destination: str | None = None, dev: bool = False) -> str:
         # The per-run temp bake file: bake validates its own input by failing on it, so no
-        # document model sits behind the render. Identical configs render byte-identical files.
+        # document model sits behind the render. Identical configs render byte-identical
+        # files. Tags and cache refs root under the destination when one is given, else
+        # the config's repository — one law for both push destinations.
+        namespace = destination if destination is not None else self.repository
         services: dict[str, dict[str, dict[str, BakeValue]]] = {}
         for service in self.service_builds.values():
+            axis = service.axis
             for target, variant in service.target_variants:
                 args: dict[str, str] = {key: f"${{{key}:-}}" for key in self.base_images}
-                if variant is not None:
-                    args[FAN_ARG] = variant
+                if axis is not None and variant is not None:
+                    args[axis] = variant
                 args.update({sha: f"${{{sha}:?err}}" for sha in service.sha_args})
                 build: dict[str, BakeValue] = {"dockerfile": service.dockerfile}
                 if dev:
@@ -378,13 +383,13 @@ class DockerDevkitConfig(BaseModel):
                     build["platforms"] = [host] if not push and len(self.platforms) > 1 else list(self.platforms)
                 build["args"] = args
                 if dev:
-                    # The dev tag is per service, not per target: whichever gpu variant a host
+                    # The dev tag is per service, not per target: whichever cell a host
                     # builds, the overlay references one {repository}/{service}:dev image.
-                    build["tags"] = [f"{self.repository}/{service.name}:dev"]
+                    build["tags"] = [f"{namespace}/{service.name}:dev"]
                 else:
                     build["tags"] = [
-                        f"{self.repository}/{target}:latest",
-                        f"{self.repository}/{target}:${{{service_sha_env(service.name)}}}",
+                        f"{namespace}/{target}:latest",
+                        f"{namespace}/{target}:${{{service_sha_env(service.name)}}}",
                     ]
                 if service.contexts:
                     build["additional_contexts"] = {
@@ -392,7 +397,7 @@ class DockerDevkitConfig(BaseModel):
                         for context in service.contexts
                     }
                 if push:
-                    cache = f"{self.repository}/build-cache"
+                    cache = f"{namespace}/build-cache"
                     build["cache_to"] = [
                         f"type=registry,ref={cache}:{target},mode=max,image-manifest=true,oci-mediatypes=true"
                     ]
@@ -451,15 +456,16 @@ class DockerDevkitConfig(BaseModel):
         for service in services:
             members.setdefault(_find(parent, service), []).append(service)
 
-        entries_by_variant: dict[str, list[str]] = {}
+        entries_by_variant: dict[tuple[str | None, str], list[str]] = {}
         for group in sorted(sorted(member_list) for member_list in members.values()):
             for name in group:
                 for target, variant in services[name].target_variants:
-                    entries_by_variant.setdefault(variant or PLAIN_VARIANT, []).append(target)
+                    cell = variant if variant is not None else PLAIN_VARIANT
+                    entries_by_variant.setdefault((services[name].axis, cell), []).append(target)
 
         return [
-            {"targets": " ".join(sorted(targets)), "variant": variant}
-            for variant, targets in sorted(entries_by_variant.items())
+            {"targets": " ".join(sorted(targets)), "variant": cell}
+            for (_axis, cell), targets in sorted(entries_by_variant.items(), key=lambda item: item[0][1])
         ]
 
     def _route_sites(self) -> list[tuple[str, RouteConfig]]:
@@ -527,6 +533,29 @@ class DockerDevkitConfig(BaseModel):
             if match is None or not (match.group("tag") or match.group("digest")):
                 raise ValueError(f"base_images.{name}: {reference!r} must be 'path:tag' or 'path@digest'")
         return base_images
+
+    @field_validator("variants")
+    @classmethod
+    def _require_declared_axes(cls, variants: dict[str, list[str]]) -> dict[str, list[str]]:
+        # Value sets and defaults are declared, never probed: the first value is the
+        # default cell, and the values ride target names and --targets cells.
+        for axis, values in variants.items():
+            if ENV_NAME_PATTERN.fullmatch(axis) is None:
+                raise ValueError(f"variants key {axis!r} must be an ALL_CAPS ARG name; it names the receiver ARG")
+            if not values:
+                raise ValueError(
+                    f"variants.{axis}: an axis declares at least one value; the first value is the default cell"
+                )
+            seen: set[str] = set()
+            for value in values:
+                if VARIANT_VALUE_PATTERN.fullmatch(value) is None:
+                    raise ValueError(
+                        f"variants.{axis}: value {value!r} must be a bare lowercase spelling like cuda; it rides target names"
+                    )
+                if value in seen:
+                    raise ValueError(f"variants.{axis}: value {value!r} is declared twice")
+                seen.add(value)
+        return variants
 
     @field_validator("platforms")
     @classmethod
@@ -660,7 +689,7 @@ class DockerDevkitConfig(BaseModel):
 
         self.base_images = _resolve_base_image_templates(root, self.base_images)
 
-        service_builds = derive_services(root)
+        service_builds = derive_services(root, self.variants)
         if service_builds and self.repository is None:
             listed = ", ".join(sorted(service_builds))
             raise RuntimeError(

@@ -152,6 +152,48 @@ class TestOldSectionsDied:
             load_config(tmp_path)
 
 
+class TestVariants:
+    def test_declared_axes_load(self, tmp_path: Path) -> None:
+        write_config(tmp_path, {"requires": ">=0.1", "variants": {"TORCH_DEVICE": ["cuda", "rocm"]}})
+
+        config = load_config(tmp_path)
+
+        assert config is not None
+        assert config.variants == {"TORCH_DEVICE": ["cuda", "rocm"]}
+
+    def test_lowercase_axis_name_rejected(self, tmp_path: Path) -> None:
+        write_config(tmp_path, {"requires": ">=0.1", "variants": {"torch_device": ["cuda"]}})
+
+        with pytest.raises(ValidationError, match="ALL_CAPS ARG name"):
+            load_config(tmp_path)
+
+    def test_duplicate_values_rejected(self, tmp_path: Path) -> None:
+        write_config(tmp_path, {"requires": ">=0.1", "variants": {"TORCH_DEVICE": ["cuda", "cuda"]}})
+
+        with pytest.raises(ValidationError, match="declared twice"):
+            load_config(tmp_path)
+
+    def test_uppercase_value_rejected(self, tmp_path: Path) -> None:
+        write_config(tmp_path, {"requires": ">=0.1", "variants": {"TORCH_DEVICE": ["CUDA"]}})
+
+        with pytest.raises(ValidationError, match="bare lowercase spelling"):
+            load_config(tmp_path)
+
+    def test_declared_axes_reach_the_derived_services(self, tmp_path: Path) -> None:
+        write_dockerfile(tmp_path, "localizer", "ARG PY_IMAGE\nARG TORCH_DEVICE\nFROM ${PY_IMAGE}\n")
+        write_config(
+            tmp_path,
+            {"requires": ">=0.1", "repository": "ghcr.io/example/repo", "variants": {"TORCH_DEVICE": ["cuda", "rocm"]}},
+        )
+
+        config = load_config(tmp_path)
+
+        assert config is not None
+        assert config.service_builds["localizer"].axis == "TORCH_DEVICE"
+        assert config.service_builds["localizer"].variants == ["cuda", "rocm"]
+        assert config.service_builds["localizer"].targets == ["localizer-cuda", "localizer-rocm"]
+
+
 class TestBaseImages:
     def test_tag_and_digest_forms_load(self, tmp_path: Path) -> None:
         write_config(

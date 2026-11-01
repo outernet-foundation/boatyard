@@ -3,16 +3,13 @@ from __future__ import annotations
 import re
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
-from typing import Literal, NamedTuple, get_args
+from typing import NamedTuple, Self
 
 import pathspec
 from bashrun.bash import bash, bash_output
-from pydantic import BaseModel, ConfigDict, Field
-
-GpuFamily = Literal["cuda", "rocm"]
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 DOCKERFILE_NAME = "Dockerfile"
-FAN_ARG = "TORCH_DEVICE"
 FROM_LINE_PATTERN = re.compile(r"^FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?", re.IGNORECASE)
 ARG_LINE_PATTERN = re.compile(r"^ARG\s+([A-Za-z_][A-Za-z0-9_]*)")
 COPY_FROM_LINE_PATTERN = re.compile(r"^COPY\s+--from=(\S+)", re.IGNORECASE)
@@ -31,13 +28,20 @@ class ServiceBuild(BaseModel):
     name: str
     dockerfile: str
     contexts: list[str] = Field(default_factory=list)
-    variants: list[GpuFamily] = Field(default_factory=list)
+    axis: str | None = None
+    variants: list[str] = Field(default_factory=list)
     sha_args: list[str] = Field(default_factory=list)
     dev_stage: bool = False
 
+    @model_validator(mode="after")
+    def _axis_pairs_with_variants(self) -> Self:
+        if (self.axis is None) != (not self.variants):
+            raise ValueError("axis and variants declare together; an axis-bearing service carries its declared values")
+        return self
+
     @property
-    def target_variants(self) -> list[tuple[str, GpuFamily | None]]:
-        variants: list[GpuFamily | None] = list(self.variants) or [None]
+    def target_variants(self) -> list[tuple[str, str | None]]:
+        variants: list[str | None] = list(self.variants) or [None]
         return [(f"{self.name}-{variant}" if variant is not None else self.name, variant) for variant in variants]
 
     @property
@@ -46,22 +50,23 @@ class ServiceBuild(BaseModel):
 
 
 class ParsedDockerfile(NamedTuple):
-    # The pre-resolution parse of one service Dockerfile; the gpu-variant graph resolves
-    # over these records before any ServiceBuild is constructed.
+    # The pre-resolution parse of one service Dockerfile; the variant-axis graph
+    # resolves over these records before any ServiceBuild is constructed.
     name: str
     dockerfile: str
     contexts: list[str]
     sha_args: list[str]
     dev_stage: bool
-    own_fan: bool
+    axis_arg: str | None
 
 
-def derive_services(root: Path) -> dict[str, ServiceBuild]:
+def derive_services(root: Path, axes: dict[str, list[str]] | None = None) -> dict[str, ServiceBuild]:
     # Every Dockerfile-bearing directory one level below a top-level directory is a
-    # service; the graph (context edges, gpu fans, SHA args) derives from the
+    # service; the graph (context edges, variant axes, SHA args) derives from the
     # Dockerfiles themselves. Parsing and variant resolution complete before any
     # ServiceBuild is constructed — each record is built once, fully resolved.
-    parsed = _parse_dockerfiles(root)
+    declared_axes = axes if axes is not None else {}
+    parsed = _parse_dockerfiles(root, declared_axes)
 
     computable = {service_sha_env(name) for name in parsed}
     for service in parsed.values():
@@ -72,21 +77,23 @@ def derive_services(root: Path) -> dict[str, ServiceBuild]:
                 "the stamp receiver must match a service directory"
             )
 
-    resolved_variants: dict[str, list[GpuFamily]] = {}
-    return {
-        name: ServiceBuild(
+    resolved: dict[str, tuple[str | None, list[str]]] = {}
+    builds: dict[str, ServiceBuild] = {}
+    for name, service in parsed.items():
+        axis, variants = _resolve_axis(name, (), parsed, resolved, declared_axes)
+        builds[name] = ServiceBuild(
             name=name,
             dockerfile=service.dockerfile,
             contexts=service.contexts,
-            variants=_resolve_variants(name, (), parsed, resolved_variants),
+            axis=axis,
+            variants=variants,
             sha_args=service.sha_args,
             dev_stage=service.dev_stage,
         )
-        for name, service in parsed.items()
-    }
+    return builds
 
 
-def _parse_dockerfiles(root: Path) -> dict[str, ParsedDockerfile]:
+def _parse_dockerfiles(root: Path, axes: dict[str, list[str]]) -> dict[str, ParsedDockerfile]:
     service_dirs: dict[str, Path] = {}
     tops: set[str] = set()
     for top in sorted(root.iterdir()):
@@ -143,6 +150,12 @@ def _parse_dockerfiles(root: Path) -> dict[str, ParsedDockerfile]:
                     f"{relative}: COPY --from={value} is a hand-written image reference; "
                     "declare the base under base_images and COPY from its build arg"
                 )
+        declared_axis_args = [argument for argument in args if argument in axes]
+        if len(declared_axis_args) > 1:
+            raise RuntimeError(
+                f"{relative}: declares two variant-axis ARGs ({', '.join(declared_axis_args)}); "
+                "a service carries one axis"
+            )
         parsed[name] = ParsedDockerfile(
             name=name,
             dockerfile=dockerfile.relative_to(root).as_posix(),
@@ -151,7 +164,7 @@ def _parse_dockerfiles(root: Path) -> dict[str, ParsedDockerfile]:
             # A genuine dev stage is one of several stages; a single-stage AS dev label
             # names the published image and is not a dev shape.
             dev_stage="dev" in stages and len(stages) > 1,
-            own_fan=FAN_ARG in args,
+            axis_arg=declared_axis_args[0] if declared_axis_args else None,
         )
     return parsed
 
@@ -161,35 +174,37 @@ def require_single_top(tops: set[str], subject: str) -> None:
         raise RuntimeError(f"{subject} span multiple top-level directories: {sorted(tops)}")
 
 
-def _resolve_variants(
+def _resolve_axis(
     name: str,
     seen: tuple[str, ...],
     parsed: dict[str, ParsedDockerfile],
-    resolved: dict[str, list[GpuFamily]],
-) -> list[GpuFamily]:
+    resolved: dict[str, tuple[str | None, list[str]]],
+    axes: dict[str, list[str]],
+) -> tuple[str | None, list[str]]:
     if name in resolved:
         return resolved[name]
     if name in seen:
         raise RuntimeError(f"FROM context cycle: {' -> '.join((*seen, name))}")
-    parent_sets = [_resolve_variants(parent, (*seen, name), parsed, resolved) for parent in parsed[name].contexts]
-    distinct = {tuple(variants) for variants in parent_sets}
+    parent_results = [_resolve_axis(parent, (*seen, name), parsed, resolved, axes) for parent in parsed[name].contexts]
+    distinct = {(axis, tuple(variants)) for axis, variants in parent_results}
     if len(distinct) > 1:
         parents = ", ".join(parsed[name].contexts)
         raise RuntimeError(
-            f"workloads/{name}/{DOCKERFILE_NAME}: parents ({parents}) disagree on gpu variants; "
-            "a dependent inherits its base's variant set"
+            f"workloads/{name}/{DOCKERFILE_NAME}: parents ({parents}) disagree on variant cells; "
+            "a dependent inherits its base's variant cells"
         )
-    if parent_sets:
-        if parsed[name].own_fan:
+    if parent_results:
+        if parsed[name].axis_arg is not None:
             raise RuntimeError(
-                f"workloads/{name}/{DOCKERFILE_NAME}: declares ARG {FAN_ARG} over a fanned base; "
-                "a dependent inherits its base's variant set"
+                f"workloads/{name}/{DOCKERFILE_NAME}: declares ARG {parsed[name].axis_arg} over a "
+                "variant-bearing base; a dependent inherits its base's variant cells"
             )
-        variants = parent_sets[0]
+        axis, variants = parent_results[0]
+        resolved[name] = (axis, list(variants))
     else:
-        variants = list(get_args(GpuFamily)) if parsed[name].own_fan else []
-    resolved[name] = variants
-    return variants
+        axis = parsed[name].axis_arg
+        resolved[name] = (axis, list(axes[axis])) if axis is not None else (None, [])
+    return resolved[name]
 
 
 def compute_service_shas(repo_root: Path, service_builds: dict[str, ServiceBuild]) -> dict[str, str]:

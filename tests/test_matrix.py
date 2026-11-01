@@ -27,8 +27,13 @@ def _write_repo(root: Path, dockerfiles: dict[str, str], *, config: dict[str, An
     (root / "docker-devkit.yaml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
 
-def _invoke_matrix(monkeypatch: Any, tmp_path: Path, dockerfiles: dict[str, str]) -> Any:
-    _write_repo(tmp_path, dockerfiles)
+def _invoke_matrix(
+    monkeypatch: Any,
+    tmp_path: Path,
+    dockerfiles: dict[str, str],
+    config: dict[str, Any] | None = None,
+) -> Any:
+    _write_repo(tmp_path, dockerfiles, config=config)
     monkeypatch.chdir(tmp_path)
     return runner.invoke(app, [])
 
@@ -44,6 +49,7 @@ def test_bases_group_with_their_dependents_per_variant(monkeypatch: Any, tmp_pat
             "reconstructor": DEPENDENT,
             "localizer": DEPENDENT,
         },
+        config={"variants": {"TORCH_DEVICE": ["cuda", "rocm"]}},
     )
 
     assert result.exit_code == 0, result.output
@@ -51,6 +57,28 @@ def test_bases_group_with_their_dependents_per_variant(monkeypatch: Any, tmp_pat
         {"targets": "api postgres", "variant": "common"},
         {"targets": "localizer-cuda neural-networks-base-cuda reconstructor-cuda", "variant": "cuda"},
         {"targets": "localizer-rocm neural-networks-base-rocm reconstructor-rocm", "variant": "rocm"},
+    ]
+
+
+def test_a_service_arg_without_a_declared_axis_stays_common(monkeypatch: Any, tmp_path: Path) -> None:
+    result = _invoke_matrix(monkeypatch, tmp_path, {"api": FANNED, "postgres": EXTERNAL})
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == [{"targets": "api postgres", "variant": "common"}]
+
+
+def test_declared_values_reach_the_legs_verbatim(monkeypatch: Any, tmp_path: Path) -> None:
+    result = _invoke_matrix(
+        monkeypatch,
+        tmp_path,
+        {"api": FANNED},
+        config={"variants": {"TORCH_DEVICE": ["rocm", "cuda"]}},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == [
+        {"targets": "api-cuda", "variant": "cuda"},
+        {"targets": "api-rocm", "variant": "rocm"},
     ]
 
 

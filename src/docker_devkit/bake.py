@@ -1,43 +1,24 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import platform
-import shutil
 from pathlib import Path
 from subprocess import CalledProcessError
 from tempfile import TemporaryDirectory
-from typing import Any, Literal, Self, TypedDict, get_args
+from typing import Any, Self
 
 import typer
-from bashrun.bash import bash, bash_check, bash_output
-from build_artifact_registry.builds import push_build
-from build_artifact_registry.setup_oras import install_oras
+from bashrun.bash import bash
 from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
 from docker_devkit.config import DockerDevkitConfig, load_config
 from docker_devkit.daemon_gc import check_gc_limits
 from docker_devkit.lock import env_entries, write_lock
-from docker_devkit.service_builds import GpuFamily
+from docker_devkit.service_builds import ServiceBuild
 
 
 METADATA_PATH = Path("metadata.json")
-
-DIGEST_PROJECT = "images-digests"
-DIGEST_PLATFORM = "all"
-DIGEST_FILE_NAME = "images-digests.json"
-
-# A flat Literal: typer cannot annotate unions and pyright cannot type a star-unpacked
-# subscript, so the family membership pins by test instead of by derivation.
-Gpu = Literal["auto", "none", "cuda", "rocm"]
-GPU_TYPES = get_args(GpuFamily)
-
-
-class DigestEntry(TypedDict):
-    ref: str
-    digest: str
-    tags: list[str]
 
 
 class BakedImage(BaseModel):
@@ -74,22 +55,34 @@ def run_build(
     *,
     root: Path | None = None,
     config: DockerDevkitConfig | None = None,
-    push: bool = False,
+    push: str | None = None,
     targets_opt: list[str] | None = None,
-    gpu: Gpu = "auto",
-    gpu_only: bool = False,
     no_cache: bool = False,
     dev: bool = False,
 ) -> None:
     # root/config inject for callers that already loaded them (up --build); the CLI
-    # derives both from the working directory.
+    # derives both from the working directory. push is the destination axis: None builds
+    # local, "" (--push alone) pushes to the config's repository, an address (--push
+    # <addr>) pushes to that registry.
     root = root if root is not None else Path.cwd()
     config = config if config is not None else load_config(root)
     if config is None:
         raise RuntimeError("No docker-devkit.yaml at the repo root; build derives its targets from it")
 
-    if dev and push:
+    pushing = push is not None
+    if dev and pushing:
         raise typer.BadParameter("--dev builds local-only images under the :dev tag; drop --push")
+
+    destination = push if push else None
+    if destination is not None:
+        host = destination.partition("/")[0]
+        if "://" in destination or destination.endswith("/") or ("." not in host and ":" not in host):
+            raise typer.BadParameter(
+                f"--push destination {destination!r} is a registry address (localhost:5000, ghcr.io/org) "
+                "with no scheme and no trailing slash"
+            )
+    elif pushing and config.repository is None:
+        raise RuntimeError("--push with no address builds for the config's repository; this repo declares none")
 
     service_shas = config.service_shas()
     os.environ.update(service_shas)
@@ -100,14 +93,8 @@ def run_build(
             "(relock declarations without building via the lock verb)"
         )
 
-    if push and gpu == "auto":
-        raise typer.BadParameter("With --push, --gpu cannot be 'auto'; specify 'cuda' or 'rocm'.")
-
-    if gpu_only and gpu not in GPU_TYPES:
-        raise typer.BadParameter("--gpu-only requires a concrete gpu (cuda or rocm), not 'auto' or 'none'.")
-
-    # Check Docker GC limits so local GPU builds don't evict the build cache.
-    if not push and not targets_opt:
+    # Check Docker GC limits so local builds don't evict the build cache.
+    if not pushing and not targets_opt:
         check_gc_limits()
 
     # The incremental lock write rides every building run (the uv sync shape): anyone who
@@ -133,53 +120,41 @@ def run_build(
         )
 
     if targets_opt:
-        requested = set(targets_opt)
-        unknown = requested - set(target_variants)
-        if unknown:
-            raise typer.BadParameter(f"Unknown targets: {unknown}. Available: {sorted(target_variants)}")
+        targets: list[str] = []
+        for address in targets_opt:
+            target = _resolve_target(address, config.service_builds, target_variants)
+            if target not in targets:
+                targets.append(target)
         if dev:
-            undeclared = sorted(requested - dev_targets)
+            undeclared = sorted(set(targets) - dev_targets)
             if undeclared:
                 raise typer.BadParameter(f"--dev builds declared dev stages; no dev stage for {undeclared}")
-        targets = [target for target in target_variants if target in requested]
     else:
-        # Default targets are the native subset — the repo platforms are undeclared (the
-        # host's arch) or include this host's arch — intersected with the gpu match over
-        # the variant fan. An empty set refuses loudly: bake with no target arguments
-        # builds every service, silently defeating the selection. Host-gpu detection lives
-        # here, so an explicit --targets run never probes the host gpu.
-        if gpu == "auto":
-            gpu = detect_gpu()
-        candidates = dev_targets if dev else set(target_variants)
-        native = not config.platforms or host in config.platforms
-        if gpu_only:
-            targets = [
-                target
-                for target, variant in target_variants.items()
-                if native and target in candidates and variant == gpu
-            ]
-        else:
-            targets = [
-                target
-                for target, variant in target_variants.items()
-                if native and target in candidates and variant in (None, gpu)
-            ]
+        # Default targets are every service's default cell (the bare-name selection: the
+        # first declared value) restricted to this machine's arch — the repo platforms are
+        # undeclared (the host's arch) or include it. An empty set refuses loudly: bake
+        # with no target arguments builds every service, silently defeating the selection.
+        defaults = {service.target_variants[0][0] for service in config.service_builds.values()}
+        selected = defaults & dev_targets if dev else defaults
+        targets = sorted(selected) if not config.platforms or host in config.platforms else []
         if not targets:
             raise RuntimeError(
-                f"No service targets this machine's arch ({host}) under gpu '{gpu}'; "
-                f"name targets with --targets to cross-build. Services: {sorted(target_variants)}"
+                f"No service targets this machine's arch ({host}); "
+                f"name targets with --targets to cross-build. Services: {_address_vocabulary(config.service_builds)}"
             )
 
-    rendered = config.render_bake(push=push, host=host, dev=dev)
+    rendered = config.render_bake(push=pushing, host=host, destination=destination, dev=dev)
 
-    # Drop stale metadata so the coverage check cannot pass against a previous run.
+    # Drop stale metadata so the coverage check cannot pass against a previous run; the
+    # file left in the working directory after the run is the shelf handoff the toolkit's
+    # build workflow reads.
     METADATA_PATH.unlink(missing_ok=True)
 
     command_arguments: list[str] = [
         "--progress auto",
         "--provenance=false",
         "--sbom=false",
-        "--push" if push else "--load",
+        "--push" if pushing else "--load",
     ]
 
     if no_cache:
@@ -199,33 +174,6 @@ def run_build(
     if not set(targets) <= baked.root.keys():
         raise RuntimeError("Bake output does not cover the requested targets")
 
-    # Shelve the digest manifest under the REGISTRY shelf, tagged with the checkout HEAD.
-    # Push one shard per leg under sha-{sha}-{key}; parallel legs would last-writer-win a
-    # shared tag, and the pull side merges a SHA's shards after every leg finishes.
-    if push:
-        registry = os.environ.get("REGISTRY", "")
-        if not registry:
-            raise SystemExit("REGISTRY not set — --push shelves the digest manifest under it")
-        shelf = f"{registry}/builds"
-        sha = bash_output("git rev-parse HEAD").strip()
-        install_oras()
-        digest_manifest: dict[str, DigestEntry] = {}
-        for target in targets:
-            image = baked.root[target]
-            digest_manifest[target] = {"ref": image.ref, "digest": image.digest, "tags": image.tags}
-        key = hashlib.sha256(",".join(sorted(targets)).encode("utf-8")).hexdigest()[:8]
-        with TemporaryDirectory(prefix="digest-manifest-") as staging:
-            manifest_path = Path(staging) / DIGEST_FILE_NAME
-            manifest_path.write_text(json.dumps(digest_manifest, indent=2), encoding="utf-8")
-            push_build(
-                shelf,
-                DIGEST_PROJECT,
-                DIGEST_PLATFORM,
-                f"sha-{sha}-{key}",
-                Path(staging),
-                [DIGEST_FILE_NAME],
-            )
-
 
 def host_platform() -> str:
     machine = platform.machine().lower()
@@ -236,14 +184,38 @@ def host_platform() -> str:
     raise RuntimeError(f"Unsupported host architecture: {machine}")
 
 
-def detect_gpu() -> Gpu:
-    # The which() pre-guard is load-bearing: bash_check execs without a shell, so a
-    # missing binary would raise instead of answering False.
-    if shutil.which("nvidia-smi") and bash_check("nvidia-smi"):
-        return "cuda"
-    if shutil.which("rocminfo") and bash_check("rocminfo"):
-        return "rocm"
-    raise RuntimeError("Could not detect GPU type.")
+def _resolve_target(
+    address: str,
+    services: dict[str, ServiceBuild],
+    target_variants: dict[str, str | None],
+) -> str:
+    # A bare name selects the default cell; name/cell addresses one declared cell; a
+    # suffixed target name (what the matrix emits) addresses it directly.
+    if "/" in address:
+        service_name, _, cell = address.partition("/")
+        service = services.get(service_name)
+        if service is None:
+            raise typer.BadParameter(f"Unknown target {address!r}. Available: {_address_vocabulary(services)}")
+        if not service.variants:
+            raise typer.BadParameter(f"{service_name} declares no variant cells; build it as {service_name!r}")
+        if cell not in service.variants:
+            raise typer.BadParameter(
+                f"Unknown cell {cell!r} for {service_name}; it declares the cells {service.variants}"
+            )
+        return f"{service_name}-{cell}"
+    if address in services:
+        return services[address].target_variants[0][0]
+    if address in target_variants:
+        return address
+    raise typer.BadParameter(f"Unknown target {address!r}. Available: {_address_vocabulary(services)}")
+
+
+def _address_vocabulary(services: dict[str, ServiceBuild]) -> list[str]:
+    addresses: list[str] = []
+    for name in sorted(services):
+        addresses.append(name)
+        addresses.extend(f"{name}/{variant}" for variant in services[name].variants)
+    return addresses
 
 
 def _run_bake(bake_file: Path, command_arguments: list[str], rendered: str) -> None:

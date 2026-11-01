@@ -1,1 +1,6 @@
 extend = "ruff.base.toml"
+
+[lint.per-file-ignores]
+# optional_value_option.py carries the # noqa-wrapper: boundary marker as its first
+# line; the private typer seams it wraps have no public spelling (pinned typer only)
+"src/docker_devkit/optional_value_option.py" = ["import-private-name", "private-member-access"]

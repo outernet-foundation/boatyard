@@ -133,37 +133,62 @@ class TestDeriveServices:
 
         assert services["api"].contexts == []
 
-    def test_torch_device_arg_fans_over_the_gpu_family(self, tmp_path: Path) -> None:
+    def test_a_declared_axis_arg_fans_over_the_declared_values(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
 
-        services = derive_services(tmp_path)
+        services = derive_services(tmp_path, {"TORCH_DEVICE": ["cuda", "rocm"]})
 
+        assert services["neural-networks-base"].axis == "TORCH_DEVICE"
         assert services["neural-networks-base"].variants == ["cuda", "rocm"]
         assert services["neural-networks-base"].targets == ["neural-networks-base-cuda", "neural-networks-base-rocm"]
 
-    def test_the_fan_propagates_along_context_edges(self, tmp_path: Path) -> None:
+    def test_an_arg_naming_no_declared_axis_stays_plain(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
-        write_dockerfile(tmp_path, "localizer", "FROM neural-networks-base AS dev\n")
 
         services = derive_services(tmp_path)
 
+        assert services["neural-networks-base"].axis is None
+        assert services["neural-networks-base"].variants == []
+        assert services["neural-networks-base"].targets == ["neural-networks-base"]
+
+    def test_declared_values_keep_their_declared_order(self, tmp_path: Path) -> None:
+        write_dockerfile(tmp_path, "api", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
+
+        services = derive_services(tmp_path, {"TORCH_DEVICE": ["rocm", "cuda"]})
+
+        assert services["api"].variants == ["rocm", "cuda"]
+        assert services["api"].targets == ["api-rocm", "api-cuda"]
+
+    def test_two_axis_args_on_one_service_refuse(self, tmp_path: Path) -> None:
+        write_dockerfile(tmp_path, "api", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG ACCEL_FPGA\nARG ACCEL_TPU\n")
+
+        with pytest.raises(RuntimeError, match="a service carries one axis"):
+            derive_services(tmp_path, {"ACCEL_FPGA": ["fpga"], "ACCEL_TPU": ["tpu"]})
+
+    def test_the_axis_propagates_along_context_edges(self, tmp_path: Path) -> None:
+        write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
+        write_dockerfile(tmp_path, "localizer", "FROM neural-networks-base AS dev\n")
+
+        services = derive_services(tmp_path, {"TORCH_DEVICE": ["cuda", "rocm"]})
+
+        assert services["localizer"].axis == "TORCH_DEVICE"
         assert services["localizer"].variants == ["cuda", "rocm"]
         assert services["localizer"].targets == ["localizer-cuda", "localizer-rocm"]
 
-    def test_an_independent_fan_over_a_fanned_base_refuses(self, tmp_path: Path) -> None:
+    def test_an_independent_axis_over_a_variant_bearing_base_refuses(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
         write_dockerfile(tmp_path, "localizer", "FROM neural-networks-base AS dev\nARG TORCH_DEVICE\n")
 
-        with pytest.raises(RuntimeError, match="inherits its base's variant set"):
-            derive_services(tmp_path)
+        with pytest.raises(RuntimeError, match="inherits its base's variant cells"):
+            derive_services(tmp_path, {"TORCH_DEVICE": ["cuda", "rocm"]})
 
-    def test_parents_disagreeing_on_variants_refuse(self, tmp_path: Path) -> None:
+    def test_parents_disagreeing_on_variant_cells_refuse(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "fanned-base", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\nARG TORCH_DEVICE\n")
         write_dockerfile(tmp_path, "plain-base", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n")
         write_dockerfile(tmp_path, "dependent", "FROM fanned-base AS a\nFROM plain-base AS b\n")
 
-        with pytest.raises(RuntimeError, match="disagree on gpu variants"):
-            derive_services(tmp_path)
+        with pytest.raises(RuntimeError, match="disagree on variant cells"):
+            derive_services(tmp_path, {"TORCH_DEVICE": ["cuda", "rocm"]})
 
     def test_sha_arg_naming_no_service_refuses(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\nARG GHOST_SHA\n")
