@@ -16,7 +16,7 @@ from .assembly import (
     write_temp_compose_file,
 )
 from .build_docker import run_build
-from .config import LOCK_PATH, ServiceGroup, load_config, parse_image_lock
+from .config import LOCK_PATH, load_config, parse_image_lock
 
 _MANIFEST_ABSENT_PATTERN = re.compile(r"\b404\b|not found|manifest unknown", re.IGNORECASE)
 
@@ -48,16 +48,6 @@ def up(
     assert config is not None
 
     try:
-        # Print the resolved assembly so nothing implicit rides hidden.
-        if assembly.riding:
-            print(f"riding: {', '.join(assembly.riding)}")
-        for name, entry in config.services.items():
-            if isinstance(entry, ServiceGroup):
-                selected_option = assembly.choices.get(name)
-                print(f"{name}: {selected_option if selected_option is not None else '(none selected)'}")
-        if assembly.routes:
-            print(f"door: {' '.join(route.path for route in assembly.routes)}")
-
         # Refuse --build in a repo with no build declarations.
         if build and not (config.repository or config.base_images):
             raise typer.BadParameter(

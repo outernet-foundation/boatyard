@@ -46,8 +46,6 @@ class Assembly:
     # The record retains its inputs (root, config) for the render methods.
     root: Path
     config: DockerDevkitConfig
-    riding: list[str]
-    choices: dict[str, str]
     profiles: list[str]
     forwarded: dict[str, str] | None
     includes: list[str]
@@ -79,29 +77,28 @@ class Assembly:
             if isinstance(entry, ServiceGroup)
             for option_name in entry.options
         }
-        self.riding = [name for name, entry in config.services.items() if not isinstance(entry, ServiceGroup)]
-        if not names and not self.riding and options:
+        riding = [name for name, entry in config.services.items() if not isinstance(entry, ServiceGroup)]
+        if not names and not riding and options:
             raise RuntimeError(
                 f"{BUNDLES_VARIABLE}= selects nothing and no bare entry rides; this repo's options are {sorted(options)}"
             )
         unknown = [name for name in names if name not in options]
         if unknown:
-            riding_note = f"; riding entries, always on: {self.riding}" if self.riding else ""
+            riding_note = f"; riding entries, always on: {riding}" if riding else ""
             raise RuntimeError(
                 f"{BUNDLES_VARIABLE}= names {unknown}; the selectable options are {sorted(options)}{riding_note}"
             )
-        self.choices = {}
+        choices: dict[str, str] = {}
         for name in names:
             group = options[name]
-            if group in self.choices:
+            if group in choices:
                 raise RuntimeError(
-                    f"{BUNDLES_VARIABLE}= selects {self.choices[group]} and {name}; "
-                    f"at most one option per group ({group})"
+                    f"{BUNDLES_VARIABLE}= selects {choices[group]} and {name}; at most one option per group ({group})"
                 )
-            self.choices[group] = name
+            choices[group] = name
 
         self.profiles = _split_names(environment.get(PROFILES_VARIABLE, ""))
-        self.forwarded = forwarded_pair(environment) if self.choices.get(AUTH_GROUP_NAME) is not None else None
+        self.forwarded = forwarded_pair(environment) if choices.get(AUTH_GROUP_NAME) is not None else None
 
         # The declaration-order flatten every assembly view reads: each group yields
         # itself (its riding routes and ports) plus its selected option, each bare
@@ -110,7 +107,7 @@ class Assembly:
         for name, entry in config.services.items():
             if isinstance(entry, ServiceGroup):
                 entries.append((name, entry))
-                option_name = self.choices.get(name)
+                option_name = choices.get(name)
                 if option_name is not None:
                     entries.append((option_name, entry.options[option_name]))
             else:
@@ -150,7 +147,7 @@ class Assembly:
         self.auth_route = None
         auth = config.services.get(AUTH_GROUP_NAME)
         if isinstance(auth, ServiceGroup):
-            option_name = self.choices.get(AUTH_GROUP_NAME)
+            option_name = choices.get(AUTH_GROUP_NAME)
             if option_name is not None:
                 self.auth_route = auth.options[option_name].routes[0]
 
