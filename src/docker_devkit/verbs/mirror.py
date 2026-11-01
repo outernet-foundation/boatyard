@@ -6,7 +6,6 @@ import typer
 from bashrun.bash import bash, bash_check
 
 from docker_devkit.config import (
-    DEFAULT_MIRROR_PREFIX,
     chart_lock_key,
     load_config,
     mirrored_ref,
@@ -22,7 +21,7 @@ def mirror() -> None:
     config = load_config(root)
     if config is None:
         raise RuntimeError("a docker-devkit.yaml with base_images (or k8s.charts) is required to mirror")
-    prefix = config.mirror.prefix if config.mirror is not None else DEFAULT_MIRROR_PREFIX
+    prefix = config.mirror_prefix
 
     lock = config.lock_entries()
     mirror_targets: list[tuple[str, list[str]]] = []

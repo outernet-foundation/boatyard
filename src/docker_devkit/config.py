@@ -152,19 +152,6 @@ class ParsedDockerfile(NamedTuple):
     axis_arg: str | None
 
 
-class MirrorConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    prefix: str
-
-    @field_validator("prefix")
-    @classmethod
-    def _require_bare_prefix(cls, prefix: str) -> str:
-        if not prefix or prefix.endswith("/"):
-            raise ValueError("mirror prefix must be non-empty and carry no trailing slash")
-        return prefix
-
-
 class RouteConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -322,7 +309,7 @@ class DockerDevkitConfig(BaseModel):
     project_name: str | None = None
     services: dict[str, ServiceGroup | ServiceEntry] = Field(default_factory=dict)
     k8s: K8sConfig | None = None
-    mirror: MirrorConfig | None = None
+    mirror_prefix: str = DEFAULT_MIRROR_PREFIX
 
     score_dir: Path = SCORE_DIR
     k8s_output: Path = K8S_OUTPUT
@@ -634,6 +621,13 @@ class DockerDevkitConfig(BaseModel):
             else:
                 _coerce_port_strings(f"services.{name}", raw_entry, name, bare_legal=True)
         return services
+
+    @field_validator("mirror_prefix")
+    @classmethod
+    def _require_bare_prefix(cls, mirror_prefix: str) -> str:
+        if not mirror_prefix or mirror_prefix.endswith("/"):
+            raise ValueError("mirror prefix must be non-empty and carry no trailing slash")
+        return mirror_prefix
 
     @model_validator(mode="after")
     def _require_flat_vocabulary(self) -> Self:

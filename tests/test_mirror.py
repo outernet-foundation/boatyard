@@ -83,7 +83,7 @@ class TestMirrorVerb:
         _write_config(
             tmp_path,
             {
-                "mirror": {"prefix": MIRROR_PREFIX},
+                "mirror_prefix": MIRROR_PREFIX,
                 "platforms": ["linux/amd64"],
                 "base_images": {
                     "UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15",

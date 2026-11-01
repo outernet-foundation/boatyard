@@ -13,7 +13,6 @@ from bashrun.bash import bash_output
 
 from docker_devkit.config import (
     CHART_REFERENCE_PREFIX,
-    DEFAULT_MIRROR_PREFIX,
     DockerDevkitConfig,
     LOCK_PATH,
     SHA256_DIGEST_REGEX,
@@ -89,7 +88,7 @@ def relock(config: DockerDevkitConfig, *, upgrade: bool = False) -> ImageLock:
     # match and re-resolves while an unchanged declaration copies its frozen entry forward.
     # The computed lock owns exactly the declared names — orphans prune by construction.
     assert config.root is not None
-    prefix = config.mirror.prefix if config.mirror is not None else DEFAULT_MIRROR_PREFIX
+    prefix = config.mirror_prefix
     committed = _committed_lock(config.root)
 
     images: dict[str, ImageLockEntry] = {}
