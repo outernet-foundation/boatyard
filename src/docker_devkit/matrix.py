@@ -5,7 +5,7 @@ from pathlib import Path
 
 import typer
 
-from .config import load_config
+from docker_devkit.config import load_config
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 

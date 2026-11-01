@@ -17,7 +17,7 @@ import yaml
 from bashrun.bash import bash, bash_output
 from pydantic import BaseModel, ConfigDict, Field
 
-from .config import (
+from docker_devkit.config import (
     DEV_TOGGLES_ANNOTATION,
     DOOR_SERVICE_NAME,
     K8sConfig,
@@ -35,15 +35,15 @@ from .config import (
     parse_image_lock,
     require_lock_entry,
 )
-from .documents import (
+from docker_devkit.documents import (
     BindVolume,
     ComposeDocument,
     WorkloadDocument,
 )
-from .markers import contains_marker, resolve_includes, resolve_lock_refs
-from .provisioners import compiled_provisioners, dump_compose
-from .secrets import SecretsDeclaration, collect_secret_keys, validate_consumed
-from .service_builds import compute_service_shas
+from docker_devkit.markers import contains_marker, resolve_includes, resolve_lock_refs
+from docker_devkit.provisioners import compiled_provisioners, dump_compose
+from docker_devkit.secrets import SecretsDeclaration, collect_secret_keys, validate_consumed
+from docker_devkit.service_builds import compute_service_shas
 
 # Match only ALL-CAPS placeholders so Score's lowercase dotted references never collide.
 PLACEHOLDER = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")

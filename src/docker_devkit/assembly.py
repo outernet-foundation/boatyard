@@ -10,7 +10,7 @@ from tempfile import NamedTemporaryFile
 import yaml
 from bashrun.bash import bash_output
 
-from .config import (
+from docker_devkit.config import (
     AUTH_GROUP_NAME,
     CADDY_IMAGE,
     DEV_TOGGLES_ANNOTATION,
@@ -26,7 +26,7 @@ from .config import (
     is_mapping,
     parse_dev_toggles,
 )
-from .documents import WorkloadDocument
+from docker_devkit.documents import WorkloadDocument
 
 ENV_FILE = Path(".env")
 BUNDLES_VARIABLE = "BUNDLES"

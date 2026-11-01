@@ -6,7 +6,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from .config import is_list, is_mapping
+from docker_devkit.config import is_list, is_mapping
 
 # Authoring markers are single-key mappings so authored sources stay plain-YAML-parseable.
 # Include markers insert a repo-root-relative file's bytes or parsed structure; lock markers

@@ -8,15 +8,15 @@ from typing import Annotated
 import typer
 from bashrun.bash import CalledProcessError, bash_handoff, bash_output
 
-from .assembly import (
+from docker_devkit.assembly import (
     Assembly,
     compose_command,
     require_compose_stack,
     require_env_file,
     write_temp_compose_file,
 )
-from .build_docker import run_build
-from .config import load_config, optional_lock_entries
+from docker_devkit.build_docker import run_build
+from docker_devkit.config import load_config, optional_lock_entries
 
 _MANIFEST_ABSENT_PATTERN = re.compile(r"\b404\b|not found|manifest unknown", re.IGNORECASE)
 

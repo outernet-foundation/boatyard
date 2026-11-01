@@ -20,7 +20,7 @@ from build_artifact_registry.builds import push_build
 from build_artifact_registry.setup_oras import install_oras
 from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
-from .config import (
+from docker_devkit.config import (
     CHART_REFERENCE_PREFIX,
     DEFAULT_MIRROR_PREFIX,
     DockerDevkitConfig,
@@ -30,9 +30,9 @@ from .config import (
     mirrored_ref,
     optional_lock_entries,
 )
-from .daemon_gc import check_gc_limits
-from .image_refs import ImageReference, resolve_remote_digest
-from .service_builds import FAN_ARG, GpuFamily, compute_service_shas, service_sha_env
+from docker_devkit.daemon_gc import check_gc_limits
+from docker_devkit.image_refs import ImageReference, resolve_remote_digest
+from docker_devkit.service_builds import FAN_ARG, GpuFamily, compute_service_shas, service_sha_env
 
 
 METADATA_PATH = Path("metadata.json")

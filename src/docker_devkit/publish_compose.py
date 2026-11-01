@@ -12,11 +12,11 @@ import typer
 import yaml
 from bashrun.bash import bash, bash_output
 
-from .config import LOCK_PATH, compose_bundles, load_config, parse_image_lock
-from .crane import install_crane
-from .documents import ComposeDocument
-from .image_refs import resolve_remote_digest
-from .service_builds import compute_service_shas
+from docker_devkit.config import LOCK_PATH, compose_bundles, load_config, parse_image_lock
+from docker_devkit.crane import install_crane
+from docker_devkit.documents import ComposeDocument
+from docker_devkit.image_refs import resolve_remote_digest
+from docker_devkit.service_builds import compute_service_shas
 
 _VAR_PATTERN = re.compile(r"\$\{([A-Z][A-Z0-9_]*)(:[?\-+][^}]*)?\}")
 STUB_VALUE = "publish-stub"

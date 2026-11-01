@@ -16,7 +16,7 @@ from pydantic import (
     model_validator,
 )
 
-from .markers import resolve_includes, resolve_lock_refs
+from docker_devkit.markers import resolve_includes, resolve_lock_refs
 
 # Compile these fields from authored mappings into the YAML strings score's Go templates
 # consume; authored manifests stay a real list.

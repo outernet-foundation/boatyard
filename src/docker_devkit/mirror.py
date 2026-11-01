@@ -5,7 +5,7 @@ from pathlib import Path
 import typer
 from bashrun.bash import bash, bash_check
 
-from .config import (
+from docker_devkit.config import (
     DEFAULT_MIRROR_PREFIX,
     chart_lock_key,
     load_config,
@@ -13,7 +13,7 @@ from .config import (
     optional_lock_entries,
     require_lock_entry,
 )
-from .crane import install_crane
+from docker_devkit.crane import install_crane
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 

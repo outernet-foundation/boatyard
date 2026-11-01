@@ -9,7 +9,7 @@ from packaging.specifiers import SpecifierSet
 from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidationInfo, field_validator, model_validator
 from strictyaml import load as load_strict_yaml
 
-from .service_builds import ServiceBuild, derive_services
+from docker_devkit.service_builds import ServiceBuild, derive_services
 
 DEFAULT_CONFIG_PATH = Path("docker-devkit.yaml")
 DEV_SENTINEL = "0.0.0.dev0"
