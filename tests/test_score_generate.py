@@ -168,7 +168,8 @@ def _generate_with_chart(
     helm = HelmRecorder()
     monkeypatch.setattr(score_generate, "bash", k8s.run)
     monkeypatch.setattr(score_generate, "bash_output", helm.run)
-    generate_k8s(tmp_path, config, output, images)
+    assert config.k8s is not None
+    generate_k8s(tmp_path, config, config.k8s, output, images)
     return helm
 
 
@@ -892,7 +893,8 @@ def test_dev_toggles_on_a_k8s_only_workload_refuses(tmp_path: Path) -> None:
     source.write_text(_toggles_workload("RELOAD=true"), encoding="utf-8")
 
     with pytest.raises(SystemExit, match="renders k8s-only"):
-        score_generate.generate_k8s(tmp_path, config, Path("stack/generated/k8s/manifests.yaml"), {})
+        assert config.k8s is not None
+        score_generate.generate_k8s(tmp_path, config, config.k8s, Path("stack/generated/k8s/manifests.yaml"), {})
 
 
 def test_consumer_interpolated_names_must_match_declared_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1020,7 +1022,8 @@ def test_k8s_builtin_templates_register_on_every_init(tmp_path: Path, monkeypatc
     monkeypatch.setattr(score_generate, "bash_output", HelmRecorder().run)
     config = _root_config(k8s={"workloads": ["api.yaml"]})
 
-    generate_k8s(tmp_path, config, output, {})
+    assert config.k8s is not None
+    generate_k8s(tmp_path, config, config.k8s, output, {})
 
     init = next(command for command in recorder.commands if command.startswith("score-k8s init"))
     assert [Path(token).name for token in init.split() if token.endswith(".tpl")] == [

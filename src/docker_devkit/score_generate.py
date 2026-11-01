@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .config import (
     DEV_TOGGLES_ANNOTATION,
     DOOR_SERVICE_NAME,
+    K8sConfig,
     is_list,
     is_mapping,
     parse_dev_toggles,
@@ -216,7 +217,7 @@ def _generate_artifacts(root: Path, config: DockerDevkitConfig, target: Target, 
         generate_compose(root, config, images)
 
     if target in ("both", "k8s") and config.k8s is not None:
-        generate_k8s(root, config, k8s_output, images)
+        generate_k8s(root, config, config.k8s, k8s_output, images)
 
     if (root / SECRETS_FILE).is_file():
         enforce_secret_contract(root, config, target, k8s_output)
@@ -497,11 +498,8 @@ def closure_provisioners(score_dir: Path, rendering: str, workloads: list[str]) 
     return selected
 
 
-def generate_k8s(root: Path, config: DockerDevkitConfig, output: Path, images: dict[str, str]) -> None:
+def generate_k8s(root: Path, config: DockerDevkitConfig, k8s: K8sConfig, output: Path, images: dict[str, str]) -> None:
     # Run score-k8s in the output's directory; it writes its .score-k8s state under its cwd.
-    k8s = config.k8s
-    if k8s is None:
-        raise RuntimeError("generate_k8s requires a k8s section in docker-devkit.yaml")
     output_path = root / output
     state_dir = output_path.parent / ".score-k8s"
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -609,8 +607,6 @@ def enforce_secret_contract(root: Path, config: DockerDevkitConfig, target: Targ
     # list from the declaration alone. The contract activates by the declaration file's
     # presence; the cluster Secret name derives from the compose project name.
     declaration_path = root / SECRETS_FILE
-    if not declaration_path.is_file():
-        raise RuntimeError(f"{declaration_path.as_posix()}: the secrets declaration file does not exist")
     k8s_secret = f"{config.project_name}-secrets"
 
     declared = SecretsDeclaration.model_validate(
