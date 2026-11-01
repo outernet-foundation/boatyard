@@ -19,13 +19,15 @@ _GB_MULTIPLIERS = {"T": 1024, "G": 1, "M": 1 / 1024, "K": 1 / 1024**2, "B": 1 / 
 class _DaemonGc(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    gigabytes: float = Field(default=0.0, alias="defaultKeepStorage")
+    # None is absent-or-null (the missing law refuses it); a set value measures, zero
+    # included — an explicit zero is too small, not missing.
+    gigabytes: float | None = Field(default=None, alias="defaultKeepStorage")
 
     @field_validator("gigabytes", mode="before")
     @classmethod
     def _measure(cls, value: object) -> object:
         if value is None:
-            return 0.0
+            return None
         match = _KEEP_STORAGE_PATTERN.match(str(value))
         if match is None:
             raise ValueError(f"Could not parse 'defaultKeepStorage' value: {value}")
@@ -46,7 +48,7 @@ class _DaemonConfig(BaseModel):
 
     @model_validator(mode="after")
     def _require_keep_storage(self, info: ValidationInfo) -> Self:
-        if self.builder.gc.gigabytes:
+        if self.builder.gc.gigabytes is not None:
             return self
         context: dict[str, object] = info.context or {}
         sample = json.dumps(
@@ -75,6 +77,7 @@ def check_gc_limits(candidates: list[Path] | None = None) -> None:
 
     daemon = _DaemonConfig.model_validate(json.loads(config.read_text(encoding="utf-8")), context={"path": config})
     gigabytes = daemon.builder.gc.gigabytes
+    assert gigabytes is not None  # _require_keep_storage refused absent-or-null values
     if gigabytes < MIN_KEEP_STORAGE_GB:
         raise RuntimeError(
             f"Docker GC limit {gigabytes:.1f}GB in {config} is below the required {MIN_KEEP_STORAGE_GB}GB"
