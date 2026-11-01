@@ -191,6 +191,184 @@ class TestBaseImages:
             load_config(tmp_path)
 
 
+class TestBaseImageTemplates:
+    def _write_toolchain_pins(self, tmp_path: Path, required_version: str = "==0.12.15", python: str = "3.13") -> None:
+        (tmp_path / "pyproject.toml").write_text(
+            f'[project]\nname = "example"\n\n[tool.uv]\nrequired-version = "{required_version}"\n',
+            encoding="utf-8",
+        )
+        (tmp_path / ".python-version").write_text(python + "\n", encoding="utf-8")
+
+    def test_fixture_pins_resolve(self, tmp_path: Path) -> None:
+        self._write_toolchain_pins(tmp_path)
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "platforms": ["linux/amd64"],
+                "base_images": {
+                    "UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:{uv}-python{python}-trixie-slim",
+                    "PYTHON_BASE_IMAGE": "docker.io/library/python:{python}-slim",
+                },
+            },
+        )
+        write_lock(tmp_path)
+
+        config = load_config(tmp_path)
+
+        assert config is not None
+        assert config.base_images == {
+            "UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:0.12.15-python3.13-trixie-slim",
+            "PYTHON_BASE_IMAGE": "docker.io/library/python:3.13-slim",
+        }
+
+    def test_a_key_may_appear_twice_in_one_value(self, tmp_path: Path) -> None:
+        self._write_toolchain_pins(tmp_path)
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "platforms": ["linux/amd64"],
+                "base_images": {"API_IMAGE": "ghcr.io/org/api:{uv}-and-{uv}"},
+            },
+        )
+        write_lock(tmp_path)
+
+        config = load_config(tmp_path)
+
+        assert config is not None and config.base_images == {"API_IMAGE": "ghcr.io/org/api:0.12.15-and-0.12.15"}
+
+    def test_plain_values_load_without_any_pin_sources(self, tmp_path: Path) -> None:
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "platforms": ["linux/amd64"],
+                "base_images": {"GOLANG_IMAGE": "docker.io/library/golang:1.22-alpine"},
+            },
+        )
+        write_lock(tmp_path)
+
+        config = load_config(tmp_path)
+
+        assert config is not None and config.base_images == {"GOLANG_IMAGE": "docker.io/library/golang:1.22-alpine"}
+
+    def test_plain_value_beside_a_templated_one(self, tmp_path: Path) -> None:
+        self._write_toolchain_pins(tmp_path)
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "platforms": ["linux/amd64"],
+                "base_images": {
+                    "UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:{uv}-python{python}-trixie-slim",
+                    "GOLANG_IMAGE": "docker.io/library/golang:1.22-alpine",
+                },
+            },
+        )
+        write_lock(tmp_path)
+
+        config = load_config(tmp_path)
+
+        assert config is not None
+        assert config.base_images["GOLANG_IMAGE"] == "docker.io/library/golang:1.22-alpine"
+
+    def test_range_pin_refuses_naming_the_fix(self, tmp_path: Path) -> None:
+        self._write_toolchain_pins(tmp_path, required_version=">=0.12")
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "platforms": ["linux/amd64"],
+                "base_images": {"UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:{uv}-python{python}-trixie-slim"},
+            },
+        )
+        write_lock(tmp_path)
+
+        with pytest.raises(RuntimeError, match=r"exact == pin like '==0\.12\.15'"):
+            load_config(tmp_path)
+
+    def test_wildcard_pin_refuses(self, tmp_path: Path) -> None:
+        self._write_toolchain_pins(tmp_path, required_version="==0.12.*")
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "platforms": ["linux/amd64"],
+                "base_images": {"UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:{uv}-trixie-slim"},
+            },
+        )
+        write_lock(tmp_path)
+
+        with pytest.raises(RuntimeError, match="not an exact pin"):
+            load_config(tmp_path)
+
+    def test_missing_uv_pin_refuses(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text('[project]\nname = "example"\n', encoding="utf-8")
+        (tmp_path / ".python-version").write_text("3.13\n", encoding="utf-8")
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "platforms": ["linux/amd64"],
+                "base_images": {"UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:{uv}-trixie-slim"},
+            },
+        )
+        write_lock(tmp_path)
+
+        with pytest.raises(RuntimeError, match=r"tool\.uv\.required-version is not declared"):
+            load_config(tmp_path)
+
+    def test_absent_python_version_file_refuses(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text(
+            '[project]\nname = "example"\n\n[tool.uv]\nrequired-version = "==0.12.15"\n', encoding="utf-8"
+        )
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "platforms": ["linux/amd64"],
+                "base_images": {"PYTHON_BASE_IMAGE": "docker.io/library/python:{python}-slim"},
+            },
+        )
+        write_lock(tmp_path)
+
+        with pytest.raises(RuntimeError, match=r"\.python-version: the file is absent"):
+            load_config(tmp_path)
+
+    def test_empty_python_version_file_refuses(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text(
+            '[project]\nname = "example"\n\n[tool.uv]\nrequired-version = "==0.12.15"\n', encoding="utf-8"
+        )
+        (tmp_path / ".python-version").write_text("\n", encoding="utf-8")
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "platforms": ["linux/amd64"],
+                "base_images": {"PYTHON_BASE_IMAGE": "docker.io/library/python:{python}-slim"},
+            },
+        )
+        write_lock(tmp_path)
+
+        with pytest.raises(RuntimeError, match=r"\.python-version: the file is empty"):
+            load_config(tmp_path)
+
+    def test_unknown_template_key_refuses_listing_the_vocabulary(self, tmp_path: Path) -> None:
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "platforms": ["linux/amd64"],
+                "base_images": {"TOOLS_IMAGE": "docker.io/org/tools:{golang}"},
+            },
+        )
+        write_lock(tmp_path)
+
+        with pytest.raises(RuntimeError, match=r"template key \{golang\} is unknown; the toolchain pins are \{uv\}, \{python\}"):
+            load_config(tmp_path)
+
+
 class TestCharts:
     def test_tag_form_loads(self, tmp_path: Path) -> None:
         write_config(

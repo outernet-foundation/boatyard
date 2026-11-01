@@ -3,32 +3,9 @@ from pathlib import Path
 import pytest
 
 from docker_devkit import image_refs
-from docker_devkit.image_refs import (
-    VersionCoupling,
-    VersionSite,
-    resolve_remote_digest,
-    unpinned_references,
-    version_coupling_violations,
-)
+from docker_devkit.image_refs import resolve_remote_digest, unpinned_references
 
 FAKE_DIGEST = "sha256:" + "a" * 64
-
-VERSION_COUPLINGS = [
-    VersionCoupling(
-        name="uv",
-        pyproject_key="tool.uv.required-version",
-        sites=(VersionSite("uv base tag", "docker-devkit.yaml", r"uv:([^@]+?)-", "UV_BASE_IMAGE"),),
-    ),
-    VersionCoupling(
-        name="python",
-        pyproject_key="project.requires-python",
-        sites=(
-            VersionSite("uv base python component", "docker-devkit.yaml", r"python([0-9][0-9.]*)", "UV_BASE_IMAGE"),
-            VersionSite("python base tag", "docker-devkit.yaml", r"python:([0-9][0-9.]*)", "PYTHON_BASE_IMAGE"),
-            VersionSite("uv python install", "docker/zed-capture/Dockerfile", r"uv python install ([0-9][0-9.]*)"),
-        ),
-    ),
-]
 
 
 def _inspect_output_with_digest(command: str) -> str:
@@ -127,81 +104,6 @@ class TestUnpinnedReferences:
             "FROM neural-networks-base AS dev\nCOPY --from=build /x /y\n", encoding="utf-8"
         )
         assert unpinned_references(tmp_path) == []
-
-
-class TestVersionCouplingViolations:
-    def _write_version_tree(
-        self,
-        tmp_path: Path,
-        uv_tag: str = "0.12.15-python3.13-trixie-slim",
-        python_tag: str = "3.13-slim@sha256:" + "c" * 64,
-        uv_python_install: str = "3.13",
-    ) -> None:
-        (tmp_path / "pyproject.toml").write_text(
-            '[project]\nrequires-python = ">=3.13"\n\n[tool.uv]\nrequired-version = "==0.12.15"\n', encoding="utf-8"
-        )
-        (tmp_path / "docker-devkit.yaml").write_text(
-            'requires: ">=0"\n'
-            "base_images:\n"
-            f"  UV_BASE_IMAGE: ghcr.io/astral-sh/uv:{uv_tag}\n"
-            f"  PYTHON_BASE_IMAGE: docker.io/library/python:{python_tag}\n",
-            encoding="utf-8",
-        )
-        docker_directory = tmp_path / "docker" / "zed-capture"
-        docker_directory.mkdir(parents=True)
-        (docker_directory / "Dockerfile").write_text(f"RUN uv python install {uv_python_install}\n", encoding="utf-8")
-
-    def test_should_return_empty_when_versions_agree(self, tmp_path: Path):
-        self._write_version_tree(tmp_path)
-        assert version_coupling_violations(tmp_path, VERSION_COUPLINGS) == []
-
-    def test_should_flag_drifted_uv_base_tag(self, tmp_path: Path):
-        self._write_version_tree(tmp_path, uv_tag="0.12.14-python3.13-trixie-slim")
-        assert version_coupling_violations(tmp_path, VERSION_COUPLINGS) == [
-            f"uv: uv base tag at {tmp_path / 'docker-devkit.yaml'}: expected 0.12.15, found 0.12.14",
-        ]
-
-    def test_should_flag_unversioned_uv_base_tag(self, tmp_path: Path):
-        self._write_version_tree(tmp_path, uv_tag="python3.13-trixie-slim")
-        assert version_coupling_violations(tmp_path, VERSION_COUPLINGS) == [
-            f"uv: uv base tag at {tmp_path / 'docker-devkit.yaml'}: expected 0.12.15, found python3.13",
-        ]
-
-    def test_should_flag_uv_base_without_python_component(self, tmp_path: Path):
-        self._write_version_tree(tmp_path, uv_tag="0.12.15-trixie-slim")
-        assert version_coupling_violations(tmp_path, VERSION_COUPLINGS) == [
-            f"python: uv base python component at {tmp_path / 'docker-devkit.yaml'}: expected 3.13, found <missing>",
-        ]
-
-    def test_should_flag_python_component_drift(self, tmp_path: Path):
-        self._write_version_tree(tmp_path, python_tag="3.14-slim@sha256:" + "c" * 64, uv_python_install="3.14")
-        assert version_coupling_violations(tmp_path, VERSION_COUPLINGS) == [
-            f"python: python base tag at {tmp_path / 'docker-devkit.yaml'}: expected 3.13, found 3.14",
-            f"python: uv python install at {tmp_path / 'docker' / 'zed-capture' / 'Dockerfile'}: expected 3.13, found 3.14",
-        ]
-
-    def test_should_flag_missing_base_image_key(self, tmp_path: Path):
-        self._write_version_tree(tmp_path)
-        (tmp_path / "docker-devkit.yaml").write_text(
-            'requires: ">=0"\nbase_images:\n  UV_BASE_IMAGE: ghcr.io/astral-sh/uv:0.12.15-python3.13-trixie-slim\n',
-            encoding="utf-8",
-        )
-        assert version_coupling_violations(tmp_path, VERSION_COUPLINGS) == [
-            f"python: python base tag at {tmp_path / 'docker-devkit.yaml'}: expected 3.13, found <missing>"
-        ]
-
-    def test_should_flag_site_whose_files_are_absent(self, tmp_path: Path):
-        self._write_version_tree(tmp_path)
-        (tmp_path / "docker" / "zed-capture" / "Dockerfile").unlink()
-        assert version_coupling_violations(tmp_path, VERSION_COUPLINGS) == [
-            "python: uv python install at docker/zed-capture/Dockerfile: expected 3.13, found <missing>"
-        ]
-
-    def test_should_raise_when_pyproject_key_is_absent(self, tmp_path: Path):
-        self._write_version_tree(tmp_path)
-        (tmp_path / "pyproject.toml").write_text('[project]\nrequires-python = ">=3.13"\n', encoding="utf-8")
-        with pytest.raises(RuntimeError):
-            version_coupling_violations(tmp_path, VERSION_COUPLINGS)
 
 
 class TestResolveRemoteDigest:
