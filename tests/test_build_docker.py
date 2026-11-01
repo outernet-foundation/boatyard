@@ -13,6 +13,7 @@ import yaml
 from typer.testing import CliRunner
 
 from docker_devkit import bake as bake_module
+from docker_devkit import config as config_module
 from docker_devkit.verbs import build
 from docker_devkit.bake import DIGEST_FILE_NAME
 from docker_devkit.config import LOCK_PATH, DockerDevkitConfig
@@ -195,7 +196,7 @@ class TestDefaultTargets:
     ) -> list[str]:
         recorder = BakeRunner()
         monkeypatch.setattr(bake_module, "bash", recorder.run)
-        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
@@ -238,7 +239,7 @@ class TestDefaultTargets:
 
     def test_foreign_arch_repo_refuses_bare_build(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(bake_module, "bash", BakeRunner().run)
-        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
@@ -263,7 +264,7 @@ class TestDefaultTargets:
     def test_multiarch_repo_pins_the_host_platform_in_load_mode(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         bake_runner = BakeRunner()
         monkeypatch.setattr(bake_module, "bash", bake_runner.run)
-        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
@@ -280,7 +281,7 @@ class TestDefaultTargets:
     ):
         bake_runner = BakeRunner()
         monkeypatch.setattr(bake_module, "bash", bake_runner.run)
-        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
@@ -296,7 +297,7 @@ class TestDefaultTargets:
 
     def test_unknown_targets_refuse(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(bake_module, "bash", BakeRunner().run)
-        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
@@ -319,7 +320,7 @@ class TestDefaultTargets:
     def test_explicit_targets_never_probe_the_host_gpu(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         recorder = BakeRunner()
         monkeypatch.setattr(bake_module, "bash", recorder.run)
-        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
 
@@ -338,7 +339,7 @@ class TestDefaultTargets:
     def test_default_targets_resolve_auto_through_detection(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         recorder = BakeRunner()
         monkeypatch.setattr(bake_module, "bash", recorder.run)
-        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
         monkeypatch.setattr(bake_module, "detect_gpu", lambda: "cuda")
@@ -360,7 +361,7 @@ class TestDefaultTargets:
 
 class TestBuildKeysGuard:
     def _prepare(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(
             tmp_path,
@@ -423,7 +424,7 @@ class TestLockOnlySelfSkip:
         assert not (tmp_path / "workloads").exists()
 
     def test_lock_only_skips_without_declarations(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": EXTERNAL})
 
@@ -462,7 +463,7 @@ class TestDevBuilds:
     ) -> tuple[list[str], str]:
         recorder = BakeRunner()
         monkeypatch.setattr(bake_module, "bash", recorder.run)
-        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
@@ -511,7 +512,7 @@ class TestDevBuilds:
         assert services["localizer-rocm"]["build"]["tags"] == [f"{REPOSITORY}/localizer:dev"]
 
     def test_dev_refuses_push(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": DEV_STAGE})
 
@@ -521,7 +522,7 @@ class TestDevBuilds:
         assert "local-only" in result.output
 
     def test_dev_refuses_lock_only(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": DEV_STAGE})
 
@@ -531,7 +532,7 @@ class TestDevBuilds:
         assert "--lock-only" in _plain_output(result.output)
 
     def test_dev_without_any_dev_stage_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(bake_module, "detect_gpu", lambda: "none")
         monkeypatch.chdir(tmp_path)
@@ -544,7 +545,7 @@ class TestDevBuilds:
         assert "no service declares a dev stage" in str(result.exception)
 
     def test_dev_explicit_target_without_dev_stage_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": EXTERNAL, "auth": DEV_STAGE})
 
@@ -560,7 +561,7 @@ class TestBakeFailure:
             raise CalledProcessError(returncode=1, cmd=command)
 
         monkeypatch.setattr(bake_module, "bash", _fail)
-        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
@@ -583,7 +584,7 @@ class TestPushShelving:
         monkeypatch.setattr(bake_module, "bash_output", _head_sha)
         monkeypatch.setattr(bake_module, "push_build", recorder)
         monkeypatch.setattr(bake_module, "install_oras", _noop_install_oras)
-        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
         monkeypatch.setattr(bake_module, "resolve_remote_digest", _fixed_digest)
         monkeypatch.setenv("REGISTRY", "ghcr.io/owner")
         monkeypatch.chdir(tmp_path)
@@ -676,7 +677,7 @@ class TestPushShelving:
         monkeypatch.setattr(bake_module, "bash_output", _head_sha)
         monkeypatch.setattr(bake_module, "push_build", PushBuildRecorder())
         monkeypatch.setattr(bake_module, "install_oras", _noop_install_oras)
-        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
         monkeypatch.setattr(bake_module, "resolve_remote_digest", _fixed_digest)
         monkeypatch.setenv("REGISTRY", "ghcr.io/owner")
         monkeypatch.chdir(tmp_path)
@@ -710,7 +711,7 @@ class TestLockRecording:
     ) -> DigestRecorder:
         recorder = DigestRecorder()
         monkeypatch.setattr(bake_module, "resolve_remote_digest", recorder.resolve)
-        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(
             tmp_path,
@@ -782,7 +783,7 @@ class TestChartLockRecording:
     ):
         recorder = DigestRecorder()
         monkeypatch.setattr(bake_module, "resolve_remote_digest", recorder.resolve)
-        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles=None, charts={"loki": f"oci://{LOKI_UPSTREAM}:7.3.0"})
 
@@ -796,7 +797,7 @@ class TestChartLockRecording:
     def test_digest_declared_chart_passes_through_unresolved(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         recorder = DigestRecorder()
         monkeypatch.setattr(bake_module, "resolve_remote_digest", recorder.resolve)
-        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles=None, charts={"loki": f"oci://{LOKI_UPSTREAM}@{DIGEST_B}"})
 
@@ -812,7 +813,7 @@ class TestChartLockRecording:
     ):
         recorder = DigestRecorder()
         monkeypatch.setattr(bake_module, "resolve_remote_digest", recorder.resolve)
-        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles=None, charts={"loki": f"oci://{LOKI_UPSTREAM}:7.3.0"})
         (tmp_path / LOCK_PATH).write_text(
@@ -829,7 +830,7 @@ class TestChartLockRecording:
     def test_chart_tag_bump_re_resolves(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         recorder = DigestRecorder()
         monkeypatch.setattr(bake_module, "resolve_remote_digest", recorder.resolve)
-        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles=None, charts={"loki": f"oci://{LOKI_UPSTREAM}:7.3.1"})
         (tmp_path / LOCK_PATH).write_text(
@@ -850,7 +851,7 @@ class TestBakeSeesLockValues:
         monkeypatch.setattr(bake_module, "bash", probe.run)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(bake_module, "resolve_remote_digest", _fixed_digest)
-        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles=LOCK_DOCKERFILES, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
 
@@ -871,7 +872,7 @@ class TestLockCheck:
     ) -> Any:
         recorder = DigestRecorder()
         monkeypatch.setattr(bake_module, "resolve_remote_digest", recorder.resolve)
-        monkeypatch.setattr(bake_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(
             tmp_path,

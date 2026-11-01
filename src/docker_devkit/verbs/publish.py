@@ -20,7 +20,6 @@ from docker_devkit.publish import (
     bake_sources,
     finalize_baked,
 )
-from docker_devkit.service_builds import compute_service_shas
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
@@ -83,7 +82,7 @@ def publish_compose(
     branch_tag = (branch or bash_output("git rev-parse --abbrev-ref HEAD").strip()).replace("/", "-")
 
     substitutions = {
-        **compute_service_shas(root, config.service_builds),
+        **config.service_shas(),
         **parse_image_lock(root / LOCK_PATH).root,
     }
 

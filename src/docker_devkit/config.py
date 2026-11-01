@@ -10,7 +10,7 @@ from packaging.specifiers import SpecifierSet
 from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidationInfo, field_validator, model_validator
 from strictyaml import load as load_strict_yaml
 
-from docker_devkit.service_builds import FAN_ARG, ServiceBuild, derive_services, service_sha_env
+from docker_devkit.service_builds import FAN_ARG, ServiceBuild, compute_service_shas, derive_services, service_sha_env
 
 DEFAULT_CONFIG_PATH = Path("docker-devkit.yaml")
 DEV_SENTINEL = "0.0.0.dev0"
@@ -275,6 +275,12 @@ class DockerDevkitConfig(BaseModel):
     service_builds: dict[str, ServiceBuild] = Field(default_factory=dict, exclude=True)
     # The repo root the config was loaded from; load-injected, never authored.
     root: Path | None = Field(default=None, exclude=True)
+
+    def service_shas(self) -> dict[str, str]:
+        # The tree-tag environment over the derived services; the git hashing machinery
+        # stays in service_builds beside its model.
+        assert self.root is not None
+        return compute_service_shas(self.root, self.service_builds)
 
     def lock_entries(self) -> ImageLock:
         # The lock read where absence is legal; required-lock callers parse directly.

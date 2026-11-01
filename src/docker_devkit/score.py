@@ -40,7 +40,6 @@ from docker_devkit.documents import (
 from docker_devkit.markers import contains_marker, resolve_includes, resolve_lock_refs
 from docker_devkit.provisioners import compiled_provisioners, dump_compose
 from docker_devkit.secrets import SecretsDeclaration, collect_secret_keys
-from docker_devkit.service_builds import compute_service_shas
 
 # Match only ALL-CAPS placeholders so Score's lowercase dotted references never collide.
 PLACEHOLDER = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
@@ -118,7 +117,7 @@ def generate_artifacts(config: DockerDevkitConfig, target: Target, local: bool) 
         )
     assert config.root is not None
     root = config.root
-    os.environ.update(compute_service_shas(root, config.service_builds))
+    os.environ.update(config.service_shas())
     if config.k8s is not None:
         os.environ[STORAGE_CLASS_VAR] = LOCAL_STORAGE_CLASS if local else CLOUD_STORAGE_CLASS
     # The lock beside the manifest is the single digest source for authored lock markers.

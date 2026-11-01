@@ -30,7 +30,7 @@ from docker_devkit.config import (
 )
 from docker_devkit.daemon_gc import check_gc_limits
 from docker_devkit.image_refs import ImageReference, resolve_remote_digest
-from docker_devkit.service_builds import GpuFamily, compute_service_shas
+from docker_devkit.service_builds import GpuFamily
 
 
 METADATA_PATH = Path("metadata.json")
@@ -117,7 +117,7 @@ def run_build(
     lock_file = root / LOCK_PATH
     mirror_prefix = config.mirror.prefix if config.mirror is not None else DEFAULT_MIRROR_PREFIX
 
-    service_shas = compute_service_shas(root, config.service_builds)
+    service_shas = config.service_shas()
     os.environ.update(service_shas)
 
     lock_data = config.lock_entries().root
