@@ -10,11 +10,13 @@ file absorbs and replaces `plan-image-identity.md` and
 the history), capturing investigation sessions 2026-10-15 and 2026-10-22 and
 the consumer-consumption rulings of 2026-10-30. Parts 0–1 — the
 platform-resolved structured lock and the precise `tree-` input closure —
-are absorbed into and execute inside `plan-consumer-contract.md` (2026-11-01,
-amendments recorded there; implementation
-`plan-consumer-contract-implementation.md`); this file remains the decision
-record for Parts 2–4 and the sequencing between them, executed by
-`plan-artifact-identity-implementation.md` (phases 8–21). All open questions
+are absorbed into `plan-consumer-contract.md` (2026-11-01, amendments
+recorded there). Part 0 executes inside that initiative's implementation,
+`plan-consumer-contract-implementation.md`; Part 1 executes at the opening
+of this file's implementation plan, `plan-artifact-identity-implementation.md`
+(phases 8–11), ahead of the change detection that depends on it. This file
+remains the decision record for Parts 2–4 and the sequencing between them,
+executed by the same implementation plan (phases 12–25). All open questions
 are closed and recorded at the end. The compose consumer model's present
 truth lives in this repo's `AGENTS.md`; this ADR records the changes to it.
 Code anchors are as of their capture date and may drift.
@@ -112,7 +114,7 @@ package discipline). Dev tightens from manifest-presence to the same
 change-based gate; a docs-only landing in an images-only repo cuts nothing.
 Digest-based detection was rejected: rebuild churn re-digests unchanged trees
 and would bump versions on noise; tree tags are source-precise once the
-prerequisite initiative lands.
+Part 1 cluster lands (the implementation plan's opening phases).
 
 ### Channels and spellings
 
@@ -373,9 +375,11 @@ implementation-plan session descopes it if the loop turns out fast enough.
   cuda/rocm, compose sources) to `publish.yml`; stop pushing derived
   `:latest` on PR builds; `publish-compose` drops branch tags and the
   `--branch` flag; `.env` `BUNDLES=` flips to qualified spelling
-  (`core-cuda,auth-keycloak,tunnel-ngrok`). The P0+P1 relock and the one-time
+  (`core-cuda,auth-keycloak,tunnel-ngrok`). The P0 relock and its
   `stack/generated/**` regeneration ride the consumer-contract catch-up wave
-  (`plan-consumer-contract-implementation.md`, phase 12) — the items here are
+  (`plan-consumer-contract-implementation.md`, phase 9); the P1 re-key
+  regeneration rides the precision wave
+  (`plan-artifact-identity-implementation.md`, phase 11) — the items here are
   strictly the Part 2–3 additions.
 - Make-it-Sing: `images:` for `livekit-token`; `:latest` removal; `.env`
   flips (`BUNDLES=placeframe-cuda,tunnel-rathole`); yaml digest refs flip to
@@ -384,7 +388,8 @@ implementation-plan session descopes it if the loop turns out fast enough.
 - placeframe-capture-tool: `images:` for its workloads; `:latest` removal;
   `.env` flip.
 - infra: switch the three `tree-` pins to version tags at leisure — after
-  the consumer-contract re-key the old tree pins freeze and remain valid.
+  the precision re-key (the implementation plan's opening) the old tree pins
+  freeze and remain valid.
 
 ## Sequencing
 
@@ -393,11 +398,14 @@ dead-code windows, and consumer migration waves. Pain-relief timing is
 explicitly a non-goal.
 
 ```
-1. P0 + P1 — delivered by the consumer-contract initiative
+1. P0 — delivered by the consumer-contract initiative
       (`plan-consumer-contract.md` + `plan-consumer-contract-implementation.md`):
-      platform-resolved lock + tree-tag precision ship there in its single
-      release, riding its consumer catch-up wave — one lock-format migration,
-      one relock wave, and capture-tool's relock unblocks the ZED-box AOA deploy
+      the platform-resolved lock ships in its single release, riding its
+      consumer catch-up wave — one lock-format migration, one relock wave,
+      and capture-tool's relock unblocks the ZED-box AOA deploy.
+      P1 rides with the same ADR but executes at the opening of this file's
+      implementation plan: tree-tag precision, its release, and the consumer
+      re-key wave land before step 2's change detection consumes the tags
 2. P2  semver lines + {sha}-only publishes (github-actions-toolkit
       + build-artifact-registry) → versions exist
 3. P3 + P4a as ONE docker-devkit consumer-surface release
@@ -411,22 +419,25 @@ The three derivations behind it:
 1. No rework: an override shipped before Part 3 would be built, tested, and
    documented against digest-ref yaml — a spelling Part 3 deletes — then
    partially reworked. Everything ships once, against final shapes. The same
-   ruling drove the absorption: P0+P1 ride the consumer-contract initiative's
+   ruling drove P0's absorption: it rides the consumer-contract initiative's
    single release so there is one lock-format migration and one relock wave,
-   not two.
+   not two. P1 split from that release for schedule — the consumer-contract
+   release ships without waiting on the precision lift — at the cost of a
+   second consumer repin at this plan's opening.
 2. Entangled changes ship together, independent ones separately: qualified
    names → lock keys → override names → `BUNDLES=` parsing are one cluster in
-   the selection machinery; the prerequisite's hash/build side touches none of
-   it; Part 2 is a different repo. Each release is independently testable,
-   none carries machinery it cannot exercise (the lock writer ships only when
-   versions exist to resolve).
+   the selection machinery; Part 1 (this plan's opening cluster) is the
+   hash/build side and touches none of it; Part 2 is a different repo. Each
+   release is independently testable, none carries machinery it cannot
+   exercise (the lock writer ships only when versions exist to resolve).
 3. One consumer migration wave: every consumer repo is touched once — `.env`
    spellings, yaml versions, lock entries, override adoption as one reviewable
    change — instead of once per feature.
 
 The order and the release boundaries are ruled here;
 `plan-artifact-identity-implementation.md` owns the phase-level work breakdown
-that implementing sessions execute (phases 8–21; the step-1 breakdown lives in
+that implementing sessions execute (phases 8–25 — the Part 1 opening plus
+Parts 2–4; the step-1 P0 breakdown lives in
 `plan-consumer-contract-implementation.md`).
 
 ## Closed decisions
@@ -435,7 +446,7 @@ that implementing sessions execute (phases 8–21; the step-1 breakdown lives in
    stays the release-event grouping label. Flip-away conditions: none known —
    contract-coupling consumers would strengthen, not weaken, it.
 3. Images count as shippable; the release gate is tree-tag change
-   (source-precise once the prerequisite's attribution lands), not digest
+   (source-precise once Part 1's cluster lands), not digest
    change (rebuild churn) or presence (release spam); the dev gate tightens to
    match.
 4. Origin axis, uniform: third-party upstreams ride the mirror; org-internal
@@ -476,9 +487,9 @@ that implementing sessions execute (phases 8–21; the step-1 breakdown lives in
 12. The `up` fail-closed probe stays one law over every lock entry; bundle
     entries probe via `crane digest` (artifact media types).
 13. Sequencing optimizes for least error-proneness (ruling out a
-     pain-first ordering); step 1 is the consumer-contract initiative's
-     release, steps 2–3 carry two devkit releases, and stage 2 stays
-     trigger-gated; consumers adopt in one wave.
+     pain-first ordering); the P0 foundation rides the consumer-contract
+     release, P1 opens this plan, steps 2–3 carry two more devkit releases,
+     and stage 2 stays trigger-gated; consumers adopt in one wave.
 
 ## Dismissed and deferred
 

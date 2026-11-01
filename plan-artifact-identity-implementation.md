@@ -1,19 +1,21 @@
 # Artifact identity implementation plan (Plan B)
 
-Procedural delivery plan for Parts 2–4 of the artifact-identity ADR
-(`plan-artifact-identity.md`) — sequencing steps 2–4: per-unit semver lines,
-bundle pinning through the lock, local overrides. The ADR owns decisions and
-rationale; this plan owns the ordered work and is the document implementing
-sessions build against. Per phase: load the phase section, the files it
-names, and the ADR anchor it cites — not the whole ADR. If this plan and the
-ADR disagree, reconcile both docs before touching code (spec-first).
+Procedural delivery plan for the artifact-identity ADR
+(`plan-artifact-identity.md`) — Parts 2–4, sequencing steps 2–4: per-unit
+semver lines, bundle pinning through the lock, local overrides — opened by
+the precision cluster: the Part 1 material (attribution-based tree-tag
+precision) the consumer-contract ADR also absorbed, executing here because
+P2's change detection hard-depends on source-precise tree tags. The ADR owns
+decisions and rationale; this plan owns the ordered work and is the document
+implementing sessions build against. Per phase: load the phase section, the
+files it names, and the ADR anchor it cites — not the whole ADR. If this plan
+and the ADR disagree, reconcile both docs before touching code (spec-first).
 
-Phases 1–7 of the previous numbering — the platform-resolved structured lock
-and attribution-based tree-tag precision (ADR Parts 0–1) — are delivered by
-the consumer-contract initiative: `plan-consumer-contract-implementation.md`.
+The P0 foundation — the platform-resolved structured lock — is delivered by
+the consumer-contract initiative, `plan-consumer-contract-implementation.md`.
 Phase completion lives in git history; nothing here tracks status.
 
-## Prerequisites (phases 1–7, delivered by Plan A)
+## Prerequisites (delivered by Plan A)
 
 Before phase 8 opens, the consumer-contract release and its catch-up wave
 have landed:
@@ -22,22 +24,21 @@ have landed:
   one concrete manifest digest per declared platform, charts flat — written
   by the platform-resolving `build --lock-only`; env consumption is
   synthesized per-run at the compose/bake edges, with a `lock-env` verb.
-- `tree-` tags are source-precise: the hash inputs are attributed per service
-  from the Dockerfile's actual consumption, the construct inventory fails
-  closed, and content-addressed build paths refuse a dirty tree. Phase 10's
-  change detection builds directly on this — tree tags are the change signal,
-  so imprecision here means spurious version bumps there.
 - Literal image references are refused at derivation; the version-coupling
   registry is gone; `build --registry` exists.
 - All five consumers repin once in the catch-up wave, with completed
   `platforms` declarations and structured locks.
 
+The Part 1 precision material is not a prerequisite — it is this plan's own
+opening cluster (phases 8–11), landing before the change detection that
+consumes precise tree tags.
+
 ## Standing constraints
 
 These rulings bind every phase:
 
-- Fail closed: an unknown name, missing lock entry, or dirty
-  content-addressed build path refuses loudly, never silently.
+- Fail closed: an unattributable construct, unknown name, missing lock entry,
+  or dirty content-addressed build path refuses loudly, never silently.
 - Platform facts come from declarations, never from the touching machine
   (delivered by Plan A): the lock is structured YAML recording, per image,
   the index digest plus one concrete manifest digest per declared platform;
@@ -59,18 +60,26 @@ These rulings bind every phase:
 
 ```
 prerequisite       Plan A       consumer-contract initiative delivers the
-                                 P0+P1 foundation: structured lock, precise
-                                 tree tags, relock + catch-up wave
-P2 semver          phases 8-12  toolkit + build-artifact-registry + devkit:
+                                 P0 foundation: structured lock, relock +
+                                 catch-up wave
+precision          phases 8-11  docker-devkit: the absorbed Part 1 —
+                                 attribution parser, precise tree-tag
+                                 hashes, dirty-tree guard, release, and the
+                                 consumer re-key wave
+P2 semver          phases 12-16 toolkit + build-artifact-registry + devkit:
                                  version lines, sha-only publishes
-P3+P4a consumer    phases 13-17  docker-devkit: qualified grammar, lock
+P3+P4a consumer    phases 17-21 docker-devkit: qualified grammar, lock
                                  pinning, overrides, release
-adoption wave      phases 18-20  one commit per consumer repo
-P4b overlay        phase 21      cross-repo dev overlay — trigger-gated,
+adoption wave      phases 22-24 one commit per consumer repo
+P4b overlay        phase 25     cross-repo dev overlay — trigger-gated,
                                  not scheduled
 ```
 
-Order within a cluster is strict; cluster order is fixed above.
+Order within a cluster is strict; cluster order is fixed above. The
+precision cluster precedes P2 by construction: phase 14's change gate
+compares tree tags, and the tags are trustworthy change signals only once
+attribution makes them source-precise — every over-inclusion is a spurious
+version bump.
 
 ## Session-start checkout state
 
@@ -104,26 +113,154 @@ holds and its verify list passes green.
 
 | # | Phase | Repo | ADR |
 |---|---|---|---|
-| 8 | Registry aliasing primitive | build-artifact-registry | Part 2 |
-| 9 | Image and bundle declarations | github-actions-toolkit | Part 2 |
-| 10 | Change detection | github-actions-toolkit | Part 2 |
-| 11 | Release verb channels | github-actions-toolkit | Part 2 |
-| 12 | Publish-side cleanup release | docker-devkit + toolkit | Part 2 |
-| 13 | Qualified selection grammar | docker-devkit | Part 3 |
-| 14 | Bundle pinning through the lock | docker-devkit | Part 3 |
-| 15 | Lock probing at bring-up | docker-devkit | Part 3 |
-| 16 | Local bundle overrides | docker-devkit | Part 4 |
-| 17 | Consumer-surface release | docker-devkit | Sequencing |
-| 18 | placeframe adoption | placeframe | Consumer adoption |
-| 19 | Make-it-Sing adoption and tag hygiene | Make-it-Sing | Consumer adoption, Hygiene |
-| 20 | capture-tool adoption; infra at leisure | placeframe-capture-tool, infra | Consumer adoption |
-| 21 | Cross-repo dev overlay (trigger-gated) | docker-devkit | Part 4 |
+| 8 | Attribution parser and construct guard | docker-devkit | absorbed Part 1 |
+| 9 | Attribution-based service hashes | docker-devkit | absorbed Part 1 |
+| 10 | Dirty-tree guard | docker-devkit | absorbed Part 1 |
+| 11 | Precision release and re-key wave | docker-devkit + consumers | absorbed Part 1 |
+| 12 | Registry aliasing primitive | build-artifact-registry | Part 2 |
+| 13 | Image and bundle declarations | github-actions-toolkit | Part 2 |
+| 14 | Change detection | github-actions-toolkit | Part 2 |
+| 15 | Release verb channels | github-actions-toolkit | Part 2 |
+| 16 | Publish-side cleanup release | docker-devkit + toolkit | Part 2 |
+| 17 | Qualified selection grammar | docker-devkit | Part 3 |
+| 18 | Bundle pinning through the lock | docker-devkit | Part 3 |
+| 19 | Lock probing at bring-up | docker-devkit | Part 3 |
+| 20 | Local bundle overrides | docker-devkit | Part 4 |
+| 21 | Consumer-surface release | docker-devkit | Sequencing |
+| 22 | placeframe adoption | placeframe | Consumer adoption |
+| 23 | Make-it-Sing adoption and tag hygiene | Make-it-Sing | Consumer adoption, Hygiene |
+| 24 | capture-tool adoption; infra at leisure | placeframe-capture-tool, infra | Consumer adoption |
+| 25 | Cross-repo dev overlay (trigger-gated) | docker-devkit | Part 4 |
 
-## Phase 8 — Registry aliasing primitive
+"Absorbed Part 1" anchors point at the design the consumer-contract ADR
+(`plan-consumer-contract.md`, Absorption section) holds for tree-tag
+precision; the design detail is lifted into the phases below.
 
-Cluster P2 · build-artifact-registry · ADR Part 2, "Aliasing mechanism". Load:
-`src/build_artifact_registry/cache.py` (`promote_scope` — the `oras tag`
-pattern), `setup_oras.py`.
+## Phase 8 — Attribution parser and construct guard
+
+Cluster precision · docker-devkit · absorbed Part 1, "The design" and "The
+fail-closed construct guard". Load: `service_builds.py` (`ParsedDockerfile`,
+`ServiceBuild`, `derive_services`), `config.py` (`build_legs` — the
+context-edge closure), the Dockerfile fixtures under `tests/`.
+
+End state:
+
+- A pure parsing layer in a new module beside `service_builds.py` computes,
+  per service: the Dockerfile's `COPY`/`ADD` source paths and globs, its
+  `ARG` declarations, its build mapping as the record derives it (dockerfile,
+  target, platforms, rendered args, context edges — the refactor dissolved
+  the bake manifest document, so the derivation itself is the serialization;
+  tag lists are not inputs), and its `additional_contexts` edges in
+  `target:` form only. The Dockerfile is the declaration; no input
+  declarations join `docker-devkit.yaml` — a config-declared input list is a
+  second source of truth that drifts, and verifying it against the Dockerfile
+  requires the parser anyway.
+- Every construct that can read the build context is either fully attributed
+  or a loud failure: path-form `additional_contexts` rejects;
+  `RUN --mount=type=bind,source=…` rejects; heredoc `COPY`, unknown syntax,
+  and unresolvable globs reject; URL-form `ADD` rides (network channel,
+  uncovered by design — same category as apt).
+- `COPY` sources outside {own dir} ∪ {copied shared roots} ∪ {declared
+  dependency outputs} reject — the cross-service guard absorbed into the
+  attribution pass.
+
+Verify: fixture tests — one per loud failure, one per attributed construct.
+
+## Phase 9 — Attribution-based service hashes
+
+Cluster precision · docker-devkit · absorbed Part 1, "Over-inclusion fates"
+and "Soundness argument". Load: `service_builds.py` (`compute_service_shas`,
+`service_sha_env`), `config.py` (`build_legs`), `tests/test_service_builds.py`.
+
+End state:
+
+- The closure walk (union-find over the derived context edges, inside
+  `build_legs`) lifts to a shared function in `service_builds.py` beside the
+  model it walks; `build_legs` and the hasher both consume it — the one-way
+  import law holds (`service_builds` imports nothing from `config`).
+- `compute_service_shas` hashes, per service: the Dockerfile itself (any
+  recipe change re-keys, keeping the closure self-consistent — a new `COPY`
+  line moves the hash at the same moment the newly copied files enter the
+  resolved set); the resolved `COPY`/`ADD` set against the allowlisted
+  committed tree (shared roots enter only when copied); the lock entries
+  whose names intersect the Dockerfile's `ARG` declarations, serialized from
+  the structured model (declared-but-unused args still hash;
+  compose-runtime-only entries drop out of build hashes entirely); the
+  service's build mapping (phase 8's serialization); and each context
+  dependency's computed tree hash embedded as a synthetic entry —
+  hash-of-hash over the DAG, no circularity.
+- `.dockerignore` is not a hash input: an edit that changes what a `COPY`
+  glob matches re-keys exactly the affected services through the resolved
+  set; an edit that matches nothing matched changed no bits, so no re-key is
+  correct.
+- Services sharing one Dockerfile dir hash identically (the variant
+  difference is an arg inside the build mapping); a variant-arg edit re-keys
+  both. An empty service set still returns `{}` without touching git.
+
+Verify (the negative-test battery): a lock line for an undeclared base edited
+→ unaffected services unchanged; another service's manifest arg edited → this
+service unchanged; a shared-root file no service copies edited → no re-key; a
+`.dockerignore` edit that matches nothing → no re-key; own-dir edit → re-key;
+dependency-dir edit → dependent re-keys; declared-arg lock edit → re-key.
+
+## Phase 10 — Dirty-tree guard
+
+Cluster precision · docker-devkit · absorbed Part 1, "Dirty-tree guard".
+Load: `bake.py` (`run_build`), `verbs/build.py`, `verbs/up.py` (the `--build`
+wiring).
+
+End state:
+
+- `build` and `up --build` run `git status --porcelain` filtered to the
+  allowlisted set (modified and untracked both count) and refuse loudly
+  listing the offending paths — the hash is over the committed tree while
+  builds compile the working tree, and post-precision this is the only
+  remaining way a `tree-` tag can lie.
+- `build --dev` and bare `up` are exempt — dev tags are not content-addressed
+  and the bind-mount workflow runs dirty by design; bare `up` pulls
+  committed-tree tags and is self-consistent. `--lock-only`,
+  `generate-score`, and `publish-compose` carry no guard (clean CI checkouts
+  make it a no-op there).
+
+Verify: dirty tree → loud failure listing paths on `build` and `up --build`;
+permitted on `build --dev` and bare `up`.
+
+## Phase 11 — Precision release and re-key wave
+
+Cluster precision · docker-devkit + image-building consumers · absorbed
+Part 1, "One-time re-key choreography" and "Delivery". Load: the release
+flow (github-actions-toolkit's AGENTS.md), the consumers' `uv.lock` files.
+
+End state:
+
+- docker-devkit ships one patch release carrying phases 8–10 (pre-1.0;
+  breaking rides the patch flow). The image-building consumers — placeframe,
+  placeframe-capture-tool, Make-it-Sing — repin onto it before phase 14 ever
+  runs: the toolkit compares tree tags recorded by consumer CI builds, so
+  those builds must compute precise tags at the certified head.
+- The repin is a `uv.lock` bump — no declaration changes, no lock rewrite
+  (the third-party lock is untouched by hash precision).
+- placeframe runs one deliberate `stack/generated/**` regeneration cycle
+  after the re-key — every image gets a fresh `tree-` tag at its next build:
+  commit the devkit bump, run `generate-score`, commit the artifacts in a
+  second commit (the score staleness gate is disabled there; operator
+  discipline).
+- Old `tree-` tags freeze in place — CI never re-pushes them, so existing
+  pins convert from movable to actually-immutable. infra's three `tree-`
+  pins keep resolving to frozen digests, re-pointed at leisure or at Part
+  2's version tags. Calibration-corpus rows keep their old
+  `pipeline_version` values (the existing re-key hard-fail on redeploy
+  stands).
+
+Verify: consumer CI green end-to-end; the placeframe regeneration diff is
+committed and reviewed; a rebuild of an unchanged tree keeps its tag (the
+negative battery's positive corollary).
+
+## Phase 12 — Registry aliasing primitive
+
+Cluster P2 · build-artifact-registry · ADR Part 2, "Aliasing mechanism".
+Load: `src/build_artifact_registry/cache.py` (`promote_scope` — the
+`oras tag` pattern), `setup_oras.py`.
 
 End state:
 
@@ -137,7 +274,7 @@ End state:
 Verify: stub-registry tests — index and manifest aliasing, multi-tag calls,
 missing-ref failure.
 
-## Phase 9 — Image and bundle declarations
+## Phase 13 — Image and bundle declarations
 
 Cluster P2 · github-actions-toolkit · ADR Part 2, "Version space" and
 "Declaration surface". Load: `src/github_actions_toolkit/config.py`
@@ -159,7 +296,7 @@ End state:
 Verify: suffix-stripping derivation; version math including forced publish;
 schema refusals (missing `major_minor`, unknown keys).
 
-## Phase 10 — Change detection
+## Phase 14 — Change detection
 
 Cluster P2 · github-actions-toolkit · ADR Part 2, "Change detection via the
 shelf" and "Compose bundles". Load: `verbs/release.py` (`pull_digest_manifest`
@@ -171,7 +308,8 @@ End state:
   that SHA's digest manifest from the shelf → compare the recorded `tree-` tags
   against the certified head's. Any variant's tree tag differs ⇒ ship and bump;
   no tag yet ⇒ first release ships. Tree tags are trustworthy change signals
-  precisely because Plan A's attribution landed them source-precise.
+  precisely because the precision cluster (phases 8–11) landed them
+  source-precise.
 - The toolkit imports no docker-devkit anywhere in this path.
 - Stable ships when any package, app, image unit, or bundle changed; the dev
   gate tightens from manifest-presence to the same change-based gate (a
@@ -184,7 +322,7 @@ Verify: stubbed shelf — changed, unchanged, first-release, missing-shard;
 nothing-to-ship including images and bundles; the bundle-gate trio
 (image-advanced, source-diff, lock-diff).
 
-## Phase 11 — Release verb channels
+## Phase 15 — Release verb channels
 
 Cluster P2 · github-actions-toolkit · ADR Part 2, "Channels and spellings",
 "`:latest` repoint", "Release-note surfaces". Load: `verbs/release.py` (stage
@@ -202,14 +340,14 @@ End state:
 - Release notes: pr/dev/stable render from one spine; the images table is
   `Image | Version` (the changed/unchanged pattern); the bundle row links the
   version page; the `tree-` tag stays one click away on the version page.
-- All aliasing goes through the phase-8 primitive; push-once discipline holds
+- All aliasing goes through the phase-12 primitive; push-once discipline holds
   under the release mutex; the shelf is SHA-keyed, so re-runs alias identical
   digests.
 
 Verify: aliasing calls against a stub registry; `latest` on stable only; dev
 aliases changed units only; note rendering for the three channels.
 
-## Phase 12 — Publish-side cleanup release
+## Phase 16 — Publish-side cleanup release
 
 Cluster P2 · docker-devkit + github-actions-toolkit · ADR Part 2, "`:latest`
 repoint" and the branch-tag retirement in "Compose bundles". Load:
@@ -226,16 +364,16 @@ End state:
 - The toolkit's reusable workflow stops passing `--branch`. Consumers relock
   devkit and bump the toolkit pin in one commit (the adoption wave), so no CI
   window ever passes a dead flag.
-- docker-devkit ships this as its release after the consumer-contract one —
-  the first release of this plan's cluster.
+- docker-devkit ships this as its second release of this plan, after the
+  precision release.
 
 Verify: `render_bake` golden tests for push vs load mode; sha-only publish tests;
 the toolkit reusable renders without the flag.
 
-## Phase 13 — Qualified selection grammar
+## Phase 17 — Qualified selection grammar
 
-Cluster P3+P4a · docker-devkit · ADR Part 3, "Qualified selection names". Load:
-`config.py` (the services schema, the flat-vocabulary collision law),
+Cluster P3+P4a · docker-devkit · ADR Part 3, "Qualified selection names".
+Load: `config.py` (the services schema, the flat-vocabulary collision law),
 `assembly.py` (the `Assembly` constructor's `BUNDLES=` resolution),
 `tests/test_config.py`, `tests/test_compose.py`.
 
@@ -248,13 +386,13 @@ End state:
   within a group); two groups may each carry a `cuda` option.
 - At-most-one-option-per-group refusal unchanged; unknown names refuse loudly
   listing the qualified vocabulary; a bare entry's name refuses as unselectable.
-- Breaking change; ships in the phase-17 release and is adopted in the wave.
+- Breaking change; ships in the phase-21 release and is adopted in the wave.
 
 Verify: qualified resolution; two groups each carrying same-named options;
 at-most-one refusal; unknown-name vocabulary listing; bare-name unselectable
 refusal.
 
-## Phase 14 — Bundle pinning through the lock
+## Phase 18 — Bundle pinning through the lock
 
 Cluster P3+P4a · docker-devkit · ADR Part 3, "Ref grammar and lock entries".
 Load: `config.py` (the entry `ref:` grammar, `parse_image_lock`), `bake.py`
@@ -281,7 +419,7 @@ Verify: digest/`latest`/range refusals; lock-key derivation including bare
 entries; declaration-incremental copy-forward, tag-bump re-resolve, `--upgrade`;
 collision refusal; missing-entry refusal naming the relock.
 
-## Phase 15 — Lock probing at bring-up
+## Phase 19 — Lock probing at bring-up
 
 Cluster P3+P4a · docker-devkit · ADR Part 3 plus Closed decision 12. Load:
 `verbs/up.py` (the fail-closed probe), `assembly.py` (the include
@@ -298,7 +436,7 @@ End state:
 Verify: probe pass/fail/not-mirrored classification for bundle entries; the
 materialized root carries digest refs.
 
-## Phase 16 — Local bundle overrides
+## Phase 20 — Local bundle overrides
 
 Cluster P3+P4a · docker-devkit · ADR Part 4, Stage 1. Load: `assembly.py`
 (the selection and materialization; `parse_env_file` lives here — `host.py`
@@ -333,17 +471,17 @@ Verify: both value forms; the refusal list; the inert override; probe and
 requirement skip; producer-lock attachment and ordering; door and collision
 teeth.
 
-## Phase 17 — Consumer-surface release
+## Phase 21 — Consumer-surface release
 
 Cluster P3+P4a · docker-devkit · ADR "Sequencing", step 3.
 
-End state: one docker-devkit patch release carrying phases 13-16. Consumers
+End state: one docker-devkit patch release carrying phases 17–20. Consumers
 relock only in the wave — the grammar flip breaks `.env` spellings, so relock
 and flip are atomic per repo.
 
 Verify: the battery green; the release published.
 
-## Phase 18 — placeframe adoption
+## Phase 22 — placeframe adoption
 
 Adoption wave · placeframe · ADR "Consumer adoption". Load: placeframe's
 `publish.yml`, `docker-devkit.yaml`, `.env` (and any committed example), CI
@@ -353,7 +491,7 @@ End state:
 
 - `publish.yml` gains `images:` (13 units) and `bundles:` (`placeframe`; variants
   cuda/rocm; the compose source paths).
-- One adoption commit: relock onto the phase-17 devkit release, bump the toolkit
+- One adoption commit: relock onto the phase-21 devkit release, bump the toolkit
   pin, and flip `.env` `BUNDLES=` to qualified spellings
   (`core-cuda,auth-keycloak,tunnel-ngrok`). No `--branch` usage survives.
 - The unused `.dockerignore` allowlist entry
@@ -365,7 +503,7 @@ End state:
 Verify: CI green through the first release; versions resolvable in ghcr; the
 `packages/generated` entry gone from `.dockerignore`.
 
-## Phase 19 — Make-it-Sing adoption and tag hygiene
+## Phase 23 — Make-it-Sing adoption and tag hygiene
 
 Adoption wave · Make-it-Sing · ADR "Consumer adoption" and "Hygiene". Load:
 Make-it-Sing's `publish.yml`, `docker-devkit.yaml`, `.env`, `docker-devkit.lock`.
@@ -385,24 +523,24 @@ End state:
 Verify: CI green; the lock diff shows the two `_BUNDLE` entries; the stale tags
 are gone.
 
-## Phase 20 — capture-tool adoption; infra at leisure
+## Phase 24 — capture-tool adoption; infra at leisure
 
 Adoption wave · placeframe-capture-tool, infra · ADR "Consumer adoption".
 
 End state:
 
 - capture-tool: `images:` for its workloads; `:latest` removal; `.env` flip;
-  relock onto the phase-17 devkit release.
+  relock onto the phase-21 devkit release.
 - infra: its three `tree-` pins switch to version tags — no deadline; the frozen
   tree pins remain valid indefinitely.
 
 Verify: CI green per repo.
 
-## Phase 21 — Cross-repo dev overlay (trigger-gated)
+## Phase 25 — Cross-repo dev overlay (trigger-gated)
 
 P4b · docker-devkit · ADR Part 4, Stage 2, and Closed decision 10.
 
-Build only when the trigger holds: the phase-16 commit → rebuild loop proves too
+Build only when the trigger holds: the phase-20 commit → rebuild loop proves too
 slow in daily consumer-driven development. A session taking this phase first
 confirms the trigger; otherwise it does not run.
 

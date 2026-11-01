@@ -182,7 +182,8 @@ needs nothing. Post-dissolution inventory: placeframe's `api_auth.py` and
 ### D9 — Consumer catch-up: one wave
 
 All five consumers repin once, onto a single devkit release carrying this
-ADR's devkit-side work plus absorbed Parts 0–1. Known consumer-side work:
+ADR's devkit-side work plus absorbed Part 0 (Part 1 follows at Plan B's
+opening; see Absorption). Known consumer-side work:
 placeframe's `scripts/preflight.py` drops its four imports and the
 `VERSION_COUPLINGS` list; its two score-generation test modules rewrite to
 assert against committed artifacts (freshness is already gated by
@@ -200,13 +201,21 @@ The platform-resolved structured-YAML lock (Part 0) and the attribution-based
 tree-hash precision (Part 1) — implementation phases 1–7 of
 `plan-artifact-identity-implementation.md` — are absorbed into this
 initiative. Rationale: the session already owes consumers exactly one
-relock-and-catch-up wave; riding P0+P1 on it costs zero additional waves and
+relock-and-catch-up wave; riding P0 on it costs zero additional waves and
 lands every read-surface change (YAML lock, `lock-env`,
 tag lookup, templates) in the single release consumers pin once. Part 0 also fixes
 capture-tool's live per-arch defect (index digests vs arm64 dishes — boxes
 currently ship unexecutable amd64 loki/alloy).
 
 Amendments recorded against the absorbed material:
+
+- Part 1 executes at the opening of `plan-artifact-identity-implementation.md`
+  (Plan B), not in this initiative: Plan B's change detection hard-depends on
+  source-precise tree tags, and splitting the precision lift out lets this
+  initiative's release ship sooner. Cost: a second consumer repin and a
+  second placeframe regeneration at Plan B's precision wave — the
+  zero-additional-waves rationale above held only while P1 rode this
+  release. The D9 release therefore carries Part 0 only.
 
 - No consumer calls the `entry_for` selection function — it is devkit-internal
   glue; consumers read the committed YAML or `lock-env` (the D1 law over the
@@ -236,14 +245,15 @@ invariant check survives anywhere in the design.
 Two ADRs and two implementation plans, each self-contained:
 
 1. **Plan A** — `plan-consumer-contract-implementation.md` — implements this
-   ADR: D3–D7 devkit work; the absorbed Parts 0–1, with their design detail
-   lifted in (resolver selection rules, migration, dirty-tree guard, re-key
-   choreography, test batteries); the consumer catch-up (D9); and the O1
-   archaeology as its first phase. It locks the names this ADR deferred to
-   plan-session material: the tag-lookup verb is `tree-tags`, the retarget
-   flag is `--registry`.
-2. **Plan B** — `plan-artifact-identity-implementation.md`, phases 8–21
-   (Parts 2–4), standing alone over stated prerequisites Plan A delivers;
+   ADR: D3–D7 devkit work; the absorbed Part 0, with its design detail
+   lifted in (resolver selection rules, migration, test batteries); the
+   consumer catch-up (D9); and the O1 archaeology as its first phase. It
+   locks the names this ADR deferred to plan-session material: the tag-lookup
+   verb is `tree-tags`, the retarget flag is `--registry`.
+2. **Plan B** — `plan-artifact-identity-implementation.md` — opens with the
+   absorbed Part 1 precision cluster (attribution parser, precise hashes,
+   dirty-tree guard, release, consumer re-key wave — phases 8–11) and then
+   executes Parts 2–4 (phases 12–25) over the P0 foundation Plan A delivers;
    its session-start checkout table is re-derived at this initiative's
    release boundary, before its first session opens.
 3. `plan-artifact-identity.md` is the Parts 2–4 decision record; this ADR's
