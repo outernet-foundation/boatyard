@@ -86,11 +86,9 @@ def down(
     volumes: Annotated[bool, typer.Option("--volumes", "-v", help="Remove named volumes.")] = False,
 ) -> None:
     root = Path.cwd()
-    config = load_config(root)
 
     require_env_file(root)
-    require_compose_stack(config)
-    assert config is not None
+    config = require_compose_stack(load_config(root))
 
     # Tear down by project name, covering every selection and profile.
     assembly_root = write_temp_compose_file({"name": config.project_name}, "devkit-assembly-")

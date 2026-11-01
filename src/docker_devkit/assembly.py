@@ -67,8 +67,7 @@ class Assembly:
         if config is None or not config.services:
             if names:
                 raise RuntimeError(f"{BUNDLES_VARIABLE}= is set but this repo declares no services")
-            require_compose_stack(config)
-        assert config is not None
+            config = require_compose_stack(config)
         self.config = config
 
         # BUNDLES= names options only: at most one per group, zero legal when riders
@@ -295,12 +294,13 @@ def require_env_file(root: Path) -> None:
         raise RuntimeError("No .env file found; create one first (e.g., copy .env.example)")
 
 
-def require_compose_stack(config: DockerDevkitConfig | None) -> None:
+def require_compose_stack(config: DockerDevkitConfig | None) -> DockerDevkitConfig:
     if config is None or not config.services:
         raise RuntimeError(
             "no docker-devkit.yaml (or no services: in it); "
             "a builds-only, mirror-only, or k8s-only repo has no compose stack"
         )
+    return config
 
 
 def compose_command(root: Path, compose_files: list[Path], *arguments: str) -> str:
