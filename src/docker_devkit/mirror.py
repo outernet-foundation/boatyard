@@ -8,7 +8,6 @@ from bashrun.bash import bash, bash_check
 from .config import (
     DEFAULT_MIRROR_PREFIX,
     LOCK_PATH,
-    MirrorConfig,
     chart_lock_key,
     load_config,
     optional_lock_entries,
@@ -56,11 +55,6 @@ def mirror() -> None:
         bash(f"crane copy {reference} {destination}")
         copied += 1
     print(f"Mirrored references: {copied} copied, {already_present} already present")
-
-
-def load_mirror_config(root: Path) -> MirrorConfig | None:
-    config = load_config(root)
-    return config.mirror if config is not None else None
 
 
 def mirrored_ref(reference: str, prefix: str) -> str:

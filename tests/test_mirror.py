@@ -7,7 +7,6 @@ from typer.testing import CliRunner, Result
 
 from docker_devkit import crane, mirror
 from docker_devkit.config import LOCK_PATH
-from docker_devkit.mirror import MirrorConfig
 
 MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
 FAKE_DIGEST = "sha256:" + "a" * 64
@@ -49,33 +48,6 @@ class CommandRecorder:
     def check(self, command: str) -> bool:
         self.commands.append(command)
         return command.removeprefix("crane digest ") in self.present_refs
-
-
-class TestLoadMirrorConfig:
-    def test_loads_declared_prefix(self, tmp_path: Path):
-        _write_config(tmp_path, {"mirror": {"prefix": MIRROR_PREFIX}})
-
-        assert mirror.load_mirror_config(tmp_path) == MirrorConfig(prefix=MIRROR_PREFIX)
-
-    def test_absent_section_returns_none(self, tmp_path: Path):
-        _write_config(tmp_path, {"requires": ">=0.1"})
-
-        assert mirror.load_mirror_config(tmp_path) is None
-
-    def test_missing_config_returns_none(self, tmp_path: Path):
-        assert mirror.load_mirror_config(tmp_path) is None
-
-    def test_rejects_unknown_keys(self, tmp_path: Path):
-        _write_config(tmp_path, {"mirror": {"prefix": "ghcr.io/x/mirror", "bogus": "true"}})
-
-        with pytest.raises(ValidationError):
-            mirror.load_mirror_config(tmp_path)
-
-    def test_rejects_trailing_slash_prefix(self, tmp_path: Path):
-        _write_config(tmp_path, {"mirror": {"prefix": "ghcr.io/x/mirror/"}})
-
-        with pytest.raises(ValidationError):
-            mirror.load_mirror_config(tmp_path)
 
 
 class TestMirroredRef:
