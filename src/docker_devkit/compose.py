@@ -17,14 +17,13 @@ from .config import (
     CADDY_IMAGE,
     DEV_TOGGLES_ANNOTATION,
     DOOR_SERVICE_NAME,
-    DockerDevkitConfig,
     LOCK_PATH,
     ServiceGroup,
     compose_bundles,
     load_config,
     parse_image_lock,
 )
-from .environment import UpEnvironment, assert_known_profiles, require_env_file
+from .assembly import Assembly, assert_known_profiles, require_compose_stack, require_env_file
 
 DEV_MOUNT_TARGET = "/app"
 
@@ -42,9 +41,7 @@ down_app = typer.Typer(add_completion=False)
 @dataclass(frozen=True)
 class ComposeContext:
     root: Path
-    config: DockerDevkitConfig
     compose_files: list[Path]
-    environment: dict[str, str] | None
     dev_overlay: Path | None = None
     assembly_root: Path | None = None
 
@@ -128,19 +125,20 @@ def up(
     root = Path.cwd()
     config = load_config(root)
 
-    # Construct the typed env view once; every derivation and refusal rides its constructor.
-    facts = UpEnvironment(root, config)
+    # Resolve once; every environment read and selection refusal rides the constructor.
+    facts = Assembly(root, config)
+    assert config is not None
 
     # Generate the dev overlay from the assembly's dev shapes.
     dev_overlay: Path | None = None
     if dev:
         declared = facts.output_services
         overlay_services: dict[str, OverlayService] = {}
-        for name, service in facts.config.service_builds.items():
+        for name, service in config.service_builds.items():
             if not service.dev_stage or name not in declared:
                 continue
             overlay_services[name] = {
-                "image": f"{facts.config.repository}/{name}:dev",
+                "image": f"{config.repository}/{name}:dev",
                 "volumes": [
                     {
                         "type": "bind",
@@ -150,10 +148,10 @@ def up(
                     }
                 ],
             }
-        for bundle in compose_bundles(facts.config):
+        for bundle in compose_bundles(config):
             for workload in bundle.workloads:
                 workload_document: dict[str, object] = _mapping_or_empty(
-                    yaml.safe_load((root / facts.config.score_dir / workload).read_text(encoding="utf-8"))
+                    yaml.safe_load((root / config.score_dir / workload).read_text(encoding="utf-8"))
                 )
                 metadata: dict[str, object] = _mapping_or_empty(workload_document.get("metadata"))
                 annotations: dict[str, object] = _mapping_or_empty(metadata.get("annotations"))
@@ -185,18 +183,18 @@ def up(
 
     # Assemble the root document: name, includes, door, port stanzas, Caddyfile.
     document: AssemblyRoot = {}
-    assert facts.config.project_name is not None
-    document["name"] = facts.config.project_name
-    if facts.sources:
-        document["include"] = facts.sources
+    assert config.project_name is not None
+    document["name"] = config.project_name
+    if facts.includes:
+        document["include"] = facts.includes
 
     services: dict[str, ServiceStanza] = {}
     if facts.routes:
-        assert facts.config.gateway is not None
+        assert config.gateway is not None
         stanza: DoorStanza = {
             "image": CADDY_IMAGE_HOLE,
             "configs": [{"source": DOOR_CONFIG_NAME, "target": DOOR_CONFIG_TARGET}],
-            "ports": [{"target": str(DOOR_LISTEN_PORT), "published": facts.config.gateway, "protocol": "tcp"}],
+            "ports": [{"target": str(DOOR_LISTEN_PORT), "published": config.gateway, "protocol": "tcp"}],
         }
         if facts.forwarded is not None:
             stanza["environment"] = facts.forwarded
@@ -237,9 +235,7 @@ def up(
     compose_files = [assembly_root, dev_overlay] if dev_overlay is not None else [assembly_root]
     context = ComposeContext(
         root,
-        facts.config,
         compose_files,
-        facts.environment,
         dev_overlay=dev_overlay,
         assembly_root=assembly_root,
     )
@@ -264,11 +260,11 @@ def up(
                     raise RuntimeError(f"ports for service {port.service!r} — absent from the selected assembly")
 
         # Print the resolved assembly so nothing implicit rides hidden.
-        if facts.selection.riding:
-            print(f"riding: {', '.join(facts.selection.riding)}")
-        for name, entry in facts.config.services.items():
+        if facts.riding:
+            print(f"riding: {', '.join(facts.riding)}")
+        for name, entry in config.services.items():
             if isinstance(entry, ServiceGroup):
-                selected_option = facts.selection.choices.get(name)
+                selected_option = facts.choices.get(name)
                 print(f"{name}: {selected_option if selected_option is not None else '(none selected)'}")
         if facts.routes:
             print(f"door: {' '.join(route.path for route in facts.routes)}")
@@ -283,7 +279,7 @@ def up(
             assert_known_profiles(facts.profiles, defined)
 
         # Refuse --build in a repo with no build declarations.
-        if build and not (facts.config.repository or facts.config.base_images):
+        if build and not (config.repository or config.base_images):
             raise typer.BadParameter(
                 "--build requires build declarations (repository or base_images) in docker-devkit.yaml"
             )
@@ -320,16 +316,12 @@ def down(
     config = load_config(root)
 
     require_env_file(root)
-
-    if config is None or not config.services:
-        raise RuntimeError(
-            "no docker-devkit.yaml (or no services: in it); "
-            "a builds-only, mirror-only, or k8s-only repo has no compose stack"
-        )
+    require_compose_stack(config)
+    assert config is not None
 
     # Tear down by project name, covering every selection and profile.
     assembly_root = _write_temp_root({"name": config.project_name})
-    context = ComposeContext(root, config, [assembly_root], None, assembly_root=assembly_root)
+    context = ComposeContext(root, [assembly_root], assembly_root=assembly_root)
 
     command = context.command("down", "--remove-orphans")
     if volumes:

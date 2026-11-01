@@ -31,14 +31,15 @@ class Selection:
     entries: list[tuple[str, ServiceGroup | ServiceEntry]]
 
 
-class UpEnvironment:
-    config: DockerDevkitConfig
-    environment: dict[str, str]
-    selection: Selection
+class Assembly:
+    # The selected assembly as one record: every environment read and selection
+    # derivation runs exactly once in the constructor, and every refusal those
+    # derivations own fires there. Inputs (config, environment) stay at call sites.
+    riding: list[str]
+    choices: dict[str, str]
     profiles: list[str]
     forwarded: dict[str, str] | None
-    sources: list[str]
-    local_outputs: list[Path]
+    includes: list[str]
     output_services: set[str]
     routes: list[RouteConfig]
     ports: list[PortDeclaration]
@@ -48,36 +49,32 @@ class UpEnvironment:
         environment = merged_environment(root)
         selected = selection(config, environment)
         if selected is None:
-            raise RuntimeError(
-                "no docker-devkit.yaml (or no services: in it); "
-                "a builds-only, mirror-only, or k8s-only repo has no compose stack"
-            )
-        assert config is not None
-        self.config = config
-        self.environment = environment
-        self.selection = selected
+            require_compose_stack(config)
+        assert selected is not None and config is not None
+        self.riding = selected.riding
+        self.choices = selected.choices
         self.profiles = selected_profiles(environment)
         self.forwarded = forwarded_pair(environment) if selected.choices.get(AUTH_GROUP_NAME) is not None else None
 
         # Collect the include list in services declaration order.
-        self.sources = []
-        self.local_outputs = []
+        self.includes = []
+        local_outputs: list[Path] = []
         for name, entry in selected.entries:
             if isinstance(entry, ServiceGroup):
                 continue
             if entry.ref is not None:
-                self.sources.append(entry.ref)
+                self.includes.append(entry.ref)
                 continue
             output = root / bundle_output(name)
             if not output.is_file():
                 raise RuntimeError(
                     f"selected entry {name!r} has no bundle output {output.as_posix()}; generate-score writes it"
                 )
-            self.sources.append(output.resolve().as_posix())
-            self.local_outputs.append(output)
+            self.includes.append(output.resolve().as_posix())
+            local_outputs.append(output)
 
         # Refuse selected outputs that define the same service name.
-        file_services = [(path, _service_names(path)) for path in self.local_outputs]
+        file_services = [(path, _service_names(path)) for path in local_outputs]
         for index, (path, service_names) in enumerate(file_services):
             for other_path, other_service_names in file_services[index + 1 :]:
                 shared = sorted(service_names & other_service_names)
@@ -97,6 +94,14 @@ class UpEnvironment:
             option_name = selected.choices.get(AUTH_GROUP_NAME)
             if option_name is not None:
                 self.auth_route = auth.options[option_name].routes[0]
+
+
+def require_compose_stack(config: DockerDevkitConfig | None) -> None:
+    if config is None or not config.services:
+        raise RuntimeError(
+            "no docker-devkit.yaml (or no services: in it); "
+            "a builds-only, mirror-only, or k8s-only repo has no compose stack"
+        )
 
 
 def merged_environment(root: Path) -> dict[str, str]:
