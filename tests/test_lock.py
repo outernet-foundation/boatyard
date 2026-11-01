@@ -13,6 +13,7 @@ from docker_devkit.verbs import build, lock
 
 DIGEST_A = "sha256:" + "a" * 64
 DIGEST_B = "sha256:" + "b" * 64
+DIGEST_C = "sha256:" + "c" * 64
 MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
 
 LOKI_UPSTREAM = "ghcr.io/grafana/helm-charts/loki"
@@ -507,3 +508,128 @@ def test_build_no_longer_carries_the_lock_flags() -> None:
 
     result = runner.invoke(build.app, ["--upgrade"])
     assert result.exit_code == 2
+
+
+def _selection_lock() -> lock_module.ImageLock:
+    return lock_module.ImageLock.model_validate(
+        {
+            "images": {
+                "LOKI_IMAGE": {
+                    "index": f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.5.0@{DIGEST_A}",
+                    "platforms": {
+                        "linux/amd64": f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.5.0@{DIGEST_B}",
+                        "linux/arm64": f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.5.0@{DIGEST_C}",
+                    },
+                }
+            },
+            "charts": {
+                "GRAFANA_CHART": f"{MIRROR_PREFIX}/ghcr.io/grafana/chart@{DIGEST_A}",
+            },
+        }
+    )
+
+
+def _selection_config(**sections: object) -> config_module.DockerDevkitConfig:
+    payload: dict[str, object] = {"requires": ">=0"}
+    payload.update(sections)
+    return config_module.DockerDevkitConfig.model_validate(payload)
+
+
+class TestEntrySelection:
+    def test_entry_for_answers_the_index_without_a_platform(self) -> None:
+        selected = lock_module.entry_for(_selection_lock(), "LOKI_IMAGE")
+
+        assert selected.endswith(f"loki:3.5.0@{DIGEST_A}")
+
+    def test_entry_for_answers_the_platform_manifest_for_a_named_platform(self) -> None:
+        selected = lock_module.entry_for(_selection_lock(), "LOKI_IMAGE", "linux/arm64")
+
+        assert selected.endswith(f"loki:3.5.0@{DIGEST_C}")
+
+    def test_entry_for_answers_charts_flat_under_both_forms(self) -> None:
+        lock = _selection_lock()
+
+        assert lock_module.entry_for(lock, "GRAFANA_CHART") == lock_module.entry_for(
+            lock, "GRAFANA_CHART", "linux/amd64"
+        )
+
+    def test_entry_for_refuses_a_platform_the_entry_never_recorded(self) -> None:
+        with pytest.raises(RuntimeError, match=r"LOKI_IMAGE records no linux/ppc64le platform manifest.*run lock"):
+            lock_module.entry_for(_selection_lock(), "LOKI_IMAGE", "linux/ppc64le")
+
+    def test_entry_for_refuses_unknown_names(self) -> None:
+        with pytest.raises(RuntimeError, match="lacks the GHOST_IMAGE entry"):
+            lock_module.entry_for(_selection_lock(), "GHOST_IMAGE")
+
+
+class TestEnvProjection:
+    def test_the_projection_without_a_platform_carries_index_references(self) -> None:
+        entries = lock_module.env_entries(_selection_lock())
+
+        assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_A}")
+        assert entries["GRAFANA_CHART"].endswith(f"@{DIGEST_A}")
+
+    def test_the_projection_with_a_platform_carries_platform_manifests(self) -> None:
+        entries = lock_module.env_entries(_selection_lock(), "linux/amd64")
+
+        assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_B}")
+        assert entries["GRAFANA_CHART"].endswith(f"@{DIGEST_A}")
+
+
+class TestComposeProjection:
+    def test_compose_entries_select_platform_manifests_over_the_declared_singleton(self) -> None:
+        config = _selection_config(platforms=["linux/amd64"])
+
+        entries = lock_module.compose_env_entries(_selection_lock(), config, {})
+
+        assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_B}")
+        assert entries["GRAFANA_CHART"].endswith(f"@{DIGEST_A}")
+
+    def test_compose_entries_select_the_platform_the_environment_names(self) -> None:
+        config = _selection_config(platforms=["linux/amd64", "linux/arm64"])
+
+        entries = lock_module.compose_env_entries(_selection_lock(), config, {"PLATFORM": "linux/arm64"})
+
+        assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_C}")
+
+    def test_compose_entries_refuse_image_entries_without_declared_platforms(self) -> None:
+        config = _selection_config()
+
+        with pytest.raises(RuntimeError, match=r"records image entries but docker-devkit\.yaml declares no platforms"):
+            lock_module.compose_env_entries(_selection_lock(), config, {})
+
+    def test_the_env_render_is_sorted_and_stable(self) -> None:
+        entries = lock_module.compose_env_entries(_selection_lock(), _selection_config(platforms=["linux/amd64"]), {})
+
+        rendered = lock_module.render_env_entries(entries)
+
+        assert rendered == lock_module.render_env_entries(entries)
+        assert rendered.splitlines() == sorted(rendered.splitlines())
+        assert rendered.endswith("\n")
+
+
+class TestPlatformSelectionLaw:
+    def test_a_singleton_selects_itself_without_reading_the_environment(self) -> None:
+        config = _selection_config(platforms=["linux/amd64"])
+
+        assert config.select_platform({"PLATFORM": ""}) == "linux/amd64"
+
+    def test_a_multi_platform_repo_selects_the_named_platform(self) -> None:
+        config = _selection_config(platforms=["linux/amd64", "linux/arm64"])
+
+        assert config.select_platform({"PLATFORM": "linux/arm64"}) == "linux/arm64"
+
+    def test_a_multi_platform_repo_without_a_selection_refuses_listing_declared(self) -> None:
+        config = _selection_config(platforms=["linux/amd64", "linux/arm64"])
+
+        with pytest.raises(RuntimeError, match=r"declares the platforms \['linux/amd64', 'linux/arm64'\].*PLATFORM="):
+            config.select_platform({})
+
+    def test_an_undeclared_selection_refuses_listing_declared(self) -> None:
+        config = _selection_config(platforms=["linux/amd64"])
+
+        with pytest.raises(RuntimeError, match=r"matches none of this repo's declared platforms \['linux/amd64'\]"):
+            config.select_platform({"PLATFORM": "linux/arm64"})
+
+    def test_a_platform_less_declaring_repo_answers_none(self) -> None:
+        assert _selection_config().select_platform({}) is None

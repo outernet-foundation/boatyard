@@ -9,11 +9,12 @@ from bashrun.bash import CalledProcessError, bash, bash_output
 from typer.testing import CliRunner
 
 from docker_devkit import assembly
-from docker_devkit.verbs import down, up
+from docker_devkit.verbs import down, lock_env, up
 from docker_devkit.config import LOCK_PATH
 
 MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
 FAKE_DIGEST = "sha256:" + "a" * 64
+PLATFORM_DIGEST = "sha256:" + "b" * 64
 KEYCLOAK_REF = "oci://ghcr.io/org/keycloak@" + FAKE_DIGEST
 LIVEKIT_REF = "oci://ghcr.io/org/livekit@" + FAKE_DIGEST
 PINNED_COMPOSE_VERSION = "5.6.1"
@@ -61,6 +62,7 @@ def _write_ref_tree(root: Path) -> None:
         root,
         {
             "project_name": "demo",
+            "platforms": ["linux/amd64"],
             "services": {"tunnel": {"ref": LIVEKIT_REF}},
         },
     )
@@ -72,12 +74,30 @@ def _normalize(command: str, root: Path) -> str:
     return command.replace(str(root), "ROOT")
 
 
-def _write_lock(root: Path, entries: dict[str, str] | None = None) -> None:
+def _write_lock(
+    root: Path,
+    entries: dict[str, str] | None = None,
+    platform_entries: dict[str, str] | None = None,
+) -> None:
+    # The writer's shape: one platform-manifest reference per declared platform beside the
+    # index (a digest-pinned declaration records the same reference uniformly). Distinct
+    # platform_entries spell the multi-arch case where index and manifests diverge.
     declared = entries or {
         "CADDY_IMAGE": MIRROR_PREFIX + "/docker.io/library/caddy:2.8.4-alpine@" + FAKE_DIGEST,
     }
+    platforms = platform_entries or {"linux/amd64": ""}
     root.joinpath(*LOCK_PATH.parts).write_text(
-        yaml.safe_dump({"images": {name: {"index": reference} for name, reference in declared.items()}}),
+        yaml.safe_dump(
+            {
+                "images": {
+                    name: {
+                        "index": reference,
+                        "platforms": {platform: manifest or reference for platform, manifest in platforms.items()},
+                    }
+                    for name, reference in declared.items()
+                }
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -175,6 +195,19 @@ class OverlayRecorder(HandoffRecorder):
         match = OVERLAY_ARGUMENT_PATTERN.search(command)
         if match is not None:
             self.documents.append(yaml.safe_load(Path(match.group(1)).read_text(encoding="utf-8")))
+
+
+class LockEnvRecorder(HandoffRecorder):
+    # Captures the materialized per-run lock env file alongside the handoff command.
+    def __init__(self) -> None:
+        super().__init__()
+        self.env_contents: list[str] = []
+
+    def run(self, command: str) -> None:
+        super().run(command)
+        match = LOCK_ENV_ARGUMENT_PATTERN.search(command)
+        if match is not None:
+            self.env_contents.append(Path(match.group(1)).read_text(encoding="utf-8"))
 
 
 class ServicesOutput:
@@ -302,6 +335,7 @@ def _write_consumer_tree(root: Path, *, bundles: str | None = "cuda,keycloak") -
         {
             "project_name": "demo",
             "repository": "ghcr.io/org/demo",
+            "platforms": ["linux/amd64"],
             "gateway": "${GATEWAY_PORT:?err}",
             "services": {
                 "auth": {
@@ -378,6 +412,7 @@ class TestSelectionLaw:
             tmp_path,
             {
                 "project_name": "demo",
+                "platforms": ["linux/amd64"],
                 "gateway": "8080",
                 "services": {
                     "livekit": {
@@ -409,6 +444,7 @@ class TestSelectionLaw:
             tmp_path,
             {
                 "project_name": "demo",
+                "platforms": ["linux/amd64"],
                 "gateway": "8080",
                 "services": {
                     "placeframe": {
@@ -654,6 +690,7 @@ class TestServiceExclusion:
             tmp_path,
             {
                 "project_name": "demo",
+                "platforms": ["linux/amd64"],
                 "gateway": "8080",
                 "repository": "ghcr.io/org/demo",
                 "services": {
@@ -687,6 +724,7 @@ class TestServiceExclusion:
             tmp_path,
             {
                 "project_name": "demo",
+                "platforms": ["linux/amd64"],
                 "gateway": "8080",
                 "repository": "ghcr.io/org/demo",
                 "services": {
@@ -1009,6 +1047,174 @@ class TestLockRequirement:
         ]
 
 
+class TestLockEnvSynthesis:
+    # The compose edge selects platform manifests: up/down attach the selected entries as
+    # the second --env-file, lock-env emits the same synthesis on stdout, and the
+    # selection itself is declaration-driven — a singleton self-selects, a multi-platform
+    # repo names PLATFORM= through the merged shell-over-.env view.
+    ALPINE_INDEX = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST
+    ALPINE_MANIFEST = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + PLATFORM_DIGEST
+
+    def _invoke_up_with_lock(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recorder: HandoffRecorder):
+        monkeypatch.delenv("PLATFORM", raising=False)
+        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
+        monkeypatch.setattr(up, "bash_output", _probe_present)
+        monkeypatch.setattr(up, "bash_handoff", recorder.run)
+        monkeypatch.chdir(tmp_path)
+        return runner.invoke(up.app, [])
+
+    def test_the_attached_env_file_carries_the_platform_manifest_not_the_index(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _write_ref_tree(tmp_path)
+        (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
+        _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST})
+        recorder = LockEnvRecorder()
+
+        result = self._invoke_up_with_lock(tmp_path, monkeypatch, recorder)
+
+        assert result.exit_code == 0, result.output
+        [content] = recorder.env_contents
+        assert content == f"ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
+
+    def test_two_consecutive_syntheses_are_byte_identical(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _write_ref_tree(tmp_path)
+        (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
+        _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST})
+        recorder = LockEnvRecorder()
+
+        self._invoke_up_with_lock(tmp_path, monkeypatch, recorder)
+        self._invoke_up_with_lock(tmp_path, monkeypatch, recorder)
+
+        assert len(recorder.env_contents) == 2
+        assert recorder.env_contents[0] == recorder.env_contents[1]
+
+    def test_lock_env_stdout_is_what_up_attaches(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        _write_ref_tree(tmp_path)
+        (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
+        _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST})
+        recorder = LockEnvRecorder()
+        monkeypatch.delenv("PLATFORM", raising=False)
+        monkeypatch.chdir(tmp_path)
+
+        emitted = runner.invoke(lock_env.app, [])
+
+        assert emitted.exit_code == 0, emitted.output
+        assert emitted.output == f"ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
+        self._invoke_up_with_lock(tmp_path, monkeypatch, recorder)
+        assert recorder.env_contents[0] == emitted.output
+
+    def test_a_multi_platform_repo_selects_the_named_platform(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _write_config(
+            tmp_path,
+            {
+                "project_name": "demo",
+                "platforms": ["linux/amd64", "linux/arm64"],
+                "services": {"tunnel": {"ref": LIVEKIT_REF}},
+            },
+        )
+        (tmp_path / ".env").write_text("PLATFORM=linux/arm64\n", encoding="utf-8")
+        arm64_manifest = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + PLATFORM_DIGEST
+        _write_lock(
+            tmp_path,
+            {"ALPINE_IMAGE": self.ALPINE_INDEX},
+            {"linux/amd64": self.ALPINE_MANIFEST, "linux/arm64": arm64_manifest},
+        )
+        recorder = LockEnvRecorder()
+
+        result = self._invoke_up_with_lock(tmp_path, monkeypatch, recorder)
+
+        assert result.exit_code == 0, result.output
+        assert recorder.env_contents[0] == f"ALPINE_IMAGE={arm64_manifest}\n"
+
+    def test_a_multi_platform_repo_without_a_selection_refuses_listing_declared(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _write_config(
+            tmp_path,
+            {
+                "project_name": "demo",
+                "platforms": ["linux/amd64", "linux/arm64"],
+                "services": {"tunnel": {"ref": LIVEKIT_REF}},
+            },
+        )
+        (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
+        _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX})
+
+        result = self._invoke_up_with_lock(tmp_path, monkeypatch, HandoffRecorder())
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, RuntimeError)
+        message = str(result.exception)
+        assert "PLATFORM=" in message
+        assert "linux/amd64" in message and "linux/arm64" in message
+
+    def test_an_undeclared_platform_selection_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _write_ref_tree(tmp_path)
+        (tmp_path / ".env").write_text("PLATFORM=linux/ppc64le\n", encoding="utf-8")
+        _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX})
+
+        result = self._invoke_up_with_lock(tmp_path, monkeypatch, HandoffRecorder())
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, RuntimeError)
+        message = str(result.exception)
+        assert "linux/ppc64le" in message
+        assert "linux/amd64" in message
+
+    def test_an_entry_lacking_the_selected_platform_manifest_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _write_ref_tree(tmp_path)
+        (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
+        root_lock = tmp_path.joinpath(*LOCK_PATH.parts)
+        root_lock.write_text(
+            yaml.safe_dump({"images": {"ALPINE_IMAGE": {"index": self.ALPINE_INDEX}}}),
+            encoding="utf-8",
+        )
+
+        result = self._invoke_up_with_lock(tmp_path, monkeypatch, HandoffRecorder())
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, RuntimeError)
+        message = str(result.exception)
+        assert "ALPINE_IMAGE" in message
+        assert "linux/amd64" in message
+        assert "run lock" in message
+
+    def test_a_failed_run_prints_and_keeps_the_env_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        _write_ref_tree(tmp_path)
+        (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
+        _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST})
+        monkeypatch.delenv("PLATFORM", raising=False)
+        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
+        monkeypatch.setattr(up, "bash_output", _probe_absent)
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(up.app, [])
+
+        assert result.exit_code != 0
+        kept = [Path(line.split(":", 1)[1].strip()) for line in result.output.splitlines() if "kept for inspection" in line]
+        assert len(kept) == 1
+        assert kept[0].read_text(encoding="utf-8") == f"ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
+
+    def test_lock_env_self_skips_without_a_lock(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        _write_ref_tree(tmp_path)
+        (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(lock_env.app, [])
+
+        assert result.exit_code == 0, result.output
+        assert result.output == ""
+
+
 class TestMirroredLockEnforcement:
     def _write_mirrored_tree(self, tmp_path: Path, entries: dict[str, str]) -> None:
         _write_ref_tree(tmp_path)
@@ -1078,6 +1284,76 @@ class TestMirroredLockEnforcement:
         assert result.exit_code != 0
         assert "alpine" in str(result.exception)
         assert probe.probed == [absent]
+
+    def test_a_missing_platform_manifest_digest_fails_closed_naming_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # The probe covers every recorded digest — index plus platform manifests — so an
+        # unmirrored manifest is the not-mirrored error even when the index is present.
+        index = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST
+        manifest = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + PLATFORM_DIGEST
+        self._write_mirrored_tree(tmp_path, {"ALPINE_IMAGE": index})
+        tmp_path.joinpath(*LOCK_PATH.parts).write_text(
+            yaml.safe_dump(
+                {
+                    "images": {
+                        "ALPINE_IMAGE": {"index": index, "platforms": {"linux/amd64": manifest}},
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        probe = SelectiveProbe(index)
+        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
+        monkeypatch.setattr(up, "bash_output", probe.run)
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(up.app, [])
+
+        assert result.exit_code != 0
+        assert str(result.exception) == (
+            f"Image {MIRROR_PREFIX}/docker.io/library/alpine:3.20 (digest {PLATFORM_DIGEST}) is not mirrored yet; "
+            "the CI mirror job populates it when the declaring change runs"
+        )
+        assert probe.probed == [index, manifest]
+
+    def test_a_probe_failure_over_a_platform_manifest_is_not_an_unmirrored_verdict(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        index = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST
+        manifest = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + PLATFORM_DIGEST
+        self._write_mirrored_tree(tmp_path, {"ALPINE_IMAGE": index})
+        tmp_path.joinpath(*LOCK_PATH.parts).write_text(
+            yaml.safe_dump(
+                {
+                    "images": {
+                        "ALPINE_IMAGE": {"index": index, "platforms": {"linux/amd64": manifest}},
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        probed: list[str] = []
+
+        def _probe_then_fail(command: str) -> str:
+            reference = command.rpartition("inspect ")[2]
+            probed.append(reference)
+            if reference == index:
+                return ""
+            raise CalledProcessError(1, command, stderr="unauthorized: authentication required\n")
+
+        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
+        monkeypatch.setattr(up, "bash_output", _probe_then_fail)
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(up.app, [])
+
+        assert result.exit_code != 0
+        message = str(result.exception)
+        assert "not mirrored yet" not in message
+        assert "not evidence the image is missing" in message
+        assert PLATFORM_DIGEST in message
+        assert probed == [index, manifest]
 
 
 class TestComposePortMergeOverIncludes:

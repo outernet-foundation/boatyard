@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import difflib
 import re
+from collections.abc import Mapping
 from pathlib import Path
 
 import yaml
@@ -84,10 +85,50 @@ def render_lock(lock: ImageLock) -> str:
     return yaml.safe_dump(document, sort_keys=False, default_flow_style=False, width=10_000_000)
 
 
-def env_entries(lock: ImageLock) -> dict[str, str]:
-    # The env projection of the lock: the flat NAME=reference vocabulary compose and bake
-    # consume — the image entry answers by its index reference, the chart entry flat.
-    return {**{name: entry.index for name, entry in lock.images.items()}, **lock.charts}
+def entry_for(lock: ImageLock, name: str, platform: str | None = None) -> str:
+    # The one selector over the structured lock: None names the index (the build edge,
+    # where buildx resolves a multi-arch index per target platform), a platform names its
+    # concrete platform manifest (the compose edge). Charts are arch-neutral and answer
+    # flat under both forms.
+    if name in lock.images:
+        entry = lock.images[name]
+        if platform is None:
+            return entry.index
+        recorded = entry.platforms.get(platform)
+        if recorded is None:
+            raise RuntimeError(
+                f"{LOCK_PATH.as_posix()}: image entry {name} records no {platform} platform manifest; "
+                f"recorded platforms: {sorted(entry.platforms) or 'none'} — run lock to re-resolve"
+            )
+        return recorded
+    if name in lock.charts:
+        return lock.charts[name]
+    raise RuntimeError(f"{LOCK_PATH.as_posix()}: lacks the {name} entry (the lock verb writes it)")
+
+
+def env_entries(lock: ImageLock, platform: str | None = None) -> dict[str, str]:
+    # The env projection of the lock through the one selector: the flat NAME=reference
+    # vocabulary compose and bake consume — images answer by the selected form (platform
+    # manifest when a platform is given, the index otherwise), charts flat.
+    return {**{name: entry_for(lock, name, platform) for name in lock.images}, **lock.charts}
+
+
+def compose_env_entries(lock: ImageLock, config: DockerDevkitConfig, environment: Mapping[str, str]) -> dict[str, str]:
+    # The compose-edge projection: the platform manifests of the declaration-selected
+    # platform. A lock recording images against a config declaring no platforms is a
+    # desync the construction rules out — the refusal names the rewrite.
+    platform = config.select_platform(environment)
+    if platform is None and lock.images:
+        raise RuntimeError(
+            f"{LOCK_PATH.as_posix()}: records image entries but docker-devkit.yaml declares no platforms; "
+            "the compose edge selects platform manifests — run lock to rewrite the lock against the declarations"
+        )
+    return env_entries(lock, platform)
+
+
+def render_env_entries(entries: Mapping[str, str]) -> str:
+    # The env-grammar render both the per-run --env-file writer and the lock-env verb emit.
+    return "".join(f"{name}={reference}\n" for name, reference in sorted(entries.items()))
 
 
 def write_lock(config: DockerDevkitConfig, *, upgrade: bool = False) -> ImageLock:

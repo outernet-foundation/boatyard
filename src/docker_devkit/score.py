@@ -33,7 +33,8 @@ from docker_devkit.config import (
     parse_image_lock,
 )
 from docker_devkit.documents import BindVolume, ComposeDocument, WorkloadDocument
-from docker_devkit.lock import env_entries
+from docker_devkit.assembly import merged_environment
+from docker_devkit.lock import compose_env_entries, env_entries
 from docker_devkit.markers import contains_marker, resolve_includes, resolve_lock_refs
 from docker_devkit.provisioners import compiled_provisioners, dump_compose
 from docker_devkit.secrets import SecretsDeclaration, collect_secret_keys
@@ -127,7 +128,9 @@ def generate_artifacts(config: DockerDevkitConfig, target: Target, local: bool) 
     k8s_output = config.k8s_output_path(local)
 
     if target in ("both", "compose"):
-        generate_compose(config, env_entries(lock))
+        # Compose markers resolve to the platform manifests of the selected platform —
+        # the committed artifact records the exact bytes one machine runs.
+        generate_compose(config, compose_env_entries(lock, config, merged_environment(root)))
 
     if target in ("both", "k8s") and config.k8s is not None:
         generate_k8s(config, config.k8s, k8s_output, lock)

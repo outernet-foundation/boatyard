@@ -58,6 +58,7 @@ def _assembly_document(
             {
                 "requires": ">=0.0",
                 "project_name": "door-demo",
+                "platforms": ["linux/amd64"],
                 "gateway": gateway,
                 "services": services,
             },
@@ -67,7 +68,17 @@ def _assembly_document(
         encoding="utf-8",
     )
     tmp_path.joinpath(*LOCK_PATH.parts).write_text(
-        yaml.safe_dump({"images": {"CADDY_IMAGE": {"index": CADDY_LOCK_ENTRY}}}), encoding="utf-8"
+        yaml.safe_dump(
+            {
+                "images": {
+                    "CADDY_IMAGE": {
+                        "index": CADDY_LOCK_ENTRY,
+                        "platforms": {"linux/amd64": CADDY_LOCK_ENTRY},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
     )
     (tmp_path / ".env").write_text(
         f"GATEWAY_PORT=58080\nPUBLIC_URL={public_url}\nBUNDLES={'keycloak' if auth else ''}\n",

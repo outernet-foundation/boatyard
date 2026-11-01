@@ -8,6 +8,8 @@ from bashrun.bash import bash_handoff
 
 from docker_devkit.assembly import (
     compose_command,
+    keep_lock_env_file,
+    merged_environment,
     require_compose_stack,
     require_env_file,
     write_lock_env_file,
@@ -29,7 +31,7 @@ def down(
 
     # Tear down by project name, covering every selection and profile.
     assembly_root = write_temp_compose_file({"name": config.project_name}, "devkit-assembly-")
-    lock_env_file = write_lock_env_file(root)
+    lock_env_file = write_lock_env_file(root, config, merged_environment(root))
 
     command = compose_command(root, [assembly_root], "down", "--remove-orphans", lock_env_file=lock_env_file)
     if volumes:
@@ -37,6 +39,10 @@ def down(
 
     try:
         bash_handoff(command)
+    except BaseException:
+        keep_lock_env_file(lock_env_file)
+        lock_env_file = None
+        raise
     finally:
         assembly_root.unlink(missing_ok=True)
         if lock_env_file is not None:

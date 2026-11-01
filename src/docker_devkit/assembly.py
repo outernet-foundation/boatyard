@@ -26,7 +26,7 @@ from docker_devkit.config import (
     parse_image_lock,
 )
 from docker_devkit.documents import WorkloadDocument
-from docker_devkit.lock import env_entries
+from docker_devkit.lock import compose_env_entries, render_env_entries
 
 ENV_FILE = Path(".env")
 BUNDLES_VARIABLE = "BUNDLES"
@@ -60,8 +60,7 @@ class Assembly:
     def __init__(self, root: Path, config: DockerDevkitConfig | None, dev: bool = False) -> None:
         self.root = root
         require_env_file(root)
-        environment = parse_env_file(root / ENV_FILE)
-        environment.update(environ)
+        environment = merged_environment(root)
 
         names = _split_names(environment.get(BUNDLES_VARIABLE, ""))
         if config is None or not config.services:
@@ -156,11 +155,13 @@ class Assembly:
         # first, dev overlay last — the -f order, so the overlay overrides) and
         # compose's own resolution over them; a failure unlinks what was written.
         # The lock's env projection rides the same lifecycle as its second --env-file.
-        self.lock_env_file = write_lock_env_file(root)
+        self.lock_env_file = write_lock_env_file(root, self.config, environment)
         self.compose_files = []
         try:
             self._materialize_and_validate(dev)
         except BaseException:
+            keep_lock_env_file(self.lock_env_file)
+            self.lock_env_file = None
             self.cleanup()
             raise
 
@@ -314,6 +315,16 @@ def parse_env_file(path: Path) -> dict[str, str]:
     return result
 
 
+def merged_environment(root: Path) -> dict[str, str]:
+    # The shell-over-.env view every selection read uses (BUNDLES, COMPOSE_PROFILES,
+    # PLATFORM): an explicitly empty shell assignment overrides a set .env value. A
+    # missing .env reads as empty so the lock-env valve stays runnable on fresh checkouts.
+    path = root / ENV_FILE
+    environment = parse_env_file(path) if path.is_file() else {}
+    environment.update(environ)
+    return environment
+
+
 def require_compose_stack(config: DockerDevkitConfig | None) -> DockerDevkitConfig:
     if config is None or not config.services:
         raise RuntimeError(
@@ -333,16 +344,26 @@ def compose_command(root: Path, compose_files: list[Path], *arguments: str, lock
     return " ".join([prefix, *quoted_arguments])
 
 
-def write_lock_env_file(root: Path) -> Path | None:
-    # The committed lock is structured YAML; compose consumes its env projection as a
-    # per-run --env-file beside the per-run compose files.
+def write_lock_env_file(root: Path, config: DockerDevkitConfig, environment: Mapping[str, str]) -> Path | None:
+    # The committed lock is structured YAML; compose consumes its selected-platform env
+    # projection as a per-run --env-file beside the per-run compose files.
     lock_path = root / LOCK_PATH
     if not lock_path.is_file():
         return None
-    entries = env_entries(parse_image_lock(lock_path))
+    entries = compose_env_entries(parse_image_lock(lock_path), config, environment)
     with NamedTemporaryFile("w", suffix=".env", prefix="devkit-lock-env-", delete=False, encoding="utf-8") as handle:
-        handle.write("".join(f"{name}={reference}\n" for name, reference in sorted(entries.items())))
+        handle.write(render_env_entries(entries))
         return Path(handle.name)
+
+
+def keep_lock_env_file(path: Path | None) -> None:
+    # The bake-file failure precedent on the lock's env projection: a failed run prints
+    # the materialized file (path and content) and keeps it in the OS temp dir — the same
+    # ride-out a successful exec leaves — instead of unlinking it.
+    if path is None:
+        return
+    print(f"lock env file kept for inspection: {path}")
+    print(path.read_text(encoding="utf-8"), end="")
 
 
 def write_temp_compose_file(document: Mapping[str, object], prefix: str) -> Path:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.metadata
 import re
 import tomllib
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal, NamedTuple, Self, TypeIs
 
@@ -71,6 +72,10 @@ AUTH_GROUP_NAME = "auth"
 DOOR_SERVICE_NAME = "door"
 CADDY_IMAGE = "CADDY_IMAGE"
 DEV_TOGGLES_ANNOTATION = "outernet.internal/dev-toggles"
+
+# The compose-edge platform selector, read from the merged shell-over-.env view (the
+# COMPOSE_PROFILES precedence); never host introspection.
+PLATFORM_VARIABLE = "PLATFORM"
 
 type BakeValue = str | list[str] | dict[str, str]
 
@@ -298,6 +303,27 @@ class DockerDevkitConfig(BaseModel):
         assert self.root is not None
         lock_path = self.root / LOCK_PATH
         return parse_image_lock(lock_path) if lock_path.is_file() else ImageLock.model_validate({})
+
+    def select_platform(self, environment: Mapping[str, str]) -> str | None:
+        # Declaration-driven platform selection: a singleton selects itself, a multi-platform
+        # repo names PLATFORM= in .env (shell env overriding), and a set value outside the
+        # declared set refuses. None answers only a repo declaring no platforms at all.
+        selected = environment.get(PLATFORM_VARIABLE, "").strip()
+        if selected:
+            if selected not in self.platforms:
+                raise RuntimeError(
+                    f"{PLATFORM_VARIABLE}={selected!r} matches none of this repo's declared platforms "
+                    f"{self.platforms}"
+                )
+            return selected
+        if not self.platforms:
+            return None
+        if len(self.platforms) == 1:
+            return self.platforms[0]
+        raise RuntimeError(
+            f"this repo declares the platforms {self.platforms}; name {PLATFORM_VARIABLE}= in .env "
+            "to select the compose edge's platform"
+        )
 
     def score_dir_path(self) -> Path:
         assert self.root is not None

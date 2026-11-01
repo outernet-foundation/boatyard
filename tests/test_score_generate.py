@@ -115,6 +115,9 @@ HELM_RENDERED = "apiVersion: v1\nkind: Secret\nmetadata:\n  name: chart\n"
 MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
 CHART_REF = "oci://ghcr.io/grafana/helm-charts/loki:7.3.0"
 MIRRORED_CHART = f"{MIRROR_PREFIX}/ghcr.io/grafana/helm-charts/loki@{DIGEST}"
+PLATFORM_DIGEST = "sha256:" + "b" * 64
+LOKI_INDEX = f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.5.0@{DIGEST}"
+LOKI_MANIFEST = f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.5.0@{PLATFORM_DIGEST}"
 LOCK_IMAGES = {
     "GRAFANA_IMAGE": "ghcr.io/outernet-foundation/mirror/docker.io/grafana/grafana:11.6.0@" + DIGEST,
     "LOKI_CHART": MIRRORED_CHART,
@@ -264,6 +267,94 @@ def test_values_lock_markers_resolve_after_includes(tmp_path: Path, monkeypatch:
 
     resolved = yaml.safe_load(helm.values_contents[0])
     assert resolved["image"]["digest"] == DIGEST
+
+
+class TestMarkerSubstrateResolution:
+    # Markers resolve by substrate: the index under k8s (kubelet resolves per node), the
+    # platform manifest under compose (the artifact records the exact bytes one machine runs).
+
+    def _multi_arch_lock(self) -> ImageLock:
+        return ImageLock.model_validate(
+            {
+                "images": {
+                    "LOKI_IMAGE": {
+                        "index": LOKI_INDEX,
+                        "platforms": {"linux/amd64": LOKI_MANIFEST, "linux/arm64": LOKI_INDEX},
+                    }
+                },
+                "charts": {"LOKI_CHART": MIRRORED_CHART},
+            }
+        )
+
+    def _compose_seam(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, platforms: list[str]
+    ) -> dict[str, str]:
+        (tmp_path / "stack" / "score").mkdir(parents=True)
+        (tmp_path / "stack" / "score" / "api.yaml").write_text("containers: {}\n", encoding="utf-8")
+        (tmp_path / "docker-devkit.lock").write_text(
+            yaml.safe_dump({
+                "images": {
+                    "LOKI_IMAGE": {
+                        "index": LOKI_INDEX,
+                        "platforms": {"linux/amd64": LOKI_MANIFEST, "linux/arm64": LOKI_INDEX},
+                    }
+                }
+            }),
+            encoding="utf-8",
+        )
+        config = _root_config(
+            repository="ghcr.io/org/repo",
+            project_name="example",
+            platforms=platforms,
+            services={"core": {"workloads": ["api.yaml"]}},
+        )
+        config.root = tmp_path
+        captured: dict[str, dict[str, str]] = {}
+
+        def _capture(_config: DockerDevkitConfig, images: dict[str, str]) -> None:
+            captured["images"] = images
+
+        monkeypatch.setattr(score_generate_module, "generate_compose", _capture)
+        score_generate_module.generate_artifacts(config, "compose", local=False)
+        return captured["images"]
+
+    def test_compose_generation_receives_the_selected_platform_manifests(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("PLATFORM", raising=False)
+
+        images = self._compose_seam(monkeypatch, tmp_path, platforms=["linux/amd64"])
+
+        assert images["LOKI_IMAGE"] == LOKI_MANIFEST
+
+    def test_compose_generation_selects_the_platform_the_environment_names(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("PLATFORM", "linux/arm64")
+
+        images = self._compose_seam(monkeypatch, tmp_path, platforms=["linux/amd64", "linux/arm64"])
+
+        assert images["LOKI_IMAGE"] == LOKI_INDEX
+
+    def test_k8s_marker_resolution_selects_the_index(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _write_values(tmp_path, "image:\n  lock: LOKI_IMAGE\n")
+        output = Path("stack/generated/k8s/manifests.yaml")
+        k8s = K8sBashRecorder(tmp_path / output, tmp_path / "stack/generated/k8s/.score-k8s/state.yaml")
+        helm = HelmRecorder()
+        monkeypatch.setattr(score_generate_module, "bash", k8s.run)
+        monkeypatch.setattr(score_generate_module, "bash_output", helm.run)
+        config = _root_config(
+            platforms=["linux/amd64"],
+            k8s={"workloads": [], "charts": {"loki": CHART_REF}},
+        )
+        config.root = tmp_path
+        lock = self._multi_arch_lock()
+        assert config.k8s is not None
+
+        generate_k8s(config, config.k8s, tmp_path / output, lock)
+
+        resolved = yaml.safe_load(helm.values_contents[0])
+        assert resolved["image"] == LOKI_INDEX
 
 
 class ComposeBashRecorder:

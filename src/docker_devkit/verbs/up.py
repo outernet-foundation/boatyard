@@ -8,7 +8,7 @@ from typing import Annotated
 import typer
 from bashrun.bash import CalledProcessError, bash_handoff, bash_output
 
-from docker_devkit.assembly import Assembly, compose_command
+from docker_devkit.assembly import Assembly, compose_command, keep_lock_env_file
 from docker_devkit.bake import run_build
 from docker_devkit.config import DockerDevkitConfig, load_config
 
@@ -46,33 +46,41 @@ def up(
     assembly = Assembly(root, config, dev=dev)
 
     try:
-        # Fail closed over every lock entry before bring-up.
-        _probe_lock_entries(assembly.config)
-
-        # Build local images; --dev builds both shapes.
-        if build:
-            run_build(root=root, config=assembly.config)
-            if dev:
-                run_build(root=root, config=assembly.config, dev=True)
-
-        # Hand off to docker compose up.
-        up_command = compose_command(
-            root,
-            assembly.compose_files,
-            *(argument for profile in assembly.profiles for argument in ("--profile", profile)),
-            "up",
-            lock_env_file=assembly.lock_env_file,
-        )
-        if not build:
-            up_command += " --pull missing"
-            if quiet_pull:
-                up_command += " --quiet-pull"
-        if not attached:
-            up_command += " -d"
-
-        bash_handoff(up_command)
+        _bring_up(assembly, attached=attached, quiet_pull=quiet_pull, build=build, dev=dev)
+    except BaseException:
+        keep_lock_env_file(assembly.lock_env_file)
+        assembly.lock_env_file = None
+        raise
     finally:
         assembly.cleanup()
+
+
+def _bring_up(assembly: Assembly, *, attached: bool, quiet_pull: bool, build: bool, dev: bool) -> None:
+    # Fail closed over every lock entry before bring-up.
+    _probe_lock_entries(assembly.config)
+
+    # Build local images; --dev builds both shapes.
+    if build:
+        run_build(root=assembly.root, config=assembly.config)
+        if dev:
+            run_build(root=assembly.root, config=assembly.config, dev=True)
+
+    # Hand off to docker compose up.
+    up_command = compose_command(
+        assembly.root,
+        assembly.compose_files,
+        *(argument for profile in assembly.profiles for argument in ("--profile", profile)),
+        "up",
+        lock_env_file=assembly.lock_env_file,
+    )
+    if not build:
+        up_command += " --pull missing"
+        if quiet_pull:
+            up_command += " --quiet-pull"
+    if not attached:
+        up_command += " -d"
+
+    bash_handoff(up_command)
 
 
 def _probe_lock_entries(config: DockerDevkitConfig) -> None:
