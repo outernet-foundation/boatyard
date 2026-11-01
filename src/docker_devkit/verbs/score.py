@@ -9,8 +9,8 @@ from typing import Annotated
 import typer
 from bashrun.bash import bash, bash_output
 
-from docker_devkit.config import SECRETS_FILE, SECRETS_OUTPUT, Target, load_config
-from docker_devkit.score import ensure_score_tools, generate_artifacts
+from docker_devkit.config import Target, load_config
+from docker_devkit.score import SECRETS_FILE, SECRETS_OUTPUT, ensure_score_tools, generate_artifacts
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 

@@ -53,9 +53,6 @@ SCORE_COMPOSE_VERSION = "0.42.0"
 SCORE_K8S_VERSION = "0.15.0"
 HELM_VERSION = "3.22.1"
 
-SECRETS_FILE = Path("stack/secrets.yaml")
-SECRETS_OUTPUT = Path("stack/generated/secrets.txt")
-
 BUNDLE_OUTPUT_DIR = Path("stack/generated/compose")
 
 # A route path is a /-rooted segment chain, optionally wildcarded by a trailing /*; the
