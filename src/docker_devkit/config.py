@@ -455,7 +455,10 @@ def _route_sites(services: dict[str, ServiceGroup | ServiceEntry]) -> list[tuple
         for where, entry_routes in (
             [(f"services.{name}", entry.routes)]
             if not isinstance(entry, ServiceGroup)
-            else [(f"services.{name}.options.{option_name}", option.routes) for option_name, option in entry.options.items()]
+            else [
+                (f"services.{name}.options.{option_name}", option.routes)
+                for option_name, option in entry.options.items()
+            ]
             + [(f"services.{name}", entry.routes)]
         )
         for route in entry_routes

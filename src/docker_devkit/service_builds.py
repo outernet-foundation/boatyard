@@ -150,9 +150,7 @@ def _resolve_variants(
         return resolved[name]
     if name in seen:
         raise RuntimeError(f"FROM context cycle: {' -> '.join((*seen, name))}")
-    parent_sets = [
-        _resolve_variants(parent, (*seen, name), parsed, resolved) for parent in parsed[name].contexts
-    ]
+    parent_sets = [_resolve_variants(parent, (*seen, name), parsed, resolved) for parent in parsed[name].contexts]
     distinct = {tuple(variants) for variants in parent_sets}
     if len(distinct) > 1:
         parents = ", ".join(parsed[name].contexts)

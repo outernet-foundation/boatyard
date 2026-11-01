@@ -51,9 +51,7 @@ class _DaemonConfig(BaseModel):
         if self.builder.gc.gigabytes is not None:
             return self
         context: dict[str, object] = info.context or {}
-        sample = json.dumps(
-            {"builder": {"gc": {"defaultKeepStorage": f"{MIN_KEEP_STORAGE_GB}GB"}}}, indent=2
-        )
+        sample = json.dumps({"builder": {"gc": {"defaultKeepStorage": f"{MIN_KEEP_STORAGE_GB}GB"}}}, indent=2)
         raise ValueError(
             f"builder.gc.defaultKeepStorage missing in {context.get('path', 'daemon.json')}; "
             f"need >= {MIN_KEEP_STORAGE_GB}GB:\n\n{sample}"
