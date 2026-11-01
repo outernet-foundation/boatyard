@@ -184,22 +184,20 @@ def render_root_document(config: DockerDevkitConfig, assembly: Assembly) -> dict
             **({"environment": assembly.forwarded} if assembly.forwarded is not None else {}),
         }
     ordered_ports = sorted(assembly.ports, key=lambda port: port.service)
-    services.update(
-        {
-            service: {
-                "ports": [
-                    {
-                        "target": port.target,
-                        "published": port.published,
-                        "protocol": port.protocol,
-                        **({"host_ip": port.host_ip} if port.host_ip is not None else {}),
-                    }
-                    for port in service_ports
-                ]
-            }
-            for service, service_ports in groupby(ordered_ports, key=lambda port: port.service)
+    services.update({
+        service: {
+            "ports": [
+                {
+                    "target": port.target,
+                    "published": port.published,
+                    "protocol": port.protocol,
+                    **({"host_ip": port.host_ip} if port.host_ip is not None else {}),
+                }
+                for port in service_ports
+            ]
         }
-    )
+        for service, service_ports in groupby(ordered_ports, key=lambda port: port.service)
+    })
     document: dict[str, object] = {"name": config.project_name}
     if assembly.includes:
         document["include"] = assembly.includes
