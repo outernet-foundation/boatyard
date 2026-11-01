@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from docker_devkit.daemon_gc import MIN_KEEP_STORAGE_GB, check_gc_limits
+from docker_devkit.bake import MIN_KEEP_STORAGE_GB, check_gc_limits
 
 
 def _daemon_json(root: Path, body: str) -> Path:
@@ -40,7 +40,7 @@ def test_accepts_byte_counts_and_binary_units(tmp_path: Path) -> None:
 
 def test_missing_key_refuses_with_sample(tmp_path: Path) -> None:
     config = _daemon_json(tmp_path, '{"registry-mirrors": ["https://mirror.example"]}')
-    with pytest.raises(ValueError, match="defaultKeepStorage"):
+    with pytest.raises(RuntimeError, match="defaultKeepStorage"):
         check_gc_limits(candidates=[config])
 
 
@@ -55,7 +55,7 @@ def test_zero_is_a_set_value_and_refuses_below_the_floor(tmp_path: Path) -> None
 
 def test_null_counts_as_missing(tmp_path: Path) -> None:
     config = _daemon_json(tmp_path, '{"builder": {"gc": {"defaultKeepStorage": null}}}')
-    with pytest.raises(ValueError, match="defaultKeepStorage"):
+    with pytest.raises(RuntimeError, match="defaultKeepStorage"):
         check_gc_limits(candidates=[config])
 
 

@@ -3,22 +3,24 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 from pathlib import Path
 from subprocess import CalledProcessError
 from tempfile import TemporaryDirectory
 from typing import Any, Self
 
 import typer
-from bashrun.bash import bash
-from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
+from bashrun.bash import bash, bash_check, bash_output
+from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, model_validator
 
 from docker_devkit.config import DockerDevkitConfig, load_config
-from docker_devkit.daemon_gc import check_gc_limits
 from docker_devkit.lock import env_entries, write_lock
 from docker_devkit.config import ServiceBuild
 
 
 METADATA_PATH = Path("metadata.json")
+
+MIN_KEEP_STORAGE_GB = 60
 
 
 class BakedImage(BaseModel):
@@ -49,6 +51,36 @@ class BakeMetadata(RootModel[dict[str, BakedImage]]):
             if not image.tags:
                 raise ValueError(f"target '{target}' produced no tagged image references from '{image.image_name}'")
         return self
+
+
+class _DaemonGc(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    gigabytes: float | None = Field(default=None, alias="defaultKeepStorage")
+
+    @field_validator("gigabytes", mode="before")
+    @classmethod
+    def _measure(cls, value: object) -> object:
+        if value is None:
+            return None
+        match = re.match(r"^(\d+(?:\.\d+)?)\s*([TGMK]i?B)?$", str(value), re.IGNORECASE)
+        if match is None:
+            raise ValueError(f"Could not parse 'defaultKeepStorage' value: {value}")
+        unit = (match.group(2) or "B")[0].upper()
+        multipliers = {"T": 1024, "G": 1, "M": 1 / 1024, "K": 1 / 1024**2, "B": 1 / 1024**3}
+        return float(match.group(1)) * multipliers[unit]
+
+
+class _DaemonBuilder(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    gc: _DaemonGc = Field(default_factory=_DaemonGc)
+
+
+class _DaemonConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    builder: _DaemonBuilder = Field(default_factory=_DaemonBuilder)
 
 
 def run_build(
@@ -173,6 +205,38 @@ def run_build(
     baked = BakeMetadata.model_validate(metadata_json)
     if not set(targets) <= baked.root.keys():
         raise RuntimeError("Bake output does not cover the requested targets")
+
+
+def check_gc_limits(candidates: list[Path] | None = None) -> None:
+    # candidates injects the daemon.json paths for tests; default discovery probes the
+    # system file, the user file, then the Windows-side home under WSL — first readable wins.
+    if candidates is None:
+        candidates = [Path("/etc/docker/daemon.json"), Path(os.path.expanduser("~/.docker/daemon.json"))]
+        wslpath = 'wslpath $(cmd.exe /c "echo %UserProfile%" 2>/dev/null)'
+        if os.getenv("WSL_DISTRO_NAME") is not None and bash_check(wslpath):
+            win_home = bash_output(wslpath).strip()
+            candidates.append(Path(win_home) / ".docker" / "daemon.json")
+
+    config = next((path for path in candidates if os.access(path, os.R_OK)), None)
+    if config is None:
+        print(f"    [WARN] No readable daemon.json found. Ensure defaultKeepStorage > {MIN_KEEP_STORAGE_GB}GB.")
+        return
+
+    daemon = _DaemonConfig.model_validate(json.loads(config.read_text(encoding="utf-8")))
+    gigabytes = daemon.builder.gc.gigabytes
+    if gigabytes is None:
+        # Absent-or-null counts as missing; an explicit zero is a set value and refuses
+        # below the floor as a measurement failure.
+        sample = json.dumps({"builder": {"gc": {"defaultKeepStorage": f"{MIN_KEEP_STORAGE_GB}GB"}}}, indent=2)
+        raise RuntimeError(
+            f"builder.gc.defaultKeepStorage missing in {config}; need >= {MIN_KEEP_STORAGE_GB}GB:\n\n{sample}"
+        )
+    if gigabytes < MIN_KEEP_STORAGE_GB:
+        raise RuntimeError(
+            f"Docker GC limit {gigabytes:.1f}GB in {config} is below the required {MIN_KEEP_STORAGE_GB}GB"
+        )
+
+    print(f"    [OK] Docker GC Limit verified: {gigabytes:.1f}GB")
 
 
 def host_platform() -> str:
