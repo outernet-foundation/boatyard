@@ -571,10 +571,48 @@ def compose_bundles(config: DockerDevkitConfig) -> list[ComposeBundle]:
     return bundles
 
 
+class ParsedDockerfile(NamedTuple):
+    # The pre-resolution parse of one service Dockerfile; the gpu-variant graph resolves
+    # over these records before any ServiceBuild is constructed.
+    name: str
+    dockerfile: str
+    contexts: list[str]
+    sha_args: list[str]
+    dev_stage: bool
+    own_fan: bool
+
+
 def derive_services(root: Path) -> dict[str, ServiceBuild]:
     # Every Dockerfile-bearing directory one level below a top-level directory is a
     # service; the graph (context edges, gpu fans, SHA args) derives from the
-    # Dockerfiles themselves.
+    # Dockerfiles themselves. Parsing and variant resolution complete before any
+    # ServiceBuild is constructed — each record is built once, fully resolved.
+    parsed = _parse_dockerfiles(root)
+
+    computable = {service_sha_env(name) for name in parsed}
+    for service in parsed.values():
+        unknown = [arg for arg in service.sha_args if arg not in computable]
+        if unknown:
+            raise RuntimeError(
+                f"workloads/{service.name}/{DOCKERFILE_NAME}: ARG {', '.join(unknown)} names no derived service; "
+                "the stamp receiver must match a service directory"
+            )
+
+    resolved_variants: dict[str, list[GpuFamily]] = {}
+    return {
+        name: ServiceBuild(
+            name=name,
+            dockerfile=service.dockerfile,
+            contexts=service.contexts,
+            variants=_resolve_variants(name, (), parsed, resolved_variants),
+            sha_args=service.sha_args,
+            dev_stage=service.dev_stage,
+        )
+        for name, service in parsed.items()
+    }
+
+
+def _parse_dockerfiles(root: Path) -> dict[str, ParsedDockerfile]:
     service_dirs: dict[str, Path] = {}
     tops: set[str] = set()
     for top in sorted(root.iterdir()):
@@ -586,8 +624,7 @@ def derive_services(root: Path) -> dict[str, ServiceBuild]:
                 tops.add(top.name)
     require_single_top(tops, "Dockerfile service directories")
 
-    services: dict[str, ServiceBuild] = {}
-    own_fans: dict[str, bool] = {}
+    parsed: dict[str, ParsedDockerfile] = {}
     for name, directory in service_dirs.items():
         dockerfile = directory / DOCKERFILE_NAME
         from_images: list[str] = []
@@ -613,7 +650,7 @@ def derive_services(root: Path) -> dict[str, ServiceBuild]:
                     "external bases must be registry references or base_images build args"
                 )
             contexts.append(image)
-        services[name] = ServiceBuild(
+        parsed[name] = ParsedDockerfile(
             name=name,
             dockerfile=dockerfile.relative_to(root).as_posix(),
             contexts=sorted(set(contexts)),
@@ -621,22 +658,9 @@ def derive_services(root: Path) -> dict[str, ServiceBuild]:
             # A genuine dev stage is one of several stages; a single-stage AS dev label
             # names the published image and is not a dev shape.
             dev_stage="dev" in stages and len(stages) > 1,
+            own_fan=FAN_ARG in args,
         )
-        own_fans[name] = FAN_ARG in args
-
-    computable = {service_sha_env(name) for name in services}
-    for service in services.values():
-        unknown = [arg for arg in service.sha_args if arg not in computable]
-        if unknown:
-            raise RuntimeError(
-                f"workloads/{service.name}/{DOCKERFILE_NAME}: ARG {', '.join(unknown)} names no derived service; "
-                "the stamp receiver must match a service directory"
-            )
-
-    resolved_variants: dict[str, list[GpuFamily]] = {}
-    for name, service in services.items():
-        service.variants = _resolve_variants(name, (), services, own_fans, resolved_variants)
-    return services
+    return parsed
 
 
 def require_single_top(tops: set[str], subject: str) -> None:
@@ -647,8 +671,7 @@ def require_single_top(tops: set[str], subject: str) -> None:
 def _resolve_variants(
     name: str,
     seen: tuple[str, ...],
-    services: dict[str, ServiceBuild],
-    own_fans: dict[str, bool],
+    parsed: dict[str, ParsedDockerfile],
     resolved: dict[str, list[GpuFamily]],
 ) -> list[GpuFamily]:
     if name in resolved:
@@ -656,24 +679,24 @@ def _resolve_variants(
     if name in seen:
         raise RuntimeError(f"FROM context cycle: {' -> '.join((*seen, name))}")
     parent_sets = [
-        _resolve_variants(parent, (*seen, name), services, own_fans, resolved) for parent in services[name].contexts
+        _resolve_variants(parent, (*seen, name), parsed, resolved) for parent in parsed[name].contexts
     ]
     distinct = {tuple(variants) for variants in parent_sets}
     if len(distinct) > 1:
-        parents = ", ".join(services[name].contexts)
+        parents = ", ".join(parsed[name].contexts)
         raise RuntimeError(
             f"workloads/{name}/{DOCKERFILE_NAME}: parents ({parents}) disagree on gpu variants; "
             "a dependent inherits its base's variant set"
         )
     if parent_sets:
-        if own_fans[name]:
+        if parsed[name].own_fan:
             raise RuntimeError(
                 f"workloads/{name}/{DOCKERFILE_NAME}: declares ARG {FAN_ARG} over a fanned base; "
                 "a dependent inherits its base's variant set"
             )
         variants = parent_sets[0]
     else:
-        variants = list(get_args(GpuFamily)) if own_fans[name] else []
+        variants = list(get_args(GpuFamily)) if parsed[name].own_fan else []
     resolved[name] = variants
     return variants
 
