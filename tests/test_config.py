@@ -368,7 +368,7 @@ class TestServices:
             },
         )
 
-        with pytest.raises(ValidationError, match="neither ref: nor workloads:"):
+        with pytest.raises(ValidationError, match="never neither"):
             load_config(tmp_path)
 
     def test_vars_beside_a_ref_refuse(self, tmp_path: Path) -> None:

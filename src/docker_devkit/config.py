@@ -207,7 +207,9 @@ class ServiceEntry(BaseModel):
         if self.ref is not None and self.workloads:
             raise ValueError("an entry is either ref: or workloads: — exactly one source, never both")
         if self.ref is None and not self.workloads:
-            raise ValueError("an entry is either ref: or workloads: — exactly one source, never neither")
+            raise ValueError(
+                "an entry is either ref: or workloads: — exactly one source, never neither (a group spells options:)"
+            )
         if self.ref is not None and self.vars:
             raise ValueError("vars fill local workload renderings; a ref carries its producer's vars")
         return self
@@ -377,13 +379,6 @@ class DockerDevkitConfig(BaseModel):
                     )
                 _coerce_port_strings(f"services.{name}", raw_entry, name, bare_legal=False)
             else:
-                if "ref" in raw_entry and "workloads" in raw_entry:
-                    raise ValueError(f"services.{name}: carries both ref: and workloads: — exactly one source")
-                if "ref" not in raw_entry and "workloads" not in raw_entry:
-                    raise ValueError(
-                        f"services.{name}: carries neither ref: nor workloads: — an entry is one of them "
-                        "(or a group via options:)"
-                    )
                 _coerce_port_strings(f"services.{name}", raw_entry, name, bare_legal=True)
         return services
 
