@@ -105,7 +105,7 @@ def _no_service_shas(root: Path, config: object) -> dict[str, str]:
     return {}
 
 
-def _no_gc_limits(min_gb: int = 60) -> None:
+def _no_gc_limits() -> None:
     return None
 
 
@@ -192,7 +192,7 @@ class TestDefaultTargets:
         bake = BakeRunner()
         monkeypatch.setattr(build_docker, "bash", bake.run)
         monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(build_docker, "_check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(build_docker, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_docker, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
         _write_repo(
@@ -235,7 +235,7 @@ class TestDefaultTargets:
     def test_foreign_arch_repo_refuses_bare_build(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(build_docker, "bash", BakeRunner().run)
         monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(build_docker, "_check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(build_docker, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_docker, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL}, platforms=["linux/arm64"])
@@ -260,7 +260,7 @@ class TestDefaultTargets:
         bake_runner = BakeRunner()
         monkeypatch.setattr(build_docker, "bash", bake_runner.run)
         monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(build_docker, "_check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(build_docker, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_docker, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": EXTERNAL}, platforms=["linux/amd64", "linux/arm64"])
@@ -277,7 +277,7 @@ class TestDefaultTargets:
         bake_runner = BakeRunner()
         monkeypatch.setattr(build_docker, "bash", bake_runner.run)
         monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(build_docker, "_check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(build_docker, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_docker, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": EXTERNAL})
@@ -293,7 +293,7 @@ class TestDefaultTargets:
     def test_unknown_targets_refuse(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(build_docker, "bash", BakeRunner().run)
         monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(build_docker, "_check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(build_docker, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_docker, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": EXTERNAL})
@@ -316,7 +316,7 @@ class TestDefaultTargets:
         bake = BakeRunner()
         monkeypatch.setattr(build_docker, "bash", bake.run)
         monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(build_docker, "_check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(build_docker, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_docker, "host_platform", _amd64_host)
 
         def _refuse_probe() -> str:
@@ -335,7 +335,7 @@ class TestDefaultTargets:
         bake = BakeRunner()
         monkeypatch.setattr(build_docker, "bash", bake.run)
         monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(build_docker, "_check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(build_docker, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_docker, "host_platform", _amd64_host)
         monkeypatch.setattr(build_docker, "detect_gpu", lambda: "cuda")
         monkeypatch.chdir(tmp_path)
@@ -459,7 +459,7 @@ class TestDevBuilds:
         bake = BakeRunner()
         monkeypatch.setattr(build_docker, "bash", bake.run)
         monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(build_docker, "_check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(build_docker, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_docker, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles=dockerfiles or {"api": DEV_STAGE, "postgres": EXTERNAL})
@@ -528,7 +528,7 @@ class TestDevBuilds:
 
     def test_dev_without_any_dev_stage_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(build_docker, "_check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(build_docker, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_docker, "detect_gpu", lambda: "none")
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": EXTERNAL, "liar": LYING_DEV_STAGE})
@@ -557,7 +557,7 @@ class TestBakeFailure:
 
         monkeypatch.setattr(build_docker, "bash", _fail)
         monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(build_docker, "_check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(build_docker, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_docker, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": EXTERNAL})
@@ -846,7 +846,7 @@ class TestBakeSeesLockValues:
     def test_bake_sees_mirror_prefixed_lock_values(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         probe = BakeEnvProbe()
         monkeypatch.setattr(build_docker, "bash", probe.run)
-        monkeypatch.setattr(build_docker, "_check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(build_docker, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_docker, "resolve_remote_digest", _fixed_digest)
         monkeypatch.setattr(build_docker, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-import re
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import Literal, Self
@@ -14,14 +12,11 @@ from pydantic import (
     ConfigDict,
     Field,
     RootModel,
-    ValidationInfo,
     field_validator,
     model_validator,
 )
 
 from .config import FAN_ARG, DockerDevkitConfig, require_single_top, service_sha_env
-
-KEEP_STORAGE_PATTERN = re.compile(r"^(\d+(?:\.\d+)?)\s*([TGMK]i?B)?$", re.IGNORECASE)
 
 type BakeValue = str | list[str] | dict[str, str]
 
@@ -130,45 +125,6 @@ class BakeMetadata(RootModel[dict[str, BakedImage]]):
             if not image.tags:
                 raise ValueError(f"target '{target}' produced no tagged image references from '{image.image_name}'")
         return self
-
-
-class DaemonGc(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    default_keep_storage: int | str | None = Field(default=None, alias="defaultKeepStorage")
-
-    @field_validator("default_keep_storage")
-    @classmethod
-    def _require_parseable_size(cls, value: int | str | None) -> int | str | None:
-        if value is None:
-            return value
-        if KEEP_STORAGE_PATTERN.match(str(value)) is None:
-            raise ValueError(f"Could not parse 'defaultKeepStorage' value: {value}")
-        return value
-
-
-class DaemonBuilder(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    gc: DaemonGc = Field(default_factory=DaemonGc)
-
-
-class DaemonConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    builder: DaemonBuilder = Field(default_factory=DaemonBuilder)
-
-    @model_validator(mode="after")
-    def _require_keep_storage(self, info: ValidationInfo) -> Self:
-        if self.builder.gc.default_keep_storage:
-            return self
-        context: dict[str, object] = info.context or {}
-        min_gb = context.get("min_gb", 60)
-        sample = json.dumps({"builder": {"gc": {"defaultKeepStorage": f"{min_gb}GB"}}}, indent=2)
-        raise ValueError(
-            f"builder.gc.defaultKeepStorage missing in {context.get('path', 'daemon.json')}; "
-            f"need >= {min_gb}GB:\n\n{sample}"
-        )
 
 
 class ManifestMetadata(BaseModel):

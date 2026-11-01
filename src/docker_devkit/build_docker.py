@@ -11,7 +11,7 @@ from tempfile import TemporaryDirectory
 from typing import Annotated, Any, TypedDict
 
 import typer
-from bashrun.bash import bash, bash_check, bash_output
+from bashrun.bash import bash, bash_output
 from build_artifact_registry.builds import push_build
 from build_artifact_registry.setup_oras import install_oras
 
@@ -24,10 +24,9 @@ from .config import (
     load_config,
     optional_lock_entries,
 )
+from .daemon_gc import check_gc_limits
 from .documents import (
-    KEEP_STORAGE_PATTERN,
     BakeMetadata,
-    DaemonConfig,
     compute_service_shas,
     render_bake,
 )
@@ -146,7 +145,7 @@ def run_build(
 
     # Check Docker GC limits so local GPU builds don't evict the build cache.
     if not push and not lock_only and not targets_opt:
-        _check_gc_limits(min_gb=60)
+        check_gc_limits()
 
     # Record one lock entry per declaration: the mirror-prefixed reference, digest resolved
     # against upstream — crane copies are byte-identical, so the digest holds under both
@@ -324,34 +323,3 @@ def _run_bake(bake_file: Path, command_arguments: list[str], rendered: str) -> N
         raise RuntimeError(
             f"docker buildx bake failed (exit {error.returncode}); rendered bake file:\n{rendered}"
         ) from error
-
-
-def _check_gc_limits(min_gb: int = 60):
-    candidates = [Path("/etc/docker/daemon.json"), Path(os.path.expanduser("~/.docker/daemon.json"))]
-    # Probe the Windows-side home through wslpath; failure is expected off WSL.
-    wslpath = 'wslpath $(cmd.exe /c "echo %UserProfile%" 2>/dev/null)'
-    if os.getenv("WSL_DISTRO_NAME") is not None and bash_check(wslpath):
-        win_home = bash_output(wslpath).strip()
-        candidates.append(Path(win_home) / ".docker" / "daemon.json")
-
-    config = next((p for p in candidates if p.exists() and os.access(p, os.R_OK)), None)
-    if not config:
-        print(f"    [WARN] No readable daemon.json found. Ensure defaultKeepStorage > {min_gb}GB.")
-        return
-
-    daemon = DaemonConfig.model_validate(
-        json.loads(config.read_text(encoding="utf-8")), context={"path": config, "min_gb": min_gb}
-    )
-    raw = daemon.builder.gc.default_keep_storage
-    match = KEEP_STORAGE_PATTERN.match(str(raw))
-    if match is None:
-        raise RuntimeError(f"Could not parse 'defaultKeepStorage' value: {raw}")
-
-    multipliers = {"T": 1024, "G": 1, "M": 1 / 1024, "K": 1 / 1024**2, "B": 1 / 1024**3}
-    unit = (match.group(2) or "B")[0].upper()
-    gigabytes = float(match.group(1)) * multipliers.get(unit, 1 / 1024**3)
-
-    if gigabytes < min_gb:
-        raise RuntimeError(f"Docker GC limit {gigabytes:.1f}GB in {config} is below the required {min_gb}GB")
-
-    print(f"    [OK] Docker GC Limit verified: {gigabytes:.1f}GB")
