@@ -7,7 +7,7 @@ import yaml
 from typer.testing import CliRunner
 
 from docker_devkit import assembly
-from docker_devkit.verbs import compose
+from docker_devkit.verbs import up
 from docker_devkit.config import LOCK_PATH
 
 FAKE_DIGEST = "sha256:" + "a" * 64
@@ -78,10 +78,10 @@ def _assembly_document(
     monkeypatch.chdir(tmp_path)
     capture = AssemblyCapture()
     monkeypatch.setattr(assembly, "bash_output", _probe_present_and_services)
-    monkeypatch.setattr(compose, "bash_output", _probe_present_and_services)
-    monkeypatch.setattr(compose, "bash_handoff", capture.run)
+    monkeypatch.setattr(up, "bash_output", _probe_present_and_services)
+    monkeypatch.setattr(up, "bash_handoff", capture.run)
 
-    result = runner.invoke(compose.up_app, [])
+    result = runner.invoke(up.app, [])
 
     assert result.exit_code == 0, result.output
     assert capture.document is not None

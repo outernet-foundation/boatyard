@@ -29,8 +29,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project.scripts]
-up = "docker_devkit.verbs.compose:up_app"
-down = "docker_devkit.verbs.compose:down_app"
+up = "docker_devkit.verbs.up:app"
+down = "docker_devkit.verbs.down:app"
 build = "docker_devkit.verbs.build:app"
 mirror = "docker_devkit.verbs.mirror:app"
 publish-compose = "docker_devkit.verbs.publish:app"

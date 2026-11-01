@@ -13,7 +13,7 @@ PLAIN_VARIANT = "common"
 
 
 @app.command()
-def matrix_main() -> None:
+def docker_build_matrix() -> None:
     config = load_config(Path.cwd())
     services = config.service_builds if config is not None else {}
 

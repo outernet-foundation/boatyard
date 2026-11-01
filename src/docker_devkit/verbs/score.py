@@ -16,7 +16,7 @@ app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
 
 @app.command()
-def cli(
+def generate_score(
     target: Annotated[Target, typer.Option(help="Which Score artifact to generate.")] = "both",
     local: Annotated[
         bool,
