@@ -1,10 +1,12 @@
 import hashlib
 import json
 import os
+import platform
 import re
+import shutil
 from pathlib import Path
 from subprocess import CalledProcessError
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 import yaml
@@ -1260,3 +1262,60 @@ def test_render_bake_carries_only_bake_read_keys():
 
 def test_render_bake_with_no_services_renders_an_empty_document():
     assert _rendered_services(render_bake(_render_config({}), push=False, host="linux/amd64")) == {}
+
+
+def _nvidia_smi_present(name: str) -> str | None:
+    return "/usr/bin/nvidia-smi" if name == "nvidia-smi" else None
+
+
+def _nothing_present(_name: str) -> str | None:
+    return None
+
+
+def _always_true(_command: str) -> bool:
+    return True
+
+
+def test_gpu_types_derive_the_concrete_families() -> None:
+    assert build_docker.GPU_TYPES == ("cuda", "rocm")
+
+
+def test_gpu_literal_derives_flat_over_the_families() -> None:
+    # typer cannot annotate union types, so Gpu must flatten to one Literal.
+    assert get_args(build_docker.Gpu) == ("auto", "none", *build_docker.GPU_TYPES)
+
+
+class TestHostPlatform:
+    def test_amd64_spellings_map_to_linux_amd64(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for machine in ("x86_64", "AMD64"):
+            monkeypatch.setattr(platform, "machine", lambda machine=machine: machine)
+
+            assert build_docker.host_platform() == "linux/amd64"
+
+    def test_arm64_spellings_map_to_linux_arm64(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for machine in ("aarch64", "ARM64"):
+            monkeypatch.setattr(platform, "machine", lambda machine=machine: machine)
+
+            assert build_docker.host_platform() == "linux/arm64"
+
+    def test_other_architectures_refuse(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(platform, "machine", lambda: "riscv64")
+
+        with pytest.raises(RuntimeError, match="Unsupported host architecture"):
+            build_docker.host_platform()
+
+
+class TestDetectGpu:
+    def test_nvidia_smi_yields_cuda(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", _nvidia_smi_present)
+        monkeypatch.setattr("docker_devkit.build_docker.bash_check", _always_true)
+
+        gpu: build_docker.Gpu = build_docker.detect_gpu()
+
+        assert gpu == "cuda"
+
+    def test_no_gpu_host_refuses(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", _nothing_present)
+
+        with pytest.raises(RuntimeError, match="Could not detect GPU"):
+            build_docker.detect_gpu()

@@ -204,3 +204,18 @@ class TestDoorStanza:
         )
 
         assert document["services"]["door"]["ports"] == [{"target": "8443", "published": "8080", "protocol": "tcp"}]
+
+
+class TestParseEnvFile:
+    def test_parses_assignments_skipping_comments_and_blanks(self, tmp_path: Path) -> None:
+        env = tmp_path / ".env"
+        env.write_text(
+            "# comment\n\nBUNDLES=core-cuda,gateway-open\nGATEWAY_PORT='8443'\nRELOAD=\"true\"\nnot-an-assignment\n",
+            encoding="utf-8",
+        )
+
+        assert assembly.parse_env_file(env) == {
+            "BUNDLES": "core-cuda,gateway-open",
+            "GATEWAY_PORT": "8443",
+            "RELOAD": "true",
+        }

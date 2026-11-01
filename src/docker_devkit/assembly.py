@@ -27,7 +27,6 @@ from .config import (
     parse_dev_toggles,
 )
 from .documents import WorkloadDocument
-from .host import parse_env_file
 
 ENV_FILE = Path(".env")
 BUNDLES_VARIABLE = "BUNDLES"
@@ -292,6 +291,17 @@ class Assembly:
 def require_env_file(root: Path) -> None:
     if not (root / ENV_FILE).exists():
         raise RuntimeError("No .env file found; create one first (e.g., copy .env.example)")
+
+
+def parse_env_file(path: Path) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        result[key.strip()] = value.strip().strip("'\"")
+    return result
 
 
 def require_compose_stack(config: DockerDevkitConfig | None) -> DockerDevkitConfig:

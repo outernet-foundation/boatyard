@@ -4,16 +4,18 @@ import difflib
 import hashlib
 import json
 import os
+import platform
 import re
+import shutil
 from itertools import starmap
 from pathlib import Path
 from subprocess import CalledProcessError
 from tempfile import TemporaryDirectory
-from typing import Annotated, Any, Self, TypedDict
+from typing import Annotated, Any, Literal, Self, TypedDict, get_args
 
 import typer
 import yaml
-from bashrun.bash import bash, bash_output
+from bashrun.bash import bash, bash_check, bash_output
 from build_artifact_registry.builds import push_build
 from build_artifact_registry.setup_oras import install_oras
 from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
@@ -28,10 +30,9 @@ from .config import (
     optional_lock_entries,
 )
 from .daemon_gc import check_gc_limits
-from .host import GPU_TYPES, Gpu, detect_gpu, host_platform
 from .image_refs import ImageReference, resolve_remote_digest
 from .mirror import mirrored_ref
-from .service_builds import FAN_ARG, compute_service_shas, service_sha_env
+from .service_builds import FAN_ARG, GpuFamily, compute_service_shas, service_sha_env
 
 
 METADATA_PATH = Path("metadata.json")
@@ -43,6 +44,11 @@ DIGEST_FILE_NAME = "images-digests.json"
 DIGEST_TAIL_PATTERN = re.compile(r"@sha256:[a-f0-9]{64}$")
 
 type BakeValue = str | list[str] | dict[str, str]
+
+# A flat Literal: typer cannot annotate unions and pyright cannot type a star-unpacked
+# subscript, so the family membership pins by test instead of by derivation.
+Gpu = Literal["auto", "none", "cuda", "rocm"]
+GPU_TYPES = get_args(GpuFamily)
 
 
 class DigestEntry(TypedDict):
@@ -340,6 +346,25 @@ def run_build(
                 Path(staging),
                 [DIGEST_FILE_NAME],
             )
+
+
+def host_platform() -> str:
+    machine = platform.machine().lower()
+    if machine in ("x86_64", "amd64"):
+        return "linux/amd64"
+    if machine in ("aarch64", "arm64"):
+        return "linux/arm64"
+    raise RuntimeError(f"Unsupported host architecture: {machine}")
+
+
+def detect_gpu() -> Gpu:
+    # The which() pre-guard is load-bearing: bash_check execs without a shell, so a
+    # missing binary would raise instead of answering False.
+    if shutil.which("nvidia-smi") and bash_check("nvidia-smi"):
+        return "cuda"
+    if shutil.which("rocminfo") and bash_check("rocminfo"):
+        return "rocm"
+    raise RuntimeError("Could not detect GPU type.")
 
 
 def render_bake(config: DockerDevkitConfig, *, push: bool, host: str, dev: bool = False) -> str:
