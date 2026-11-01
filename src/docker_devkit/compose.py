@@ -43,26 +43,24 @@ def up(
     root = Path.cwd()
     config = load_config(root)
 
+    # Refuse --build in a repo with no build declarations.
+    if config is not None and build and not (config.repository or config.base_images):
+        raise typer.BadParameter(
+            "--build requires build declarations (repository or base_images) in docker-devkit.yaml"
+        )
+
     # Resolve, render, and validate in one construction; every refusal rides it.
     assembly = Assembly(root, config, dev=dev)
-    assert config is not None
 
     try:
-        # Refuse --build in a repo with no build declarations.
-        if build and not (config.repository or config.base_images):
-            raise typer.BadParameter(
-                "--build requires build declarations (repository or base_images) in docker-devkit.yaml"
-            )
-
         # Fail closed over every lock entry before bring-up.
-        if (root / LOCK_PATH).exists():
-            _probe_lock_entries(root)
+        _probe_lock_entries(root)
 
         # Build local images; --dev builds both shapes.
         if build:
-            run_build(root=root, config=config)
+            run_build(root=root, config=assembly.config)
             if dev:
-                run_build(root=root, config=config, dev=True)
+                run_build(root=root, config=assembly.config, dev=True)
 
         # Hand off to docker compose up.
         up_command = compose_command(
@@ -105,7 +103,10 @@ def down(
 
 
 def _probe_lock_entries(root: Path) -> None:
-    for value in sorted(parse_image_lock(root / LOCK_PATH).root.values()):
+    lock_path = root / LOCK_PATH
+    if not lock_path.exists():
+        return
+    for value in sorted(parse_image_lock(lock_path).root.values()):
         reference, _, digest = value.rpartition("@")
         try:
             bash_output(f"docker buildx imagetools inspect {shlex.quote(value)}")
