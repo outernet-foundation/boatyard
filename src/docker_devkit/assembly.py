@@ -5,7 +5,6 @@ from itertools import combinations, groupby
 from os import environ
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import TypeIs
 
 import yaml
 from bashrun.bash import bash_output
@@ -23,6 +22,7 @@ from .config import (
     ServiceGroup,
     bundle_output,
     compose_bundles,
+    is_string_mapping,
     parse_dev_toggles,
 )
 from .host import parse_env_file
@@ -362,8 +362,4 @@ def _service_names(path: Path) -> set[str]:
 
 
 def mapping_or_empty(value: object) -> dict[str, object]:
-    return value if _is_mapping(value) else {}
-
-
-def _is_mapping(value: object) -> TypeIs[dict[str, object]]:
-    return isinstance(value, dict)
+    return value if is_string_mapping(value) else {}

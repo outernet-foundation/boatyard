@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib.metadata
 import re
 from pathlib import Path
-from typing import Any, Literal, NamedTuple, Self, get_args
+from typing import Literal, NamedTuple, Self, TypeIs, get_args
 
 from packaging.specifiers import SpecifierSet
 from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidationInfo, field_validator, model_validator
@@ -65,7 +65,6 @@ AUTH_GROUP_NAME = "auth"
 DOOR_SERVICE_NAME = "door"
 CADDY_IMAGE = "CADDY_IMAGE"
 DEV_TOGGLES_ANNOTATION = "outernet.internal/dev-toggles"
-PORT_PROTOCOLS = ("tcp", "udp")
 
 
 def service_sha_env(name: str) -> str:
@@ -161,7 +160,7 @@ class PortDeclaration(BaseModel):
 
     @field_validator("published", "target")
     @classmethod
-    def _numeric_or_hole(cls, value: str, info: Any) -> str:
+    def _numeric_or_hole(cls, value: str, info: ValidationInfo) -> str:
         if PORT_PATTERN.fullmatch(value) is None and ENV_HOLE_PATTERN.fullmatch(value) is None:
             raise ValueError(
                 f"ports {info.field_name} {value!r} must be a literal port number or a ${{…}} env hole "
@@ -355,33 +354,38 @@ class DockerDevkitConfig(BaseModel):
 
     @field_validator("services", mode="before")
     @classmethod
-    def _coerce_services(cls, services: Any) -> Any:
+    def _coerce_services(cls, services: object) -> object:
         # String-form ports name their owner by context (the entry or option they sit on);
         # group-level ports must spell the mapping form because a group has no namesake service.
-        raw: Any = services
-        if not isinstance(services, dict):
+        # Shapes that are not mappings ride through untouched; field validation reports them.
+        if not is_string_mapping(services):
             return services
-        entries: dict[str, Any] = {name: entry for name, entry in raw.items()}
-        for name, raw_entry in entries.items():
-            entry: dict[str, Any] = raw_entry
-            if "options" in entry:
-                options: dict[str, Any] = entry["options"] or {}
-                if not options:
+        for name, raw_entry in services.items():
+            if not is_string_mapping(raw_entry):
+                continue
+            if "options" in raw_entry:
+                raw_options: object = raw_entry["options"] or {}
+                if not is_string_mapping(raw_options):
+                    continue
+                if not raw_options:
                     raise ValueError(f"services.{name}: a group's options: is a non-empty map of alternatives")
-                for option_name, raw_option in options.items():
-                    option: dict[str, Any] = raw_option
-                    _coerce_port_strings(f"services.{name}.options.{option_name}", option, option_name, bare_legal=True)
-                _coerce_port_strings(f"services.{name}", entry, name, bare_legal=False)
+                for option_name, raw_option in raw_options.items():
+                    if not is_string_mapping(raw_option):
+                        continue
+                    _coerce_port_strings(
+                        f"services.{name}.options.{option_name}", raw_option, option_name, bare_legal=True
+                    )
+                _coerce_port_strings(f"services.{name}", raw_entry, name, bare_legal=False)
             else:
-                if "ref" in entry and "workloads" in entry:
+                if "ref" in raw_entry and "workloads" in raw_entry:
                     raise ValueError(f"services.{name}: carries both ref: and workloads: — exactly one source")
-                if "ref" not in entry and "workloads" not in entry:
+                if "ref" not in raw_entry and "workloads" not in raw_entry:
                     raise ValueError(
                         f"services.{name}: carries neither ref: nor workloads: — an entry is one of them "
                         "(or a group via options:)"
                     )
-                _coerce_port_strings(f"services.{name}", entry, name, bare_legal=True)
-        return entries
+                _coerce_port_strings(f"services.{name}", raw_entry, name, bare_legal=True)
+        return services
 
     @model_validator(mode="after")
     def _service_laws(self) -> Self:
@@ -393,17 +397,6 @@ class DockerDevkitConfig(BaseModel):
         any_route = False
         any_local = False
 
-        def collect(routes: list[RouteConfig], where: str) -> None:
-            nonlocal any_route
-            for route in routes:
-                any_route = True
-                if route.path in route_owner:
-                    raise ValueError(
-                        f"{where}: route path {route.path} is already declared at {route_owner[route.path]}; "
-                        "paths are door-wide unique"
-                    )
-                route_owner[route.path] = where
-
         for name, entry in self.services.items():
             if isinstance(entry, ServiceGroup):
                 for option_name, option in entry.options.items():
@@ -414,11 +407,14 @@ class DockerDevkitConfig(BaseModel):
                         )
                     option_owner[option_name] = name
                     any_local = any_local or not option.remote
-                    collect(option.routes, f"services.{name}.options.{option_name}")
-                collect(entry.routes, f"services.{name}")
+                    if _collect_route_owners(option.routes, f"services.{name}.options.{option_name}", route_owner):
+                        any_route = True
+                if _collect_route_owners(entry.routes, f"services.{name}", route_owner):
+                    any_route = True
             else:
                 any_local = any_local or not entry.remote
-                collect(entry.routes, f"services.{name}")
+                if _collect_route_owners(entry.routes, f"services.{name}", route_owner):
+                    any_route = True
 
         if AUTH_GROUP_NAME in self.services:
             auth = self.services[AUTH_GROUP_NAME]
@@ -447,11 +443,14 @@ class DockerDevkitConfig(BaseModel):
         return self
 
 
-def _coerce_port_strings(where: str, entry: dict[str, Any], owning_name: str, *, bare_legal: bool) -> None:
-    ports: list[Any] = entry.get("ports") or []
-    coerced: list[Any] = []
+def _coerce_port_strings(where: str, entry: dict[str, object], owning_name: str, *, bare_legal: bool) -> None:
+    # A non-list ports value rides through untouched; field validation reports it.
+    ports: object = entry.get("ports") or []
+    if not _is_object_list(ports):
+        return
+    coerced: list[object] = []
     for item in ports:
-        if isinstance(item, dict):
+        if is_string_mapping(item):
             coerced.append(item)
             continue
         if not isinstance(item, str):
@@ -471,15 +470,36 @@ def _coerce_port_strings(where: str, entry: dict[str, Any], owning_name: str, *,
     entry["ports"] = coerced
 
 
+def _collect_route_owners(routes: list[RouteConfig], where: str, route_owner: dict[str, str]) -> bool:
+    any_route = False
+    for route in routes:
+        any_route = True
+        if route.path in route_owner:
+            raise ValueError(
+                f"{where}: route path {route.path} is already declared at {route_owner[route.path]}; "
+                "paths are door-wide unique"
+            )
+        route_owner[route.path] = where
+    return any_route
+
+
+def is_string_mapping(value: object) -> TypeIs[dict[str, object]]:
+    return isinstance(value, dict)
+
+
+def _is_object_list(value: object) -> TypeIs[list[object]]:
+    return isinstance(value, list)
+
+
 class ImageLock(RootModel[dict[str, str]]):
     # The env-format pair file beside the root config; entries parse from raw text so
     # errors can name the offending line.
     @model_validator(mode="before")
     @classmethod
-    def _parse_entries(cls, value: Any, info: ValidationInfo) -> Any:
+    def _parse_entries(cls, value: object, info: ValidationInfo) -> object:
         if not isinstance(value, str):
             return value
-        context: dict[str, Any] = info.context or {}
+        context: dict[str, object] = info.context or {}
         source = context.get("path", "the image lock")
         entries: dict[str, str] = {}
         for number, line in enumerate(value.splitlines(), start=1):
@@ -496,7 +516,7 @@ class ImageLock(RootModel[dict[str, str]]):
 
     @model_validator(mode="after")
     def _require_digest_pins(self, info: ValidationInfo) -> Self:
-        context: dict[str, Any] = info.context or {}
+        context: dict[str, object] = info.context or {}
         for name, reference in self.root.items():
             if not reference.rpartition("@")[2].startswith("sha256:"):
                 raise ValueError(
@@ -594,35 +614,48 @@ def derive_services(root: Path) -> dict[str, ServiceBuild]:
             )
 
     resolved_variants: dict[str, list[GpuFamily]] = {}
-
-    def resolve_variants(name: str, seen: tuple[str, ...]) -> list[GpuFamily]:
-        if name in resolved_variants:
-            return resolved_variants[name]
-        if name in seen:
-            raise RuntimeError(f"FROM context cycle: {' -> '.join((*seen, name))}")
-        parent_sets = [resolve_variants(parent, (*seen, name)) for parent in services[name].contexts]
-        distinct = {tuple(variants) for variants in parent_sets}
-        if len(distinct) > 1:
-            parents = ", ".join(services[name].contexts)
-            raise RuntimeError(
-                f"workloads/{name}/{DOCKERFILE_NAME}: parents ({parents}) disagree on gpu variants; "
-                "a dependent inherits its base's set exactly"
-            )
-        if parent_sets:
-            if own_fans[name]:
-                raise RuntimeError(
-                    f"workloads/{name}/{DOCKERFILE_NAME}: declares ARG {FAN_ARG} over a fanned base; "
-                    "a dependent inherits its base's variant set"
-                )
-            variants = parent_sets[0]
-        else:
-            variants = list(get_args(GpuFamily)) if own_fans[name] else []
-        resolved_variants[name] = variants
-        return variants
-
     for name, service in services.items():
-        service.variants = resolve_variants(name, ())
+        service.variants = _resolve_variants(name, (), services, own_fans, resolved_variants)
     return services
+
+
+def require_single_top(tops: set[str], subject: str) -> None:
+    if len(tops) > 1:
+        raise RuntimeError(f"{subject} span multiple top-level directories: {sorted(tops)}")
+
+
+def _resolve_variants(
+    name: str,
+    seen: tuple[str, ...],
+    services: dict[str, ServiceBuild],
+    own_fans: dict[str, bool],
+    resolved: dict[str, list[GpuFamily]],
+) -> list[GpuFamily]:
+    if name in resolved:
+        return resolved[name]
+    if name in seen:
+        raise RuntimeError(f"FROM context cycle: {' -> '.join((*seen, name))}")
+    parent_sets = [
+        _resolve_variants(parent, (*seen, name), services, own_fans, resolved) for parent in services[name].contexts
+    ]
+    distinct = {tuple(variants) for variants in parent_sets}
+    if len(distinct) > 1:
+        parents = ", ".join(services[name].contexts)
+        raise RuntimeError(
+            f"workloads/{name}/{DOCKERFILE_NAME}: parents ({parents}) disagree on gpu variants; "
+            "a dependent inherits its base's variant set"
+        )
+    if parent_sets:
+        if own_fans[name]:
+            raise RuntimeError(
+                f"workloads/{name}/{DOCKERFILE_NAME}: declares ARG {FAN_ARG} over a fanned base; "
+                "a dependent inherits its base's variant set"
+            )
+        variants = parent_sets[0]
+    else:
+        variants = list(get_args(GpuFamily)) if own_fans[name] else []
+    resolved[name] = variants
+    return variants
 
 
 def parse_image_lock(path: Path) -> ImageLock:

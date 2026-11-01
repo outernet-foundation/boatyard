@@ -45,6 +45,7 @@ packages = ["src/docker_devkit"]
 [tool.basedpyright]
 venvPath = "."
 venv = ".venv"
+pythonVersion = "3.13"
 typeCheckingMode = "strict"
 include = ["src", "tests"]
 
