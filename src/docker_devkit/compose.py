@@ -4,26 +4,29 @@ import re
 import shlex
 from collections.abc import Mapping
 from dataclasses import dataclass
+from itertools import groupby
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Annotated, Any, Literal, NotRequired, TypedDict, TypeIs
+from typing import Annotated, Any, TypeIs
 
 import typer
 import yaml
 from bashrun.bash import CalledProcessError, bash_handoff, bash_output
 
+from .assembly import Assembly, assert_known_profiles, require_compose_stack, require_env_file
 from .build_docker import run_build
 from .config import (
     CADDY_IMAGE,
     DEV_TOGGLES_ANNOTATION,
     DOOR_SERVICE_NAME,
     LOCK_PATH,
+    DockerDevkitConfig,
+    RouteConfig,
     ServiceGroup,
     compose_bundles,
     load_config,
     parse_image_lock,
 )
-from .assembly import Assembly, assert_known_profiles, require_compose_stack, require_env_file
 
 DEV_MOUNT_TARGET = "/app"
 
@@ -56,56 +59,6 @@ class ComposeContext:
         return " ".join([prefix, *arguments])
 
 
-class ConfigReference(TypedDict):
-    source: str
-    target: str
-
-
-class PortEntry(TypedDict):
-    target: str
-    published: str
-    protocol: str
-    host_ip: NotRequired[str]
-
-
-class InlineConfig(TypedDict):
-    content: str
-
-
-class ServiceStanza(TypedDict, total=False):
-    image: str
-    configs: list[ConfigReference]
-    ports: list[PortEntry]
-    environment: dict[str, str]
-
-
-class DoorStanza(TypedDict):
-    image: str
-    configs: list[ConfigReference]
-    ports: list[PortEntry]
-    environment: NotRequired[dict[str, str]]
-
-
-class DevMount(TypedDict):
-    type: Literal["bind"]
-    source: str
-    target: str
-    read_only: bool
-
-
-class OverlayService(TypedDict, total=False):
-    image: str
-    volumes: list[DevMount]
-    environment: dict[str, str]
-
-
-class AssemblyRoot(TypedDict, total=False):
-    name: str
-    include: list[str]
-    services: dict[str, ServiceStanza]
-    configs: dict[str, InlineConfig]
-
-
 @up_app.command()
 def up(
     attached: Annotated[bool, typer.Option("--attached", "-a", help="Run in foreground (not detached)")] = False,
@@ -126,157 +79,63 @@ def up(
     config = load_config(root)
 
     # Resolve once; every environment read and selection refusal rides the constructor.
-    facts = Assembly(root, config)
+    assembly = Assembly(root, config)
     assert config is not None
 
-    # Generate the dev overlay from the assembly's dev shapes.
+    # Render the dev overlay before the root, so the file list is final at one construction.
     dev_overlay: Path | None = None
     if dev:
-        declared = facts.output_services
-        overlay_services: dict[str, OverlayService] = {}
-        for name, service in config.service_builds.items():
-            if not service.dev_stage or name not in declared:
-                continue
-            overlay_services[name] = {
-                "image": f"{config.repository}/{name}:dev",
-                "volumes": [
-                    {
-                        "type": "bind",
-                        "source": root.resolve().as_posix(),
-                        "target": DEV_MOUNT_TARGET,
-                        "read_only": True,
-                    }
-                ],
-            }
-        for bundle in compose_bundles(config):
-            for workload in bundle.workloads:
-                workload_document: dict[str, object] = _mapping_or_empty(
-                    yaml.safe_load((root / config.score_dir / workload).read_text(encoding="utf-8"))
-                )
-                metadata: dict[str, object] = _mapping_or_empty(workload_document.get("metadata"))
-                annotations: dict[str, object] = _mapping_or_empty(metadata.get("annotations"))
-                raw: object | None = annotations.get(DEV_TOGGLES_ANNOTATION)
-                if not isinstance(raw, str) or not raw.strip():
-                    continue
-                service_name = metadata.get("name")
-                if not isinstance(service_name, str) or not service_name:
-                    continue
-                if service_name not in declared:
-                    continue
-                toggles = {
-                    toggle_name: default
-                    for toggle_name, _, default in (item.strip().partition("=") for item in raw.split(","))
-                }
-                overlay_services.setdefault(service_name, OverlayService())["environment"] = {
-                    key: f"${{{key}:-{value}}}" for key, value in toggles.items()
-                }
-        if not overlay_services:
-            raise RuntimeError(
-                "--dev found no dev shape in the assembly: a service Dockerfile declaring a "
-                f"dev stage or a workload carrying {DEV_TOGGLES_ANNOTATION}"
-            )
+        overlay = render_dev_overlay(root, config, assembly)
         with NamedTemporaryFile(
             "w", suffix=".yaml", prefix="devkit-dev-overlay-", delete=False, encoding="utf-8"
         ) as handle:
-            handle.write(yaml.safe_dump({"services": overlay_services}, sort_keys=False, default_flow_style=False))
+            handle.write(yaml.safe_dump(overlay, sort_keys=False, default_flow_style=False))
             dev_overlay = Path(handle.name)
 
-    # Assemble the root document: name, includes, door, port stanzas, Caddyfile.
-    document: AssemblyRoot = {}
-    assert config.project_name is not None
-    document["name"] = config.project_name
-    if facts.includes:
-        document["include"] = facts.includes
-
-    services: dict[str, ServiceStanza] = {}
-    if facts.routes:
-        assert config.gateway is not None
-        stanza: DoorStanza = {
-            "image": CADDY_IMAGE_HOLE,
-            "configs": [{"source": DOOR_CONFIG_NAME, "target": DOOR_CONFIG_TARGET}],
-            "ports": [{"target": str(DOOR_LISTEN_PORT), "published": config.gateway, "protocol": "tcp"}],
-        }
-        if facts.forwarded is not None:
-            stanza["environment"] = facts.forwarded
-        services[DOOR_SERVICE_NAME] = ServiceStanza(**stanza)
-    for port in facts.ports:
-        port_entry: PortEntry = {
-            "target": port.target,
-            "published": port.published,
-            "protocol": port.protocol,
-        }
-        if port.host_ip is not None:
-            port_entry["host_ip"] = port.host_ip
-        services.setdefault(port.service, {}).setdefault("ports", []).append(port_entry)
-    if services:
-        document["services"] = services
-    if facts.routes:
-        caddyfile_lines = [f":{DOOR_LISTEN_PORT} {{"]
-        for route in facts.routes:
-            matcher = "" if route.path == "/*" else f" {route.path}"
-            if route.raw is not None:
-                block = ["\t\t" + line for line in route.raw.splitlines()]
-            elif route is facts.auth_route:
-                block = [
-                    f"\t\treverse_proxy {route.upstream} {{",
-                    "\t\t\theader_up X-Forwarded-Proto {$FORWARDED_PROTO}",
-                    "\t\t\theader_up X-Forwarded-Port {$FORWARDED_PORT}",
-                    "\t\t}",
-                ]
-            else:
-                block = [f"\t\treverse_proxy {route.upstream}"]
-            head = "\thandle_path" if route.strip_prefix else "\thandle"
-            caddyfile_lines.extend((f"{head}{matcher} {{", *block, "\t}"))
-        caddyfile_lines.append("}")
-        document["configs"] = {DOOR_CONFIG_NAME: {"content": ("\n".join(caddyfile_lines) + "\n").replace("$", "$$")}}
-
     # Write the per-run root and build the context over the final file list.
-    assembly_root = _write_temp_root(document)
+    assembly_root = _write_temp_root(render_root_document(config, assembly))
     compose_files = [assembly_root, dev_overlay] if dev_overlay is not None else [assembly_root]
-    context = ComposeContext(
-        root,
-        compose_files,
-        dev_overlay=dev_overlay,
-        assembly_root=assembly_root,
-    )
+    context = ComposeContext(root, compose_files, dev_overlay=dev_overlay, assembly_root=assembly_root)
 
     try:
-        if facts.routes or facts.ports:
+        if assembly.routes or assembly.ports:
             # Validate every upstream and port owner against compose's own resolution.
-            resolved = {line.strip() for line in bash_output(f"{context.command('config', '--services')}").splitlines()}
+            resolved = {
+                line.strip() for line in bash_output(f"{context.command('config', '--services')}").splitlines()
+            }
             resolved.discard("")
-            for route in facts.routes:
+            for route in assembly.routes:
                 upstream = route.upstream.partition(":")[0]
                 if upstream not in resolved:
                     raise RuntimeError(
                         f"route {route.path} upstream {upstream} resolves to no service in the selected assembly"
                     )
-            if facts.auth_route is not None:
-                upstream = facts.auth_route.upstream.partition(":")[0]
+            if assembly.auth_route is not None:
+                upstream = assembly.auth_route.upstream.partition(":")[0]
                 if upstream not in resolved:
                     raise RuntimeError(f"the selected auth option's upstream {upstream} is absent from the assembly")
-            for port in facts.ports:
+            for port in assembly.ports:
                 if port.service not in resolved:
                     raise RuntimeError(f"ports for service {port.service!r} — absent from the selected assembly")
 
         # Print the resolved assembly so nothing implicit rides hidden.
-        if facts.riding:
-            print(f"riding: {', '.join(facts.riding)}")
+        if assembly.riding:
+            print(f"riding: {', '.join(assembly.riding)}")
         for name, entry in config.services.items():
             if isinstance(entry, ServiceGroup):
-                selected_option = facts.choices.get(name)
+                selected_option = assembly.choices.get(name)
                 print(f"{name}: {selected_option if selected_option is not None else '(none selected)'}")
-        if facts.routes:
-            print(f"door: {' '.join(route.path for route in facts.routes)}")
+        if assembly.routes:
+            print(f"door: {' '.join(route.path for route in assembly.routes)}")
 
         # Refuse profile names the compose files do not define.
-        if facts.profiles:
+        if assembly.profiles:
             defined = [
                 line.strip()
                 for line in bash_output(f"{context.command()} config --profiles").splitlines()
                 if line.strip()
             ]
-            assert_known_profiles(facts.profiles, defined)
+            assert_known_profiles(assembly.profiles, defined)
 
         # Refuse --build in a repo with no build declarations.
         if build and not (config.repository or config.base_images):
@@ -295,7 +154,7 @@ def up(
                 run_build(dev=True)
 
         # Hand off to docker compose up.
-        up_command = context.command(*(f"--profile {profile}" for profile in facts.profiles), "up")
+        up_command = context.command(*(f"--profile {profile}" for profile in assembly.profiles), "up")
         if not build:
             up_command += " --pull missing"
             if quiet_pull:
@@ -331,6 +190,114 @@ def down(
         bash_handoff(command)
     finally:
         _cleanup(context)
+
+
+def render_root_document(config: DockerDevkitConfig, assembly: Assembly) -> dict[str, object]:
+    # The per-run root compose file: name, includes, the door, parent port stanzas, Caddyfile.
+    assert config.project_name is not None
+    services: dict[str, object] = {}
+    if assembly.routes:
+        assert config.gateway is not None
+        services[DOOR_SERVICE_NAME] = {
+            "image": CADDY_IMAGE_HOLE,
+            "configs": [{"source": DOOR_CONFIG_NAME, "target": DOOR_CONFIG_TARGET}],
+            "ports": [{"target": str(DOOR_LISTEN_PORT), "published": config.gateway, "protocol": "tcp"}],
+            **({"environment": assembly.forwarded} if assembly.forwarded is not None else {}),
+        }
+    ordered_ports = sorted(assembly.ports, key=lambda port: port.service)
+    services.update(
+        {
+            service: {
+                "ports": [
+                    {
+                        "target": port.target,
+                        "published": port.published,
+                        "protocol": port.protocol,
+                        **({"host_ip": port.host_ip} if port.host_ip is not None else {}),
+                    }
+                    for port in service_ports
+                ]
+            }
+            for service, service_ports in groupby(ordered_ports, key=lambda port: port.service)
+        }
+    )
+    document: dict[str, object] = {"name": config.project_name}
+    if assembly.includes:
+        document["include"] = assembly.includes
+    if services:
+        document["services"] = services
+    if assembly.routes:
+        document["configs"] = {DOOR_CONFIG_NAME: {"content": render_caddyfile(assembly.routes, assembly.auth_route)}}
+    return document
+
+
+def render_caddyfile(routes: list[RouteConfig], auth_route: RouteConfig | None) -> str:
+    # One site on the internal port; each route one handle block, in declaration order
+    # (caddy sorts them longest-path-first, so the order cannot shadow).
+    lines = [f":{DOOR_LISTEN_PORT} {{"]
+    for route in routes:
+        matcher = "" if route.path == "/*" else f" {route.path}"
+        if route.raw is not None:
+            block = ["\t\t" + line for line in route.raw.splitlines()]
+        elif route is auth_route:
+            block = [
+                f"\t\treverse_proxy {route.upstream} {{",
+                "\t\t\theader_up X-Forwarded-Proto {$FORWARDED_PROTO}",
+                "\t\t\theader_up X-Forwarded-Port {$FORWARDED_PORT}",
+                "\t\t}",
+            ]
+        else:
+            block = [f"\t\treverse_proxy {route.upstream}"]
+        head = "\thandle_path" if route.strip_prefix else "\thandle"
+        lines.extend((f"{head}{matcher} {{", *block, "\t}"))
+    lines.append("}")
+    # Every $ doubles: compose interpolation would otherwise eat caddy's {$ENV} placeholders.
+    return ("\n".join(lines) + "\n").replace("$", "$$")
+
+
+def render_dev_overlay(root: Path, config: DockerDevkitConfig, assembly: Assembly) -> Mapping[str, object]:
+    # The --dev overlay: dev-stage images with the repo bind, plus dev-toggle env holes.
+    declared = assembly.output_services
+    services: dict[str, dict[str, object]] = {
+        name: {
+            "image": f"{config.repository}/{name}:dev",
+            "volumes": [
+                {
+                    "type": "bind",
+                    "source": root.resolve().as_posix(),
+                    "target": DEV_MOUNT_TARGET,
+                    "read_only": True,
+                }
+            ],
+        }
+        for name, service in config.service_builds.items()
+        if service.dev_stage and name in declared
+    }
+    for bundle in compose_bundles(config):
+        for workload in bundle.workloads:
+            workload_document: dict[str, object] = _mapping_or_empty(
+                yaml.safe_load((root / config.score_dir / workload).read_text(encoding="utf-8"))
+            )
+            metadata: dict[str, object] = _mapping_or_empty(workload_document.get("metadata"))
+            annotations: dict[str, object] = _mapping_or_empty(metadata.get("annotations"))
+            raw: object | None = annotations.get(DEV_TOGGLES_ANNOTATION)
+            if not isinstance(raw, str) or not raw.strip():
+                continue
+            service_name = metadata.get("name")
+            if not isinstance(service_name, str) or not service_name or service_name not in declared:
+                continue
+            toggles = {
+                toggle_name: default
+                for toggle_name, _, default in (item.strip().partition("=") for item in raw.split(","))
+            }
+            service = services.setdefault(service_name, {})
+            service["environment"] = {key: f"${{{key}:-{value}}}" for key, value in toggles.items()}
+    if not services:
+        raise RuntimeError(
+            "--dev found no dev shape in the assembly: a service Dockerfile declaring a "
+            f"dev stage or a workload carrying {DEV_TOGGLES_ANNOTATION}"
+        )
+    return {"services": services}
 
 
 def _mapping_or_empty(value: object) -> dict[str, object]:
