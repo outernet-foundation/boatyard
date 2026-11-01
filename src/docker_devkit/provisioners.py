@@ -4,7 +4,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, NamedTuple, Self
+from typing import NamedTuple, Self
 
 import yaml
 from pydantic import (
@@ -41,20 +41,20 @@ class AuthoredProvisioner(BaseModel):
     uri: str
     type: str
     description: str = ""
-    state: dict[str, Any] | None = None
-    outputs: dict[str, Any] | None = None
-    volumes: dict[str, Any] | None = None
-    services: dict[str, Any] | None = None
-    manifests: list[Any] | None = None
+    state: dict[str, object] | None = None
+    outputs: dict[str, object] | None = None
+    volumes: dict[str, object] | None = None
+    services: dict[str, object] | None = None
+    manifests: list[object] | None = None
 
     @field_validator(*STRING_FORM_FIELDS, mode="before")
     @classmethod
-    def _reject_string_form(cls, value: Any, info: ValidationInfo) -> Any:
+    def _reject_string_form(cls, value: object, info: ValidationInfo) -> object:
         if not isinstance(value, str):
             return value
 
         shape = "list" if info.field_name == "manifests" else "mapping"
-        context: dict[str, Any] = info.context or {}
+        context: dict[str, object] = info.context or {}
         raise ValueError(
             f"{context.get('name', 'the provisioner file')}: "
             f"{info.field_name} is already in score's compiled string form; author it as a {shape}"
@@ -65,7 +65,7 @@ class AuthoredProvisioners(RootModel[list[AuthoredProvisioner]]):
     @model_validator(mode="after")
     def _require_entries(self, info: ValidationInfo) -> Self:
         if not self.root:
-            context: dict[str, Any] = info.context or {}
+            context: dict[str, object] = info.context or {}
             raise ValueError(
                 f"{context.get('name', 'the provisioner file')}: "
                 "an authored provisioner file is a non-empty YAML list of provisioner entries"
@@ -105,9 +105,9 @@ def compiled_provisioners(
             declares_services = declares_services or any(entry.get("services") for entry in document)
 
             # Compile from the raw authored dicts so authored key order controls dump order.
-            compiled_entries: list[dict[str, Any]] = []
+            compiled_entries: list[dict[str, object]] = []
             for entry in document:
-                compiled: dict[str, Any] = {}
+                compiled: dict[str, object] = {}
                 for key, value in entry.items():
                     if key in STRING_FORM_FIELDS:
                         if value is not None:
@@ -122,7 +122,7 @@ def compiled_provisioners(
         yield CompiledProvisioners(paths=paths, declares_services=declares_services)
 
 
-def dump_compose(value: Any) -> str:
+def dump_compose(value: object) -> str:
     return yaml.dump(
         value,
         Dumper=ComposeDumper,
