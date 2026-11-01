@@ -664,6 +664,16 @@ def optional_lock_entries(root: Path) -> dict[str, str]:
     return parse_image_lock(lock_path).root if lock_path.is_file() else {}
 
 
+def require_lock_entry(
+    entries: dict[str, str], name: str, subject: str, hint: str = "build --lock-only writes it"
+) -> str:
+    # The one "lock lacks NAME" refusal every lock consumer raises.
+    entry = entries.get(name)
+    if entry is None:
+        raise RuntimeError(f"{subject}: {LOCK_PATH.as_posix()} lacks the {name} entry ({hint})")
+    return entry
+
+
 def load_config(root: Path) -> DockerDevkitConfig | None:
     path = root / DEFAULT_CONFIG_PATH
     if not path.exists():
@@ -705,12 +715,12 @@ def _finalize(config: DockerDevkitConfig, root: Path) -> None:
             "required beside them (build writes it)"
         )
     if config.gateway is not None:
-        entries = optional_lock_entries(root)
-        if CADDY_IMAGE not in entries:
-            raise RuntimeError(
-                f"routes are declared, so the door rides; {LOCK_PATH.as_posix()} lacks the {CADDY_IMAGE} entry — "
-                "declare CADDY_IMAGE in base_images and run build --lock-only"
-            )
+        require_lock_entry(
+            optional_lock_entries(root),
+            CADDY_IMAGE,
+            "routes are declared, so the door rides",
+            hint="declare CADDY_IMAGE in base_images and run build --lock-only",
+        )
     for chart in declared_charts:
         values = root / chart_values_path(config.score_dir, chart)
         if not values.is_file():

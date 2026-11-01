@@ -31,6 +31,7 @@ from .config import (
     compose_bundles,
     load_config,
     parse_image_lock,
+    require_lock_entry,
 )
 from .documents import (
     BindVolume,
@@ -522,12 +523,7 @@ def generate_k8s(root: Path, config: DockerDevkitConfig, output: Path, images: d
             values_dir = Path(values_directory)
             for chart_name in k8s.charts:
                 key = chart_lock_key(chart_name)
-                entry = images.get(key)
-                if entry is None:
-                    raise RuntimeError(
-                        f"chart {chart_name!r}: {LOCK_PATH.as_posix()} lacks the {key} entry; "
-                        "build --lock-only resolves and writes it"
-                    )
+                entry = require_lock_entry(images, key, f"chart {chart_name!r}")
                 # Pass a marker-free values file through untouched; resolve markers into a tempdir copy.
                 values_arguments: list[str] = []
                 path = root / chart_values_path(config.score_dir, chart_name)

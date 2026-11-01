@@ -7,10 +7,10 @@ from bashrun.bash import bash, bash_check
 
 from .config import (
     DEFAULT_MIRROR_PREFIX,
-    LOCK_PATH,
     chart_lock_key,
     load_config,
     optional_lock_entries,
+    require_lock_entry,
 )
 from .crane import install_crane
 
@@ -31,12 +31,7 @@ def mirror() -> None:
         for name, reference in sorted(config.base_images.items(), key=lambda item: item[1])
     ]
     for chart_name, chart_ref in sorted((config.k8s.charts if config.k8s is not None else {}).items()):
-        entry = lock_entries.get(chart_lock_key(chart_name))
-        if entry is None:
-            raise RuntimeError(
-                f"chart {chart_name!r}: {LOCK_PATH.as_posix()} lacks the {chart_lock_key(chart_name)} entry "
-                "consumers render (build --lock-only writes it)"
-            )
+        entry = require_lock_entry(lock_entries, chart_lock_key(chart_name), f"chart {chart_name!r}")
         mirror_targets.append((chart_ref.removeprefix("oci://"), entry))
 
     if not mirror_targets:
