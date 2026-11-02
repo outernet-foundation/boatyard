@@ -15,10 +15,11 @@ The P0 foundation — the platform-resolved structured lock — is delivered by
 the consumer-contract initiative, `plan-consumer-contract-implementation.md`.
 Phase completion lives in git history; nothing here tracks status.
 
-## Prerequisites (delivered by the consumer-contract initiative)
+## Prerequisites
 
 Before phase 8 opens, the consumer-contract release and its catch-up wave
-have landed (tracked by that initiative's plan):
+have landed (tracked by that initiative's plan), and the module-tiers
+refactor (`refactor-plan.md`) has landed in its single session:
 
 - `docker-devkit.lock` is structured YAML — per image the index digest plus
   one concrete manifest digest per declared platform, charts flat — written
@@ -28,6 +29,16 @@ have landed (tracked by that initiative's plan):
   registry is gone; `build --push <addr>` exists.
 - All five consumers repin once in the catch-up wave, with completed
   `platforms` declarations and structured locks.
+
+The module-tiers refactor delivers:
+
+- `derive_services` and `ServiceBuild` live in `dockerfiles.py`; fan
+  resolution is the `_effective_axis` parent walk — no memoized recursion,
+  no `ParsedDockerfile`.
+- The compose boundary is `compose.py`: `select` (pure `BUNDLES=` laws) and
+  `render` beside the invocation kit; the `Assembly` class is gone.
+- `config.py` loads in three steps — `read_config`, `resolve_config`,
+  `load_config` — with the schema models unchanged.
 
 The Part 1 precision material is not a prerequisite — it is this plan's own
 opening cluster (phases 8–11), landing before the change detection that
@@ -85,12 +96,12 @@ version bump.
 
 The plan spans seven repos. A session opening on a fresh machine verifies
 every repo against this table before any phase work runs and refuses loudly
-on any mismatch — wrong branch or wrong commit. The rows below record the
-2026-11-01 surgery capture, before the prerequisite initiative advanced every
-repo; the first session of this plan re-derives every row at the
-consumer-contract release boundary — the states are unknowable earlier. Once
-phase sessions begin landing commits on a repo, that repo's HEAD advances
-past its recorded sha by design; only the branch keeps needing to match.
+on any mismatch — wrong branch or wrong commit. The rows below are the
+surgery capture. The first session of this plan re-derives every row at the
+consumer-contract release boundary before any phase work runs. Once
+sessions begin landing commits on a repo — the module-tiers refactor
+included — that repo's HEAD advances past its recorded sha by design; only
+the branch keeps needing to match.
 
 | Repo | Branch | Commit |
 |---|---|---|
@@ -139,13 +150,14 @@ precision; the design detail is lifted into the phases below.
 ## Phase 8 — Attribution parser and construct guard
 
 Cluster precision · docker-devkit · absorbed Part 1, "The design" and "The
-fail-closed construct guard". Load: `service_builds.py` (`ParsedDockerfile`,
-`ServiceBuild`, `derive_services`), `config.py` (`build_partitions` — the
+fail-closed construct guard". Load: `dockerfiles.py` (`ServiceBuild`,
+`derive_services`, `_effective_axis`), `config.py` (`build_partitions` — the
 context-edge closure), the Dockerfile fixtures under `tests/`.
 
 End state:
 
-- A pure parsing layer in a new module beside `service_builds.py` computes,
+- A pure parsing layer in `dockerfiles.py`, grown from `derive_services`,
+  computes,
   per service: the Dockerfile's `COPY`/`ADD` source paths and globs, its
   `ARG` declarations, its build mapping as the record derives it (dockerfile,
   target, platforms, rendered args, context edges — the refactor dissolved
@@ -163,21 +175,26 @@ End state:
 - `COPY` sources outside {own dir} ∪ {copied shared roots} ∪ {declared
   dependency outputs} reject — the cross-service guard absorbed into the
   attribution pass.
+- A bare-identifier `COPY --from=` naming a sibling service the same file
+  never `FROM`s refuses (it passes silently today — load accepts what bake
+  then breaks on), and the independent-axis refusal text is corrected to
+  match its behavior (any parented service, variant-bearing or not).
 
 Verify: fixture tests — one per loud failure, one per attributed construct.
 
 ## Phase 9 — Attribution-based service hashes
 
 Cluster precision · docker-devkit · absorbed Part 1, "Over-inclusion fates"
-and "Soundness argument". Load: `service_builds.py` (`compute_service_shas`,
-`service_sha_env`), `config.py` (`build_partitions`), `tests/test_service_builds.py`.
+and "Soundness argument". Load: `config.py` (`compute_service_shas`,
+`service_sha_env`, `build_partitions`), `dockerfiles.py` (`derive_services`),
+`tests/test_service_builds.py`.
 
 End state:
 
 - The closure walk (union-find over the derived context edges, inside
-  `build_partitions`) lifts to a shared function in `service_builds.py` beside
+  `build_partitions`) lifts to a shared function in `dockerfiles.py` beside
   the model it walks; `build_partitions` and the hasher both consume it — the
-  one-way import law holds (`service_builds` imports nothing from `config`).
+  one-way import law holds (`dockerfiles` imports nothing from `config`).
 - `compute_service_shas` hashes, per service: the Dockerfile itself (any
   recipe change re-keys, keeping the closure self-consistent — a new `COPY`
   line moves the hash at the same moment the newly copied files enter the
@@ -352,13 +369,13 @@ aliases changed units only; note rendering for the three channels.
 Cluster P2 · docker-devkit + github-actions-toolkit · ADR Part 2, "`:latest`
 repoint" and the branch-tag retirement in "Compose bundles". Load:
 `publish.py` + `verbs/publish.py` (the `--branch` flag and the `crane tag`
-aliasing), `config.py` (the `render_bake` record member's derived tags), the
+aliasing), `bake.py` (the bake rendering's derived tags), the
 toolkit reusable that invokes `publish-compose --branch`.
 
 End state:
 
-- `render_bake` emits no derived `:latest` in push mode; local load-mode builds
-  keep theirs. `latest` exists only as the stable alias.
+- The bake rendering emits no derived `:latest` in push mode; local
+  load-mode builds keep theirs. `latest` exists only as the stable alias.
 - `publish-compose` publishes `{sha}` only; branch tags and the `--branch` flag
   are gone; `--plan` output is unchanged.
 - The toolkit's reusable workflow stops passing `--branch`. Consumers relock
@@ -367,14 +384,14 @@ End state:
 - docker-devkit ships this as its second release of this plan, after the
   precision release.
 
-Verify: `render_bake` golden tests for push vs load mode; sha-only publish tests;
-the toolkit reusable renders without the flag.
+Verify: bake-rendering golden tests for push vs load mode; sha-only publish
+tests; the toolkit reusable renders without the flag.
 
 ## Phase 17 — Qualified selection grammar
 
 Cluster P3+P4a · docker-devkit · ADR Part 3, "Qualified selection names".
 Load: `config.py` (the services schema, the flat-vocabulary collision law),
-`assembly.py` (the `Assembly` constructor's `BUNDLES=` resolution),
+`compose.py` (`select`'s `BUNDLES=` resolution),
 `tests/test_config.py`, `tests/test_compose.py`.
 
 End state:
@@ -395,7 +412,8 @@ refusal.
 ## Phase 18 — Bundle pinning through the lock
 
 Cluster P3+P4a · docker-devkit · ADR Part 3, "Ref grammar and lock entries".
-Load: `config.py` (the entry `ref:` grammar, `parse_image_lock`), `bake.py`
+Load: `config.py` (the entry `ref:` grammar), `config_lock.py`
+(`parse_image_lock`), `bake.py`
 (the lock writer inside `run_build`), `verbs/mirror.py`.
 
 End state:
@@ -422,7 +440,7 @@ collision refusal; missing-entry refusal naming the relock.
 ## Phase 19 — Lock probing at bring-up
 
 Cluster P3+P4a · docker-devkit · ADR Part 3 plus Closed decision 12. Load:
-`verbs/up.py` (the fail-closed probe), `assembly.py` (the include
+`verbs/up.py` (the fail-closed probe), `compose.py` (`render`'s include
 materialization), `crane.py`.
 
 End state:
@@ -438,8 +456,8 @@ materialized root carries digest refs.
 
 ## Phase 20 — Local bundle overrides
 
-Cluster P3+P4a · docker-devkit · ADR Part 4, Stage 1. Load: `assembly.py`
-(the selection and materialization; `parse_env_file` lives here), `config.py`
+Cluster P3+P4a · docker-devkit · ADR Part 4, Stage 1. Load: `compose.py`
+(`select` and `render`; `merged_environment` lives here), `config.py`
 (`EDGE_SERVICE_NAME`) and `score.py` (the edge-reserved generation refusal),
 `documents.py` (`ComposeDocument`).
 
