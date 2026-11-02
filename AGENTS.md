@@ -152,7 +152,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 - Authored provisioner files carry `state`/`outputs`/`volumes`/`services` as real YAML mappings + `manifests` as a real list — score's string form is generated, never authored; a field already in string form = a loud validation error;
   `extra="forbid"`.
 - Compilation resolves include markers, then lock markers, both before validation; the compiled form lives in a per-run tempdir under `score_dir`, never the committed tree; `--provisioners` paths stay POSIX-relative; `declares_services` =
-  the phantom-service condition the gate keys on; authored key order controls dump order at every level; comments are dropped; registration derives by resource-type closure in sorted-filename order (order-independence pinned by a test);
+  the phantom-service condition the gate keys on; authored key order controls dump order at every level; comments are dropped; registration derives by resource-type closure in sorted-filename order;
   orphan provisioner files silently no-ship.
 - Marker grammar: a single-key mapping (authored sources stay plain-YAML-parseable); `include:` inserts bytes verbatim, `include-yaml:` inserts parsed structure; neither transforms content (`${VAR}` holes pass through; `$`-handling is
   per-consumer); paths anchor at the repo root — absolute paths, `..` escapes, missing files, cycles = loud errors; text content is never scanned for markers; `lock: NAME`/`lock-image: NAME` substitute the full reference /

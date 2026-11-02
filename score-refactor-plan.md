@@ -14,19 +14,20 @@ toward a single function, and that is the direction below.
 One function in score.py owns the whole rendering spine for both
 substrates — compose calls it per-bundle, k8s calls it once:
 
-`with builtin_patch_templates() + compiled_provisioners(...)` → init →
+`as_file(package templates) + ExitStack` → compile provisioners → init →
 seed (k8s only) → generate.
 
 Minimal parameters (config + is_k8s + per-rendering scalars; root,
 score_dir, tool, rendering, state-prefix derived, not passed). Every
-non-lifecycle helper eliminated — init command-building, generate
-invocation, and the seed logic inline in the one function. The three
-context managers that own resource lifecycles stay as the only helpers:
-`builtin_patch_templates` (package-resource handle), `compiled_provisioners`
-(tempdir), `rendered_workloads` (tempdir) — they cannot inline
-(try/finally lifecycle). The operator believes the one remaining substrate
-difference (the GPU template selection) can also be eliminated; the agent
-has reservations (see the GPU move).
+helper inline in the one function — init command-building, generate
+invocation, the seed logic, the package-resource handle (`as_file`
+directly in the spine's `with` tuple), and provisioner selection+compile
+(the ExitStack holds the conditional compiled-provisioners tempdir; no
+tempdir when no files match). `rendered_workloads` (tempdir) is the one
+remaining context manager; the operator overruled the earlier "lifecycle
+context managers cannot inline" stance. The one remaining substrate
+difference (the GPU template selection) may also be eliminated; the
+agent has reservations (see the GPU move).
 
 ## Landed
 
@@ -53,6 +54,15 @@ has reservations (see the GPU move).
   score_k8s narrows to `bash_output`, per-module `bash` patches retired.
   The seed landed as the `if is_k8s:` branch (the move-2 disagreement
   resolved in the line's favor unless overruled).
+- **context-manager inline** (d0039da): `builtin_patch_templates` and
+  `compiled_provisioners` dissolved into `render_score` — `as_file`
+  directly in the `with` tuple, selection+compile inline, an ExitStack
+  holding the conditional tempdir (no tempdir when nothing matches).
+  Their seams' tests deleted on the operator's direction ("test coverage
+  is irrelevant"): the 22 compile-law tests in test_provisioners.py (the
+  five AuthoredProvisioner model tests stay) and the order-independence
+  test; AGENTS.md's "pinned by a test" parenthetical dropped in the same
+  change. `rendered_workloads` is the last context manager standing.
 
 ## Moves (ordered by the agent's certainty the move is correct)
 
