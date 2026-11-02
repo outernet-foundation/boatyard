@@ -118,35 +118,6 @@ class DockerDevkitConfig(BaseModel):
             if not entry.remote
         ]
 
-    def tool_requirements(self, target: Target) -> list[ToolRequirement]:
-        score_tools: list[tuple[str, str]] = []
-        if target in ("both", "compose"):
-            score_tools.append(("score-compose", self.score_compose_version))
-        if target in ("both", "k8s") and self.k8s is not None:
-            score_tools.append(("score-k8s", self.score_k8s_version))
-        requirements = [
-            ToolRequirement(
-                binary=binary,
-                version=version,
-                release=f"https://github.com/score-spec/{binary}/releases/tag/{version}",
-                archive=f"https://github.com/score-spec/{binary}/releases/download/{version}/{binary}_{version}_linux_amd64.tar.gz",
-                extract=binary,
-            )
-            for binary, version in score_tools
-        ]
-        if self.k8s is not None and self.k8s.charts and target in ("both", "k8s"):
-            version = self.helm_version
-            requirements.append(
-                ToolRequirement(
-                    binary="helm",
-                    version=version,
-                    release=f"https://github.com/helm/helm/releases/tag/v{version}",
-                    archive=f"https://get.helm.sh/helm-v{version}-linux-amd64.tar.gz",
-                    extract="--strip-components=1 linux-amd64/helm",
-                )
-            )
-        return requirements
-
     @field_validator("services", mode="before")
     @classmethod
     def _coerce_services(cls, services: object) -> object:
@@ -424,14 +395,6 @@ class ComposeBundle(NamedTuple):
     output: Path
     workloads: list[str]
     vars: dict[str, str]
-
-
-class ToolRequirement(NamedTuple):
-    binary: str
-    version: str
-    release: str
-    archive: str
-    extract: str
 
 
 class ParsedDockerfile(NamedTuple):
