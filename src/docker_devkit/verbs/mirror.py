@@ -6,8 +6,8 @@ import typer
 from bashrun.bash import bash, bash_check
 
 from docker_devkit.config import (
+    DockerDevkitConfig,
     chart_lock_key,
-    load_config,
     mirrored_ref,
 )
 from docker_devkit.crane import install_crane
@@ -18,7 +18,7 @@ app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 @app.command()
 def mirror() -> None:
     root = Path.cwd()
-    config = load_config(root)
+    config = DockerDevkitConfig.load(root)
     if config is None:
         raise RuntimeError("a docker-devkit.yaml with base_images (or k8s.charts) is required to mirror")
     prefix = config.mirror_prefix

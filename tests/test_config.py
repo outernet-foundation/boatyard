@@ -11,7 +11,6 @@ from docker_devkit.config import (
     DEV_SENTINEL,
     DockerDevkitConfig,
     ServiceEntry,
-    load_config,
 )
 from docker_devkit.config_lock import LOCK_PATH, parse_image_lock
 
@@ -44,8 +43,8 @@ def write_dockerfile(tmp_path: Path, service: str, text: str, top: str = "worklo
     (directory / "Dockerfile").write_text(text, encoding="utf-8")
 
 
-def test_load_config_returns_none_when_file_absent(tmp_path: Path) -> None:
-    assert load_config(tmp_path) is None
+def test_load_returns_none_when_file_absent(tmp_path: Path) -> None:
+    assert DockerDevkitConfig.load(tmp_path) is None
 
 
 def _installed_version(version: str) -> Any:
@@ -60,25 +59,25 @@ class TestRequires:
         write_config(tmp_path, {"project_name": "example"})
 
         with pytest.raises(ValidationError, match="requires"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_empty_string_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ""})
 
         with pytest.raises(ValidationError, match="requires"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_invalid_specifier_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": "not-a-specifier"})
 
         with pytest.raises(ValidationError, match="requires"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_dev_sentinel_skips_check(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(importlib.metadata, "version", _installed_version(DEV_SENTINEL))
         write_config(tmp_path, {"requires": ">=0.1"})
 
-        config = load_config(tmp_path)
+        config = DockerDevkitConfig.load(tmp_path)
 
         assert config is not None and config.requires == ">=0.1"
 
@@ -86,7 +85,7 @@ class TestRequires:
         monkeypatch.setattr(importlib.metadata, "version", _installed_version("0.1.18"))
         write_config(tmp_path, {"requires": ">=0.1.18"})
 
-        config = load_config(tmp_path)
+        config = DockerDevkitConfig.load(tmp_path)
 
         assert config is not None and config.requires == ">=0.1.18"
 
@@ -94,7 +93,7 @@ class TestRequires:
         monkeypatch.setattr(importlib.metadata, "version", _installed_version("0.1.19.dev5"))
         write_config(tmp_path, {"requires": ">=0.1.18"})
 
-        config = load_config(tmp_path)
+        config = DockerDevkitConfig.load(tmp_path)
 
         assert config is not None
 
@@ -103,21 +102,21 @@ class TestRequires:
         write_config(tmp_path, {"requires": ">=0.1.18"})
 
         with pytest.raises(SystemExit, match="does not satisfy requires"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
 
-def test_load_config_rejects_duplicate_keys(tmp_path: Path) -> None:
+def test_load_rejects_duplicate_keys(tmp_path: Path) -> None:
     (tmp_path / "docker-devkit.yaml").write_text('requires: ">=0.1"\nrequires: ">=0.2"\n', encoding="utf-8")
 
     with pytest.raises(Exception, match=r"Duplicate key"):
-        load_config(tmp_path)
+        DockerDevkitConfig.load(tmp_path)
 
 
-def test_load_config_rejects_unknown_top_level_keys(tmp_path: Path) -> None:
+def test_load_rejects_unknown_top_level_keys(tmp_path: Path) -> None:
     write_config(tmp_path, {"requires": ">=0.1", "lifecycle_prefix": "ghcr.io/x/mirror"})
 
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-        load_config(tmp_path)
+        DockerDevkitConfig.load(tmp_path)
 
 
 class TestOldSectionsDied:
@@ -125,19 +124,19 @@ class TestOldSectionsDied:
         write_config(tmp_path, {"requires": ">=0.1", "generate-score": {"project_name": "example"}})
 
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_publish_compose_section_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "publish-compose": {"repository": "ghcr.io/org/repo"}})
 
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_lifecycle_section_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "lifecycle": {"files": ["compose.yml"]}})
 
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_bundles_key_rejected(self, tmp_path: Path) -> None:
         write_config(
@@ -146,14 +145,14 @@ class TestOldSectionsDied:
         )
 
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
 
 class TestVariants:
     def test_declared_axes_load(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "variants": {"TORCH_DEVICE": ["cuda", "rocm"]}})
 
-        config = load_config(tmp_path)
+        config = DockerDevkitConfig.load(tmp_path)
 
         assert config is not None
         assert config.variants == {"TORCH_DEVICE": ["cuda", "rocm"]}
@@ -162,19 +161,19 @@ class TestVariants:
         write_config(tmp_path, {"requires": ">=0.1", "variants": {"torch_device": ["cuda"]}})
 
         with pytest.raises(ValidationError, match="ALL_CAPS env name"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_duplicate_values_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "variants": {"TORCH_DEVICE": ["cuda", "cuda"]}})
 
         with pytest.raises(ValidationError, match="declared twice"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_uppercase_value_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "variants": {"TORCH_DEVICE": ["CUDA"]}})
 
         with pytest.raises(ValidationError, match="bare lowercase spelling"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_declared_axes_reach_the_derived_services(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "localizer", "ARG PY_IMAGE\nARG TORCH_DEVICE\nFROM ${PY_IMAGE}\n")
@@ -183,7 +182,7 @@ class TestVariants:
             {"requires": ">=0.1", "repository": "ghcr.io/example/repo", "variants": {"TORCH_DEVICE": ["cuda", "rocm"]}},
         )
 
-        config = load_config(tmp_path)
+        config = DockerDevkitConfig.load(tmp_path)
 
         assert config is not None
         assert config.service_builds["localizer"].axis == "TORCH_DEVICE"
@@ -206,7 +205,7 @@ class TestBaseImages:
         )
         write_lock(tmp_path)
 
-        config = load_config(tmp_path)
+        config = DockerDevkitConfig.load(tmp_path)
 
         assert config is not None
         assert config.base_images == {
@@ -218,19 +217,19 @@ class TestBaseImages:
         write_config(tmp_path, {"requires": ">=0.1", "base_images": {"ALPINE_IMAGE": "docker.io/library/alpine"}})
 
         with pytest.raises(ValidationError, match="path:tag"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_env_hole_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "base_images": {"ALPINE_IMAGE": "${ALPINE_REF}"}})
 
         with pytest.raises(ValidationError, match="path:tag"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_lowercase_key_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "base_images": {"uv_image": "ghcr.io/astral-sh/uv:0.12.15"}})
 
         with pytest.raises(ValidationError, match="ALL_CAPS"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
 
 class TestBaseImageTemplates:
@@ -256,7 +255,7 @@ class TestBaseImageTemplates:
         )
         write_lock(tmp_path)
 
-        config = load_config(tmp_path)
+        config = DockerDevkitConfig.load(tmp_path)
 
         assert config is not None
         assert config.base_images == {
@@ -276,7 +275,7 @@ class TestBaseImageTemplates:
         )
         write_lock(tmp_path)
 
-        config = load_config(tmp_path)
+        config = DockerDevkitConfig.load(tmp_path)
 
         assert config is not None and config.base_images == {"API_IMAGE": "ghcr.io/org/api:0.12.15-and-0.12.15"}
 
@@ -291,7 +290,7 @@ class TestBaseImageTemplates:
         )
         write_lock(tmp_path)
 
-        config = load_config(tmp_path)
+        config = DockerDevkitConfig.load(tmp_path)
 
         assert config is not None and config.base_images == {"GOLANG_IMAGE": "docker.io/library/golang:1.22-alpine"}
 
@@ -310,7 +309,7 @@ class TestBaseImageTemplates:
         )
         write_lock(tmp_path)
 
-        config = load_config(tmp_path)
+        config = DockerDevkitConfig.load(tmp_path)
 
         assert config is not None
         assert config.base_images["GOLANG_IMAGE"] == "docker.io/library/golang:1.22-alpine"
@@ -328,7 +327,7 @@ class TestBaseImageTemplates:
         write_lock(tmp_path)
 
         with pytest.raises(RuntimeError, match=r"exact == pin like '==0\.12\.15'"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_wildcard_pin_refuses(self, tmp_path: Path) -> None:
         self._write_toolchain_pins(tmp_path, required_version="==0.12.*")
@@ -343,7 +342,7 @@ class TestBaseImageTemplates:
         write_lock(tmp_path)
 
         with pytest.raises(RuntimeError, match="must be an exact == pin"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_missing_uv_pin_refuses(self, tmp_path: Path) -> None:
         (tmp_path / "pyproject.toml").write_text('[project]\nname = "example"\n', encoding="utf-8")
@@ -359,7 +358,7 @@ class TestBaseImageTemplates:
         write_lock(tmp_path)
 
         with pytest.raises(RuntimeError, match=r"tool\.uv\.required-version is not declared"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_absent_python_version_file_refuses(self, tmp_path: Path) -> None:
         (tmp_path / "pyproject.toml").write_text(
@@ -376,7 +375,7 @@ class TestBaseImageTemplates:
         write_lock(tmp_path)
 
         with pytest.raises(RuntimeError, match=r"\.python-version: the file is absent"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_empty_python_version_file_refuses(self, tmp_path: Path) -> None:
         (tmp_path / "pyproject.toml").write_text(
@@ -394,7 +393,7 @@ class TestBaseImageTemplates:
         write_lock(tmp_path)
 
         with pytest.raises(RuntimeError, match=r"\.python-version: the file is empty"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_unknown_template_key_refuses_listing_the_vocabulary(self, tmp_path: Path) -> None:
         write_config(
@@ -410,7 +409,7 @@ class TestBaseImageTemplates:
         with pytest.raises(
             RuntimeError, match=r"template key \{golang\} is unknown; the toolchain pins are \{uv\}, \{python\}"
         ):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
 
 class TestCharts:
@@ -426,7 +425,7 @@ class TestCharts:
         (tmp_path / "stack" / "score" / "k8s" / "values").mkdir(parents=True)
         (tmp_path / "stack" / "score" / "k8s" / "values" / "loki.yaml").write_text("loki: {}\n", encoding="utf-8")
 
-        config = load_config(tmp_path)
+        config = DockerDevkitConfig.load(tmp_path)
 
         assert config is not None and config.k8s is not None
         assert config.k8s.charts == {"loki": "oci://ghcr.io/grafana/helm-charts/loki:7.3.0"}
@@ -440,7 +439,7 @@ class TestCharts:
         (tmp_path / "stack" / "score" / "k8s" / "values").mkdir(parents=True)
         (tmp_path / "stack" / "score" / "k8s" / "values" / "loki.yaml").write_text("loki: {}\n", encoding="utf-8")
 
-        config = load_config(tmp_path)
+        config = DockerDevkitConfig.load(tmp_path)
 
         assert config is not None and config.k8s is not None
         assert config.k8s.charts == {"loki": "oci://ghcr.io/grafana/helm-charts/loki@" + DIGEST}
@@ -451,7 +450,7 @@ class TestCharts:
         )
 
         with pytest.raises(ValidationError, match="tag or a digest"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_non_oci_rejected(self, tmp_path: Path) -> None:
         write_config(
@@ -459,7 +458,7 @@ class TestCharts:
         )
 
         with pytest.raises(ValidationError, match="upstream-native OCI"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_env_hole_rejected(self, tmp_path: Path) -> None:
         write_config(
@@ -471,7 +470,7 @@ class TestCharts:
         )
 
         with pytest.raises(ValidationError, match="tag or a digest"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_missing_values_file_refuses_at_load(self, tmp_path: Path) -> None:
         write_config(
@@ -481,7 +480,7 @@ class TestCharts:
         write_lock(tmp_path)
 
         with pytest.raises(RuntimeError, match=r"values/loki\.yaml.*values file is required"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
 
 class TestK8sSection:
@@ -494,7 +493,7 @@ class TestK8sSection:
             },
         )
 
-        config = load_config(tmp_path)
+        config = DockerDevkitConfig.load(tmp_path)
 
         assert config is not None and config.k8s is not None
         assert config.k8s.workloads == ["api.yaml"]
@@ -506,13 +505,13 @@ class TestK8sSection:
         (tmp_path / "docker-devkit.yaml").write_text('requires: ">=0.1"\nk8s:\n', encoding="utf-8")
 
         with pytest.raises(ValidationError, match="Input should be a valid dictionary"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_vars_only_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "k8s": {"vars": {"GPU_VARIANT": "cuda"}}})
 
         with pytest.raises(ValidationError, match="must declare workloads or charts"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
 
 class TestServices:
@@ -557,7 +556,7 @@ class TestServices:
             },
         )
 
-        config = load_config(tmp_path)
+        config = DockerDevkitConfig.load(tmp_path)
 
         assert config is not None
         bundles = config.compose_bundles()
@@ -586,7 +585,7 @@ class TestServices:
         )
 
         with pytest.raises(ValidationError, match="ref: or workloads:, not both"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_an_entry_carrying_neither_source_refuses(self, tmp_path: Path) -> None:
         write_config(
@@ -600,7 +599,7 @@ class TestServices:
         )
 
         with pytest.raises(ValidationError, match="ref: or workloads: is required"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_a_group_shape_with_entry_keys_reports_the_group_branch(self, tmp_path: Path) -> None:
         write_config(
@@ -619,7 +618,7 @@ class TestServices:
         )
 
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_vars_beside_a_ref_refuse(self, tmp_path: Path) -> None:
         write_config(
@@ -637,7 +636,7 @@ class TestServices:
         )
 
         with pytest.raises(ValidationError, match="vars is not allowed with ref:"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_an_unpinned_ref_refuses(self, tmp_path: Path) -> None:
         write_config(
@@ -650,7 +649,7 @@ class TestServices:
         )
 
         with pytest.raises(ValidationError, match="digest-pinned OCI include"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_an_empty_workloads_list_refuses(self) -> None:
         with pytest.raises(ValidationError, match="ref: or workloads: is required"):
@@ -672,7 +671,7 @@ class TestServices:
         )
 
         with pytest.raises(ValidationError, match="project_name is required"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_local_entries_require_repository(self, tmp_path: Path) -> None:
         write_config(
@@ -686,7 +685,7 @@ class TestServices:
         )
 
         with pytest.raises(ValidationError, match="repository is required"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_remote_only_services_need_no_repository(self, tmp_path: Path) -> None:
         write_edge_lock(tmp_path)
@@ -705,7 +704,7 @@ class TestServices:
             },
         )
 
-        assert load_config(tmp_path) is not None
+        assert DockerDevkitConfig.load(tmp_path) is not None
 
 
 class TestFlatVocabulary:
@@ -727,7 +726,7 @@ class TestFlatVocabulary:
         )
 
         with pytest.raises(ValidationError, match=r"livekit is already an entry or option name"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_an_option_colliding_across_groups_refuses(self, tmp_path: Path) -> None:
         write_config(
@@ -739,7 +738,7 @@ class TestFlatVocabulary:
         )
 
         with pytest.raises(ValidationError, match=r"cuda is already an entry or option name"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
 
 class TestAuthGroup:
@@ -763,7 +762,7 @@ class TestAuthGroup:
             }),
         )
 
-        assert load_config(tmp_path) is not None
+        assert DockerDevkitConfig.load(tmp_path) is not None
 
     def test_an_auth_option_without_a_route_refuses(self, tmp_path: Path) -> None:
         write_config(
@@ -772,7 +771,7 @@ class TestAuthGroup:
         )
 
         with pytest.raises(ValidationError, match="auth option declares exactly one route"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_an_auth_option_with_two_routes_refuses(self, tmp_path: Path) -> None:
         write_config(
@@ -789,7 +788,7 @@ class TestAuthGroup:
         )
 
         with pytest.raises(ValidationError, match="exactly one route"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_a_bare_entry_named_auth_refuses(self, tmp_path: Path) -> None:
         write_config(
@@ -802,7 +801,7 @@ class TestAuthGroup:
         )
 
         with pytest.raises(ValidationError, match="auth is a reserved group name"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
 
 class TestRoutes:
@@ -843,7 +842,7 @@ class TestRoutes:
         )
 
         with pytest.raises(ValidationError, match="edge-wide unique"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     @pytest.mark.parametrize(
         "path",
@@ -853,7 +852,7 @@ class TestRoutes:
         write_config(tmp_path, self._routed([{"path": path, "upstream": "api:8000"}]))
 
         with pytest.raises(ValidationError, match="must be a /-rooted segment chain"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_plain_and_wildcard_paths_load(self, tmp_path: Path) -> None:
         write_edge_lock(tmp_path)
@@ -865,7 +864,7 @@ class TestRoutes:
             ]),
         )
 
-        config = load_config(tmp_path)
+        config = DockerDevkitConfig.load(tmp_path)
 
         assert config is not None
 
@@ -873,7 +872,7 @@ class TestRoutes:
         write_config(tmp_path, self._routed([{"path": "/*", "upstream": "api:${PORT}"}]))
 
         with pytest.raises(ValidationError, match="a service name and a literal port"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_strip_prefix_on_a_non_wildcard_path_refuses(self, tmp_path: Path) -> None:
         write_config(
@@ -882,7 +881,7 @@ class TestRoutes:
         )
 
         with pytest.raises(ValidationError, match="must end in /\\*"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_a_raw_route_loads(self, tmp_path: Path) -> None:
         write_edge_lock(tmp_path)
@@ -891,7 +890,7 @@ class TestRoutes:
             self._routed([{"path": "/x/*", "upstream": "x:1", "raw": 'respond "hi" 200'}]),
         )
 
-        config = load_config(tmp_path)
+        config = DockerDevkitConfig.load(tmp_path)
 
         assert config is not None
 
@@ -914,7 +913,7 @@ class TestGatewayKey:
         )
 
         with pytest.raises(RuntimeError, match="CADDY_IMAGE"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_a_routeless_stack_carries_an_inert_gateway(self, tmp_path: Path) -> None:
         write_config(
@@ -927,7 +926,7 @@ class TestGatewayKey:
             },
         )
 
-        config = load_config(tmp_path)
+        config = DockerDevkitConfig.load(tmp_path)
 
         assert config is not None
 
@@ -948,7 +947,7 @@ class TestGatewayKey:
             },
         )
 
-        assert load_config(tmp_path) is not None
+        assert DockerDevkitConfig.load(tmp_path) is not None
 
     def test_a_malformed_gateway_value_refuses(self, tmp_path: Path) -> None:
         write_config(
@@ -967,7 +966,7 @@ class TestGatewayKey:
         )
 
         with pytest.raises(ValidationError, match="literal port number or a"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
 
 class TestPorts:
@@ -996,7 +995,7 @@ class TestPorts:
             }),
         )
 
-        config = load_config(tmp_path)
+        config = DockerDevkitConfig.load(tmp_path)
 
         assert config is not None
         livekit = config.services["livekit"]
@@ -1020,7 +1019,7 @@ class TestPorts:
         write_lock(tmp_path)
 
         with pytest.raises(ValidationError, match="Input should be a valid dictionary or instance of PortDeclaration"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_an_empty_group_options_map_refuses(self, tmp_path: Path) -> None:
         write_config(
@@ -1036,7 +1035,7 @@ class TestPorts:
         write_lock(tmp_path)
 
         with pytest.raises(ValidationError):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_the_mapping_form_spells_the_owning_service_and_host_ip(self, tmp_path: Path) -> None:
         write_edge_lock(tmp_path)
@@ -1061,7 +1060,7 @@ class TestPorts:
             }),
         )
 
-        config = load_config(tmp_path)
+        config = DockerDevkitConfig.load(tmp_path)
 
         assert config is not None
 
@@ -1078,7 +1077,7 @@ class TestPorts:
         )
 
         with pytest.raises(ValidationError, match="literal port number or a"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
 
 class TestRepository:
@@ -1086,13 +1085,13 @@ class TestRepository:
         write_config(tmp_path, {"requires": ">=0.1", "repository": "lbe-toolkit"})
 
         with pytest.raises(ValidationError, match="registry-host/repository-path"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_trailing_slash_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "repository": "ghcr.io/org/repo/"})
 
         with pytest.raises(ValidationError, match="trailing slash"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_repository_without_service_builds_loads(self, tmp_path: Path) -> None:
         # The publish shape for a repo whose whole runtime is its own workload set: no
@@ -1109,7 +1108,7 @@ class TestRepository:
         )
         write_lock(tmp_path)
 
-        config = load_config(tmp_path)
+        config = DockerDevkitConfig.load(tmp_path)
 
         assert config is not None and config.repository == "ghcr.io/org/repo"
         assert config.service_builds == {}
@@ -1119,7 +1118,7 @@ class TestPlatforms:
     def test_arch_pairs_load(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "platforms": ["linux/arm64"]})
 
-        config = load_config(tmp_path)
+        config = DockerDevkitConfig.load(tmp_path)
 
         assert config is not None and config.platforms == ["linux/arm64"]
 
@@ -1127,13 +1126,13 @@ class TestPlatforms:
         write_config(tmp_path, {"requires": ">=0.1", "platforms": ["arm64"]})
 
         with pytest.raises(ValidationError, match="os/arch pair"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_base_images_without_platforms_refuse_naming_the_fix(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "base_images": {"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"}})
 
         with pytest.raises(ValidationError, match=r"platforms is required.*\[linux/amd64\]"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_charts_stay_exempt_from_the_platforms_rule(self, tmp_path: Path) -> None:
         write_config(
@@ -1144,7 +1143,7 @@ class TestPlatforms:
         (tmp_path / "stack" / "score" / "k8s" / "values").mkdir(parents=True)
         (tmp_path / "stack" / "score" / "k8s" / "values" / "loki.yaml").write_text("loki: {}\n", encoding="utf-8")
 
-        assert load_config(tmp_path) is not None
+        assert DockerDevkitConfig.load(tmp_path) is not None
 
 
 class TestLockPairing:
@@ -1159,7 +1158,7 @@ class TestLockPairing:
         )
 
         with pytest.raises(RuntimeError, match="the committed lock is required"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_charts_without_lock_refuse(self, tmp_path: Path) -> None:
         write_config(
@@ -1170,7 +1169,7 @@ class TestLockPairing:
         (tmp_path / "stack" / "score" / "k8s" / "values" / "loki.yaml").write_text("loki: {}\n", encoding="utf-8")
 
         with pytest.raises(RuntimeError, match="the committed lock is required"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_lock_beside_base_images_loads(self, tmp_path: Path) -> None:
         write_config(
@@ -1183,7 +1182,7 @@ class TestLockPairing:
         )
         write_lock(tmp_path)
 
-        assert load_config(tmp_path) is not None
+        assert DockerDevkitConfig.load(tmp_path) is not None
 
     def test_no_declarations_need_no_lock(self, tmp_path: Path) -> None:
         write_config(
@@ -1196,7 +1195,7 @@ class TestLockPairing:
             },
         )
 
-        assert load_config(tmp_path) is not None
+        assert DockerDevkitConfig.load(tmp_path) is not None
 
 
 class TestServiceDerivation:
@@ -1205,13 +1204,13 @@ class TestServiceDerivation:
         write_config(tmp_path, {"requires": ">=0.1"})
 
         with pytest.raises(RuntimeError, match="repository is required"):
-            load_config(tmp_path)
+            DockerDevkitConfig.load(tmp_path)
 
     def test_derived_services_attach_to_the_loaded_config(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n")
         write_config(tmp_path, {"requires": ">=0.1", "repository": "ghcr.io/org/repo"})
 
-        config = load_config(tmp_path)
+        config = DockerDevkitConfig.load(tmp_path)
 
         assert config is not None
         assert sorted(config.service_builds) == ["api"]

@@ -99,6 +99,112 @@ class DockerDevkitConfig(BaseModel):
     service_builds: dict[str, ServiceBuild] = Field(default_factory=dict, exclude=True)
     root: Path | None = Field(default=None, exclude=True)
 
+    @classmethod
+    def load(cls, root: Path) -> DockerDevkitConfig | None:
+        path = root / DEFAULT_CONFIG_PATH
+        if not path.exists():
+            return None
+        config = cls.model_validate(load_strict_yaml(path.read_text(encoding="utf-8")).data)
+        config.resolve(root)
+        return config
+
+    def resolve(self, root: Path) -> Self:
+        # Self-check the installed version.
+        installed = importlib.metadata.version("docker-devkit")
+        if installed != DEV_SENTINEL and not SpecifierSet(self.requires).contains(installed, prereleases=True):
+            raise SystemExit(f"docker-devkit {installed} does not satisfy requires={self.requires!r}")
+        self.root = root
+
+        # Resolve {uv} and {python} templates in base_images against the toolchain pins.
+        pins: dict[str, str] = {}
+        used = sorted({
+            key for reference in self.base_images.values() for key in TEMPLATE_KEY_PATTERN.findall(reference)
+        })
+        for key in used:
+            if key == "uv":
+                pyproject = root / PYPROJECT_PATH
+                tool_document: dict[str, object] = (
+                    tomllib.loads(pyproject.read_text(encoding="utf-8")) if pyproject.is_file() else {}
+                )
+                tool_table: object = tool_document.get("tool")
+                uv_table: object = tool_table.get("uv") if is_mapping(tool_table) else None
+                declared: object = uv_table.get("required-version") if is_mapping(uv_table) else None
+                if not isinstance(declared, str) or not declared:
+                    raise RuntimeError(
+                        f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version is not declared; "
+                        "the {uv} template requires it"
+                    )
+                pin_match = re.fullmatch(r"==(?P<version>[^,*\s]+)", declared.strip())
+                if pin_match is None:
+                    raise RuntimeError(
+                        f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version {declared!r} "
+                        "must be an exact == pin like '==0.12.15'"
+                    )
+                pins[key] = pin_match.group("version")
+            elif key == "python":
+                python_version = root / PYTHON_VERSION_PATH
+                if not python_version.is_file():
+                    raise RuntimeError(
+                        f"{PYTHON_VERSION_PATH.as_posix()}: the file is absent; the {{{key}}} template requires it"
+                    )
+                # Take the first non-empty line.
+                version = next(
+                    (line.strip() for line in python_version.read_text(encoding="utf-8").splitlines() if line.strip()),
+                    "",
+                )
+                if not version:
+                    raise RuntimeError(
+                        f"{PYTHON_VERSION_PATH.as_posix()}: the file is empty; the {{{key}}} template requires it"
+                    )
+                pins[key] = version
+            else:
+                raise RuntimeError(
+                    f"base_images template key {{{key}}} is unknown; the toolchain pins are {{uv}}, {{python}}"
+                )
+        self.base_images = {
+            name: TEMPLATE_KEY_PATTERN.sub(lambda match: pins[match.group(1)], reference)
+            for name, reference in self.base_images.items()
+        }
+
+        # Derive the service build set from the Dockerfile tree.
+        service_builds = derive_services(root, self.variants)
+
+        computable = {service_sha_env(name) for name in service_builds}
+        for service in service_builds.values():
+            unknown = [argument for argument in service.sha_args if argument not in computable]
+            if unknown:
+                raise RuntimeError(
+                    f"workloads/{service.name}/{DOCKERFILE_NAME}: ARG {', '.join(unknown)} names no service directory"
+                )
+        if service_builds and self.repository is None:
+            listed = ", ".join(sorted(service_builds))
+            raise RuntimeError(f"Dockerfile service directories exist ({listed}); repository is required")
+        self.service_builds = service_builds
+
+        # Enforce the lock pairing laws.
+        declared_charts = self.declared_charts
+        if (self.base_images or declared_charts) and not (root / LOCK_PATH).is_file():
+            raise RuntimeError(
+                f"{LOCK_PATH.as_posix()}: base_images or k8s.charts are declared; the committed lock is required"
+            )
+        declares_routes = any(
+            entry.routes
+            or (isinstance(entry, ServiceGroup) and any(option.routes for option in entry.options.values()))
+            for entry in self.services.values()
+        )
+        if declares_routes:
+            self.image_lock().require(
+                CADDY_IMAGE,
+                "routes are declared",
+                hint="declare CADDY_IMAGE in base_images and run lock",
+            )
+        for chart in declared_charts:
+            values = root / self.score_dir / "k8s" / "values" / f"{chart}.yaml"
+            if not values.is_file():
+                raise RuntimeError(f"{values.as_posix()}: the chart's values file is required")
+
+        return self
+
     def service_shas(self) -> dict[str, str]:
         assert self.root is not None
         return dockerfiles.compute_service_shas(self.root, self.service_builds)
@@ -373,115 +479,6 @@ class ComposeBundle(NamedTuple):
     output: Path
     workloads: list[str]
     vars: dict[str, str]
-
-
-def load_config(root: Path) -> DockerDevkitConfig | None:
-    config = read_config(root)
-    if config is None:
-        return None
-    return resolve_config(root, config)
-
-
-def read_config(root: Path) -> DockerDevkitConfig | None:
-    path = root / DEFAULT_CONFIG_PATH
-    if not path.exists():
-        return None
-    return DockerDevkitConfig.model_validate(load_strict_yaml(path.read_text(encoding="utf-8")).data)
-
-
-def resolve_config(root: Path, config: DockerDevkitConfig) -> DockerDevkitConfig:
-    # Self-check the installed version.
-    installed = importlib.metadata.version("docker-devkit")
-    if installed != DEV_SENTINEL and not SpecifierSet(config.requires).contains(installed, prereleases=True):
-        raise SystemExit(f"docker-devkit {installed} does not satisfy requires={config.requires!r}")
-    config.root = root
-
-    # Resolve {uv} and {python} templates in base_images against the toolchain pins.
-    pins: dict[str, str] = {}
-    used = sorted({key for reference in config.base_images.values() for key in TEMPLATE_KEY_PATTERN.findall(reference)})
-    for key in used:
-        if key == "uv":
-            pyproject = root / PYPROJECT_PATH
-            tool_document: dict[str, object] = (
-                tomllib.loads(pyproject.read_text(encoding="utf-8")) if pyproject.is_file() else {}
-            )
-            tool_table: object = tool_document.get("tool")
-            uv_table: object = tool_table.get("uv") if is_mapping(tool_table) else None
-            declared: object = uv_table.get("required-version") if is_mapping(uv_table) else None
-            if not isinstance(declared, str) or not declared:
-                raise RuntimeError(
-                    f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version is not declared; "
-                    "the {uv} template requires it"
-                )
-            pin_match = re.fullmatch(r"==(?P<version>[^,*\s]+)", declared.strip())
-            if pin_match is None:
-                raise RuntimeError(
-                    f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version {declared!r} "
-                    "must be an exact == pin like '==0.12.15'"
-                )
-            pins[key] = pin_match.group("version")
-        elif key == "python":
-            python_version = root / PYTHON_VERSION_PATH
-            if not python_version.is_file():
-                raise RuntimeError(
-                    f"{PYTHON_VERSION_PATH.as_posix()}: the file is absent; the {{{key}}} template requires it"
-                )
-            # Take the first non-empty line.
-            version = next(
-                (line.strip() for line in python_version.read_text(encoding="utf-8").splitlines() if line.strip()),
-                "",
-            )
-            if not version:
-                raise RuntimeError(
-                    f"{PYTHON_VERSION_PATH.as_posix()}: the file is empty; the {{{key}}} template requires it"
-                )
-            pins[key] = version
-        else:
-            raise RuntimeError(
-                f"base_images template key {{{key}}} is unknown; the toolchain pins are {{uv}}, {{python}}"
-            )
-    config.base_images = {
-        name: TEMPLATE_KEY_PATTERN.sub(lambda match: pins[match.group(1)], reference)
-        for name, reference in config.base_images.items()
-    }
-
-    # Derive the service build set from the Dockerfile tree.
-    service_builds = derive_services(root, config.variants)
-
-    computable = {service_sha_env(name) for name in service_builds}
-    for service in service_builds.values():
-        unknown = [arg for arg in service.sha_args if arg not in computable]
-        if unknown:
-            raise RuntimeError(
-                f"workloads/{service.name}/{DOCKERFILE_NAME}: ARG {', '.join(unknown)} names no service directory"
-            )
-    if service_builds and config.repository is None:
-        listed = ", ".join(sorted(service_builds))
-        raise RuntimeError(f"Dockerfile service directories exist ({listed}); repository is required")
-    config.service_builds = service_builds
-
-    # Enforce the lock pairing laws.
-    declared_charts = config.declared_charts
-    if (config.base_images or declared_charts) and not (root / LOCK_PATH).is_file():
-        raise RuntimeError(
-            f"{LOCK_PATH.as_posix()}: base_images or k8s.charts are declared; the committed lock is required"
-        )
-    declares_routes = any(
-        entry.routes or (isinstance(entry, ServiceGroup) and any(option.routes for option in entry.options.values()))
-        for entry in config.services.values()
-    )
-    if declares_routes:
-        config.image_lock().require(
-            CADDY_IMAGE,
-            "routes are declared",
-            hint="declare CADDY_IMAGE in base_images and run lock",
-        )
-    for chart in declared_charts:
-        values = root / config.score_dir / "k8s" / "values" / f"{chart}.yaml"
-        if not values.is_file():
-            raise RuntimeError(f"{values.as_posix()}: the chart's values file is required")
-
-    return config
 
 
 def require_compose_stack(config: DockerDevkitConfig | None) -> DockerDevkitConfig:

@@ -11,7 +11,7 @@ from bashrun.bash import CalledProcessError, bash_handoff, bash_output
 
 from docker_devkit.bake import run_build
 from docker_devkit.compose import compose_command, merged_environment, render, require_env_file, select
-from docker_devkit.config import DockerDevkitConfig, load_config
+from docker_devkit.config import DockerDevkitConfig
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
@@ -33,7 +33,7 @@ def up(
     ] = False,
 ) -> None:
     root = Path.cwd()
-    config = load_config(root)
+    config = DockerDevkitConfig.load(root)
 
     # Refuse --build in a repo with no build declarations.
     if config is not None and build and not (config.repository or config.base_images):

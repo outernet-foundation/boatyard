@@ -5,14 +5,14 @@ from pathlib import Path
 
 import typer
 
-from docker_devkit.config import load_config
+from docker_devkit.config import DockerDevkitConfig
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
 
 @app.command()
 def docker_build_matrix() -> None:
-    config = load_config(Path.cwd())
+    config = DockerDevkitConfig.load(Path.cwd())
     if config is None:
         print(json.dumps([]))
         return

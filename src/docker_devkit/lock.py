@@ -17,7 +17,6 @@ from docker_devkit.config import (
     chart_lock_key,
     is_list,
     is_mapping,
-    load_config,
     mirrored_ref,
 )
 from docker_devkit.config_lock import (
@@ -39,7 +38,7 @@ class UpstreamManifests(NamedTuple):
 
 
 def run_lock(*, upgrade: bool = False, check: bool = False) -> None:
-    config = load_config(Path.cwd())
+    config = DockerDevkitConfig.load(Path.cwd())
     if config is None:
         print("no docker-devkit.yaml; no lock declarations to relock")
         return
