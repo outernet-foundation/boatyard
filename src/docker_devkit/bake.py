@@ -99,7 +99,7 @@ def run_build(
     os.environ.update(service_shas)
 
     if not config.service_builds:
-        raise RuntimeError("no Dockerfile service derives under this repo; the lock verb owns relocking declarations")
+        raise ValueError("no Dockerfile service derives under this repo; the lock verb owns relocking declarations")
 
     # Check Docker GC limits.
     if not pushing and not targets:
@@ -118,7 +118,7 @@ def run_build(
     }
 
     if dev and not dev_targets:
-        raise RuntimeError("no service declares a dev stage (a multi-stage Dockerfile carrying an AS dev stage)")
+        raise ValueError("no service declares a dev stage (a multi-stage Dockerfile carrying an AS dev stage)")
 
     if targets:
         resolved_targets: list[str] = []
@@ -161,7 +161,7 @@ def run_build(
             else []
         )
         if not resolved_targets:
-            raise RuntimeError(
+            raise ValueError(
                 f"No service targets this machine's arch ({host}); "
                 f"other arches require --targets. Services: {_address_vocabulary(config.service_builds)}"
             )
@@ -238,7 +238,7 @@ def run_build(
                 ])
             )
         except CalledProcessError as error:
-            raise RuntimeError(
+            raise ValueError(
                 f"docker buildx bake failed (exit {error.returncode}); rendered bake file:\n{rendered}"
             ) from error
 
@@ -247,7 +247,7 @@ def run_build(
     )
     baked = BakeMetadata.model_validate(metadata_json)
     if not set(resolved_targets) <= baked.root.keys():
-        raise RuntimeError("Bake output does not cover the requested targets")
+        raise ValueError("Bake output does not cover the requested targets")
 
 
 def check_gc_limits(candidates: list[Path] | None = None) -> None:
@@ -268,13 +268,11 @@ def check_gc_limits(candidates: list[Path] | None = None) -> None:
     gigabytes = daemon.builder.gc.gigabytes
     if gigabytes is None:
         sample = json.dumps({"builder": {"gc": {"defaultKeepStorage": f"{MIN_KEEP_STORAGE_GB}GB"}}}, indent=2)
-        raise RuntimeError(
+        raise ValueError(
             f"builder.gc.defaultKeepStorage missing in {config}; must be >= {MIN_KEEP_STORAGE_GB}GB:\n\n{sample}"
         )
     if gigabytes < MIN_KEEP_STORAGE_GB:
-        raise RuntimeError(
-            f"Docker GC limit {gigabytes:.1f}GB in {config} is below the required {MIN_KEEP_STORAGE_GB}GB"
-        )
+        raise ValueError(f"Docker GC limit {gigabytes:.1f}GB in {config} is below the required {MIN_KEEP_STORAGE_GB}GB")
 
     print(f"    [OK] Docker GC Limit verified: {gigabytes:.1f}GB")
 
@@ -285,7 +283,7 @@ def host_platform() -> str:
         return "linux/amd64"
     if machine in ("aarch64", "arm64"):
         return "linux/arm64"
-    raise RuntimeError(f"Unsupported host architecture: {machine}")
+    raise ValueError(f"Unsupported host architecture: {machine}")
 
 
 def _address_vocabulary(services: dict[str, ServiceBuild]) -> list[str]:

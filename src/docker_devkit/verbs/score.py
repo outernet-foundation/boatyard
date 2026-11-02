@@ -11,6 +11,7 @@ from bashrun.bash import bash, bash_output
 
 from docker_devkit.config import Config, Target
 from docker_devkit.score import generate_artifacts, rendering_targets
+from docker_devkit.verbs.entry import entry
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
@@ -24,6 +25,7 @@ class ToolRequirement(NamedTuple):
 
 
 @app.command()
+@entry
 def generate_score(
     target: Annotated[Target, typer.Option(help="Which Score artifact to generate.")] = "both",
     local: Annotated[

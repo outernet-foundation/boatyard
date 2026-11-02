@@ -225,17 +225,17 @@ def test_none_valued_fields_are_dropped(tmp_path: Path) -> None:
 
 
 def test_non_list_document_is_rejected(tmp_path: Path) -> None:
-    with pytest.raises(RuntimeError, match="non-empty YAML list"):
+    with pytest.raises(ValueError, match="non-empty YAML list"):
         compile_entry("uri: template://example/x\ntype: example-x\n", "x.yaml", tmp_path)
 
 
 def test_empty_file_is_rejected(tmp_path: Path) -> None:
-    with pytest.raises(RuntimeError, match="non-empty YAML list"):
+    with pytest.raises(ValueError, match="non-empty YAML list"):
         compile_entry("", "x.yaml", tmp_path)
 
 
 def test_empty_document_list_is_rejected(tmp_path: Path) -> None:
-    with pytest.raises(RuntimeError, match="non-empty YAML list"):
+    with pytest.raises(ValueError, match="non-empty YAML list"):
         compile_entry("[]\n", "x.yaml", tmp_path)
 
 
@@ -381,7 +381,7 @@ def test_compile_include_missing_file_names_the_source_and_path(tmp_path: Path) 
           include: workloads/relay/missing.river
 """
 
-    with pytest.raises(RuntimeError, match=r"k8s\.yaml.*missing\.river"):
+    with pytest.raises(ValueError, match=r"k8s\.yaml.*missing\.river"):
         compile_entry(authored, "k8s.yaml", tmp_path)
 
 
@@ -435,5 +435,5 @@ def test_compile_unknown_lock_entry_names_the_source(tmp_path: Path) -> None:
         lock: MISSING_IMAGE
 """
 
-    with pytest.raises(RuntimeError, match=r"k8s\.yaml.*'MISSING_IMAGE' does not exist"):
+    with pytest.raises(ValueError, match=r"k8s\.yaml.*'MISSING_IMAGE' does not exist"):
         compile_entry(authored, "k8s.yaml", tmp_path)

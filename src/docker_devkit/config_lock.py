@@ -40,7 +40,7 @@ class ConfigLock(BaseModel):
             return self.images[name].index
         if name in self.charts:
             return self.charts[name]
-        raise RuntimeError(f"{subject}: {LOCK_PATH.as_posix()} lacks the {name} entry ({hint})")
+        raise ValueError(f"{subject}: {LOCK_PATH.as_posix()} lacks the {name} entry ({hint})")
 
 
 class ConfigLockEntry(BaseModel):

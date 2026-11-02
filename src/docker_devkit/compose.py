@@ -96,20 +96,20 @@ def select(config: Config, environment: Mapping[str, str]) -> Selection:
     }
     riding = [name for name, entry in config.services.items() if not isinstance(entry, ServiceGroup)]
     if not names and not riding and options:
-        raise RuntimeError(
+        raise ValueError(
             f"{BUNDLES_VARIABLE}= selects nothing and no bare entry exists; the options are {sorted(options)}"
         )
     unknown = [name for name in names if name not in options]
     if unknown:
         riding_note = f"; bare entries, always included: {riding}" if riding else ""
-        raise RuntimeError(
+        raise ValueError(
             f"{BUNDLES_VARIABLE}= names {unknown}; the selectable options are {sorted(options)}{riding_note}"
         )
     choices: dict[str, str] = {}
     for name in names:
         group = options[name]
         if group in choices:
-            raise RuntimeError(
+            raise ValueError(
                 f"{BUNDLES_VARIABLE}= selects {choices[group]} and {name}; at most one option per group ({group})"
             )
         choices[group] = name
@@ -121,7 +121,7 @@ def select(config: Config, environment: Mapping[str, str]) -> Selection:
     if auth_option is not None:
         public_url = environment.get("PUBLIC_URL", "").strip()
         if not public_url:
-            raise RuntimeError("an auth option is selected; PUBLIC_URL is required")
+            raise ValueError("an auth option is selected; PUBLIC_URL is required")
         scheme, _, rest = public_url.partition("://")
         hostport = rest.partition("/")[0]
         if ":" in hostport:
@@ -154,7 +154,7 @@ def select(config: Config, environment: Mapping[str, str]) -> Selection:
             continue
         output = root / "stack/generated/compose" / f"compose.{name}.yaml"
         if not output.is_file():
-            raise RuntimeError(
+            raise ValueError(
                 f"selected entry {name!r} has no bundle output {output.as_posix()}; generate-score writes it"
             )
         includes.append(output.resolve().as_posix())
@@ -170,7 +170,7 @@ def select(config: Config, environment: Mapping[str, str]) -> Selection:
     for (path, service_names), (other_path, other_service_names) in combinations(file_services, 2):
         shared = sorted(service_names & other_service_names)
         if shared:
-            raise RuntimeError(f"{path.as_posix()} and {other_path.as_posix()} both define service(s) {shared}")
+            raise ValueError(f"{path.as_posix()} and {other_path.as_posix()} both define service(s) {shared}")
     output_services = {name for _path, names in file_services for name in names}
 
     # Gather the routes, ports, and the selected auth route.
@@ -227,7 +227,7 @@ def render(
     services: dict[str, Yaml] = {}
     if selection.routes:
         if config.gateway is None:
-            raise RuntimeError("routes are declared; gateway is required")
+            raise ValueError("routes are declared; gateway is required")
         edge: dict[str, Yaml] = {
             "image": f"${{{CADDY_IMAGE}:?err}}",
             "configs": [{"source": EDGE_CONFIG_NAME, "target": "/etc/caddy/Caddyfile"}],
@@ -303,7 +303,7 @@ def render(
                 overlay_services[service_name] = service
             service["environment"] = {key: f"${{{key}:-{value}}}" for key, value in toggles.items()}
         if not overlay_services:
-            raise RuntimeError(
+            raise ValueError(
                 f"--dev requires a dev shape: a service Dockerfile declaring a dev stage "
                 f"or a workload carrying {DEV_TOGGLES_ANNOTATION}"
             )
@@ -315,18 +315,18 @@ def render(
         for route in selection.routes:
             upstream = route.upstream.partition(":")[0]
             if upstream not in resolved:
-                raise RuntimeError(
+                raise ValueError(
                     f"route {route.path} upstream {upstream} resolves to no service in the selected assembly"
                 )
         for port in selection.ports:
             if port.service not in resolved:
-                raise RuntimeError(f"ports for service {port.service!r} resolve to no service in the selected assembly")
+                raise ValueError(f"ports for service {port.service!r} resolve to no service in the selected assembly")
     if selection.profiles:
         # Refuse profile names the compose files do not define.
         defined = _compose_config(root, compose_files, "--profiles", lock_env_file=lock_env_file)
         unknown = [profile for profile in selection.profiles if profile not in defined]
         if unknown:
-            raise RuntimeError(
+            raise ValueError(
                 f"COMPOSE_PROFILES selects unknown profile(s) {unknown}; "
                 f"profiles defined by the compose files: {defined}"
             )
@@ -336,7 +336,7 @@ def render(
 
 def require_env_file(root: Path) -> None:
     if not (root / ENV_FILE).exists():
-        raise RuntimeError(".env is required")
+        raise ValueError(".env is required")
 
 
 def merged_environment(root: Path) -> dict[str, str]:

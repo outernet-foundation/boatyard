@@ -78,22 +78,22 @@ def test_marker_with_extra_keys_is_plain_data(tmp_path: Path) -> None:
 
 
 def test_missing_include_is_a_loud_error_naming_the_source(tmp_path: Path) -> None:
-    with pytest.raises(RuntimeError, match=r"values\.yaml.*'workloads/alloy/config.alloy' does not exist"):
+    with pytest.raises(ValueError, match=r"values\.yaml.*'workloads/alloy/config.alloy' does not exist"):
         resolve_includes({"include": "workloads/alloy/config.alloy"}, tmp_path, "values.yaml")
 
 
 def test_absolute_include_path_is_rejected(tmp_path: Path) -> None:
-    with pytest.raises(RuntimeError, match="anchor at the repo root"):
+    with pytest.raises(ValueError, match="anchor at the repo root"):
         resolve_includes({"include": "/etc/passwd"}, tmp_path, "x.yaml")
 
 
 def test_parent_escaping_include_path_is_rejected(tmp_path: Path) -> None:
-    with pytest.raises(RuntimeError, match="anchor at the repo root"):
+    with pytest.raises(ValueError, match="anchor at the repo root"):
         resolve_includes({"include": "../outside.txt"}, tmp_path, "x.yaml")
 
 
 def test_non_string_marker_value_is_a_loud_error(tmp_path: Path) -> None:
-    with pytest.raises(RuntimeError, match="path string"):
+    with pytest.raises(ValueError, match="path string"):
         resolve_includes({"include": ["a", "b"]}, tmp_path, "x.yaml")
 
 
@@ -107,14 +107,14 @@ def test_invalid_yaml_include_is_a_loud_error(tmp_path: Path) -> None:
 def test_empty_yaml_include_is_a_loud_error(tmp_path: Path) -> None:
     write_repo({"empty.yaml": ""}, tmp_path)
 
-    with pytest.raises(RuntimeError, match="is empty"):
+    with pytest.raises(ValueError, match="is empty"):
         resolve_includes({"include-yaml": "empty.yaml"}, tmp_path, "x.yaml")
 
 
 def test_yaml_include_cycles_are_detected(tmp_path: Path) -> None:
     write_repo({"a.yaml": "a: {include-yaml: b.yaml}\n", "b.yaml": "b: {include-yaml: a.yaml}\n"}, tmp_path)
 
-    with pytest.raises(RuntimeError, match="cycle"):
+    with pytest.raises(ValueError, match="cycle"):
         resolve_includes({"include-yaml": "a.yaml"}, tmp_path, "x.yaml")
 
 
@@ -155,12 +155,12 @@ def test_lock_marker_resolves_inside_lists_and_nested_mappings() -> None:
 
 
 def test_unknown_lock_entry_is_a_loud_error_naming_the_source() -> None:
-    with pytest.raises(RuntimeError, match=r"k8s\.yaml.*'KEYCLOAK_IMAGE' does not exist"):
+    with pytest.raises(ValueError, match=r"k8s\.yaml.*'KEYCLOAK_IMAGE' does not exist"):
         resolve_lock_refs({"image": {"lock": "KEYCLOAK_IMAGE"}}, {"ALLOY_IMAGE": ALLOY}, "k8s.yaml")
 
 
 def test_non_string_lock_marker_value_is_a_loud_error() -> None:
-    with pytest.raises(RuntimeError, match="name string"):
+    with pytest.raises(ValueError, match="name string"):
         resolve_lock_refs({"image": {"lock": ["ALLOY"]}}, {"ALLOY_IMAGE": ALLOY}, "k8s.yaml")
 
 
@@ -215,7 +215,7 @@ def test_lock_image_marker_rejects_extra_spec_keys() -> None:
 
 
 def test_lock_image_marker_rejects_non_name_non_mapping_values() -> None:
-    with pytest.raises(RuntimeError, match="name or a key/digest_field mapping"):
+    with pytest.raises(ValueError, match="name or a key/digest_field mapping"):
         resolve_lock_refs({"image": {"lock-image": ["LOKI_IMAGE"]}}, {"LOKI_IMAGE": LOKI}, "grafana.yaml")
 
 
@@ -232,12 +232,12 @@ def test_lock_image_marker_splits_untagged_references_without_a_tag_field() -> N
 
 
 def test_literal_image_values_refuse_naming_the_lock_marker() -> None:
-    with pytest.raises(RuntimeError, match=r"k8s\.yaml.*'ghcr.io/example/app:v1' must consume the lock.*lock: NAME"):
+    with pytest.raises(ValueError, match=r"k8s\.yaml.*'ghcr.io/example/app:v1' must consume the lock.*lock: NAME"):
         resolve_lock_refs({"image": "ghcr.io/example/app:v1"}, {}, "k8s.yaml")
 
 
 def test_untagged_literal_image_values_refuse_anywhere_in_the_tree() -> None:
-    with pytest.raises(RuntimeError, match="must consume the lock"):
+    with pytest.raises(ValueError, match="must consume the lock"):
         resolve_lock_refs({"containers": [{"image": "postgres"}]}, {}, "workload api")
 
 

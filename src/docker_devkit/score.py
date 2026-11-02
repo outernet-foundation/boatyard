@@ -193,9 +193,7 @@ class SecretsDeclaration(RootModel[dict[str, "SecretKey"]]):
     def validate_consumed(self, consumed: set[str], rendering: str, source: str) -> None:
         undeclared = sorted(consumed - self.root.keys())
         if undeclared:
-            raise RuntimeError(
-                f"{source}: the {rendering} rendering consumes undeclared keys: " + ", ".join(undeclared)
-            )
+            raise ValueError(f"{source}: the {rendering} rendering consumes undeclared keys: " + ", ".join(undeclared))
 
 
 class SecretKey(BaseModel):
@@ -280,15 +278,15 @@ def generate_artifacts(
 ) -> list[Path]:
     # Require the build keys, derive the tree tags, and load the lock.
     if not (config.repository or config.base_images):
-        raise RuntimeError("repository or base_images is required in docker-devkit.yaml")
+        raise ValueError("repository or base_images is required in docker-devkit.yaml")
     root = config.root
     service_shas = dockerfiles.compute_service_shas(root, config.service_builds)
     lock_path = root / LOCK_PATH
     if not lock_path.is_file():
-        raise RuntimeError(f"{lock_path.as_posix()}: the image lock is required")
+        raise ValueError(f"{lock_path.as_posix()}: the image lock is required")
     lock = parse_config_lock(lock_path)
     if not lock.images and not lock.charts:
-        raise RuntimeError(f"{lock_path.as_posix()}: the image lock carries no entries")
+        raise ValueError(f"{lock_path.as_posix()}: the image lock carries no entries")
     k8s_output = root / (config.k8s_local_output if local else config.k8s_output)
 
     outputs: list[Path] = []
@@ -347,7 +345,7 @@ def generate_compose(
 ) -> None:
     bundles = config.compose_bundles()
     if not bundles:
-        raise RuntimeError("the compose target requires local service entries (workloads:)")
+        raise ValueError("the compose target requires local service entries (workloads:)")
     score_dir = config.root / config.score_dir
     score_state = score_dir / STATE_PREFIX
 
@@ -366,12 +364,12 @@ def generate_compose(
                 # The httpGet requirement is a compose placement law: score-compose drops httpGet probes.
                 if annotations.get(PROBE_ADAPTER_ANNOTATION) is None:
                     for probe in workload.http_get_probes:
-                        raise SystemExit(f"{name}: a {probe} httpGet requires {PROBE_ADAPTER_ANNOTATION}")
+                        raise ValueError(f"{name}: a {probe} httpGet requires {PROBE_ADAPTER_ANNOTATION}")
 
                 toggle_raw, service_name = workload.dev_toggles
                 if toggle_raw is not None and service_name is not None:
                     if service_name in toggle_services:
-                        raise SystemExit(
+                        raise ValueError(
                             f"{toggle_services[service_name]} and {name} both declare "
                             f"{DEV_TOGGLES_ANNOTATION} for {service_name}"
                         )
@@ -379,7 +377,7 @@ def generate_compose(
             provisioner_names = closure_provisioners(score_dir, "compose", bundle.workloads)
             with compiled_provisioners(score_dir, provisioner_names, root, images) as provisioners:
                 if provisioners.declares_services and "ALPINE_IMAGE" not in images:
-                    raise RuntimeError(
+                    raise ValueError(
                         f"bundle {bundle.name!r}: its provisioners declare services; "
                         f"{LOCK_PATH.as_posix()} must carry the ALPINE_IMAGE entry"
                     )
@@ -414,14 +412,14 @@ def generate_compose(
                     match = DOUBLED_SERVICE_NAME.fullmatch(name)
                     target = match.group(1) if match is not None else name
                     if target != name and target in services:
-                        raise SystemExit(f"service rename {name} -> {target} collides with an existing service")
+                        raise ValueError(f"service rename {name} -> {target} collides with an existing service")
                     collapsed[target] = service
 
                 # Rename the gate per entry and follow the depends_on references.
                 gate = f"{GATE_SERVICE}-{bundle.name}"
                 if GATE_SERVICE in collapsed:
                     if gate in collapsed:
-                        raise SystemExit(f"gate rename {GATE_SERVICE} -> {gate} collides with an existing service")
+                        raise ValueError(f"gate rename {GATE_SERVICE} -> {gate} collides with an existing service")
                     collapsed[gate] = collapsed.pop(GATE_SERVICE)
                     for service in collapsed.values():
                         depends_on = service.depends_on
@@ -433,7 +431,7 @@ def generate_compose(
                             ]
 
                 if EDGE_SERVICE_NAME in collapsed:
-                    raise SystemExit(
+                    raise ValueError(
                         f"bundle {bundle.name!r} rendering defines the reserved service {EDGE_SERVICE_NAME!r}"
                     )
 
@@ -526,7 +524,7 @@ def compiled_provisioners(
                 name,
             )
             if not is_list(document) or not document:
-                raise RuntimeError(f"{name}: an authored provisioner file must be a non-empty YAML list")
+                raise ValueError(f"{name}: an authored provisioner file must be a non-empty YAML list")
             compiled_entries: list[Yaml] = []
             for entry in document:
                 validate(AuthoredProvisioner, entry, name)
@@ -574,7 +572,7 @@ def generate_k8s(
             continue
         k8s_annotations = validate(WorkloadDocument, _load_yaml_file(score_dir / name), name).metadata.annotations
         if DEV_TOGGLES_ANNOTATION in k8s_annotations:
-            raise SystemExit(
+            raise ValueError(
                 f"{name}: {DEV_TOGGLES_ANNOTATION} is compose dev-overlay vocabulary; this workload renders k8s-only"
             )
 
@@ -664,15 +662,15 @@ def resolve_includes(node: Yaml, root: Path, source: str, ancestors: tuple[Path,
     if entry is not None:
         key, value = entry
         if not isinstance(value, str):
-            raise RuntimeError(f"{source}: {key} takes a repo-root-relative path string, not {type(value).__name__}")
+            raise ValueError(f"{source}: {key} takes a repo-root-relative path string, not {type(value).__name__}")
         relative = Path(value)
         if relative.is_absolute() or ".." in relative.parts:
-            raise RuntimeError(f"{source}: include path {value!r} must anchor at the repo root")
+            raise ValueError(f"{source}: include path {value!r} must anchor at the repo root")
         path = root / relative
         if path in ancestors:
-            raise RuntimeError(f"{source}: include {value!r} participates in a cycle")
+            raise ValueError(f"{source}: include {value!r} participates in a cycle")
         if not path.is_file():
-            raise RuntimeError(f"{source}: include {value!r} does not exist at the repo root")
+            raise ValueError(f"{source}: include {value!r} does not exist at the repo root")
         text = path.read_text(encoding="utf-8")
         if key == TEXT_MARKER:
             return text
@@ -681,7 +679,7 @@ def resolve_includes(node: Yaml, root: Path, source: str, ancestors: tuple[Path,
         except yaml.YAMLError as error:
             raise ValueError(f"{source}: include {value!r} is not valid YAML: {error}") from error
         if parsed is None:
-            raise RuntimeError(f"{source}: include {value!r} is empty")
+            raise ValueError(f"{source}: include {value!r} is empty")
         return resolve_includes(parsed, root, source, (*ancestors, path))
 
     if is_mapping(node):
@@ -699,9 +697,9 @@ def resolve_lock_refs(node: Yaml, images: dict[str, str], source: str) -> Yaml:
         marker, value = entry
         if marker == LOCK_MARKER:
             if not isinstance(value, str):
-                raise RuntimeError(f"{source}: lock takes a lock-entry name string, not {type(value).__name__}")
+                raise ValueError(f"{source}: lock takes a lock-entry name string, not {type(value).__name__}")
             if value not in images:
-                raise RuntimeError(f"{source}: lock entry {value!r} does not exist in the image lock")
+                raise ValueError(f"{source}: lock entry {value!r} does not exist in the image lock")
             return images[value]
 
         if isinstance(value, str):
@@ -709,11 +707,11 @@ def resolve_lock_refs(node: Yaml, images: dict[str, str], source: str) -> Yaml:
         elif is_mapping(value):
             image_spec = LockImageSpec.model_validate(value)
         else:
-            raise RuntimeError(
+            raise ValueError(
                 f"{source}: lock-image takes a lock-entry name or a key/digest_field mapping, not {type(value).__name__}"
             )
         if image_spec.key not in images:
-            raise RuntimeError(f"{source}: lock entry {image_spec.key!r} does not exist in the image lock")
+            raise ValueError(f"{source}: lock entry {image_spec.key!r} does not exist in the image lock")
         reference = images[image_spec.key]
         path_part, _, digest = reference.rpartition("@")
 
@@ -735,7 +733,7 @@ def resolve_lock_refs(node: Yaml, images: dict[str, str], source: str) -> Yaml:
     if is_mapping(node):
         image = node.get(IMAGE_FIELD)
         if isinstance(image, str) and IMAGE_HOLE_PATTERN.search(image) is None:
-            raise RuntimeError(f"{source}: image {image!r} must consume the lock (lock: NAME / lock-image: NAME)")
+            raise ValueError(f"{source}: image {image!r} must consume the lock (lock: NAME / lock-image: NAME)")
         return {key: resolve_lock_refs(value, images, source) for key, value in node.items()}
 
     if is_list(node):
@@ -747,7 +745,7 @@ def resolve_lock_refs(node: Yaml, images: dict[str, str], source: str) -> Yaml:
 def _split_path(path: str, reference: str, source: str) -> tuple[str, str]:
     registry, separator, repository = path.rpartition("/")
     if not separator or not registry or not repository:
-        raise RuntimeError(f"{source}: lock reference {reference!r} has no registry/repository split")
+        raise ValueError(f"{source}: lock reference {reference!r} has no registry/repository split")
     return registry, repository
 
 
@@ -846,7 +844,7 @@ def _placeholder_value(
     variable = match.group(1)
     value = rendering_vars.get(variable) or service_shas.get(variable)
     if not value:
-        raise SystemExit(
+        raise ValueError(
             f"{workload_name}: ${{{variable}}} is set in neither the rendering's vars map nor the derived service shas"
         )
     return value

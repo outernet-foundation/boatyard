@@ -8,11 +8,13 @@ import typer
 from docker_devkit.bake import run_build
 from docker_devkit.config import Config
 from docker_devkit.optional_value_option import DestinationCommand
+from docker_devkit.verbs.entry import entry
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
 
 @app.command(cls=DestinationCommand)
+@entry
 def build(
     push: Annotated[
         str | None,

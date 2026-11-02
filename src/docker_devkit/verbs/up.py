@@ -21,11 +21,13 @@ from docker_devkit.compose import (
 )
 from docker_devkit.config import Config, require_compose_stack
 from docker_devkit.config_lock import read_config_lock
+from docker_devkit.verbs.entry import entry
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
 
 @app.command()
+@entry
 def up(
     attached: Annotated[bool, typer.Option("--attached", "-a", help="Run in foreground (not detached)")] = False,
     quiet_pull: Annotated[

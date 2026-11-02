@@ -101,7 +101,7 @@ class TestRequires:
         monkeypatch.setattr(importlib.metadata, "version", _installed_version("0.1.17"))
         write_config(tmp_path, {"requires": ">=0.1.18"})
 
-        with pytest.raises(SystemExit, match="does not satisfy requires"):
+        with pytest.raises(ValueError, match="does not satisfy requires"):
             Config.load(tmp_path)
 
 
@@ -326,7 +326,7 @@ class TestBaseImageTemplates:
         )
         write_lock(tmp_path)
 
-        with pytest.raises(RuntimeError, match=r"exact == pin like '==0\.12\.15'"):
+        with pytest.raises(ValueError, match=r"exact == pin like '==0\.12\.15'"):
             Config.load(tmp_path)
 
     def test_wildcard_pin_refuses(self, tmp_path: Path) -> None:
@@ -341,7 +341,7 @@ class TestBaseImageTemplates:
         )
         write_lock(tmp_path)
 
-        with pytest.raises(RuntimeError, match="must be an exact == pin"):
+        with pytest.raises(ValueError, match="must be an exact == pin"):
             Config.load(tmp_path)
 
     def test_missing_uv_pin_refuses(self, tmp_path: Path) -> None:
@@ -357,7 +357,7 @@ class TestBaseImageTemplates:
         )
         write_lock(tmp_path)
 
-        with pytest.raises(RuntimeError, match=r"tool\.uv\.required-version is not declared"):
+        with pytest.raises(ValueError, match=r"tool\.uv\.required-version is not declared"):
             Config.load(tmp_path)
 
     def test_absent_python_version_file_refuses(self, tmp_path: Path) -> None:
@@ -374,7 +374,7 @@ class TestBaseImageTemplates:
         )
         write_lock(tmp_path)
 
-        with pytest.raises(RuntimeError, match=r"\.python-version: the file is absent"):
+        with pytest.raises(ValueError, match=r"\.python-version: the file is absent"):
             Config.load(tmp_path)
 
     def test_empty_python_version_file_refuses(self, tmp_path: Path) -> None:
@@ -392,7 +392,7 @@ class TestBaseImageTemplates:
         )
         write_lock(tmp_path)
 
-        with pytest.raises(RuntimeError, match=r"\.python-version: the file is empty"):
+        with pytest.raises(ValueError, match=r"\.python-version: the file is empty"):
             Config.load(tmp_path)
 
     def test_unknown_template_key_refuses_listing_the_vocabulary(self, tmp_path: Path) -> None:
@@ -407,7 +407,7 @@ class TestBaseImageTemplates:
         write_lock(tmp_path)
 
         with pytest.raises(
-            RuntimeError, match=r"template key \{golang\} is unknown; the toolchain pins are \{uv\}, \{python\}"
+            ValueError, match=r"template key \{golang\} is unknown; the toolchain pins are \{uv\}, \{python\}"
         ):
             Config.load(tmp_path)
 
@@ -479,7 +479,7 @@ class TestCharts:
         )
         write_lock(tmp_path)
 
-        with pytest.raises(RuntimeError, match=r"values/loki\.yaml.*values file is required"):
+        with pytest.raises(ValueError, match=r"values/loki\.yaml.*values file is required"):
             Config.load(tmp_path)
 
 
@@ -912,7 +912,7 @@ class TestGatewayKey:
             },
         )
 
-        with pytest.raises(RuntimeError, match="CADDY_IMAGE"):
+        with pytest.raises(ValueError, match="CADDY_IMAGE"):
             Config.load(tmp_path)
 
     def test_a_routeless_stack_carries_an_inert_gateway(self, tmp_path: Path) -> None:
@@ -1157,7 +1157,7 @@ class TestLockPairing:
             },
         )
 
-        with pytest.raises(RuntimeError, match="the committed lock is required"):
+        with pytest.raises(ValueError, match="the committed lock is required"):
             Config.load(tmp_path)
 
     def test_charts_without_lock_refuse(self, tmp_path: Path) -> None:
@@ -1168,7 +1168,7 @@ class TestLockPairing:
         (tmp_path / "stack" / "score" / "k8s" / "values").mkdir(parents=True)
         (tmp_path / "stack" / "score" / "k8s" / "values" / "loki.yaml").write_text("loki: {}\n", encoding="utf-8")
 
-        with pytest.raises(RuntimeError, match="the committed lock is required"):
+        with pytest.raises(ValueError, match="the committed lock is required"):
             Config.load(tmp_path)
 
     def test_lock_beside_base_images_loads(self, tmp_path: Path) -> None:
@@ -1203,7 +1203,7 @@ class TestServiceDerivation:
         write_dockerfile(tmp_path, "api", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n")
         write_config(tmp_path, {"requires": ">=0.1"})
 
-        with pytest.raises(RuntimeError, match="repository is required"):
+        with pytest.raises(ValueError, match="repository is required"):
             Config.load(tmp_path)
 
     def test_derived_services_attach_to_the_loaded_config(self, tmp_path: Path) -> None:
@@ -1317,5 +1317,5 @@ class TestConfigLockParse:
     def test_require_refuses_naming_the_lock_verb(self, tmp_path: Path) -> None:
         lock = parse_config_lock(_write_raw_lock(tmp_path, "{}\n"))
 
-        with pytest.raises(RuntimeError, match=r"lacks the CADDY_IMAGE entry.*lock verb writes it"):
+        with pytest.raises(ValueError, match=r"lacks the CADDY_IMAGE entry.*lock verb writes it"):
             lock.require("CADDY_IMAGE", "routes are declared")

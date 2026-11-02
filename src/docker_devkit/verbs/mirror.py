@@ -12,11 +12,13 @@ from docker_devkit.config import (
 )
 from docker_devkit.config_lock import read_config_lock
 from docker_devkit.crane import install_crane
+from docker_devkit.verbs.entry import entry
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
 
 @app.command()
+@entry
 def mirror() -> None:
     root = Path.cwd()
     config = Config.load(root)

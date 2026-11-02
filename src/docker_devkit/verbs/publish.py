@@ -14,6 +14,7 @@ from docker_devkit import dockerfiles
 from docker_devkit.config import Config
 from docker_devkit.config_lock import LOCK_PATH, parse_config_lock
 from docker_devkit.crane import install_crane
+from docker_devkit.verbs.entry import entry
 from docker_devkit.lock import env_entries
 from docker_devkit.publish import (
     STUB_VALUE,
@@ -27,6 +28,7 @@ app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
 
 @app.command()
+@entry
 def publish_compose(
     bundle: Annotated[
         str | None,
@@ -85,12 +87,12 @@ def publish_compose(
     }
 
     published: list[PublishedEntry] = []
-    for entry in bundles:
-        if bundle is not None and entry.name != bundle:
+    for bundle_entry in bundles:
+        if bundle is not None and bundle_entry.name != bundle:
             continue
         with TemporaryDirectory(prefix="compose-bundle-") as baked_directory_string:
             baked_directory = Path(baked_directory_string)
-            baked_path = bake_sources(baked_directory, entry.output.as_posix(), substitutions)
+            baked_path = bake_sources(baked_directory, bundle_entry.output.as_posix(), substitutions)
 
             # Set non-empty stubs for unresolved vars.
             unresolved = {
@@ -102,16 +104,16 @@ def publish_compose(
             finalize_baked(baked_path, repository)
 
             # Publish once under the sha tag and alias the branch tag.
-            sha_reference = f"{repository}/{entry.name}:{sha}"
+            sha_reference = f"{repository}/{bundle_entry.name}:{sha}"
             print(f"Publish {sha_reference}")
             bash(f"docker compose -f {shlex.quote(str(baked_path))} publish {shlex.quote(sha_reference)} --yes")
-            branch_reference = f"{repository}/{entry.name}:{branch_tag}"
+            branch_reference = f"{repository}/{bundle_entry.name}:{branch_tag}"
             print(f"Tag {branch_reference}")
             bash(f"crane tag {shlex.quote(sha_reference)} {shlex.quote(branch_tag)}")
             digest = bash_output(f"crane digest {shlex.quote(sha_reference)}").strip()
             print(f"Digest {sha_reference} {digest}")
             print(f"Digest {branch_reference} {digest}")
-            published.append(PublishedEntry(entry.name, sha_reference, branch_reference, digest))
+            published.append(PublishedEntry(bundle_entry.name, sha_reference, branch_reference, digest))
 
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path is not None and published:

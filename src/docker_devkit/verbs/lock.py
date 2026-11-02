@@ -5,11 +5,13 @@ from typing import Annotated
 import typer
 
 from docker_devkit.lock import run_lock
+from docker_devkit.verbs.entry import entry
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
 
 @app.command()
+@entry
 def lock(
     upgrade: Annotated[
         bool,

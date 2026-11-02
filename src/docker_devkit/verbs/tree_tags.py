@@ -8,11 +8,13 @@ import typer
 from docker_devkit import dockerfiles
 from docker_devkit.config import Config
 from docker_devkit.dockerfiles import service_sha_env
+from docker_devkit.verbs.entry import entry
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
 
 @app.command()
+@entry
 def tree_tags(
     services: Annotated[
         list[str] | None,

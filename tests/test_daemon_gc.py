@@ -22,7 +22,7 @@ def test_passes_at_the_floor(tmp_path: Path, capsys: pytest.CaptureFixture[str])
 
 def test_refuses_below_the_floor(tmp_path: Path) -> None:
     config = _daemon_json(tmp_path, '{"builder": {"gc": {"defaultKeepStorage": "50GB"}}}')
-    with pytest.raises(RuntimeError, match="below the required"):
+    with pytest.raises(ValueError, match="below the required"):
         check_gc_limits(candidates=[config])
 
 
@@ -40,22 +40,22 @@ def test_accepts_byte_counts_and_binary_units(tmp_path: Path) -> None:
 
 def test_missing_key_refuses_with_sample(tmp_path: Path) -> None:
     config = _daemon_json(tmp_path, '{"registry-mirrors": ["https://mirror.example"]}')
-    with pytest.raises(RuntimeError, match="defaultKeepStorage"):
+    with pytest.raises(ValueError, match="defaultKeepStorage"):
         check_gc_limits(candidates=[config])
 
 
 def test_zero_is_a_set_value_and_refuses_below_the_floor(tmp_path: Path) -> None:
     config = _daemon_json(tmp_path, '{"builder": {"gc": {"defaultKeepStorage": 0}}}')
-    with pytest.raises(RuntimeError, match="below the required"):
+    with pytest.raises(ValueError, match="below the required"):
         check_gc_limits(candidates=[config])
     config.write_text('{"builder": {"gc": {"defaultKeepStorage": "0GB"}}}', encoding="utf-8")
-    with pytest.raises(RuntimeError, match="below the required"):
+    with pytest.raises(ValueError, match="below the required"):
         check_gc_limits(candidates=[config])
 
 
 def test_null_counts_as_missing(tmp_path: Path) -> None:
     config = _daemon_json(tmp_path, '{"builder": {"gc": {"defaultKeepStorage": null}}}')
-    with pytest.raises(RuntimeError, match="defaultKeepStorage"):
+    with pytest.raises(ValueError, match="defaultKeepStorage"):
         check_gc_limits(candidates=[config])
 
 
@@ -75,7 +75,7 @@ def test_first_readable_candidate_wins(tmp_path: Path) -> None:
     first.write_text('{"builder": {"gc": {"defaultKeepStorage": "50GB"}}}', encoding="utf-8")
     second = tmp_path / "second.json"
     second.write_text('{"builder": {"gc": {"defaultKeepStorage": "100GB"}}}', encoding="utf-8")
-    with pytest.raises(RuntimeError, match=str(first)):
+    with pytest.raises(ValueError, match=str(first)):
         check_gc_limits(candidates=[first, second])
 
 

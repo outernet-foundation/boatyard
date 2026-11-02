@@ -2,7 +2,6 @@ from pathlib import Path
 
 import pytest
 import yaml
-from pydantic import ValidationError
 from typer.testing import CliRunner, Result
 
 from docker_devkit import crane
@@ -63,7 +62,7 @@ class TestMirroredRef:
         )
 
     def test_rejects_already_prefixed_references(self):
-        with pytest.raises(RuntimeError, match="upstream-native"):
+        with pytest.raises(ValueError, match="upstream-native"):
             mirrored_ref(f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15", MIRROR_PREFIX)
 
 
@@ -242,7 +241,7 @@ class TestMirrorVerb:
         result = runner.invoke(mirror.app, [])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, RuntimeError)
+        assert isinstance(result.exception, SystemExit)
         assert "LOKI_CHART" in str(result.exception)
 
     def test_errors_without_a_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -271,4 +270,4 @@ class TestMirrorVerb:
         result = runner.invoke(mirror.app, [])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, ValidationError)
+        assert isinstance(result.exception, SystemExit)

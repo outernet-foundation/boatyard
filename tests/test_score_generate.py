@@ -172,7 +172,7 @@ def test_a_missing_chart_lock_entry_refuses_naming_the_chart(tmp_path: Path, mon
     _write_values(tmp_path, "service:\n  port: 3000\n")
     config = _charts_config()
 
-    with pytest.raises(RuntimeError, match=r"chart 'loki'.*LOKI_CHART"):
+    with pytest.raises(ValueError, match=r"chart 'loki'.*LOKI_CHART"):
         _generate_with_chart(monkeypatch, tmp_path, config, {})
 
 
@@ -400,7 +400,7 @@ def test_generate_compose_collapses_doubled_names_with_no_binds(
 def test_generate_compose_refuses_a_rename_collision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     colliding = GENERATED_COMPOSE + "  api:\n    image: ghcr.io/org/api:2\n"
 
-    with pytest.raises(SystemExit, match="collides"):
+    with pytest.raises(ValueError, match="collides"):
         _generate_compose(monkeypatch, tmp_path, colliding)
 
 
@@ -468,7 +468,7 @@ def test_generate_compose_gate_names_differ_per_entry(tmp_path: Path, monkeypatc
 def test_generate_compose_refuses_a_gate_rename_collision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     colliding = GATED_COMPOSE + "  wait-for-resources-core:\n    image: ghcr.io/org/api:2\n"
 
-    with pytest.raises(SystemExit, match="collides"):
+    with pytest.raises(ValueError, match="collides"):
         _generate_compose(monkeypatch, tmp_path, colliding)
 
 
@@ -527,7 +527,7 @@ def test_workload_lock_marker_naming_no_lock_entry_refuses(tmp_path: Path, monke
     )
     config.root = tmp_path
 
-    with pytest.raises(RuntimeError, match=r"workload api\.yaml.*API_IMAGE.*does not exist"):
+    with pytest.raises(ValueError, match=r"workload api\.yaml.*API_IMAGE.*does not exist"):
         score_generate_module.generate_compose(tmp_path, config, {}, {}, None)
 
 
@@ -689,7 +689,7 @@ def test_gate_pin_refuses_a_gate_forming_run_without_the_lock_entry(
 ) -> None:
     config = _bundle_config()
 
-    with pytest.raises(RuntimeError, match="ALPINE_IMAGE"):
+    with pytest.raises(ValueError, match="ALPINE_IMAGE"):
         _compose_init_templates(
             monkeypatch,
             tmp_path,
@@ -765,7 +765,7 @@ def test_httpget_probe_without_the_adapter_annotation_refuses_naming_the_workloa
 ) -> None:
     config = _bundle_config()
 
-    with pytest.raises(SystemExit, match=r"api\.yaml.*readinessProbe httpGet.*probe-adapter"):
+    with pytest.raises(ValueError, match=r"api\.yaml.*readinessProbe httpGet.*probe-adapter"):
         _compose_init_templates(
             monkeypatch,
             tmp_path,
@@ -776,7 +776,7 @@ def test_httpget_probe_without_the_adapter_annotation_refuses_naming_the_workloa
             },
         )
 
-    with pytest.raises(SystemExit, match=r"api\.yaml.*livenessProbe httpGet.*probe-adapter"):
+    with pytest.raises(ValueError, match=r"api\.yaml.*livenessProbe httpGet.*probe-adapter"):
         _compose_init_templates(
             monkeypatch,
             tmp_path,
@@ -896,7 +896,7 @@ def test_two_workloads_toggling_one_service_refuse_at_generation(
 ) -> None:
     config = _bundle_config(workloads=["api.yaml", "api2.yaml"])
 
-    with pytest.raises(SystemExit, match=r"both declare.*dev-toggles.*api"):
+    with pytest.raises(ValueError, match=r"both declare.*dev-toggles.*api"):
         _compose_init_templates(
             monkeypatch,
             tmp_path,
@@ -912,7 +912,7 @@ def test_two_workloads_toggling_one_service_refuse_at_generation(
 def test_a_rendering_defining_the_edge_service_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _bundle_config()
 
-    with pytest.raises(SystemExit, match=r"reserved service 'edge'"):
+    with pytest.raises(ValueError, match=r"reserved service 'edge'"):
         _compose_init_templates(
             monkeypatch,
             tmp_path,
@@ -931,7 +931,7 @@ def test_dev_toggles_on_a_k8s_only_workload_refuses(tmp_path: Path) -> None:
 
     assert config.k8s is not None
     config.root = tmp_path
-    with pytest.raises(SystemExit, match="renders k8s-only"):
+    with pytest.raises(ValueError, match="renders k8s-only"):
         score_generate_module.generate_k8s(
             tmp_path,
             config,

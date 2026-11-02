@@ -146,7 +146,7 @@ class Config(BaseModel):
         # Self-check the installed version.
         installed = importlib.metadata.version("docker-devkit")
         if installed != DEV_SENTINEL and not SpecifierSet(self.requires).contains(installed, prereleases=True):
-            raise SystemExit(f"docker-devkit {installed} does not satisfy requires={self.requires!r}")
+            raise ValueError(f"docker-devkit {installed} does not satisfy requires={self.requires!r}")
         self.root = root
 
         # Resolve {uv} and {python} templates in base_images against the toolchain pins.
@@ -166,13 +166,13 @@ class Config(BaseModel):
                     else None
                 )
                 if not declared:
-                    raise RuntimeError(
+                    raise ValueError(
                         f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version is not declared; "
                         "the {uv} template requires it"
                     )
                 pin_match = re.fullmatch(r"==(?P<version>[^,*\s]+)", declared.strip())
                 if pin_match is None:
-                    raise RuntimeError(
+                    raise ValueError(
                         f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version {declared!r} "
                         "must be an exact == pin like '==0.12.15'"
                     )
@@ -180,7 +180,7 @@ class Config(BaseModel):
             elif key == "python":
                 python_version = root / PYTHON_VERSION_PATH
                 if not python_version.is_file():
-                    raise RuntimeError(
+                    raise ValueError(
                         f"{PYTHON_VERSION_PATH.as_posix()}: the file is absent; the {{{key}}} template requires it"
                     )
                 # Take the first non-empty line.
@@ -189,12 +189,12 @@ class Config(BaseModel):
                     "",
                 )
                 if not version:
-                    raise RuntimeError(
+                    raise ValueError(
                         f"{PYTHON_VERSION_PATH.as_posix()}: the file is empty; the {{{key}}} template requires it"
                     )
                 pins[key] = version
             else:
-                raise RuntimeError(
+                raise ValueError(
                     f"base_images template key {{{key}}} is unknown; the toolchain pins are {{uv}}, {{python}}"
                 )
         self.base_images = {
@@ -209,18 +209,18 @@ class Config(BaseModel):
         for service in service_builds.values():
             unknown = [argument for argument in service.sha_args if argument not in computable]
             if unknown:
-                raise RuntimeError(
+                raise ValueError(
                     f"workloads/{service.name}/{DOCKERFILE_NAME}: ARG {', '.join(unknown)} names no service directory"
                 )
         if service_builds and self.repository is None:
             listed = ", ".join(sorted(service_builds))
-            raise RuntimeError(f"Dockerfile service directories exist ({listed}); repository is required")
+            raise ValueError(f"Dockerfile service directories exist ({listed}); repository is required")
         self.service_builds = service_builds
 
         # Enforce the lock pairing laws.
         declared_charts = self.declared_charts
         if (self.base_images or declared_charts) and not (root / LOCK_PATH).is_file():
-            raise RuntimeError(
+            raise ValueError(
                 f"{LOCK_PATH.as_posix()}: base_images or k8s.charts are declared; the committed lock is required"
             )
         declares_routes = any(
@@ -237,7 +237,7 @@ class Config(BaseModel):
         for chart in declared_charts:
             values = root / self.score_dir / "k8s" / "values" / f"{chart}.yaml"
             if not values.is_file():
-                raise RuntimeError(f"{values.as_posix()}: the chart's values file is required")
+                raise ValueError(f"{values.as_posix()}: the chart's values file is required")
 
         return self
 
@@ -620,7 +620,7 @@ def _validation_error_text(error: ValidationError) -> str:
 
 def require_compose_stack(config: Config | None) -> Config:
     if config is None or not config.services:
-        raise RuntimeError("docker-devkit.yaml must exist and declare services")
+        raise ValueError("docker-devkit.yaml must exist and declare services")
     return config
 
 
@@ -646,7 +646,7 @@ def parse_dev_toggles(raw: str) -> dict[str, str]:
 
 def mirrored_ref(reference: str, prefix: str) -> str:
     if reference.startswith(f"{prefix}/"):
-        raise RuntimeError(f"declarations are upstream-native; {reference} already carries the mirror prefix {prefix}")
+        raise ValueError(f"declarations are upstream-native; {reference} already carries the mirror prefix {prefix}")
     return f"{prefix}/{reference}"
 
 

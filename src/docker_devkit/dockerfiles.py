@@ -80,17 +80,17 @@ def derive_services(root: Path, axes: dict[str, list[str]]) -> dict[str, Service
                 continue
             if BARE_IDENTIFIER_PATTERN.fullmatch(image) is None:
                 if BUILD_ARG_REFERENCE_PATTERN.fullmatch(image) is None:
-                    raise RuntimeError(f"{relative}: FROM {image} must reference a base_images build arg")
+                    raise ValueError(f"{relative}: FROM {image} must reference a base_images build arg")
                 continue
             if image not in service_dirs:
-                raise RuntimeError(f"{relative}: FROM {image} names no service directory or stage")
+                raise ValueError(f"{relative}: FROM {image} names no service directory or stage")
             contexts.append(image)
         for value in copy_from_values:
             if "/" in value:
-                raise RuntimeError(f"{relative}: COPY --from={value} must reference a base_images build arg")
+                raise ValueError(f"{relative}: COPY --from={value} must reference a base_images build arg")
         declared_axis_args = [argument for argument in args if argument in axes]
         if len(declared_axis_args) > 1:
-            raise RuntimeError(
+            raise ValueError(
                 f"{relative}: declares two variant-axis ARGs ({', '.join(declared_axis_args)}); "
                 "a service carries one axis"
             )
@@ -116,7 +116,7 @@ def derive_services(root: Path, axes: dict[str, list[str]]) -> dict[str, Service
 
 def _require_single_top(tops: set[str], subject: str) -> None:
     if len(tops) > 1:
-        raise RuntimeError(f"{subject} span multiple top-level directories: {sorted(tops)}")
+        raise ValueError(f"{subject} span multiple top-level directories: {sorted(tops)}")
 
 
 def service_sha_env(name: str) -> str:
@@ -180,16 +180,16 @@ def compute_service_shas(repo_root: Path, service_builds: dict[str, ServiceBuild
 
 def _effective_axis(name: str, builds: dict[str, ServiceBuild], path: tuple[str, ...]) -> str | None:
     if name in path:
-        raise RuntimeError(f"FROM context cycle: {' -> '.join((*path, name))}")
+        raise ValueError(f"FROM context cycle: {' -> '.join((*path, name))}")
     build = builds[name]
     parent_axes = [_effective_axis(parent, builds, (*path, name)) for parent in build.contexts]
     if len(set(parent_axes)) > 1:
-        raise RuntimeError(
+        raise ValueError(
             f"workloads/{name}/{DOCKERFILE_NAME}: parents ({', '.join(build.contexts)}) disagree on variant cells"
         )
     if parent_axes:
         if build.axis is not None:
-            raise RuntimeError(
+            raise ValueError(
                 f"workloads/{name}/{DOCKERFILE_NAME}: declares ARG {build.axis} over a "
                 f"variant-bearing base (parents: {', '.join(build.contexts)})"
             )

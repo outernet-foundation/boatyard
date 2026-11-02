@@ -403,7 +403,7 @@ class TestResolveRemoteDigest:
 
     def test_should_raise_when_digest_missing(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(lock_module, "bash_output", _inspect_output_without_digest)
-        with pytest.raises(RuntimeError):
+        with pytest.raises(ValueError, match="must carry a Digest line"):
             lock_module.resolve_remote_digest("docker.io/library/alpine:3.20")
 
 
@@ -459,7 +459,7 @@ class TestSelectPlatformManifests:
         monkeypatch.setattr(lock_module, "bash_output", RawInspectOutput(raw))
         monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
 
-        with pytest.raises(RuntimeError, match=f"entry X.*multiple upstream manifests.*{DIGEST_C}, {DIGEST_D}"):
+        with pytest.raises(ValueError, match=f"entry X.*multiple upstream manifests.*{DIGEST_C}, {DIGEST_D}"):
             lock_module.resolve_remote_manifests("docker.io/library/alpine:3.20", ["linux/amd64"], "entry X")
 
     def test_a_declared_platform_no_index_child_covers_refuses_naming_the_entry(self, monkeypatch: pytest.MonkeyPatch):
@@ -467,7 +467,7 @@ class TestSelectPlatformManifests:
         monkeypatch.setattr(lock_module, "bash_output", RawInspectOutput(raw))
         monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
 
-        with pytest.raises(RuntimeError, match=r"entry X.*no linux/arm64 manifest.*index platforms: \['linux/amd64'\]"):
+        with pytest.raises(ValueError, match=r"entry X.*no linux/arm64 manifest.*index platforms: \['linux/amd64'\]"):
             lock_module.resolve_remote_manifests("docker.io/library/alpine:3.20", ["linux/arm64"], "entry X")
 
 
@@ -617,7 +617,7 @@ def _selection_config(**sections: object) -> config_module.Config:
 class TestEntrySelection:
     def test_the_projection_refuses_a_platform_an_entry_never_recorded(self) -> None:
         with pytest.raises(
-            RuntimeError, match=r"LOKI_IMAGE records no linux/ppc64le platform manifest.*recorded platforms"
+            ValueError, match=r"LOKI_IMAGE records no linux/ppc64le platform manifest.*recorded platforms"
         ):
             lock_module.env_entries(_selection_lock(), "linux/ppc64le")
 
@@ -658,7 +658,7 @@ class TestComposeProjection:
     def test_compose_entries_refuse_image_entries_without_declared_platforms(self) -> None:
         config = _selection_config()
 
-        with pytest.raises(RuntimeError, match=r"records image entries but docker-devkit\.yaml declares no platforms"):
+        with pytest.raises(ValueError, match=r"records image entries but docker-devkit\.yaml declares no platforms"):
             lock_module.compose_env_entries(_selection_lock(), config, {})
 
     def test_the_env_render_is_sorted_and_stable(self) -> None:
@@ -690,7 +690,7 @@ class TestPlatformSelectionLaw:
         config = _selection_config(platforms=["linux/amd64", "linux/arm64"])
 
         with pytest.raises(
-            RuntimeError, match=r"platforms \['linux/amd64', 'linux/arm64'\] are declared.*PLATFORM= must be named"
+            ValueError, match=r"platforms \['linux/amd64', 'linux/arm64'\] are declared.*PLATFORM= must be named"
         ):
             lock_module.compose_env_entries(_selection_lock(), config, {})
 
@@ -698,7 +698,7 @@ class TestPlatformSelectionLaw:
         config = _selection_config(platforms=["linux/amd64"])
 
         with pytest.raises(
-            RuntimeError,
+            ValueError,
             match=r"PLATFORM='linux/arm64' must be one of the declared platforms \['linux/amd64'\]",
         ):
             lock_module.compose_env_entries(_selection_lock(), config, {"PLATFORM": "linux/arm64"})

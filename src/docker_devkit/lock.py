@@ -98,7 +98,7 @@ def run_lock(*, upgrade: bool = False, check: bool = False) -> None:
                 )
             )
         )
-        raise SystemExit("image lock is stale")
+        raise ValueError("image lock is stale")
 
 
 def write_lock(config: Config, *, upgrade: bool = False) -> ConfigLock:
@@ -181,7 +181,7 @@ def resolve_remote_manifests(reference: str, platforms: list[str], subject: str)
         ]
         if len(matches) > 1:
             digests = ", ".join(_child_digest(child, subject) for child in matches)
-            raise RuntimeError(f"{subject}: platform {platform} matches multiple upstream manifests ({digests})")
+            raise ValueError(f"{subject}: platform {platform} matches multiple upstream manifests ({digests})")
         if not matches:
             available = sorted({
                 f"{os_name}/{architecture}"
@@ -189,7 +189,7 @@ def resolve_remote_manifests(reference: str, platforms: list[str], subject: str)
                 if (concrete := _concrete_platform(child)) is not None
                 for os_name, architecture in (concrete,)
             })
-            raise RuntimeError(
+            raise ValueError(
                 f"{subject}: the upstream index carries no {platform} manifest "
                 f"(declared platforms: {sorted(platforms)}; index platforms: {available})"
             )
@@ -202,7 +202,7 @@ def resolve_remote_digest(reference: str) -> str:
     output = bash_output(f"docker buildx imagetools inspect {shlex.quote(reference)}")
     match = DIGEST_PATTERN.search(output)
     if match is None:
-        raise RuntimeError(f"imagetools output for {reference} must carry a Digest line")
+        raise ValueError(f"imagetools output for {reference} must carry a Digest line")
     return match.group(1)
 
 
@@ -217,7 +217,7 @@ def _concrete_platform(child: OciDescriptor) -> tuple[str, str] | None:
 
 def _child_digest(child: OciDescriptor, subject: str) -> str:
     if not child.digest.startswith("sha256:"):
-        raise RuntimeError(f"{subject}: upstream index child must carry a digest ({child!r})")
+        raise ValueError(f"{subject}: upstream index child must carry a digest ({child!r})")
     return child.digest
 
 
@@ -225,7 +225,7 @@ def compose_env_entries(lock: ConfigLock, config: Config, environment: Mapping[s
     selected = environment.get(PLATFORM_VARIABLE, "").strip()
     if selected:
         if selected not in config.platforms:
-            raise RuntimeError(
+            raise ValueError(
                 f"{PLATFORM_VARIABLE}={selected!r} must be one of the declared platforms {config.platforms}"
             )
         platform: str | None = selected
@@ -234,11 +234,9 @@ def compose_env_entries(lock: ConfigLock, config: Config, environment: Mapping[s
     elif len(config.platforms) == 1:
         platform = config.platforms[0]
     else:
-        raise RuntimeError(f"platforms {config.platforms} are declared; {PLATFORM_VARIABLE}= must be named in .env")
+        raise ValueError(f"platforms {config.platforms} are declared; {PLATFORM_VARIABLE}= must be named in .env")
     if platform is None and lock.images:
-        raise RuntimeError(
-            f"{LOCK_PATH.as_posix()}: records image entries but docker-devkit.yaml declares no platforms"
-        )
+        raise ValueError(f"{LOCK_PATH.as_posix()}: records image entries but docker-devkit.yaml declares no platforms")
     return env_entries(lock, platform)
 
 
@@ -250,7 +248,7 @@ def env_entries(lock: ConfigLock, platform: str | None = None) -> dict[str, str]
             continue
         recorded = entry.platforms.get(platform)
         if recorded is None:
-            raise RuntimeError(
+            raise ValueError(
                 f"{LOCK_PATH.as_posix()}: image entry {name} records no {platform} platform manifest; "
                 f"recorded platforms: {sorted(entry.platforms) or 'none'}"
             )
