@@ -30,7 +30,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 
 ## Modules
 
-`config.py` schema + sha machinery; `dockerfiles.py` Dockerfile declarations (`ServiceBuild`, `derive_services`); `config_lock.py` lock schema + parsers; `lock.py` lock engine + projections; `assembly.py` resolve/render/validate; `bake.py` build pipeline; `score.py` score generation;
+`config.py` schema + load + sha machinery; `dockerfiles.py` Dockerfile declarations (`ServiceBuild`, `derive_services`); `config_lock.py` lock schema + parsers; `lock.py` lock engine + projections; `assembly.py` resolve/render/validate; `bake.py` build pipeline; `score.py` score generation;
   `publish.py` publish preparation; `documents.py` shared typed lenses; `crane.py` pinned crane installer; `optional_value_option.py` typer `--push` seam (`# noqa-wrapper:` boundary); `verbs/*` one module per command. Model modules run root → leaves: root record first
   (`RootModel` subscripts quote forward refs; the one inversion is a parent whose field default constructs the child), functions callers-before-callees; imports absolute; `config_lock`/`dockerfiles` ← `config` one-way. Also in `config.py`: `is_mapping`/`is_list`,
   `EDGE_SERVICE_NAME`, `chart_lock_key`, `service_sha_env`; shell-outs via bashrun. Lifecycle stays a separate package from codegen (disjoint dependency surfaces — bundling would force stack-only consumers to install `sqlacodegen`, `psycopg`, `datamodel-code-generator`).
@@ -49,7 +49,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 - `k8s`: `workloads`, `vars`, `charts` name → `oci://…:tag|@digest`; the map key IS the `{NAME}_CHART` lock key; a section declaring neither workloads nor charts refuses.
 - `mirror_prefix`: root override (non-empty, no trailing slash), else `DEFAULT_MIRROR_PREFIX` (`ghcr.io/outernet-foundation/mirror`).
 - Root-model invisible defaults: `score_dir` (`stack/score`), k8s output paths, the three tool pins.
-- Load refusals: Dockerfile services or local entries without `repository`; `base_images`/`k8s.charts` without the committed lock (pairing law); a declared chart without `stack/score/k8s/values/{chart}.yaml`; routes without `CADDY_IMAGE` in
+- Load refusals (`resolve_config`): Dockerfile services or local entries without `repository`; `base_images`/`k8s.charts` without the committed lock (pairing law); a declared chart without `stack/score/k8s/values/{chart}.yaml`; routes without `CADDY_IMAGE` in
   the lock.
 - `mirrored_ref(reference, prefix)` = the only prefix join — injects the prefix, rejects an already-prefixed reference (double-prefix guard).
 - Derivation shape law: multi-consumer derivations ride `DockerDevkitConfig` (`compose_bundles`, `image_lock`, `declared_charts`, `service_shas`); single-call-site derivations inline at their consumer;
