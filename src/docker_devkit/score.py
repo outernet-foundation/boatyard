@@ -265,6 +265,16 @@ def _represent_multiline(dumper: yaml.SafeDumper, value: str) -> yaml.ScalarNode
 ComposeDumper.add_representer(str, _represent_multiline)
 
 
+def rendering_targets(config: Config, target: Target) -> list[Literal["compose", "k8s"]]:
+    # The one fan-out decider: which renderings a run produces.
+    renderings: list[Literal["compose", "k8s"]] = []
+    if target in ("both", "compose"):
+        renderings.append("compose")
+    if target in ("both", "k8s") and config.k8s is not None:
+        renderings.append("k8s")
+    return renderings
+
+
 def generate_artifacts(
     config: Config, target: Target, local: bool, tool_environment: dict[str, str] | None = None
 ) -> list[Path]:
@@ -282,14 +292,15 @@ def generate_artifacts(
     k8s_output = root / (config.k8s_local_output if local else config.k8s_output)
 
     outputs: list[Path] = []
+    renderings = rendering_targets(config, target)
 
-    if target in ("both", "compose"):
+    if "compose" in renderings:
         generate_compose(
             root, config, compose_env_entries(lock, config, merged_environment(root)), service_shas, tool_environment
         )
         outputs.extend(bundle.output for bundle in config.compose_bundles())
 
-    if target in ("both", "k8s") and config.k8s is not None:
+    if "k8s" in renderings and config.k8s is not None:
         storage_class = LOCAL_STORAGE_CLASS if local else CLOUD_STORAGE_CLASS
         generate_k8s(root, config, config.k8s, k8s_output, lock, service_shas, storage_class, tool_environment)
         outputs.append(k8s_output)

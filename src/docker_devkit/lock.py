@@ -10,6 +10,7 @@ from typing import NamedTuple
 
 import yaml
 from bashrun.bash import bash_output
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from docker_devkit.config import (
     CHART_REFERENCE_PREFIX,
@@ -37,6 +38,36 @@ PLATFORM_VARIABLE = "PLATFORM"
 class UpstreamManifests(NamedTuple):
     index_digest: str
     platforms: dict[str, str]
+
+
+class OciPlatform(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    os: str | None = None
+    architecture: str | None = None
+
+
+class OciDescriptor(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    digest: str = ""
+    platform: OciPlatform | None = None
+    annotations: dict[str, str] = Field(default_factory=dict)
+
+
+class OciIndex(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    manifests: list[OciDescriptor] = Field(default_factory=list)
+
+    @field_validator("manifests", mode="before")
+    @classmethod
+    def _drop_non_descriptors(cls, value: Yaml) -> Yaml:
+        if value is None:
+            return []
+        if is_list(value):
+            return [child for child in value if is_mapping(child)]
+        return value
 
 
 def run_lock(*, upgrade: bool = False, check: bool = False) -> None:
@@ -133,10 +164,10 @@ def render_lock(lock: ConfigLock) -> str:
 def resolve_remote_manifests(reference: str, platforms: list[str], subject: str) -> UpstreamManifests:
     print(f"Resolving digests for: {reference}")
     raw = bash_output(f"docker buildx imagetools inspect --raw {shlex.quote(reference)}")
-    document: Yaml = json.loads(raw)
+    index = OciIndex.model_validate(json.loads(raw))
     index_digest = resolve_remote_digest(reference)
-    children = document.get("manifests") if is_mapping(document) else None
-    if not is_list(children):
+    children = index.manifests
+    if not children:
         # Record a manifest answer as the index and every platform entry.
         return UpstreamManifests(index_digest, dict.fromkeys(platforms, index_digest))
     selected: dict[str, str] = {}
@@ -145,11 +176,7 @@ def resolve_remote_manifests(reference: str, platforms: list[str], subject: str)
         matches = [
             child
             for child in children
-            if not (
-                is_mapping(child)
-                and is_mapping(annotations := child.get("annotations"))
-                and annotations.get("vnd.docker.reference.type") == "attestation-manifest"
-            )
+            if child.annotations.get("vnd.docker.reference.type") != "attestation-manifest"
             if _concrete_platform(child) == (os_name, architecture)
         ]
         if len(matches) > 1:
@@ -179,28 +206,19 @@ def resolve_remote_digest(reference: str) -> str:
     return match.group(1)
 
 
-def _concrete_platform(child: Yaml) -> tuple[str, str] | None:
-    if not is_mapping(child):
+def _concrete_platform(child: OciDescriptor) -> tuple[str, str] | None:
+    platform = child.platform
+    if platform is None or platform.os is None or platform.architecture is None:
         return None
-    platform = child.get("platform")
-    if not is_mapping(platform):
+    if platform.os == "unknown" or platform.architecture == "unknown":
         return None
-    os_name = platform.get("os")
-    architecture = platform.get("architecture")
-    if not isinstance(os_name, str) or not isinstance(architecture, str):
-        return None
-    if os_name == "unknown" or architecture == "unknown":
-        return None
-    return (os_name, architecture)
+    return (platform.os, platform.architecture)
 
 
-def _child_digest(child: Yaml, subject: str) -> str:
-    if not is_mapping(child):
-        raise RuntimeError(f"{subject}: upstream index child {child!r} must be a manifest descriptor")
-    digest = child.get("digest")
-    if not isinstance(digest, str) or not digest.startswith("sha256:"):
+def _child_digest(child: OciDescriptor, subject: str) -> str:
+    if not child.digest.startswith("sha256:"):
         raise RuntimeError(f"{subject}: upstream index child must carry a digest ({child!r})")
-    return digest
+    return child.digest
 
 
 def compose_env_entries(lock: ConfigLock, config: Config, environment: Mapping[str, str]) -> dict[str, str]:

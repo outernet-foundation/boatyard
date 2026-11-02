@@ -91,6 +91,24 @@ DEV_TOGGLES_ANNOTATION = "outernet.internal/dev-toggles"
 Target = Literal["both", "compose", "k8s"]
 
 
+class UvToolTable(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    required_version: str | None = Field(default=None, alias="required-version")
+
+
+class ToolTable(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    uv: UvToolTable | None = None
+
+
+class PyprojectToml(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    tool: ToolTable | None = None
+
+
 class Config(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -139,13 +157,15 @@ class Config(BaseModel):
         for key in used:
             if key == "uv":
                 pyproject = root / PYPROJECT_PATH
-                tool_document: dict[str, Yaml] = (
+                pyproject_document = PyprojectToml.model_validate(
                     tomllib.loads(pyproject.read_text(encoding="utf-8")) if pyproject.is_file() else {}
                 )
-                tool_table = tool_document.get("tool")
-                uv_table = tool_table.get("uv") if is_mapping(tool_table) else None
-                declared = uv_table.get("required-version") if is_mapping(uv_table) else None
-                if not isinstance(declared, str) or not declared:
+                declared = (
+                    pyproject_document.tool.uv.required_version
+                    if pyproject_document.tool is not None and pyproject_document.tool.uv is not None
+                    else None
+                )
+                if not declared:
                     raise RuntimeError(
                         f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version is not declared; "
                         "the {uv} template requires it"

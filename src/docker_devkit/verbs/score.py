@@ -10,7 +10,7 @@ import typer
 from bashrun.bash import bash, bash_output
 
 from docker_devkit.config import Config, Target
-from docker_devkit.score import generate_artifacts
+from docker_devkit.score import generate_artifacts, rendering_targets
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
@@ -56,10 +56,11 @@ def generate_score(
         raise typer.BadParameter("--local requires a k8s section; this config declares none")
 
     # The pinned tools this run needs at exact versions.
+    renderings = rendering_targets(config, target)
     score_tools: list[tuple[str, str]] = []
-    if target in ("both", "compose"):
+    if "compose" in renderings:
         score_tools.append(("score-compose", config.score_compose_version))
-    if target in ("both", "k8s") and config.k8s is not None:
+    if "k8s" in renderings:
         score_tools.append(("score-k8s", config.score_k8s_version))
     requirements = [
         ToolRequirement(
@@ -71,7 +72,7 @@ def generate_score(
         )
         for binary, version in score_tools
     ]
-    if config.k8s is not None and config.k8s.charts and target in ("both", "k8s"):
+    if "k8s" in renderings and config.k8s is not None and config.k8s.charts:
         version = config.helm_version
         requirements.append(
             ToolRequirement(
