@@ -16,11 +16,11 @@ from pydantic import (
 
 from boatyard.config import (
     CONSUMER_INTERPOLATED_ANNOTATION,
+    ComposeWorkloadDocument,
     EDGE_SERVICE_NAME,
     Yaml,
     double_dollars,
     is_mapping,
-    load_compose_workload,
     Config,
 )
 from boatyard.config_lock import LOCK_PATH
@@ -118,7 +118,6 @@ def generate_compose(
     config: Config,
     images: dict[str, str],
     service_shas: dict[str, str],
-    tool_environment: dict[str, str] | None,
 ) -> None:
     # Refuse the compose target without local service entries.
     bundles = config.compose_bundles()
@@ -131,7 +130,7 @@ def generate_compose(
         # Collect per-workload annotation facts and enforce the compose placement laws.
         interpolated_targets: set[str] = set()
         for name in bundle.workloads:
-            workload = load_compose_workload(score_dir, name)
+            workload = ComposeWorkloadDocument.load(score_dir / name)
             annotations = workload.metadata.annotations
 
             # Track the declared files whose contents ride un-doubled.
@@ -157,7 +156,6 @@ def generate_compose(
             output=output,
             images=images,
             service_shas=service_shas,
-            tool_environment=tool_environment,
             gate=partial(_require_alpine_when_declaring_services, images=images, bundle_name=bundle.name),
         )
 

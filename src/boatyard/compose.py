@@ -16,6 +16,7 @@ from bashrun.bash import bash_output
 from boatyard.config import (
     AUTH_GROUP_NAME,
     CADDY_IMAGE,
+    ComposeWorkloadDocument,
     Config,
     DEV_TOGGLES_ANNOTATION,
     EDGE_SERVICE_NAME,
@@ -26,7 +27,6 @@ from boatyard.config import (
     Yaml,
     double_dollars,
     is_mapping,
-    load_compose_workload,
     parse_dev_toggles,
 )
 from boatyard.config_lock import LOCK_PATH, parse_config_lock
@@ -188,7 +188,7 @@ def select(config: Config, environment: Mapping[str, str]) -> Selection:
     score_dir = config.root / config.score_dir
     for bundle in config.compose_bundles():
         for workload in bundle.workloads:
-            annotations = load_compose_workload(score_dir, workload).metadata.annotations
+            annotations = ComposeWorkloadDocument.load(score_dir / workload).metadata.annotations
             raw = annotations.get(DEV_TOGGLES_ANNOTATION)
             stem = Path(workload).stem
             if raw is None or stem not in output_services:

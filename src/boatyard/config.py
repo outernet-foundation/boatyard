@@ -540,6 +540,10 @@ class WorkloadDocument(BaseModel):
     metadata: WorkloadMetadata = Field(default_factory=WorkloadMetadata)
     containers: dict[str, WorkloadContainer] = Field(default_factory=dict)
 
+    @classmethod
+    def load(cls, path: Path) -> Self:
+        return cls.model_validate(load_yaml_file(path), context={"source": path.name})
+
     @model_validator(mode="after")
     def _require_name_matching_file_stem(self, info: ValidationInfo) -> Self:
         source = info.context.get("source") if info.context is not None else None
@@ -622,14 +626,6 @@ def load_yaml_file(path: Path) -> Yaml:
         return safe_load(path.read_text(encoding="utf-8"))
     except YAMLError as error:
         raise ValueError(f"{path.as_posix()}: {error}") from error
-
-
-def load_workload(score_dir: Path, name: str) -> WorkloadDocument:
-    return WorkloadDocument.model_validate(load_yaml_file(score_dir / name), context={"source": name})
-
-
-def load_compose_workload(score_dir: Path, name: str) -> ComposeWorkloadDocument:
-    return ComposeWorkloadDocument.model_validate(load_yaml_file(score_dir / name), context={"source": name})
 
 
 def require_compose_stack(config: Config | None) -> Config:

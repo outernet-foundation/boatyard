@@ -15,12 +15,12 @@ from pydantic import (
 from boatyard.config import (
     DEV_TOGGLES_ANNOTATION,
     K8sConfig,
+    WorkloadDocument,
     Yaml,
     Config,
     chart_lock_key,
     is_list,
     is_mapping,
-    load_workload,
 )
 from boatyard.config_lock import ConfigLock
 from boatyard.lock import env_entries
@@ -64,7 +64,6 @@ def generate_k8s(
     lock: ConfigLock,
     service_shas: dict[str, str],
     storage_class: str,
-    tool_environment: dict[str, str] | None,
 ) -> None:
     # Run score-k8s in the output's directory, where it writes its .score-k8s state.
     images = env_entries(lock)
@@ -76,7 +75,7 @@ def generate_k8s(
     for name in k8s.workloads:
         if name in compose_workloads:
             continue
-        k8s_annotations = load_workload(score_dir, name).metadata.annotations
+        k8s_annotations = WorkloadDocument.load(score_dir / name).metadata.annotations
         if DEV_TOGGLES_ANNOTATION in k8s_annotations:
             raise ValueError(
                 f"{name}: {DEV_TOGGLES_ANNOTATION} is compose dev-overlay vocabulary; this workload renders k8s-only"
@@ -91,7 +90,6 @@ def generate_k8s(
         output=output_path,
         images=images,
         service_shas=service_shas,
-        tool_environment=tool_environment,
     )
 
     # Render the charts through helm template.
@@ -115,7 +113,7 @@ def generate_k8s(
                     write_generated_file(target, dump_compose(resolved))
                     values_arguments.append(target.as_posix())
                 values = "".join(f" --values {argument}" for argument in values_arguments)
-                rendered = bash_output(f"helm template {chart_name} oci://{entry}{values}", env=tool_environment)
+                rendered = bash_output(f"helm template {chart_name} oci://{entry}{values}")
                 chart_blocks.extend(split_documents(rendered))
         write_generated_file(
             output_path,

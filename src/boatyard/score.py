@@ -29,9 +29,9 @@ from boatyard.config import (
     Yaml,
     is_list,
     is_mapping,
-    load_workload,
     load_yaml_file,
     Config,
+    WorkloadDocument,
 )
 
 PATCH_TEMPLATES_DIR = "patch_templates"
@@ -149,7 +149,6 @@ def render_score(
     output: Path,
     images: dict[str, str],
     service_shas: dict[str, str],
-    tool_environment: dict[str, str] | None,
     gate: Callable[[CompiledProvisioners], None] | None = None,
 ) -> None:
     # Derive the per-substrate names and create the output parent.
@@ -235,7 +234,7 @@ def render_score(
             for name in templates
         )
         project = f" --project {project_name}" if project_name is not None else ""
-        bash(f"{tool} init{project} --no-sample{flags}", cwd=working_dir, env=tool_environment)
+        bash(f"{tool} init{project} --no-sample{flags}", cwd=working_dir)
 
         # Pre-seed each workload's instance suffix so generated names are deterministic.
         if is_k8s:
@@ -248,7 +247,7 @@ def render_score(
                 entries = {}
                 state["workloads"] = entries
             for name in workloads:
-                workload_name = load_workload(score_dir, name).metadata.name
+                workload_name = WorkloadDocument.load(score_dir / name).metadata.name
                 if not workload_name:
                     continue
                 entry = entries.get(workload_name)
@@ -260,7 +259,7 @@ def render_score(
 
         # Render the expanded workload copies and run generate.
         with rendered_workloads(config, workloads, rendering_vars, images, service_shas) as rendered:
-            bash(f"{tool} generate {rendered} --output {output.as_posix()}", cwd=working_dir, env=tool_environment)
+            bash(f"{tool} generate {rendered} --output {output.as_posix()}", cwd=working_dir)
 
 
 def resolve_markers(
