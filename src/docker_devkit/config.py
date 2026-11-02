@@ -6,12 +6,12 @@ import tomllib
 from itertools import chain
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
-from typing import Literal, NamedTuple, Self, TypeIs
+from typing import Annotated, Literal, NamedTuple, Self, TypeIs
 
 import pathspec
 from bashrun.bash import bash, bash_output
 from packaging.specifiers import SpecifierSet
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 from strictyaml import load as load_strict_yaml
 
 from docker_devkit.config_lock import (
@@ -31,6 +31,15 @@ PYPROJECT_PATH = Path("pyproject.toml")
 PYTHON_VERSION_PATH = Path(".python-version")
 
 ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+def _require_port_or_hole(value: str) -> str:
+    if PORT_PATTERN.fullmatch(value) is None and ENV_HOLE_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"{value!r} must be a literal port number or a ${{…}} env hole")
+    return value
+
+
+PortOrHole = Annotated[str, AfterValidator(_require_port_or_hole)]
 
 # Match path:tag or path@digest.
 DECLARED_REFERENCE_PATTERN = re.compile(
@@ -64,7 +73,7 @@ class DockerDevkitConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     requires: str
-    gateway: str | None = None
+    gateway: PortOrHole | None = None
     repository: str | None = None
     base_images: dict[str, str] = Field(default_factory=dict)
     variants: dict[str, list[str]] = Field(default_factory=dict)
@@ -124,13 +133,6 @@ class DockerDevkitConfig(BaseModel):
         if not value:
             raise ValueError("requires must be a non-empty PEP 440 specifier")
         SpecifierSet(value)
-        return value
-
-    @field_validator("gateway")
-    @classmethod
-    def _validate_gateway(cls, value: str | None) -> str | None:
-        if value is not None and PORT_PATTERN.fullmatch(value) is None and ENV_HOLE_PATTERN.fullmatch(value) is None:
-            raise ValueError(f"gateway {value!r} must be a literal port number or a ${{…}} env hole")
         return value
 
     @field_validator("repository")
@@ -324,18 +326,10 @@ class PortDeclaration(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     service: str
-    published: str
-    target: str
+    published: PortOrHole
+    target: PortOrHole
     protocol: Literal["tcp", "udp"] = "tcp"
     host_ip: str | None = None
-
-    @model_validator(mode="after")
-    def _validate(self) -> Self:
-        for field_name in ("published", "target"):
-            value = getattr(self, field_name)
-            if PORT_PATTERN.fullmatch(value) is None and ENV_HOLE_PATTERN.fullmatch(value) is None:
-                raise ValueError(f"ports {field_name} {value!r} must be a literal port number or a ${{…}} env hole")
-        return self
 
 
 class K8sConfig(BaseModel):
