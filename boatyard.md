@@ -79,8 +79,8 @@ their own prose commits, never mixed with code (see "Commit discipline").
 - `git mv src/docker_devkit src/boatyard`.
 - Every intra-package import `from docker_devkit...` → `from boatyard...` across `src/` and
   `tests/` (absolute-import law unchanged).
-- Test package-data references: `files("docker_devkit")` → `files("boatyard")`
-  (tests/test_score_generate.py, three sites around the patch_templates reads).
+- Package-data references: `files("docker_devkit")` → `files("boatyard")` (score.py
+  one site; tests/test_score_generate.py six sites around the patch_templates reads).
 - `pyproject.toml`: `name = "boatyard"`, `version = "0.6.0"`, description updated to the
   compiler framing; `[tool.hatch.build.targets.wheel] packages = ["src/boatyard"]`;
    `[project.scripts]` collapses to the single line `boatyard = "boatyard.cli:app"`.
@@ -91,7 +91,7 @@ their own prose commits, never mixed with code (see "Commit discipline").
 - Delete `src/boatyard/verbs/entry.py`.
 - Drop `@entry` + its import from all 9 verb modules (the decorator stack
   `@app.command()` + `@entry` collapses with the single-app step anyway).
-- Test audit — the 36 `assert isinstance(result.exception, SystemExit)` sites split into:
+- Test audit — the 30 `assert isinstance(result.exception, SystemExit)` sites split into:
   - `ValueError` paths (were converted by `@entry` → `SystemExit`): retarget to
     `isinstance(result.exception, ValueError)`. `str(result.exception)` message assertions
     keep passing unchanged.
