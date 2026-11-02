@@ -3,7 +3,6 @@ from __future__ import annotations
 import importlib.metadata
 import re
 import tomllib
-from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import Literal, NamedTuple, Self, TypeIs
@@ -64,10 +63,6 @@ ARG_LINE_PATTERN = re.compile(r"^ARG\s+([A-Za-z_][A-Za-z0-9_]*)")
 COPY_FROM_LINE_PATTERN = re.compile(r"^COPY\s+--from=(\S+)", re.IGNORECASE)
 BARE_IDENTIFIER_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 BUILD_ARG_REFERENCE_PATTERN = re.compile(r"^\$\{[A-Za-z0-9_]+\}$")
-
-# The compose-edge platform selector, read from the merged shell-over-.env view (the
-# COMPOSE_PROFILES precedence); never host introspection.
-PLATFORM_VARIABLE = "PLATFORM"
 
 Target = Literal["both", "compose", "k8s"]
 
@@ -316,26 +311,6 @@ class DockerDevkitConfig(BaseModel):
     @property
     def declared_charts(self) -> dict[str, str]:
         return self.k8s.charts if self.k8s is not None else {}
-
-    def select_platform(self, environment: Mapping[str, str]) -> str | None:
-        # Declaration-driven platform selection: a singleton selects itself, a multi-platform
-        # repo names PLATFORM= in .env (shell env overriding), and a set value outside the
-        # declared set refuses. None answers only a repo declaring no platforms at all.
-        selected = environment.get(PLATFORM_VARIABLE, "").strip()
-        if selected:
-            if selected not in self.platforms:
-                raise RuntimeError(
-                    f"{PLATFORM_VARIABLE}={selected!r} matches none of this repo's declared platforms {self.platforms}"
-                )
-            return selected
-        if not self.platforms:
-            return None
-        if len(self.platforms) == 1:
-            return self.platforms[0]
-        raise RuntimeError(
-            f"this repo declares the platforms {self.platforms}; name {PLATFORM_VARIABLE}= in .env "
-            "to select the compose edge's platform"
-        )
 
     def score_dir_path(self) -> Path:
         assert self.root is not None

@@ -31,6 +31,10 @@ from docker_devkit.config_lock import (
 DIGEST_TAIL_PATTERN = re.compile(rf"@{SHA256_DIGEST_REGEX}$")
 DIGEST_PATTERN = re.compile(r"^Digest:\s+(sha256:[a-f0-9]+)", re.MULTILINE)
 
+# The compose-edge platform selector, read from the merged shell-over-.env view (the
+# COMPOSE_PROFILES precedence); never host introspection.
+PLATFORM_VARIABLE = "PLATFORM"
+
 
 class UpstreamManifests(NamedTuple):
     index_digest: str
@@ -216,10 +220,29 @@ def _child_digest(child: object, subject: str) -> str:
 
 
 def compose_env_entries(lock: ImageLock, config: DockerDevkitConfig, environment: Mapping[str, str]) -> dict[str, str]:
-    # The compose-edge projection: the platform manifests of the declaration-selected
-    # platform. A lock recording images against a config declaring no platforms is a
-    # desync the construction rules out — the refusal names the rewrite.
-    platform = config.select_platform(environment)
+    # The compose-edge projection: the platform manifests of the selected platform. The
+    # selection law: a declared singleton selects itself, a multi-platform repo names
+    # PLATFORM= in .env (shell env overriding; a missing, empty, or undeclared value
+    # refuses loudly listing the declared platforms), and None answers only a repo
+    # declaring no platforms — never host introspection. A lock recording images against
+    # a config declaring no platforms is a desync the construction rules out — the
+    # refusal names the rewrite.
+    selected = environment.get(PLATFORM_VARIABLE, "").strip()
+    if selected:
+        if selected not in config.platforms:
+            raise RuntimeError(
+                f"{PLATFORM_VARIABLE}={selected!r} matches none of this repo's declared platforms {config.platforms}"
+            )
+        platform: str | None = selected
+    elif not config.platforms:
+        platform = None
+    elif len(config.platforms) == 1:
+        platform = config.platforms[0]
+    else:
+        raise RuntimeError(
+            f"this repo declares the platforms {config.platforms}; name {PLATFORM_VARIABLE}= in .env "
+            "to select the compose edge's platform"
+        )
     if platform is None and lock.images:
         raise RuntimeError(
             f"{LOCK_PATH.as_posix()}: records image entries but docker-devkit.yaml declares no platforms; "

@@ -739,24 +739,32 @@ class TestPlatformSelectionLaw:
     def test_a_singleton_selects_itself_without_reading_the_environment(self) -> None:
         config = _selection_config(platforms=["linux/amd64"])
 
-        assert config.select_platform({"PLATFORM": ""}) == "linux/amd64"
+        entries = lock_module.compose_env_entries(_selection_lock(), config, {"PLATFORM": ""})
+
+        assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_B}")
 
     def test_a_multi_platform_repo_selects_the_named_platform(self) -> None:
         config = _selection_config(platforms=["linux/amd64", "linux/arm64"])
 
-        assert config.select_platform({"PLATFORM": "linux/arm64"}) == "linux/arm64"
+        entries = lock_module.compose_env_entries(_selection_lock(), config, {"PLATFORM": "linux/arm64"})
+
+        assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_C}")
 
     def test_a_multi_platform_repo_without_a_selection_refuses_listing_declared(self) -> None:
         config = _selection_config(platforms=["linux/amd64", "linux/arm64"])
 
         with pytest.raises(RuntimeError, match=r"declares the platforms \['linux/amd64', 'linux/arm64'\].*PLATFORM="):
-            config.select_platform({})
+            lock_module.compose_env_entries(_selection_lock(), config, {})
 
     def test_an_undeclared_selection_refuses_listing_declared(self) -> None:
         config = _selection_config(platforms=["linux/amd64"])
 
         with pytest.raises(RuntimeError, match=r"matches none of this repo's declared platforms \['linux/amd64'\]"):
-            config.select_platform({"PLATFORM": "linux/arm64"})
+            lock_module.compose_env_entries(_selection_lock(), config, {"PLATFORM": "linux/arm64"})
 
     def test_a_platform_less_declaring_repo_answers_none(self) -> None:
-        assert _selection_config().select_platform({}) is None
+        charts_only = lock_module.ImageLock(charts={"GRAFANA_CHART": f"{MIRROR_PREFIX}/ghcr.io/grafana/chart@{DIGEST_A}"})
+
+        entries = lock_module.compose_env_entries(charts_only, _selection_config(), {})
+
+        assert entries == {"GRAFANA_CHART": f"{MIRROR_PREFIX}/ghcr.io/grafana/chart@{DIGEST_A}"}
