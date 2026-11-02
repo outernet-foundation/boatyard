@@ -41,6 +41,15 @@ def _require_port_or_hole(value: str) -> str:
 
 PortOrHole = Annotated[str, AfterValidator(_require_port_or_hole)]
 
+
+def _require_all_caps_name(value: str) -> str:
+    if ENV_NAME_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"{value!r} must be an ALL_CAPS env name")
+    return value
+
+
+AllCapsName = Annotated[str, AfterValidator(_require_all_caps_name)]
+
 # Match path:tag or path@digest.
 DECLARED_REFERENCE_PATTERN = re.compile(
     rf"^(?P<path>[^:@\s$]+)(?::(?P<tag>[^@\s$]+))?(?:@(?P<digest>{SHA256_DIGEST_REGEX}))?$"
@@ -75,8 +84,8 @@ class DockerDevkitConfig(BaseModel):
     requires: str
     gateway: PortOrHole | None = None
     repository: str | None = None
-    base_images: dict[str, str] = Field(default_factory=dict)
-    variants: dict[str, list[str]] = Field(default_factory=dict)
+    base_images: dict[AllCapsName, str] = Field(default_factory=dict)
+    variants: dict[AllCapsName, list[str]] = Field(default_factory=dict)
     platforms: list[str] = Field(default_factory=list)
     project_name: str | None = None
     services: dict[str, ServiceGroup | ServiceEntry] = Field(default_factory=dict)
@@ -148,10 +157,8 @@ class DockerDevkitConfig(BaseModel):
 
     @field_validator("base_images")
     @classmethod
-    def _validate_base_images(cls, value: dict[str, str]) -> dict[str, str]:
+    def _validate_base_images(cls, value: dict[AllCapsName, str]) -> dict[AllCapsName, str]:
         for name, reference in value.items():
-            if ENV_NAME_PATTERN.fullmatch(name) is None:
-                raise ValueError(f"base_images key {name!r} must be an ALL_CAPS env name")
             match = DECLARED_REFERENCE_PATTERN.fullmatch(reference)
             if match is None or not (match.group("tag") or match.group("digest")):
                 raise ValueError(f"base_images.{name}: {reference!r} must be 'path:tag' or 'path@digest'")
@@ -159,10 +166,8 @@ class DockerDevkitConfig(BaseModel):
 
     @field_validator("variants")
     @classmethod
-    def _validate_variants(cls, value: dict[str, list[str]]) -> dict[str, list[str]]:
+    def _validate_variants(cls, value: dict[AllCapsName, list[str]]) -> dict[AllCapsName, list[str]]:
         for axis, values in value.items():
-            if ENV_NAME_PATTERN.fullmatch(axis) is None:
-                raise ValueError(f"variants key {axis!r} must be an ALL_CAPS ARG name")
             if not values:
                 raise ValueError(f"variants.{axis}: must declare at least one value")
             seen: set[str] = set()

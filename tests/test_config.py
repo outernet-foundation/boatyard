@@ -161,7 +161,7 @@ class TestVariants:
     def test_lowercase_axis_name_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "variants": {"torch_device": ["cuda"]}})
 
-        with pytest.raises(ValidationError, match="ALL_CAPS ARG name"):
+        with pytest.raises(ValidationError, match="ALL_CAPS env name"):
             load_config(tmp_path)
 
     def test_duplicate_values_rejected(self, tmp_path: Path) -> None:
