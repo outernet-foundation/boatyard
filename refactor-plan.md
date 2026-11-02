@@ -26,7 +26,7 @@ Tick a phase only after its final commit and a green verification trio;
 - [x] Phase 7 — dedup: score/publish/config + 2.5 + 2.7
 - [x] Phase 8 — inline wave + 2.9
 - [x] Phase 9 — dead code + validation timing
-- [ ] Phase 10 — ordering, naming, micro
+- [x] Phase 10 — ordering, naming, micro
 
 The import graph after all folds is verified cycle-free: `service_builds.py`,
 `image_refs.py`, `markers.py` have zero internal imports today;
