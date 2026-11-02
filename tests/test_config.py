@@ -629,7 +629,7 @@ class TestServices:
             load_config(tmp_path)
 
     def test_an_empty_workloads_list_refuses(self) -> None:
-        with pytest.raises(ValidationError, match="at least one workload"):
+        with pytest.raises(ValidationError, match="never neither"):
             DockerDevkitConfig.model_validate({
                 "requires": ">=0.1",
                 "repository": "ghcr.io/org/repo",

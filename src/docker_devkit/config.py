@@ -12,7 +12,7 @@ import pathspec
 import yaml
 from bashrun.bash import bash, bash_output
 from packaging.specifiers import SpecifierSet
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from strictyaml import load as load_strict_yaml
 
 from docker_devkit.config_lock import (
@@ -126,7 +126,7 @@ class ServiceBuild(BaseModel):
     dev_stage: bool = False
 
     @model_validator(mode="after")
-    def _axis_pairs_with_variants(self) -> Self:
+    def _validate(self) -> Self:
         if (self.axis is None) != (not self.variants):
             raise ValueError("axis and variants declare together; an axis-bearing service carries its declared values")
         return self
@@ -156,22 +156,12 @@ class RouteConfig(BaseModel):
     strip_prefix: bool = False
     raw: str | None = None
 
-    @field_validator("path")
-    @classmethod
-    def _require_route_path(cls, path: str) -> str:
-        if re.fullmatch(r"(?:/\*|/(?:[^/\s*]+(?:/[^/\s*]+)*)?(?:/\*)?)", path) is None:
-            raise ValueError(f"route path {path!r} must be a /-rooted segment chain, optionally wildcarded as …/*")
-        return path
-
-    @field_validator("upstream")
-    @classmethod
-    def _require_upstream(cls, upstream: str) -> str:
-        if re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*:[0-9]+", upstream) is None:
-            raise ValueError(f"route upstream {upstream!r} must be a service name and a literal port (grafana:3000)")
-        return upstream
-
     @model_validator(mode="after")
-    def _strip_prefix_needs_a_wildcard(self) -> Self:
+    def _validate(self) -> Self:
+        if re.fullmatch(r"(?:/\*|/(?:[^/\s*]+(?:/[^/\s*]+)*)?(?:/\*)?)", self.path) is None:
+            raise ValueError(f"route path {self.path!r} must be a /-rooted segment chain, optionally wildcarded as …/*")
+        if re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*:[0-9]+", self.upstream) is None:
+            raise ValueError(f"route upstream {self.upstream!r} must be a service name and a literal port (grafana:3000)")
         if self.strip_prefix and not self.path.endswith("/*"):
             raise ValueError(f"route {self.path}: strip_prefix strips a wildcard prefix; the path must end in /*")
         return self
@@ -189,15 +179,16 @@ class PortDeclaration(BaseModel):
     protocol: Literal["tcp", "udp"] = "tcp"
     host_ip: str | None = None
 
-    @field_validator("published", "target")
-    @classmethod
-    def _numeric_or_hole(cls, value: str, info: ValidationInfo) -> str:
-        if PORT_PATTERN.fullmatch(value) is None and ENV_HOLE_PATTERN.fullmatch(value) is None:
-            raise ValueError(
-                f"ports {info.field_name} {value!r} must be a literal port number or a ${{…}} env hole "
-                "(published and target may both be holes)"
-            )
-        return value
+    @model_validator(mode="after")
+    def _validate(self) -> Self:
+        for field_name in ("published", "target"):
+            value = getattr(self, field_name)
+            if PORT_PATTERN.fullmatch(value) is None and ENV_HOLE_PATTERN.fullmatch(value) is None:
+                raise ValueError(
+                    f"ports {field_name} {value!r} must be a literal port number or a ${{…}} env hole "
+                    "(published and target may both be holes)"
+                )
+        return self
 
 
 class ServiceEntry(BaseModel):
@@ -216,25 +207,10 @@ class ServiceEntry(BaseModel):
     def remote(self) -> bool:
         return self.ref is not None
 
-    @field_validator("ref")
-    @classmethod
-    def _require_digest_pinned_ref(cls, ref: str | None) -> str | None:
-        if ref is not None and re.fullmatch(rf"oci://\S+@{SHA256_DIGEST_REGEX}", ref) is None:
-            raise ValueError(f"ref {ref!r} must be a digest-pinned OCI include (oci://…@sha256:…)")
-        return ref
-
-    @field_validator("workloads")
-    @classmethod
-    def _require_workloads(cls, workloads: list[str]) -> list[str]:
-        if not workloads:
-            raise ValueError("a local entry carries at least one workload; it renders and publishes an artifact")
-        for name in workloads:
-            if not name:
-                raise ValueError("workload names must be non-empty")
-        return workloads
-
     @model_validator(mode="after")
-    def _exactly_one_source(self) -> Self:
+    def _validate(self) -> Self:
+        if self.ref is not None and re.fullmatch(rf"oci://\S+@{SHA256_DIGEST_REGEX}", self.ref) is None:
+            raise ValueError(f"ref {self.ref!r} must be a digest-pinned OCI include (oci://…@sha256:…)")
         if self.ref is not None and self.workloads:
             raise ValueError("an entry is either ref: or workloads: — exactly one source, never both")
         if self.ref is None and not self.workloads:
@@ -243,6 +219,9 @@ class ServiceEntry(BaseModel):
             )
         if self.ref is not None and self.vars:
             raise ValueError("vars fill local workload renderings; a ref carries its producer's vars")
+        for name in self.workloads:
+            if not name:
+                raise ValueError("workload names must be non-empty")
         return self
 
 
@@ -263,10 +242,9 @@ class K8sConfig(BaseModel):
     vars: dict[str, str] = Field(default_factory=dict)
     charts: dict[str, str] = Field(default_factory=dict)
 
-    @field_validator("charts")
-    @classmethod
-    def _require_upstream_native_refs(cls, charts: dict[str, str]) -> dict[str, str]:
-        for name, reference in charts.items():
+    @model_validator(mode="after")
+    def _validate(self) -> Self:
+        for name, reference in self.charts.items():
             if not name:
                 raise ValueError("chart names must be non-empty")
             if not reference.startswith(CHART_REFERENCE_PREFIX):
@@ -280,10 +258,6 @@ class K8sConfig(BaseModel):
                 raise ValueError(
                     f"charts.{name}: {reference!r} must carry a tag or a digest; a bare path or a ${{…}} hole refuses"
                 )
-        return charts
-
-    @model_validator(mode="after")
-    def _require_a_rendering(self) -> Self:
         if not (self.workloads or self.charts):
             raise ValueError("the k8s section declares neither workloads nor charts; remove it")
         return self
@@ -508,95 +482,6 @@ class DockerDevkitConfig(BaseModel):
             for (_axis, cell), targets in sorted(entries_by_variant.items(), key=lambda item: item[0][1])
         ]
 
-    def _route_sites(self) -> list[tuple[str, RouteConfig]]:
-        # Every route with its declaration site, in services declaration order — a group's
-        # options first, then its own riding routes.
-        return [
-            (where, route)
-            for name, entry in self.services.items()
-            for where, entry_routes in (
-                [(f"services.{name}", entry.routes)]
-                if not isinstance(entry, ServiceGroup)
-                else [
-                    (f"services.{name}.options.{option_name}", option.routes)
-                    for option_name, option in entry.options.items()
-                ]
-                + [(f"services.{name}", entry.routes)]
-            )
-            for route in entry_routes
-        ]
-
-    @field_validator("requires")
-    @classmethod
-    def _validate_requires(cls, value: str) -> str:
-        if not value:
-            raise ValueError("requires must be a non-empty PEP 440 specifier; use '>=0.0' for no constraint")
-        SpecifierSet(value)
-        return value
-
-    @field_validator("gateway")
-    @classmethod
-    def _require_port_or_hole(cls, gateway: str | None) -> str | None:
-        if gateway is None:
-            return gateway
-        if PORT_PATTERN.fullmatch(gateway) is None and ENV_HOLE_PATTERN.fullmatch(gateway) is None:
-            raise ValueError(f"gateway {gateway!r} must be a literal port number or a ${{…}} env hole")
-        return gateway
-
-    @field_validator("repository")
-    @classmethod
-    def _require_registry_repository(cls, repository: str | None) -> str | None:
-        if repository is None:
-            return repository
-        host, separator, path = repository.partition("/")
-        if not separator or not host or not path or repository.endswith("/"):
-            raise ValueError(
-                "repository must be registry-host/repository-path with no trailing slash (ghcr.io/org/repo)"
-            )
-        return repository
-
-    @field_validator("base_images")
-    @classmethod
-    def _require_tag_or_digest(cls, base_images: dict[str, str]) -> dict[str, str]:
-        for name, reference in base_images.items():
-            if ENV_NAME_PATTERN.fullmatch(name) is None:
-                raise ValueError(f"base_images key {name!r} must be an ALL_CAPS env name; it becomes a build arg")
-            match = DECLARED_REFERENCE_PATTERN.fullmatch(reference)
-            if match is None or not (match.group("tag") or match.group("digest")):
-                raise ValueError(f"base_images.{name}: {reference!r} must be 'path:tag' or 'path@digest'")
-        return base_images
-
-    @field_validator("variants")
-    @classmethod
-    def _require_declared_axes(cls, variants: dict[str, list[str]]) -> dict[str, list[str]]:
-        # Value sets and defaults are declared, never probed: the first value is the
-        # default cell, and the values ride target names and --targets cells.
-        for axis, values in variants.items():
-            if ENV_NAME_PATTERN.fullmatch(axis) is None:
-                raise ValueError(f"variants key {axis!r} must be an ALL_CAPS ARG name; it names the receiver ARG")
-            if not values:
-                raise ValueError(
-                    f"variants.{axis}: an axis declares at least one value; the first value is the default cell"
-                )
-            seen: set[str] = set()
-            for value in values:
-                if re.fullmatch(r"[a-z0-9][a-z0-9_-]*", value) is None:
-                    raise ValueError(
-                        f"variants.{axis}: value {value!r} must be a bare lowercase spelling like cuda; it rides target names"
-                    )
-                if value in seen:
-                    raise ValueError(f"variants.{axis}: value {value!r} is declared twice")
-                seen.add(value)
-        return variants
-
-    @field_validator("platforms")
-    @classmethod
-    def _require_arch_pairs(cls, platforms: list[str]) -> list[str]:
-        for platform in platforms:
-            if PLATFORM_PATTERN.fullmatch(platform) is None:
-                raise ValueError(f"platforms entry {platform!r} must be an os/arch pair like linux/arm64")
-        return platforms
-
     @field_validator("services", mode="before")
     @classmethod
     def _coerce_services(cls, services: object) -> object:
@@ -625,15 +510,59 @@ class DockerDevkitConfig(BaseModel):
                 _coerce_port_strings(f"services.{name}", raw_entry, name, bare_legal=True)
         return services
 
-    @field_validator("mirror_prefix")
-    @classmethod
-    def _require_bare_prefix(cls, mirror_prefix: str) -> str:
-        if not mirror_prefix or mirror_prefix.endswith("/"):
-            raise ValueError("mirror prefix must be non-empty and carry no trailing slash")
-        return mirror_prefix
-
     @model_validator(mode="after")
-    def _require_flat_vocabulary(self) -> Self:
+    def _validate(self) -> Self:
+        if not self.requires:
+            raise ValueError("requires must be a non-empty PEP 440 specifier; use '>=0.0' for no constraint")
+        SpecifierSet(self.requires)
+
+        if (
+            self.gateway is not None
+            and PORT_PATTERN.fullmatch(self.gateway) is None
+            and ENV_HOLE_PATTERN.fullmatch(self.gateway) is None
+        ):
+            raise ValueError(f"gateway {self.gateway!r} must be a literal port number or a ${{…}} env hole")
+
+        if self.repository is not None:
+            host, separator, path = self.repository.partition("/")
+            if not separator or not host or not path or self.repository.endswith("/"):
+                raise ValueError(
+                    "repository must be registry-host/repository-path with no trailing slash (ghcr.io/org/repo)"
+                )
+
+        for name, reference in self.base_images.items():
+            if ENV_NAME_PATTERN.fullmatch(name) is None:
+                raise ValueError(f"base_images key {name!r} must be an ALL_CAPS env name; it becomes a build arg")
+            match = DECLARED_REFERENCE_PATTERN.fullmatch(reference)
+            if match is None or not (match.group("tag") or match.group("digest")):
+                raise ValueError(f"base_images.{name}: {reference!r} must be 'path:tag' or 'path@digest'")
+
+        # Value sets and defaults are declared, never probed: the first value is the
+        # default cell, and the values ride target names and --targets cells.
+        for axis, values in self.variants.items():
+            if ENV_NAME_PATTERN.fullmatch(axis) is None:
+                raise ValueError(f"variants key {axis!r} must be an ALL_CAPS ARG name; it names the receiver ARG")
+            if not values:
+                raise ValueError(
+                    f"variants.{axis}: an axis declares at least one value; the first value is the default cell"
+                )
+            seen: set[str] = set()
+            for value in values:
+                if re.fullmatch(r"[a-z0-9][a-z0-9_-]*", value) is None:
+                    raise ValueError(
+                        f"variants.{axis}: value {value!r} must be a bare lowercase spelling like cuda; it rides target names"
+                    )
+                if value in seen:
+                    raise ValueError(f"variants.{axis}: value {value!r} is declared twice")
+                seen.add(value)
+
+        for platform in self.platforms:
+            if PLATFORM_PATTERN.fullmatch(platform) is None:
+                raise ValueError(f"platforms entry {platform!r} must be an os/arch pair like linux/arm64")
+
+        if not self.mirror_prefix or self.mirror_prefix.endswith("/"):
+            raise ValueError("mirror prefix must be non-empty and carry no trailing slash")
+
         # Entry and option names share one flat vocabulary.
         entry_names = set(self.services)
         claimed: set[str] = set()
@@ -646,23 +575,32 @@ class DockerDevkitConfig(BaseModel):
                             f"{option_name} is already taken"
                         )
                     claimed.add(option_name)
-        return self
 
-    @model_validator(mode="after")
-    def _require_unique_route_paths(self) -> Self:
-        # Route paths are edge-wide unique.
+        # Every route with its declaration site, in services declaration order — a group's
+        # options first, then its own riding routes.
+        route_sites = [
+            (where, route)
+            for name, entry in self.services.items()
+            for where, entry_routes in (
+                [(f"services.{name}", entry.routes)]
+                if not isinstance(entry, ServiceGroup)
+                else [
+                    (f"services.{name}.options.{option_name}", option.routes)
+                    for option_name, option in entry.options.items()
+                ]
+                + [(f"services.{name}", entry.routes)]
+            )
+            for route in entry_routes
+        ]
         owner: dict[str, str] = {}
-        for where, route in self._route_sites():
+        for where, route in route_sites:
             if route.path in owner:
                 raise ValueError(
                     f"{where}: route path {route.path} is already declared at {owner[route.path]}; "
                     "paths are edge-wide unique"
                 )
             owner[route.path] = where
-        return self
 
-    @model_validator(mode="after")
-    def _require_auth_shape(self) -> Self:
         # Auth is a reserved group name; an auth option declares exactly one route — its
         # upstream is the auth entry point the edge forwards headers for.
         if AUTH_GROUP_NAME in self.services:
@@ -675,20 +613,14 @@ class DockerDevkitConfig(BaseModel):
                         f"services.{AUTH_GROUP_NAME}.options.{option_name}: an auth option declares exactly one "
                         "route; its upstream is the auth entry point the edge forwards headers for"
                     )
-        return self
 
-    @model_validator(mode="after")
-    def _require_gateway_pairing(self) -> Self:
         # The edge emits iff any route rides anywhere.
-        any_route = any(self._route_sites())
+        any_route = any(route_sites)
         if any_route and self.gateway is None:
             raise ValueError("routes are declared; gateway (the edge's host port) is required")
         if not any_route and self.gateway is not None:
             raise ValueError("gateway is declared but no route exists anywhere; the edge would never emit")
-        return self
 
-    @model_validator(mode="after")
-    def _require_project_pairings(self) -> Self:
         if self.services:
             if not self.project_name:
                 raise ValueError("services are declared; project_name is required (the compose project name)")
@@ -705,11 +637,8 @@ class DockerDevkitConfig(BaseModel):
                     "local entries (workloads:) are declared; repository is required — published artifacts "
                     "derive their names from it"
                 )
-        return self
 
-    @model_validator(mode="after")
-    def _require_platforms_with_base_images(self) -> Self:
-        # The rule guards lock resolution: one platform manifest per declared os/arch.
+        # The platforms rule guards lock resolution: one platform manifest per declared os/arch.
         # Charts are arch-neutral and exempt; built services alone never force it.
         if self.base_images and not self.platforms:
             raise ValueError(

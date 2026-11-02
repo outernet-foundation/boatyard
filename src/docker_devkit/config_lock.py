@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Self
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 
 # The lock pairs with the root config at the repo root: build keys declared
 # (base_images or charts) => the committed lock is required.
@@ -22,20 +22,17 @@ class ImageLockEntry(BaseModel):
     index: str
     platforms: dict[str, str] = Field(default_factory=dict)
 
-    @field_validator("index", "platforms")
-    @classmethod
-    def _require_digest_pins(cls, value: str | dict[str, str], info: ValidationInfo) -> str | dict[str, str]:
+    @model_validator(mode="after")
+    def _require_digest_pins(self, info: ValidationInfo) -> Self:
         context: dict[str, object] = info.context or {}
         source = context.get("path", "the image lock")
-        pins = value.items() if isinstance(value, dict) else [(info.field_name, value)]
-        for site, reference in pins:
+        for site, reference in [("index", self.index), *self.platforms.items()]:
             if not reference.rpartition("@")[2].startswith("sha256:"):
                 raise ValueError(f"{source}: entry field {site} is not digest-pinned ({reference!r})")
-        if isinstance(value, dict):
-            for platform in value:
-                if PLATFORM_PATTERN.fullmatch(platform) is None:
-                    raise ValueError(f"{source}: platform key {platform!r} must be an os/arch pair like linux/arm64")
-        return value
+        for platform in self.platforms:
+            if PLATFORM_PATTERN.fullmatch(platform) is None:
+                raise ValueError(f"{source}: platform key {platform!r} must be an os/arch pair like linux/arm64")
+        return self
 
     @property
     def recorded_digests(self) -> list[str]:
@@ -51,20 +48,14 @@ class ImageLock(BaseModel):
     images: dict[str, ImageLockEntry] = Field(default_factory=dict)
     charts: dict[str, str] = Field(default_factory=dict)
 
-    @field_validator("charts")
-    @classmethod
-    def _require_digest_pinned_charts(cls, charts: dict[str, str], info: ValidationInfo) -> dict[str, str]:
+    @model_validator(mode="after")
+    def _validate(self, info: ValidationInfo) -> Self:
         context: dict[str, object] = info.context or {}
-        for name, reference in charts.items():
+        for name, reference in self.charts.items():
             if not reference.rpartition("@")[2].startswith("sha256:"):
                 raise ValueError(
                     f"{context.get('path', 'the image lock')}: chart {name} is not digest-pinned ({reference!r})"
                 )
-        return charts
-
-    @model_validator(mode="after")
-    def _require_one_flat_vocabulary(self, info: ValidationInfo) -> Self:
-        context: dict[str, object] = info.context or {}
         shared = sorted(self.images.keys() & self.charts.keys())
         if shared:
             raise ValueError(
