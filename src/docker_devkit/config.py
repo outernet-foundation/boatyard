@@ -11,7 +11,7 @@ from typing import Annotated, Literal, NamedTuple, Self, TypeIs
 import pathspec
 from bashrun.bash import bash, bash_output
 from packaging.specifiers import SpecifierSet
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Discriminator, Field, Tag, field_validator, model_validator
 from strictyaml import load as load_strict_yaml
 
 from docker_devkit.config_lock import (
@@ -88,7 +88,7 @@ class DockerDevkitConfig(BaseModel):
     variants: dict[AllCapsName, list[str]] = Field(default_factory=dict)
     platforms: list[str] = Field(default_factory=list)
     project_name: str | None = None
-    services: dict[str, ServiceGroup | ServiceEntry] = Field(default_factory=dict)
+    services: dict[str, ServiceMember] = Field(default_factory=dict)
     k8s: K8sConfig | None = None
     mirror_prefix: str = DEFAULT_MIRROR_PREFIX
 
@@ -304,6 +304,16 @@ class ServiceEntry(BaseModel):
             if not name:
                 raise ValueError("workload names must be non-empty")
         return self
+
+
+def _service_member_kind(value: object) -> str:
+    return "group" if is_mapping(value) and "options" in value else "entry"
+
+
+ServiceMember = Annotated[
+    Annotated[ServiceGroup, Tag("group")] | Annotated[ServiceEntry, Tag("entry")],
+    Discriminator(_service_member_kind),
+]
 
 
 class RouteConfig(BaseModel):

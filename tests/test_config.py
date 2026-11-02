@@ -602,6 +602,25 @@ class TestServices:
         with pytest.raises(ValidationError, match="ref: or workloads: is required"):
             load_config(tmp_path)
 
+    def test_a_group_shape_with_entry_keys_reports_the_group_branch(self, tmp_path: Path) -> None:
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "repository": "ghcr.io/org/repo",
+                "project_name": "example",
+                "services": {
+                    "tunnel": {
+                        "options": {"ngrok": {"workloads": ["tunnel-ngrok.yaml"]}},
+                        "ref": "oci://ghcr.io/org/repo/x@" + DIGEST,
+                    }
+                },
+            },
+        )
+
+        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+            load_config(tmp_path)
+
     def test_vars_beside_a_ref_refuse(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,
