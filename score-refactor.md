@@ -100,13 +100,16 @@ type checker where `Any` disabled it; it validates nothing at runtime.
 
 ### D2 — Committed-artifact reordering
 
-Status: OPEN.
-
-Typing the generated compose document means re-dumping through pydantic,
-regrouping keys (declared fields first, extras after) — byte changes in
-`stack/generated/**` across all five consumer repos, one regeneration wave
-each. Alternative: typed lens + surgical mutation preserving score-compose
-byte order. Lean: typed round-trip, eat the one-time wave.
+Ruling: (a) — typed round-trip. The generated compose document parses into
+the typed model, all post-passes run as typed transformations, and the
+model dumps exactly once per document. Pydantic's declared-fields-first
+dump order becomes the artifacts' deterministic key order; every consumer
+takes a one-time `stack/generated/**` reordering diff, regenerated and
+committed in the same wave as the devkit version bump (the Plan A
+catch-up-wave playbook). The lens-plus-raw-mutation alternative was
+rejected: it preserves bytes only by keeping mutations outside the type
+system permanently. k8s artifacts are unaffected (documents ride verbatim;
+D3 pre-seeding would keep it that way).
 
 ### D3 — k8s instance-suffix determinism
 
