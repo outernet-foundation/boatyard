@@ -25,7 +25,7 @@ from boatyard.config import (
     ServiceEntry,
     ServiceGroup,
     Yaml,
-    compose_bundle_output,
+    compose_bundle_output_path,
     double_dollars,
     is_mapping,
     parse_dev_toggles,
@@ -152,7 +152,7 @@ def select(config: Config, environment: Mapping[str, str]) -> Selection:
         if entry.ref is not None:
             includes.append(entry.ref)
             continue
-        output = compose_bundle_output(root, name)
+        output = compose_bundle_output_path(root, name)
         if not output.is_file():
             raise ValueError(
                 f"selected entry {name!r} has no bundle output {output.as_posix()}; generate-score writes it"

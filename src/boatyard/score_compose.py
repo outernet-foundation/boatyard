@@ -20,7 +20,7 @@ from boatyard.config import (
     ComposeWorkloadDocument,
     EDGE_SERVICE_NAME,
     Yaml,
-    compose_bundle_output,
+    compose_bundle_output_path,
     double_dollars,
     Config,
 )
@@ -146,7 +146,7 @@ def generate_compose(
 
         # Recreate the shared state dir and render the bundle through the spine.
         shutil.rmtree(score_state, ignore_errors=True)
-        output = compose_bundle_output(root, name)
+        output_path = compose_bundle_output_path(root, name)
         render_score(
             config,
             is_k8s=False,
@@ -161,13 +161,13 @@ def generate_compose(
                     if variant == entry.vars.get("GPU_VARIANT", "")
                 ),
             ],
-            output=output,
+            output=output_path,
             images=images,
             service_shas=service_shas,
         )
 
         # Parse the rendered output into the typed compose document.
-        raw = yaml.safe_load(output.read_text(encoding="utf-8"))
+        raw = yaml.safe_load(output_path.read_text(encoding="utf-8"))
         document = ComposeDocument.model_validate(raw)
         services = document.services or {}
 
@@ -229,16 +229,16 @@ def generate_compose(
         document.services = collapsed
         if contents:
             document.configs = {**(document.configs or {}), **contents}
-        write_generated_file(output, dump_compose(document.dump()))
-        outputs.append(output)
+        write_generated_file(output_path, dump_compose(document.dump()))
+        outputs.append(output_path)
 
     # Remove the compose state dir after the last entry.
     shutil.rmtree(score_state, ignore_errors=True)
 
     # Validate the consumed secrets against the declaration.
     consumed: set[str] = set()
-    for output in outputs:
-        for match in COMPOSE_HOLE.finditer(output.read_text(encoding="utf-8")):
+    for output_path in outputs:
+        for match in COMPOSE_HOLE.finditer(output_path.read_text(encoding="utf-8")):
             if len(match.group(1)) % 2 == 1:
                 consumed.add(match.group(2))
     secrets.validate_consumed(consumed, "compose", SECRETS_FILE.as_posix())

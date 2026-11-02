@@ -11,7 +11,7 @@ import typer
 from bashrun.bash import bash, bash_output
 
 from boatyard import dockerfiles
-from boatyard.config import Config, compose_bundle_output
+from boatyard.config import Config, compose_bundle_output_path
 from boatyard.config_lock import LOCK_PATH, parse_config_lock
 from boatyard.crane import install_crane
 from boatyard.lock import env_entries
@@ -49,7 +49,7 @@ def publish_compose(
     root = Path.cwd()
     config = Config.load(root)
     bundles = (
-        [(name, compose_bundle_output(root, name)) for name, _entry in config.local_service_entries()]
+        [(name, compose_bundle_output_path(root, name)) for name, _entry in config.local_service_entries()]
         if config is not None
         else []
     )

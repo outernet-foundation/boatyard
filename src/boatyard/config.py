@@ -611,7 +611,7 @@ def require_workload_reference(name: str) -> None:
         raise ValueError(f"workload reference {name!r} must be a flat .yaml file name")
 
 
-def compose_bundle_output(root: Path, name: str) -> Path:
+def compose_bundle_output_path(root: Path, name: str) -> Path:
     return root / COMPOSE_OUTPUT_DIR / f"compose.{name}.yaml"
 
 
