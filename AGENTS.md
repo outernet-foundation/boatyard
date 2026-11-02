@@ -13,7 +13,8 @@ Docker-stack lifecycle verbs as a generic package for any repo shipping a compos
 
 ## Verbs
 
-One module per command under `verbs/`; the app object is `app`; the command function names the command underscore-spelled; both Typer flag suppressions always set.
+One module per command under `verbs/`; the app object is `app`; the command function names the command underscore-spelled; both Typer flag suppressions always set. Error-channel law: every authored-input refusal in library code is a bare
+`ValueError` with byte-stable text; `verbs/entry.py` is the boundary — `@entry` converts `ValueError` to one-line stderr + exit 1; `typer.BadParameter` keeps the CLI-flag layer; bug-class exceptions keep tracebacks.
 
 - `up`: `--attached/-a` `--quiet-pull/-q` `--build` `--dev`
 - `down`: `--volumes/-v`
@@ -25,14 +26,13 @@ One module per command under `verbs/`; the app object is `app`; the command func
 - `generate-score`: `--target` `--local` `--check`
 - `docker-build-matrix`: bare JSON array on stdout
 
-Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lock` verb owns them), no `--gpu` anywhere (variant cells are declared, not detected), no `--compose-file` (the verbs own the compose invocation). `tree-tags`'
-  whole contract is a string — no JSON, no service-list endpoint, no `{SERVICE}_SHA` names (consumers own those where they author the compose holes).
+Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lock` verb owns them), no `--gpu` anywhere, no `--compose-file` (the verbs own the compose invocation). `tree-tags`' whole contract is a string — no JSON, no service-list endpoint, no `{SERVICE}_SHA` names.
 
 ## Modules
 
 `config.py` schema + load; `dockerfiles.py` Dockerfile declarations + sha machinery (`ServiceBuild`, `derive_services`); `config_lock.py` lock schema + parsers; `lock.py` lock engine + projections; `compose.py` compose invocation
   (`select`/`render` + kit); `bake.py` build pipeline; `score.py` score generation;
-  `publish.py` publish preparation; `crane.py` pinned crane installer; `optional_value_option.py` typer `--push` seam (`# noqa-wrapper:` boundary); `verbs/*` one module per command. Model modules run root → leaves: root record first
+  `publish.py` publish preparation; `crane.py` pinned crane installer; `optional_value_option.py` typer `--push` seam (`# noqa-wrapper:` boundary); `verbs/entry.py` the verb boundary; `verbs/*` one module per command. Model modules run root → leaves: root record first
   (`RootModel` subscripts quote forward refs; the one inversion is a parent whose field default constructs the child), functions callers-before-callees; imports absolute; `config_lock`/`dockerfiles` ← `config` one-way. Also in `config.py` (the shared leaf): `Yaml`,
   `is_mapping`/`is_list`, `double_dollars` (the one `$`-doubling home), `PLACEHOLDER`/`COMPOSE_HOLE`/`ENV_NAME_PATTERN`, `EDGE_SERVICE_NAME`, `chart_lock_key`. Lifecycle stays a separate package from codegen (disjoint dependency surfaces — bundling would force
   stack-only consumers to install `sqlacodegen`, `psycopg`, `datamodel-code-generator`).
