@@ -15,9 +15,6 @@ from typer.core import TyperCommand, TyperOption
 
 
 class _OptionalValueParserOption(_Option):  # pyright: ignore[reportPrivateUsage]
-    # nargs=0 keeps the parser from demanding a value; process consumes the next
-    # argument only when it does not start with a dash, storing the flag default ("")
-    # or the given address.
     def __init__(self, obj: TyperOption, opts: list[str], dest: str) -> None:
         super().__init__(obj, opts, dest, action="store", nargs=0, const=None)
 
@@ -29,9 +26,6 @@ class _OptionalValueParserOption(_Option):  # pyright: ignore[reportPrivateUsage
 
 
 class DestinationOption(TyperOption):
-    # An option whose value is optional: alone it answers the flag default (""), with a
-    # value the given string. Built from the plain option typer derived, with only the
-    # parser spelling replaced.
     def __init__(self, original: TyperOption) -> None:
         assert original.name is not None
         super().__init__(
@@ -53,8 +47,6 @@ class DestinationOption(TyperOption):
 
 
 class DestinationCommand(TyperCommand):
-    # Swaps the plain option typer derived for the destination spelling above; the
-    # parameter name it looks for is the class attribute.
     destination_parameter = "push"
 
     def get_params(self, ctx: Context) -> list[Any]:

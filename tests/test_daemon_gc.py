@@ -61,7 +61,7 @@ def test_null_counts_as_missing(tmp_path: Path) -> None:
 
 def test_unparseable_value_refuses(tmp_path: Path) -> None:
     config = _daemon_json(tmp_path, '{"builder": {"gc": {"defaultKeepStorage": "lots"}}}')
-    with pytest.raises(ValidationError, match="Could not parse"):
+    with pytest.raises(ValidationError, match="must be a number"):
         check_gc_limits(candidates=[config])
 
 

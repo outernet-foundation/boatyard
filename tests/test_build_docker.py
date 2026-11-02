@@ -40,8 +40,6 @@ def _write_repo(
         (directory / "Dockerfile").write_text(text, encoding="utf-8")
     payload: dict[str, Any] = {"requires": ">=0", "repository": repository}
     if base_images:
-        # base_images force the platforms declaration (the lock resolves one platform
-        # manifest per declared os/arch); amd64 keeps the fixtures native for _amd64_host.
         payload["platforms"] = platforms or ["linux/amd64"]
         payload["base_images"] = base_images
     elif platforms:
@@ -56,7 +54,6 @@ def _write_repo(
             values.write_text("chart: {}\n", encoding="utf-8")
     (root / "docker-devkit.yaml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     if (base_images or charts) and not (root / LOCK_PATH).exists():
-        # Declarations => the committed lock is required at load.
         (root / LOCK_PATH).write_text("", encoding="utf-8")
 
 
@@ -345,8 +342,6 @@ class TestDevBuilds:
             variants=TORCH_AXIS,
         )
 
-        # The axis-bearing base declares no dev stage, so only localizer's default-cell
-        # dev target builds.
         assert _bake_targets(recorder.commands) == ["localizer-cuda"]
 
     def test_dev_selects_cells_by_address(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

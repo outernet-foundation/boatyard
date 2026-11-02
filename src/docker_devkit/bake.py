@@ -30,7 +30,7 @@ class BakeMetadata(RootModel[dict[str, "BakedImage"]]):
     def _require_tagged_references(self) -> Self:
         for target, image in self.root.items():
             if not image.tags:
-                raise ValueError(f"target '{target}' produced no tagged image references from '{image.image_name}'")
+                raise ValueError(f"target '{target}' must produce tagged image references")
         return self
 
 
@@ -64,7 +64,7 @@ class _DaemonGc(BaseModel):
             return None
         match = re.match(r"^(\d+(?:\.\d+)?)\s*([TGMK]i?B)?$", str(value), re.IGNORECASE)
         if match is None:
-            raise ValueError(f"Could not parse 'defaultKeepStorage' value: {value}")
+            raise ValueError(f"defaultKeepStorage value {value!r} must be a number with an optional unit (60GB, 1TiB)")
         unit = (match.group(2) or "B")[0].upper()
         multipliers = {"T": 1024, "G": 1, "M": 1 / 1024, "K": 1 / 1024**2, "B": 1 / 1024**3}
         return float(match.group(1)) * multipliers[unit]
@@ -91,40 +91,33 @@ def run_build(
     no_cache: bool = False,
     dev: bool = False,
 ) -> None:
-    # root/config inject for callers that already loaded them (up --build); the CLI
-    # derives both from the working directory. push is the destination axis: None builds
-    # local, "" (--push alone) pushes to the config's repository, an address (--push
-    # <addr>) pushes to that registry.
     root = root if root is not None else Path.cwd()
     config = config if config is not None else load_config(root)
     if config is None:
-        raise RuntimeError("No docker-devkit.yaml at the repo root; build derives its targets from it")
+        raise RuntimeError("No docker-devkit.yaml at the repo root")
 
     pushing = push is not None
     if dev and pushing:
-        raise typer.BadParameter("--dev builds local-only images under the :dev tag; drop --push")
+        raise typer.BadParameter("--dev builds local-only images; --push is not allowed")
 
     destination = push if push else None
     if destination is not None:
         registry_host = destination.partition("/")[0]
         if "://" in destination or destination.endswith("/") or ("." not in registry_host and ":" not in registry_host):
             raise typer.BadParameter(
-                f"--push destination {destination!r} is a registry address (localhost:5000, ghcr.io/org) "
+                f"--push destination {destination!r} must be a registry address (localhost:5000, ghcr.io/org) "
                 "with no scheme and no trailing slash"
             )
     elif pushing and config.repository is None:
-        raise RuntimeError("--push with no address builds for the config's repository; this repo declares none")
+        raise RuntimeError("--push is declared with no address; repository is required")
 
     service_shas = config.service_shas()
     os.environ.update(service_shas)
 
     if not config.service_builds:
-        raise RuntimeError(
-            "no Dockerfile service derives under this repo; build builds the derived services "
-            "(relock declarations without building via the lock verb)"
-        )
+        raise RuntimeError("no Dockerfile service derives under this repo; the lock verb owns relocking declarations")
 
-    # Check Docker GC limits so local builds don't evict the build cache.
+    # Check Docker GC limits.
     if not pushing and not targets_opt:
         check_gc_limits()
 
@@ -141,15 +134,12 @@ def run_build(
     }
 
     if dev and not dev_targets:
-        raise RuntimeError(
-            "no service declares a dev stage (a multi-stage Dockerfile carrying an AS dev stage); --dev builds those"
-        )
+        raise RuntimeError("no service declares a dev stage (a multi-stage Dockerfile carrying an AS dev stage)")
 
     if targets_opt:
         targets: list[str] = []
         for address in targets_opt:
-            # A bare name selects the default cell; name/cell addresses one declared cell;
-            # a suffixed target name (what the matrix emits) addresses it directly.
+            # Resolve each address to a target.
             if "/" in address:
                 service_name, _, cell = address.partition("/")
                 service = config.service_builds.get(service_name)
@@ -158,7 +148,7 @@ def run_build(
                         f"Unknown target {address!r}. Available: {_address_vocabulary(config.service_builds)}"
                     )
                 if not service.variants:
-                    raise typer.BadParameter(f"{service_name} declares no variant cells; build it as {service_name!r}")
+                    raise typer.BadParameter(f"{service_name} declares no variant cells")
                 if cell not in service.variants:
                     raise typer.BadParameter(
                         f"Unknown cell {cell!r} for {service_name}; it declares the cells {service.variants}"
@@ -177,12 +167,9 @@ def run_build(
         if dev:
             undeclared = sorted(set(targets) - dev_targets)
             if undeclared:
-                raise typer.BadParameter(f"--dev builds declared dev stages; no dev stage for {undeclared}")
+                raise typer.BadParameter(f"--dev: no dev stage for {undeclared}")
     else:
-        # Default targets are every service's default cell (the bare-name selection: the
-        # first declared value) restricted to this machine's arch — the repo platforms are
-        # undeclared (the host's arch) or include it. An empty set refuses loudly: bake
-        # with no target arguments builds every service, silently defeating the selection.
+        # Select the default targets for this machine's arch.
         defaults = {service.target_variants[0][0] for service in config.service_builds.values()}
         targets = (
             sorted(defaults & dev_targets if dev else defaults)
@@ -192,20 +179,14 @@ def run_build(
         if not targets:
             raise RuntimeError(
                 f"No service targets this machine's arch ({host}); "
-                f"name targets with --targets to cross-build. Services: {_address_vocabulary(config.service_builds)}"
+                f"other arches require --targets. Services: {_address_vocabulary(config.service_builds)}"
             )
 
-    # The incremental lock write rides every building run (the uv sync shape): anyone who
-    # builds also locks, landing only after target selection and its refusals so a failing
-    # invocation leaves the tree untouched; bake reads the freshly written entries as
-    # environment.
+    # Write the incremental lock and load its entries into the environment.
     written = write_lock(config)
     os.environ.update(env_entries(written))
 
-    # The deterministic per-run bake file: authored key order, byte-identical for identical
-    # configs; tags and cache refs root under the destination when one is given, else the
-    # config's repository — one law for both push destinations. Bake validates its own
-    # input by failing on it — no document model sits behind the render.
+    # Render the bake services for every target.
     namespace = destination if destination is not None else config.repository
     services: dict[str, dict[str, dict[str, BakeValue]]] = {}
     for service in config.service_builds.values():
@@ -219,13 +200,11 @@ def run_build(
             if dev:
                 build["target"] = "dev"
             if config.platforms:
-                # A --load run writes a single arch, so a multi-arch declaration collapses
-                # to the host; a single declared platform rides through in both modes.
+                # Collapse multi-arch declarations to the host arch in load mode.
                 build["platforms"] = [host] if not pushing and len(config.platforms) > 1 else list(config.platforms)
             build["args"] = args
             if dev:
-                # The dev tag is per service, not per target: whichever cell a host
-                # builds, the overlay references one {repository}/{service}:dev image.
+                # Tag dev builds per service, not per target.
                 build["tags"] = [f"{namespace}/{service.name}:dev"]
             else:
                 build["tags"] = [
@@ -246,9 +225,7 @@ def run_build(
             services[target] = {"build": build}
     rendered = yaml.safe_dump({"services": services}, sort_keys=False)
 
-    # Drop stale metadata so the coverage check cannot pass against a previous run; the
-    # file left in the working directory after the run is the shelf handoff the toolkit's
-    # build workflow reads.
+    # Drop stale metadata from a previous run.
     METADATA_PATH.unlink(missing_ok=True)
 
     command_arguments: list[str] = [
@@ -266,8 +243,7 @@ def run_build(
     with TemporaryDirectory(prefix="bake-") as bake_dir:
         bake_file = Path(bake_dir) / "bake.yaml"
         bake_file.write_text(rendered, encoding="utf-8")
-        # The temp bake file vanishes with its directory, so a failed bake re-raises with
-        # the rendered content attached — the failure stays inspectable after the run.
+        # Re-raise a failed bake with the rendered content attached.
         try:
             bash(
                 " ".join([
@@ -291,8 +267,7 @@ def run_build(
 
 
 def check_gc_limits(candidates: list[Path] | None = None) -> None:
-    # candidates injects the daemon.json paths for tests; default discovery probes the
-    # system file, the user file, then the Windows-side home under WSL — first readable wins.
+    # Probe the system file, the user file, then the Windows home under WSL.
     if candidates is None:
         candidates = [Path("/etc/docker/daemon.json"), Path(os.path.expanduser("~/.docker/daemon.json"))]
         wslpath = 'wslpath $(cmd.exe /c "echo %UserProfile%" 2>/dev/null)'
@@ -302,17 +277,15 @@ def check_gc_limits(candidates: list[Path] | None = None) -> None:
 
     config = next((path for path in candidates if os.access(path, os.R_OK)), None)
     if config is None:
-        print(f"    [WARN] No readable daemon.json found. Ensure defaultKeepStorage > {MIN_KEEP_STORAGE_GB}GB.")
+        print(f"    [WARN] No readable daemon.json found; defaultKeepStorage must be >= {MIN_KEEP_STORAGE_GB}GB.")
         return
 
     daemon = _DaemonConfig.model_validate(json.loads(config.read_text(encoding="utf-8")))
     gigabytes = daemon.builder.gc.gigabytes
     if gigabytes is None:
-        # Absent-or-null counts as missing; an explicit zero is a set value and refuses
-        # below the floor as a measurement failure.
         sample = json.dumps({"builder": {"gc": {"defaultKeepStorage": f"{MIN_KEEP_STORAGE_GB}GB"}}}, indent=2)
         raise RuntimeError(
-            f"builder.gc.defaultKeepStorage missing in {config}; need >= {MIN_KEEP_STORAGE_GB}GB:\n\n{sample}"
+            f"builder.gc.defaultKeepStorage missing in {config}; must be >= {MIN_KEEP_STORAGE_GB}GB:\n\n{sample}"
         )
     if gigabytes < MIN_KEEP_STORAGE_GB:
         raise RuntimeError(
