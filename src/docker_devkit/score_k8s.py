@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import shutil
-from hashlib import sha256
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import yaml
-from bashrun.bash import bash, bash_output
+from bashrun.bash import bash_output
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -19,19 +18,15 @@ from docker_devkit.config import (
     WorkloadDocument,
     Config,
     chart_lock_key,
-    is_mapping,
     validate,
 )
 from docker_devkit.config_lock import ConfigLock
 from docker_devkit.lock import env_entries
 from docker_devkit.score import (
-    builtin_patch_templates,
-    compiled_provisioners,
     contains_marker,
     dump_compose,
-    init_score_tool,
     load_yaml_file,
-    rendered_workloads,
+    render_score,
     resolve_markers,
     split_documents,
     write_generated_file,
@@ -72,7 +67,6 @@ def generate_k8s(
     # Run score-k8s in the output's directory, where it writes its .score-k8s state.
     images = env_entries(lock)
     state_dir = output_path.parent / ".score-k8s"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     score_dir = root / config.score_dir
     rendering_vars = {**k8s.vars, STORAGE_CLASS_VAR: storage_class}
 
@@ -86,27 +80,17 @@ def generate_k8s(
                 f"{name}: {DEV_TOGGLES_ANNOTATION} is compose dev-overlay vocabulary; this workload renders k8s-only"
             )
 
-    with (
-        builtin_patch_templates() as builtin_templates,
-        compiled_provisioners(score_dir, "k8s", k8s.workloads, root, images) as provisioners,
-    ):
-        init_score_tool(
-            "score-k8s",
-            output_path.parent,
-            None,
-            provisioners.paths,
-            [builtin_templates / GPU_POD_TEMPLATE, builtin_templates / SCALE_TO_ZERO_TEMPLATE],
-            tool_environment,
-        )
-
-        _seed_instance_suffixes(state_dir / "state.yaml", score_dir, k8s.workloads)
-
-        with rendered_workloads(config, k8s.workloads, rendering_vars, images, service_shas) as workloads:
-            bash(
-                f"score-k8s generate {workloads} --output {output_path.as_posix()}",
-                cwd=output_path.parent,
-                env=tool_environment,
-            )
+    render_score(
+        config,
+        is_k8s=True,
+        workloads=k8s.workloads,
+        rendering_vars=rendering_vars,
+        templates=[GPU_POD_TEMPLATE, SCALE_TO_ZERO_TEMPLATE],
+        output=output_path,
+        images=images,
+        service_shas=service_shas,
+        tool_environment=tool_environment,
+    )
 
     # Render the charts through helm template.
     if k8s.charts:
@@ -146,25 +130,3 @@ def generate_k8s(
     write_generated_file(output_path, "".join(f"---\n{block}" for *_, block in decorated))
 
     shutil.rmtree(state_dir, ignore_errors=True)
-
-
-def _seed_instance_suffixes(state_path: Path, score_dir: Path, workloads: list[str]) -> None:
-    # Pre-seed each workload's instance suffix so the tool names instances
-    # deterministically by construction; init's other state keys ride through.
-    state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
-    if not is_mapping(state):
-        state = {}
-    entries = state.get("workloads")
-    if not is_mapping(entries):
-        entries = {}
-        state["workloads"] = entries
-    for name in workloads:
-        workload_name = validate(WorkloadDocument, load_yaml_file(score_dir / name), name).metadata.name
-        if not workload_name:
-            continue
-        entry = entries.get(workload_name)
-        if not is_mapping(entry):
-            entry = {}
-            entries[workload_name] = entry
-        entry["instance_suffix"] = "-" + sha256(workload_name.encode()).hexdigest()[:10]
-    write_generated_file(state_path, dump_compose(state))

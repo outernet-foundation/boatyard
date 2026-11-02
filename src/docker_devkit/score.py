@@ -3,9 +3,10 @@ from __future__ import annotations
 import os
 import re
 import shlex
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from functools import partial
+from hashlib import sha256
 from importlib.resources import as_file, files
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -30,6 +31,7 @@ from docker_devkit.config import (
     is_mapping,
     validate,
     Config,
+    WorkloadDocument,
 )
 
 PATCH_TEMPLATES_DIR = "patch_templates"
@@ -139,6 +141,70 @@ def _represent_multiline(dumper: yaml.SafeDumper, value: str) -> yaml.ScalarNode
 ComposeDumper.add_representer(str, _represent_multiline)
 
 
+def render_score(
+    config: Config,
+    is_k8s: bool,
+    workloads: list[str],
+    rendering_vars: dict[str, str],
+    templates: list[str],
+    output: Path,
+    images: dict[str, str],
+    service_shas: dict[str, str],
+    tool_environment: dict[str, str] | None,
+    gate: Callable[[CompiledProvisioners], None] | None = None,
+) -> None:
+    root = config.root
+    score_dir = root / config.score_dir
+    tool = "score-k8s" if is_k8s else "score-compose"
+    rendering = "k8s" if is_k8s else "compose"
+    working_dir = output.parent if is_k8s else score_dir
+    project_name = None if is_k8s else config.project_name
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    with (
+        builtin_patch_templates() as builtin_templates,
+        compiled_provisioners(score_dir, rendering, workloads, root, images) as provisioners,
+    ):
+        if gate is not None:
+            gate(provisioners)
+
+        flags = "".join(
+            f" --provisioners {shlex.quote(Path(os.path.relpath(path, working_dir)).as_posix())}"
+            for path in provisioners.paths
+        )
+        flags += "".join(
+            f" --patch-templates {shlex.quote(Path(os.path.relpath(builtin_templates / name, working_dir)).as_posix())}"
+            for name in templates
+        )
+        project = f" --project {project_name}" if project_name is not None else ""
+        bash(f"{tool} init{project} --no-sample{flags}", cwd=working_dir, env=tool_environment)
+
+        if is_k8s:
+            # Pre-seed each workload's instance suffix so the tool names instances
+            # deterministically by construction; init's other state keys ride through.
+            state_path = working_dir / f".{tool}" / "state.yaml"
+            state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
+            if not is_mapping(state):
+                state = {}
+            entries = state.get("workloads")
+            if not is_mapping(entries):
+                entries = {}
+                state["workloads"] = entries
+            for name in workloads:
+                workload_name = validate(WorkloadDocument, load_yaml_file(score_dir / name), name).metadata.name
+                if not workload_name:
+                    continue
+                entry = entries.get(workload_name)
+                if not is_mapping(entry):
+                    entry = {}
+                    entries[workload_name] = entry
+                entry["instance_suffix"] = "-" + sha256(workload_name.encode()).hexdigest()[:10]
+            write_generated_file(state_path, dump_compose(state))
+
+        with rendered_workloads(config, workloads, rendering_vars, images, service_shas) as rendered:
+            bash(f"{tool} generate {rendered} --output {output.as_posix()}", cwd=working_dir, env=tool_environment)
+
+
 @contextmanager
 def builtin_patch_templates() -> Generator[Path]:
     with as_file(files("docker_devkit") / PATCH_TEMPLATES_DIR) as directory:
@@ -206,25 +272,6 @@ def compiled_provisioners(
             target.write_text(dump_compose(compiled_entries), encoding="utf-8", newline="")
             paths.append(target)
         yield CompiledProvisioners(paths=paths, declares_services=declares_services)
-
-
-def init_score_tool(
-    tool: str,
-    cwd: Path,
-    project_name: str | None,
-    provisioners: list[Path],
-    templates: list[Path],
-    tool_environment: dict[str, str] | None,
-) -> None:
-    flags = "".join(
-        f" --provisioners {shlex.quote(Path(os.path.relpath(provisioner, cwd)).as_posix())}"
-        for provisioner in provisioners
-    )
-    flags += "".join(
-        f" --patch-templates {shlex.quote(Path(os.path.relpath(template, cwd)).as_posix())}" for template in templates
-    )
-    project = f" --project {project_name}" if project_name is not None else ""
-    bash(f"{tool} init{project} --no-sample{flags}", cwd=cwd, env=tool_environment)
 
 
 def contains_marker(node: Yaml) -> bool:
