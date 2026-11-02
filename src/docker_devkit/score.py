@@ -134,7 +134,6 @@ class ComposeDumper(yaml.SafeDumper):
 
 
 def _represent_multiline(dumper: yaml.SafeDumper, value: str) -> yaml.ScalarNode:
-    # Force literal block style for multiline strings.
     return yaml.ScalarNode("tag:yaml.org,2002:str", value, style="|" if "\n" in value else None)
 
 
@@ -153,6 +152,7 @@ def render_score(
     tool_environment: dict[str, str] | None,
     gate: Callable[[CompiledProvisioners], None] | None = None,
 ) -> None:
+    # Derive the per-substrate names and create the output parent.
     root = config.root
     score_dir = root / config.score_dir
     tool = "score-k8s" if is_k8s else "score-compose"
@@ -165,8 +165,7 @@ def render_score(
         as_file(files("docker_devkit") / PATCH_TEMPLATES_DIR) as builtin_templates,
         ExitStack() as stack,
     ):
-        # Select the provisioner files whose resource types the workloads reference,
-        # then compile into a per-run tempdir under score_dir.
+        # Collect the resource types the workloads reference.
         referenced: set[str] = set()
         for name in workloads:
             document = load_yaml_file(score_dir / name)
@@ -177,6 +176,7 @@ def render_score(
                     if isinstance(resource_type, str):
                         referenced.add(resource_type)
 
+        # Select the rendering's provisioner files that declare a referenced type.
         names: list[str] = []
         rendering_dir = score_dir / rendering
         if rendering_dir.is_dir():
@@ -187,6 +187,7 @@ def render_score(
                 if any(is_mapping(entry) and entry.get("type") in referenced for entry in entries):
                     names.append(f"{rendering}/{path.name}")
 
+        # Compile the selected provisioners into a per-run tempdir under score_dir.
         paths: list[Path] = []
         declares_services = False
         if names:
@@ -219,10 +220,12 @@ def render_score(
                 target.write_text(dump_compose(compiled_entries), encoding="utf-8", newline="")
                 paths.append(target)
 
+        # Run the gate over the compiled provisioners.
         provisioners = CompiledProvisioners(paths=paths, declares_services=declares_services)
         if gate is not None:
             gate(provisioners)
 
+        # Build the tool flags and run init.
         flags = "".join(
             f" --provisioners {shlex.quote(Path(os.path.relpath(path, working_dir)).as_posix())}"
             for path in provisioners.paths
@@ -234,9 +237,8 @@ def render_score(
         project = f" --project {project_name}" if project_name is not None else ""
         bash(f"{tool} init{project} --no-sample{flags}", cwd=working_dir, env=tool_environment)
 
+        # Pre-seed each workload's instance suffix so generated names are deterministic.
         if is_k8s:
-            # Pre-seed each workload's instance suffix so the tool names instances
-            # deterministically by construction; init's other state keys ride through.
             state_path = working_dir / f".{tool}" / "state.yaml"
             state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
             if not is_mapping(state):
@@ -256,6 +258,7 @@ def render_score(
                 entry["instance_suffix"] = "-" + sha256(workload_name.encode()).hexdigest()[:10]
             write_generated_file(state_path, dump_compose(state))
 
+        # Render the expanded workload copies and run generate.
         with rendered_workloads(config, workloads, rendering_vars, images, service_shas) as rendered:
             bash(f"{tool} generate {rendered} --output {output.as_posix()}", cwd=working_dir, env=tool_environment)
 
@@ -335,7 +338,6 @@ def resolve_markers(
         fields["tag"] = tag
 
     if image_spec.digest_field == "sha":
-        # Spell the digest bare.
         fields["sha"] = digest.removeprefix("sha256:")
     else:
         fields["digest"] = digest
@@ -375,7 +377,6 @@ def rendered_workloads(
     images: dict[str, str],
     service_shas: dict[str, str],
 ) -> Generator[str]:
-    # Expand ${ALL_CAPS} placeholders into tempdir copies.
     with TemporaryDirectory() as temporary_directory:
         directory = Path(temporary_directory)
 
@@ -416,11 +417,9 @@ def dump_compose(value: Yaml) -> str:
 
 
 def write_generated_file(path: Path, text: str) -> None:
-    # Write with newline="" to prevent CRLF rewrites.
     with path.open("w", encoding="utf-8", newline="") as handle:
         handle.write(text)
 
-    # Normalise the mode to 0644.
     path.chmod(0o644)
 
 

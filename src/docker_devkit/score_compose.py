@@ -37,7 +37,6 @@ from docker_devkit.score import (
 
 STATE_PREFIX = ".score-compose/"
 
-# Match doubled {workload}-{container} service names.
 DOUBLED_SERVICE_NAME = re.compile(r"^(.+)-\1$")
 
 GATE_SERVICE = "wait-for-resources"
@@ -54,7 +53,6 @@ class ComposeDocument(BaseModel):
 
     @model_validator(mode="after")
     def _reject_colliding_bind_basenames(self) -> Self:
-        # Refuse bind sources sharing one basename.
         seen: dict[str, str] = {}
         for service in (self.services or {}).values():
             for volume in service.volumes or []:
@@ -67,7 +65,6 @@ class ComposeDocument(BaseModel):
         return self
 
     def dump(self) -> Yaml:
-        # Declared fields dump before extras; this order is the artifacts' deterministic key order.
         return self.model_dump(exclude_none=True)
 
 
@@ -106,7 +103,6 @@ class OtherVolume(BaseModel):
 
     type: str
 
-    # Reject malformed binds.
     @model_validator(mode="after")
     def _reject_bind(self) -> Self:
         if self.type == "bind":
@@ -128,6 +124,7 @@ def generate_compose(
     service_shas: dict[str, str],
     tool_environment: dict[str, str] | None,
 ) -> None:
+    # Refuse the compose target without local service entries.
     bundles = config.compose_bundles()
     if not bundles:
         raise ValueError("the compose target requires local service entries (workloads:)")
@@ -135,21 +132,24 @@ def generate_compose(
     score_state = score_dir / STATE_PREFIX
 
     for bundle in bundles:
+        # Collect per-workload annotation facts and enforce the compose placement laws.
         interpolated_targets: set[str] = set()
         toggle_services: dict[str, str] = {}
         for name in bundle.workloads:
             workload = validate(WorkloadDocument, load_yaml_file(score_dir / name), name)
             annotations = workload.metadata.annotations
 
+            # Track the declared files whose contents ride un-doubled.
             consumer_interpolated = annotations.get(CONSUMER_INTERPOLATED_ANNOTATION)
             if consumer_interpolated is not None:
                 interpolated_targets.update(consumer_interpolated.split(","))
 
-            # The httpGet requirement is a compose placement law: score-compose drops httpGet probes.
+            # Refuse httpGet probes without a probe adapter; score-compose drops httpGet.
             if annotations.get(PROBE_ADAPTER_ANNOTATION) is None:
                 for probe in workload.http_get_probes:
                     raise ValueError(f"{name}: a {probe} httpGet requires {PROBE_ADAPTER_ANNOTATION}")
 
+            # Record dev-toggle ownership per service and refuse collisions.
             toggle_raw, service_name = workload.dev_toggles
             if toggle_raw is not None and service_name is not None:
                 if service_name in toggle_services:
@@ -159,11 +159,13 @@ def generate_compose(
                     )
                 toggle_services[service_name] = name
 
+        # Assemble the patch templates, adding the GPU template for the bundle's variant.
         templates = [HEALTHCHECK_TEMPLATE, RESTART_TEMPLATE]
         gpu_template = GPU_COMPOSE_TEMPLATES.get(bundle.vars.get("GPU_VARIANT", ""))
         if gpu_template is not None:
             templates.append(gpu_template)
 
+        # Recreate the shared state dir and render the bundle through the spine.
         shutil.rmtree(score_state, ignore_errors=True)
         output = bundle.output
         render_score(
@@ -179,13 +181,13 @@ def generate_compose(
             gate=partial(_require_alpine_when_declaring_services, images=images, bundle_name=bundle.name),
         )
 
+        # Pin the synthesized gate's bare alpine image to the ALPINE_IMAGE lock hole.
         raw = yaml.safe_load(output.read_text(encoding="utf-8"))
-        # Score-compose synthesizes the gate with a bare alpine image; pin it to the ALPINE_IMAGE lock hole.
         raw_services = raw.get("services") if is_mapping(raw) else None
         gate_service = raw_services.get(GATE_SERVICE) if is_mapping(raw_services) else None
         if is_mapping(gate_service):
             gate_service["image"] = "${ALPINE_IMAGE:?err}"
-        # Post-passes run as typed transformations; the model dumps exactly once.
+        # Parse the rendered output into the typed compose document.
         document = validate(ComposeDocument, raw, output.as_posix())
         services = document.services or {}
 
@@ -213,6 +215,7 @@ def generate_compose(
                         gate if dependency == GATE_SERVICE else dependency for dependency in depends_on
                     ]
 
+        # Refuse renderings that define the reserved edge service.
         if EDGE_SERVICE_NAME in collapsed:
             raise ValueError(f"bundle {bundle.name!r} rendering defines the reserved service {EDGE_SERVICE_NAME!r}")
 
@@ -237,11 +240,13 @@ def generate_compose(
             ]
             service.volumes = remaining or None
 
+        # Write the transformed document.
         document.services = collapsed
         if contents:
             document.configs = {**(document.configs or {}), **contents}
         write_generated_file(output, dump_compose(document.dump()))
 
+    # Remove the compose state dir after the last entry.
     shutil.rmtree(score_state, ignore_errors=True)
 
 
