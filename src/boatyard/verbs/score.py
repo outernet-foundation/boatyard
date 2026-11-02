@@ -56,8 +56,6 @@ def generate_score(
         print("no local service entries and no k8s section; nothing to check")
         return
 
-    compose_rendering = target in ("both", "compose")
-    k8s_rendering = target in ("both", "k8s") and config.k8s is not None
     if config.k8s is None and target == "k8s":
         raise typer.BadParameter("--target k8s: this config declares no k8s section (compose-only)")
     if config.k8s is None and local:
@@ -103,10 +101,10 @@ def generate_score(
         raise ValueError(f"{lock_path.as_posix()}: the image lock carries no entries")
     outputs: list[Path] = []
     k8s_output: Path | None = None
-    if compose_rendering:
+    if target in ("both", "compose"):
         outputs.extend(generate_compose(config, lock, service_shas))
 
-    if k8s_rendering:
+    if target in ("both", "k8s") and config.k8s is not None:
         k8s_output = generate_k8s(config, lock, service_shas, local)
         outputs.append(k8s_output)
 
