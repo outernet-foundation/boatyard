@@ -888,17 +888,17 @@ class TestPushFlags:
             yaml.safe_dump({"requires": ">=0.0", "repository": "ghcr.io/org/demo"}), encoding="utf-8"
         )
         monkeypatch.chdir(tmp_path)
-        values: dict[str, bool | str | None] = {}
+        recorded: list[tuple[bool, str | None]] = []
 
         def _record(push: bool = False, push_to: str | None = None, **kwargs: object) -> None:
-            values["push"], values["push_to"] = push, push_to
+            recorded.append((push, push_to))
 
         monkeypatch.setattr(build, "run_build", _record)
 
         result = runner.invoke(app, ["build", *arguments])
 
         assert result.exit_code == 0, result.output
-        return values["push"], values["push_to"]
+        return recorded[0]
 
     def test_absent_flags_pass_bool_false_and_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         assert self._parse(tmp_path, monkeypatch, []) == (False, None)
