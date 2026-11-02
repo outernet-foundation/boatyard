@@ -73,6 +73,7 @@ class ComposeService(BaseModel):
     volumes: list[BindVolume | OtherVolume] | None = None
     depends_on: dict[str, Yaml] | list[str] | None = None
     configs: list[ComposeConfigReference] | None = None
+    image: str | None = None
 
 
 class ComposeConfigReference(BaseModel):
