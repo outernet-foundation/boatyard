@@ -21,7 +21,7 @@ def build(
             help="Push images and registry caches: alone builds for the config's repository, --push <addr> for that registry.",
         ),
     ] = None,
-    targets_opt: Annotated[
+    targets: Annotated[
         list[str] | None,
         typer.Option(
             "--targets", "-t", help="Build these targets: bare names select default cells, name/cell a declared cell."
@@ -50,5 +50,5 @@ def build(
     elif push is not None and config.repository is None:
         raise typer.BadParameter("--push is declared with no address; repository is required")
 
-    targets = [address for value in targets_opt or [] for address in value.split()] or None
-    run_build(config=config, push=push, targets_opt=targets, no_cache=no_cache, dev=dev)
+    targets = [address for value in targets or [] for address in value.split()] or None
+    run_build(config=config, push=push, targets=targets, no_cache=no_cache, dev=dev)

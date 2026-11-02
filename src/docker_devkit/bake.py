@@ -88,7 +88,7 @@ def run_build(
     *,
     config: Config,
     push: str | None = None,
-    targets_opt: list[str] | None = None,
+    targets: list[str] | None = None,
     no_cache: bool = False,
     dev: bool = False,
 ) -> None:
@@ -102,7 +102,7 @@ def run_build(
         raise RuntimeError("no Dockerfile service derives under this repo; the lock verb owns relocking declarations")
 
     # Check Docker GC limits.
-    if not pushing and not targets_opt:
+    if not pushing and not targets:
         check_gc_limits()
 
     host = host_platform()
@@ -120,9 +120,9 @@ def run_build(
     if dev and not dev_targets:
         raise RuntimeError("no service declares a dev stage (a multi-stage Dockerfile carrying an AS dev stage)")
 
-    if targets_opt:
-        targets: list[str] = []
-        for address in targets_opt:
+    if targets:
+        resolved_targets: list[str] = []
+        for address in targets:
             # Resolve each address to a target.
             if "/" in address:
                 service_name, _, cell = address.partition("/")
@@ -146,21 +146,21 @@ def run_build(
                 raise typer.BadParameter(
                     f"Unknown target {address!r}. Available: {_address_vocabulary(config.service_builds)}"
                 )
-            if target not in targets:
-                targets.append(target)
+            if target not in resolved_targets:
+                resolved_targets.append(target)
         if dev:
-            undeclared = sorted(set(targets) - dev_targets)
+            undeclared = sorted(set(resolved_targets) - dev_targets)
             if undeclared:
                 raise typer.BadParameter(f"--dev: no dev stage for {undeclared}")
     else:
         # Select the default targets for this machine's arch.
         defaults = {service.target_variants[0][0] for service in config.service_builds.values()}
-        targets = (
+        resolved_targets = (
             sorted(defaults & dev_targets if dev else defaults)
             if not config.platforms or host in config.platforms
             else []
         )
-        if not targets:
+        if not resolved_targets:
             raise RuntimeError(
                 f"No service targets this machine's arch ({host}); "
                 f"other arches require --targets. Services: {_address_vocabulary(config.service_builds)}"
@@ -222,7 +222,7 @@ def run_build(
     if no_cache:
         command_arguments.append("--no-cache")
 
-    command_arguments.extend(targets)
+    command_arguments.extend(resolved_targets)
 
     with TemporaryDirectory(prefix="bake-") as bake_dir:
         bake_file = Path(bake_dir) / "bake.yaml"
@@ -246,7 +246,7 @@ def run_build(
         json.loads(METADATA_PATH.read_text(encoding="utf-8")) if METADATA_PATH.exists() else {}
     )
     baked = BakeMetadata.model_validate(metadata_json)
-    if not set(targets) <= baked.root.keys():
+    if not set(resolved_targets) <= baked.root.keys():
         raise RuntimeError("Bake output does not cover the requested targets")
 
 
