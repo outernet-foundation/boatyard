@@ -50,7 +50,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 - `k8s`: `workloads`, `vars`, `charts` name → `oci://…:tag|@digest`; the map key IS the `{NAME}_CHART` lock key; a section declaring neither workloads nor charts refuses.
 - `mirror_prefix`: root override (non-empty, no trailing slash), else `DEFAULT_MIRROR_PREFIX` (`ghcr.io/outernet-foundation/mirror`).
 - Root-model invisible defaults: `score_dir` (`stack/score`), k8s output paths, the three tool pins.
-- Load refusals (`resolve_config`): Dockerfile services or local entries without `repository`; `base_images`/`k8s.charts` without the committed lock (pairing law); a declared chart without `stack/score/k8s/values/{chart}.yaml`; routes without `CADDY_IMAGE` in
+- Load refusals (`DockerDevkitConfig.resolve`): Dockerfile services or local entries without `repository`; `base_images`/`k8s.charts` without the committed lock (pairing law); a declared chart without `stack/score/k8s/values/{chart}.yaml`; routes without `CADDY_IMAGE` in
   the lock.
 - `mirrored_ref(reference, prefix)` = the only prefix join — injects the prefix, rejects an already-prefixed reference (double-prefix guard).
 - Derivation shape law: multi-consumer derivations ride `DockerDevkitConfig` (`compose_bundles`, `image_lock`, `declared_charts`, `service_shas`); single-call-site derivations inline at their consumer;
@@ -60,7 +60,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 
 ## Service derivation
 
-- The Dockerfile-derived build set computes in `dockerfiles.py`'s `derive_services` (called from `load_config`), never authored: Dockerfile dirs one level below a top-level dir = services (spanning several top-level dirs refuses); context edges from bare-identifier `FROM`s naming a
+- The Dockerfile-derived build set computes in `dockerfiles.py`'s `derive_services` (called from `DockerDevkitConfig.resolve`), never authored: Dockerfile dirs one level below a top-level dir = services (spanning several top-level dirs refuses); context edges from bare-identifier `FROM`s naming a
   sibling (stage names skipped); a literal `FROM` or slash-bearing `COPY --from=` refuses (base images ride as build args); `ARG <axis>` fans over the axis's declared values, dependents inherit the base's cells exactly (independent axes
   over fanned bases, disagreeing parents, cycles refuse); `ARG {SERVICE}_SHA` declares the stamp receiver; a genuine dev stage = an `AS dev` among several stages — single-stage `AS dev` names the published image.
 - `.dockerignore` (where images build locally) = the allowlist the sha machinery hashes over `git ls-tree HEAD`; an empty service set returns `{}` without touching git.
