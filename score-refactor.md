@@ -147,11 +147,13 @@ declined.
 
 ### D5 — Strictness at the lens edge
 
-Status: OPEN.
-
-`metadata.name: str | None`, `annotations: dict[str, str]`: parse-refuse
-spec-forbidden garbage (non-string names/annotations) vs passthrough of
-uninterpreted fields. Lean: strict.
+Ruling: (a) — strict at parse. `WorkloadMetadata.name: str | None`,
+`annotations: dict[str, str]` (the Score spec's own grammar); spec-illegal
+values refuse loudly at the lens with file and field named, regardless of
+whether the devkit interprets the field. Same ruling the config schema
+already applies to itself (`extra="forbid"`). Strict-on-use was rejected:
+it keeps gratuitous `object` in the lens and makes lens validation
+inconsistent per field.
 
 ### D6 — Validation-scope ripple
 
