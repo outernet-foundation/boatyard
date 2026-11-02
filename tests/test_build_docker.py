@@ -882,7 +882,11 @@ class TestHostPlatform:
 
 
 class TestOptionalPushFlag:
-    def _parse(self, monkeypatch: pytest.MonkeyPatch, arguments: list[str]) -> str | None:
+    def _parse(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, arguments: list[str]) -> str | None:
+        (tmp_path / "docker-devkit.yaml").write_text(
+            yaml.safe_dump({"requires": ">=0.0", "repository": "ghcr.io/org/demo"}), encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
         values: dict[str, str | None] = {}
 
         def _record(push: str | None = None, **kwargs: object) -> None:
@@ -895,17 +899,17 @@ class TestOptionalPushFlag:
         assert result.exit_code == 0, result.output
         return values["push"]
 
-    def test_absent_push_passes_none(self, monkeypatch: pytest.MonkeyPatch):
-        assert self._parse(monkeypatch, []) is None
+    def test_absent_push_passes_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        assert self._parse(tmp_path, monkeypatch, []) is None
 
-    def test_bare_push_passes_the_empty_destination(self, monkeypatch: pytest.MonkeyPatch):
-        assert self._parse(monkeypatch, ["--push"]) == ""
+    def test_bare_push_passes_the_empty_destination(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        assert self._parse(tmp_path, monkeypatch, ["--push"]) == ""
 
-    def test_address_push_passes_the_address(self, monkeypatch: pytest.MonkeyPatch):
-        assert self._parse(monkeypatch, ["--push", LOCAL_REGISTRY]) == LOCAL_REGISTRY
+    def test_address_push_passes_the_address(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        assert self._parse(tmp_path, monkeypatch, ["--push", LOCAL_REGISTRY]) == LOCAL_REGISTRY
 
-    def test_attached_address_push_passes_the_address(self, monkeypatch: pytest.MonkeyPatch):
-        assert self._parse(monkeypatch, [f"--push={LOCAL_REGISTRY}"]) == LOCAL_REGISTRY
+    def test_attached_address_push_passes_the_address(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        assert self._parse(tmp_path, monkeypatch, [f"--push={LOCAL_REGISTRY}"]) == LOCAL_REGISTRY
 
-    def test_push_does_not_eat_a_following_flag(self, monkeypatch: pytest.MonkeyPatch):
-        assert self._parse(monkeypatch, ["--push", "--no-cache"]) == ""
+    def test_push_does_not_eat_a_following_flag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        assert self._parse(tmp_path, monkeypatch, ["--push", "--no-cache"]) == ""

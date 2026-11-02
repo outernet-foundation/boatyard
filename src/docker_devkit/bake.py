@@ -85,32 +85,15 @@ class _DaemonConfig(BaseModel):
 
 def run_build(
     *,
-    root: Path | None = None,
-    config: Config | None = None,
+    root: Path,
+    config: Config,
     push: str | None = None,
     targets_opt: list[str] | None = None,
     no_cache: bool = False,
     dev: bool = False,
 ) -> None:
-    root = root if root is not None else Path.cwd()
-    config = config if config is not None else Config.load(root)
-    if config is None:
-        raise RuntimeError("No docker-devkit.yaml at the repo root")
-
     pushing = push is not None
-    if dev and pushing:
-        raise typer.BadParameter("--dev builds local-only images; --push is not allowed")
-
     destination = push if push else None
-    if destination is not None:
-        registry_host = destination.partition("/")[0]
-        if "://" in destination or destination.endswith("/") or ("." not in registry_host and ":" not in registry_host):
-            raise typer.BadParameter(
-                f"--push destination {destination!r} must be a registry address (localhost:5000, ghcr.io/org) "
-                "with no scheme and no trailing slash"
-            )
-    elif pushing and config.repository is None:
-        raise RuntimeError("--push is declared with no address; repository is required")
 
     service_shas = config.service_shas()
     os.environ.update(service_shas)

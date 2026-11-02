@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated
 
 import typer
 
 from docker_devkit.bake import run_build
+from docker_devkit.config import Config
 from docker_devkit.optional_value_option import DestinationCommand
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
@@ -30,5 +32,23 @@ def build(
         bool, typer.Option("--dev", help="Build each Dockerfile-declared dev stage under the :dev tag (local-only).")
     ] = False,
 ) -> None:
+    root = Path.cwd()
+    config = Config.load(root)
+    if config is None:
+        raise RuntimeError("No docker-devkit.yaml at the repo root")
+
+    if dev and push is not None:
+        raise typer.BadParameter("--dev builds local-only images; --push is not allowed")
+
+    if push:
+        registry_host = push.partition("/")[0]
+        if "://" in push or push.endswith("/") or ("." not in registry_host and ":" not in registry_host):
+            raise typer.BadParameter(
+                f"--push destination {push!r} must be a registry address (localhost:5000, ghcr.io/org) "
+                "with no scheme and no trailing slash"
+            )
+    elif push is not None and config.repository is None:
+        raise typer.BadParameter("--push is declared with no address; repository is required")
+
     targets = [address for value in targets_opt or [] for address in value.split()] or None
-    run_build(push=push, targets_opt=targets, no_cache=no_cache, dev=dev)
+    run_build(root=root, config=config, push=push, targets_opt=targets, no_cache=no_cache, dev=dev)
