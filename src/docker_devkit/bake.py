@@ -86,7 +86,6 @@ class _DaemonConfig(BaseModel):
 
 def run_build(
     *,
-    root: Path,
     config: Config,
     push: str | None = None,
     targets_opt: list[str] | None = None,

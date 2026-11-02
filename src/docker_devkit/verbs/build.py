@@ -51,4 +51,4 @@ def build(
         raise typer.BadParameter("--push is declared with no address; repository is required")
 
     targets = [address for value in targets_opt or [] for address in value.split()] or None
-    run_build(root=root, config=config, push=push, targets_opt=targets, no_cache=no_cache, dev=dev)
+    run_build(config=config, push=push, targets_opt=targets, no_cache=no_cache, dev=dev)

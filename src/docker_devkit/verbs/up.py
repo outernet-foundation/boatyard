@@ -67,9 +67,9 @@ def up(
 
         # Build local images; --dev builds both shapes.
         if build:
-            run_build(root=root, config=config)
+            run_build(config=config)
             if dev:
-                run_build(root=root, config=config, dev=True)
+                run_build(config=config, dev=True)
 
         # Hand off to docker compose up.
         up_command = compose_command(
