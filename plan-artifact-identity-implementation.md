@@ -459,8 +459,8 @@ materialized root carries digest refs.
 
 Cluster P3+P4a · docker-devkit · ADR Part 4, Stage 1. Load: `compose.py`
 (`select` and `render`; `merged_environment` lives here), `config.py`
-(`EDGE_SERVICE_NAME`) and `score.py` (the edge-reserved generation refusal),
-`documents.py` (`ComposeDocument`).
+(`EDGE_SERVICE_NAME`) and `score.py` (the edge-reserved generation refusal,
+`ComposeDocument`).
 
 End state:
 
