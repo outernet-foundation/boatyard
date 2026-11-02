@@ -24,9 +24,9 @@ invocation, and the seed logic inline in the one function. The three
 context managers that own resource lifecycles stay as the only helpers:
 `builtin_patch_templates` (package-resource handle), `compiled_provisioners`
 (tempdir), `rendered_workloads` (tempdir) — they cannot inline
-(try/finally lifecycle). The operator believes the two remaining substrate
-differences (the GPU template selection and the k8s seed) can also be
-eliminated; the agent has reservations on both (see moves 3 and 4).
+(try/finally lifecycle). The operator believes the one remaining substrate
+difference (the GPU template selection) can also be eliminated; the agent
+has reservations (see the GPU move).
 
 ## Landed
 
@@ -37,66 +37,26 @@ eliminated; the agent has reservations on both (see moves 3 and 4).
   mutation in `generate_compose`, replacing the
   `wait-for-resources-image.tpl` patch-template (deleted). Removed the
   `declares_services`-gated templates conditional from `_compose_templates`
-  (the ALPINE_IMAGE check at score_compose.py:165 still consumes
-  `declares_services`, unchanged). Verified safe — see "Settled facts".
+  (the ALPINE_IMAGE check still consumes `declares_services`, unchanged).
+  Verified safe — see "Settled facts".
+- **unified spine** (e82403e): `render_score` in score.py owns
+  `builtin_patch_templates()` + `compiled_provisioners(...)` → gate →
+  init → seed (`if is_k8s:`) → generate; compose calls it per-bundle,
+  k8s once. `init_score_tool`, `_seed_instance_suffixes`, and
+  `_compose_templates` dissolved — templates pass as names and the spine
+  joins them against the builtin dir; the three context managers stay as
+  the only helpers. The ALPINE_IMAGE check stayed at the compose consumer
+  as `_require_alpine_when_declaring_services`, bound via
+  `functools.partial` into a `gate` param — the one param beyond the
+  minimal set, the seam that keeps the compose refusal text out of
+  score.py. Test retarget landed as predicted: score_compose drops `bash`,
+  score_k8s narrows to `bash_output`, per-module `bash` patches retired.
+  The seed landed as the `if is_k8s:` branch (the move-2 disagreement
+  resolved in the line's favor unless overruled).
 
 ## Moves (ordered by the agent's certainty the move is correct)
 
-### 1. Build the unified spine function [HIGH]
-
-One function in score.py owning `with builtin_patch_templates() +
-compiled_provisioners(...)` → init (inlined) → seed (`if is_k8s:`,
-inlined) → generate (inlined). Both pipelines call it. Templates passed
-in as a param — compose computes `[healthcheck, restart,
-gpu-cuda|gpu-rocm]` per bundle's `GPU_VARIANT`, k8s passes its fixed
-`[gpu-pod, scale-to-zero]`. The init command-building (currently
-`init_score_tool`), the generate invocation (currently inline in each
-pipeline), and the seed (currently `_seed_instance_suffixes`) become
-inline logic in the one function — no `init_score_tool` /
-`generate_score_tool` / `_seed_instance_suffixes` helpers. The context
-managers stay.
-
-This supersedes the earlier "settled step: lift generate_score_tool" —
-the generate code goes directly into the unified function inline, not via
-a transient helper that the unified function would then absorb.
-
-Test retarget: after this, all `bash` calls (init + generate) live in
-score.py. score_compose drops the `bash` import entirely; score_k8s
-narrows to `bash_output` (helm stays). The per-module `bash` patches
-(`score_compose_module.bash`, `score_k8s_module.bash`) retire at every
-site — those attrs no longer exist and `monkeypatch.setattr` would raise.
-The `score_module.bash` patches (already present from the init lift)
-intercept both init and generate through the same recorder. Keep
-`score_k8s_module.bash_output` patches (helm stays in score_k8s).
-
-This realizes the vision with two honest remaining differences
-(templates-param, seed-if-line). Correct regardless of whether those
-differences are later eliminated by moves 3–4.
-
-### 2. Seed: line, not fold [HIGH — open disagreement]
-
-The seed (`_seed_instance_suffixes`) writes deterministic instance
-suffixes to score-k8s's `state.yaml` between init (creates it) and
-generate (reads it) — pinning `InstanceSuffix` to `-` + first 10 hex of
-sha256(metadata.name) so regeneration is byte-stable. k8s-only by
-construction (compose has no instances).
-
-**Agent recommendation: keep it as one `if is_k8s:` line in the unified
-function.** Do NOT fold it into `init_score_tool` via a boolean (the
-operator's proposal). Reasons: `init_score_tool`'s job is "run `<tool>
-init`"; the seed is a devkit determinism concern (different
-reason-to-change); folding makes the name a lie and grows the signature
-with three k8s-only params (`state_dir`, `score_dir`, `workloads`) that
-are null/ignored in compose. The boolean-for-string swap is only
-motivated by the fold; keep the string. The one `if is_k8s:` line is
-honest — k8s genuinely has a determinism step compose doesn't, and the
-unified function is exactly where that substrate divergence should be
-visible.
-
-Open disagreement — the operator proposed the fold. Resolved in the
-line's favor in move 1's shape unless overruled.
-
-### 3. GPU collapse drill [LOW — open, operator's lead]
+### 1. GPU collapse drill [LOW — open, operator's lead]
 
 The cuda/rocm pair: one annotation (`outernet.internal/gpu`), two compose
 templates (`gpu-cuda.tpl`, `gpu-rocm.tpl`), one registered, selected by
@@ -117,8 +77,8 @@ If the key is found, the compose templates list becomes a fixed
 `[healthcheck, restart, gpu]` and the templates param is a plain
 per-substrate constant (no computation at the call site) — eliminating
 the templates difference. If not found, templates stay computed at the
-call site, which is already the move 1 shape; the unified function is
-correct either way.
+call site, which is the landed shape; the unified function is correct
+either way.
 
 ## Settled facts (do not re-derive)
 
@@ -148,12 +108,13 @@ correct either way.
 - One-way import law unchanged (`config_lock`/`dockerfiles` ← `config`;
   score.py ← config; the pipeline modules ← score.py).
 - score.py purity is WAIVED (decided 2026-11-02): `bash` may live in
-  score.py; `init_score_tool` already imports it. Do not re-litigate.
-- Bash-patch law: the tests monkeypatch `bash` per-module. `bash` calls
-  in score.py are intercepted via `score_module.bash` patches. After move
-  1, every score-generation patch site carries only the `score_module.bash`
-  patch (the per-module pipeline patches retire). `monkeypatch.setattr`
-  raises on an absent attr by default.
+  score.py; `render_score` carries both its calls. Do not re-litigate.
+- Bash-patch law: the tests monkeypatch `bash` per-module. Every
+  score-generation patch site (init + generate) carries only the
+  `score_module.bash` patch; `score_k8s_module.bash_output` covers helm
+  (helm stays in score_k8s). The per-module pipeline `bash` patches are
+  retired — those attrs no longer exist and `monkeypatch.setattr` raises
+  on an absent attr by default.
 - Commit as you go; prose and code in separate commits; an AGENTS.md line
   a change invalidates updates in the same change.
 
@@ -167,8 +128,9 @@ correct either way.
   pin; k8s chart rendering + document sort) stay at their consumers —
   different substrates.
 - The bundle loop (compose N, k8s 1) stays — it is the spec.
-- The ALPINE_IMAGE check (score_compose.py:165, keyed on
-  `declares_services`) stays pre-generate at the compose consumer.
+- The ALPINE_IMAGE check (`_require_alpine_when_declaring_services` in
+  score_compose.py, keyed on `declares_services`, bound into the spine's
+  `gate` param) stays at the compose consumer.
 
 ## Verify
 
