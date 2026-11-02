@@ -186,8 +186,10 @@ def select(config: Config, environment: Mapping[str, str]) -> Selection:
     ]
     dev_toggles: dict[str, dict[str, str]] = {}
     score_dir = config.root / config.score_dir
-    for bundle in config.compose_bundles():
-        for workload in bundle.workloads:
+    for _, entry in entries:
+        if isinstance(entry, ServiceGroup) or entry.remote:
+            continue
+        for workload in entry.workloads:
             annotations = ComposeWorkloadDocument.load(score_dir / workload).metadata.annotations
             raw = annotations.get(DEV_TOGGLES_ANNOTATION)
             stem = Path(workload).stem

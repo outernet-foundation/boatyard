@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import shutil
+from itertools import chain
 from pathlib import Path
 from typing import Literal, Self
 
@@ -19,6 +20,7 @@ from boatyard.config import (
     CONSUMER_INTERPOLATED_ANNOTATION,
     ComposeWorkloadDocument,
     EDGE_SERVICE_NAME,
+    ServiceGroup,
     Yaml,
     double_dollars,
     is_mapping,
@@ -119,8 +121,15 @@ class ComposeConfig(BaseModel):
 def generate_compose(
     config: Config, lock: ConfigLock, service_shas: dict[str, str], secrets: SecretsDeclaration
 ) -> list[Path]:
-    # Refuse the compose target without local service entries.
-    bundles = config.compose_bundles()
+    # Local bundles (group options and bare entries) in declaration order.
+    bundles = [
+        (name, entry)
+        for name, entry in chain.from_iterable(
+            entry.options.items() if isinstance(entry, ServiceGroup) else ((name, entry),)
+            for name, entry in config.services.items()
+        )
+        if not entry.remote
+    ]
     if not bundles:
         raise ValueError("the compose target requires local service entries (workloads:)")
     root = config.root
@@ -130,11 +139,12 @@ def generate_compose(
     if "ALPINE_IMAGE" not in images:
         raise ValueError(f"{LOCK_PATH.as_posix()}: the image lock must carry the ALPINE_IMAGE entry")
 
-    for bundle in bundles:
+    outputs: list[Path] = []
+    for name, entry in bundles:
         # Collect per-workload annotation facts and enforce the compose placement laws.
         interpolated_targets: set[str] = set()
-        for name in bundle.workloads:
-            workload = ComposeWorkloadDocument.load(score_dir / name)
+        for workload_name in entry.workloads:
+            workload = ComposeWorkloadDocument.load(score_dir / workload_name)
             annotations = workload.metadata.annotations
 
             # Track the declared files whose contents ride un-doubled.
@@ -144,18 +154,18 @@ def generate_compose(
 
         # Assemble the patch templates, adding the GPU template for the bundle's variant.
         templates = [HEALTHCHECK_TEMPLATE, RESTART_TEMPLATE]
-        gpu_template = GPU_COMPOSE_TEMPLATES.get(bundle.vars.get("GPU_VARIANT", ""))
+        gpu_template = GPU_COMPOSE_TEMPLATES.get(entry.vars.get("GPU_VARIANT", ""))
         if gpu_template is not None:
             templates.append(gpu_template)
 
         # Recreate the shared state dir and render the bundle through the spine.
         shutil.rmtree(score_state, ignore_errors=True)
-        output = bundle.output
+        output = root / "stack/generated/compose" / f"compose.{name}.yaml"
         render_score(
             config,
             is_k8s=False,
-            workloads=bundle.workloads,
-            rendering_vars=bundle.vars,
+            workloads=entry.workloads,
+            rendering_vars=entry.vars,
             templates=templates,
             output=output,
             images=images,
@@ -174,15 +184,15 @@ def generate_compose(
 
         # Collapse doubled {workload}-{container} service names.
         collapsed: dict[str, ComposeService] = {}
-        for name, service in services.items():
-            match = DOUBLED_SERVICE_NAME.fullmatch(name)
-            target = match.group(1) if match is not None else name
-            if target != name and target in services:
-                raise ValueError(f"service rename {name} -> {target} collides with an existing service")
+        for service_name, service in services.items():
+            match = DOUBLED_SERVICE_NAME.fullmatch(service_name)
+            target = match.group(1) if match is not None else service_name
+            if target != service_name and target in services:
+                raise ValueError(f"service rename {service_name} -> {target} collides with an existing service")
             collapsed[target] = service
 
         # Rename the gate per entry and follow the depends_on references.
-        gate = f"{GATE_SERVICE}-{bundle.name}"
+        gate = f"{GATE_SERVICE}-{name}"
         if GATE_SERVICE in collapsed:
             if gate in collapsed:
                 raise ValueError(f"gate rename {GATE_SERVICE} -> {gate} collides with an existing service")
@@ -198,7 +208,7 @@ def generate_compose(
 
         # Refuse renderings that define the reserved edge service.
         if EDGE_SERVICE_NAME in collapsed:
-            raise ValueError(f"bundle {bundle.name!r} rendering defines the reserved service {EDGE_SERVICE_NAME!r}")
+            raise ValueError(f"bundle {name!r} rendering defines the reserved service {EDGE_SERVICE_NAME!r}")
 
         # Inline every bind as configs.content with $ doubled.
         contents: dict[str, ComposeConfig] = {}
@@ -226,16 +236,17 @@ def generate_compose(
         if contents:
             document.configs = {**(document.configs or {}), **contents}
         write_generated_file(output, dump_compose(document.dump()))
+        outputs.append(output)
 
     # Remove the compose state dir after the last entry.
     shutil.rmtree(score_state, ignore_errors=True)
 
     # Validate the consumed secrets against the declaration.
     consumed: set[str] = set()
-    for bundle in bundles:
-        for match in COMPOSE_HOLE.finditer(bundle.output.read_text(encoding="utf-8")):
+    for output in outputs:
+        for match in COMPOSE_HOLE.finditer(output.read_text(encoding="utf-8")):
             if len(match.group(1)) % 2 == 1:
                 consumed.add(match.group(2))
     secrets.validate_consumed(consumed, "compose", SECRETS_FILE.as_posix())
 
-    return [bundle.output for bundle in bundles]
+    return outputs

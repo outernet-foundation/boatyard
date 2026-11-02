@@ -3,9 +3,8 @@ from __future__ import annotations
 import importlib.metadata
 import re
 import tomllib
-from itertools import chain
 from pathlib import Path
-from typing import Annotated, Literal, NamedTuple, Self, TypeIs
+from typing import Annotated, Literal, Self, TypeIs
 
 from packaging.specifiers import SpecifierSet
 from pydantic import (
@@ -245,22 +244,6 @@ class Config(BaseModel):
     @property
     def declared_charts(self) -> dict[str, str]:
         return self.k8s.charts if self.k8s is not None else {}
-
-    def compose_bundles(self) -> list[ComposeBundle]:
-        # Local bundles (group options and bare entries) in declaration order.
-        return [
-            ComposeBundle(
-                name,
-                self.root / "stack/generated/compose" / f"compose.{name}.yaml",
-                list(entry.workloads),
-                dict(entry.vars),
-            )
-            for name, entry in chain.from_iterable(
-                entry.options.items() if isinstance(entry, ServiceGroup) else ((name, entry),)
-                for name, entry in self.services.items()
-            )
-            if not entry.remote
-        ]
 
     @field_validator("requires")
     @classmethod
@@ -607,13 +590,6 @@ class ComposeWorkloadDocument(WorkloadDocument):
                 if block is not None and block.http_get is not None:
                     raise ValueError(f"a {probe} httpGet requires {PROBE_ADAPTER_ANNOTATION}")
         return self
-
-
-class ComposeBundle(NamedTuple):
-    name: str
-    output: Path
-    workloads: list[str]
-    vars: dict[str, str]
 
 
 def require_workload_reference(name: str) -> None:

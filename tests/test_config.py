@@ -11,6 +11,7 @@ from boatyard.config import (
     DEV_SENTINEL,
     Config,
     ServiceEntry,
+    ServiceGroup,
 )
 from boatyard.config_lock import LOCK_PATH, parse_config_lock
 
@@ -585,10 +586,9 @@ class TestServices:
         config = Config.load(tmp_path)
 
         assert config is not None
-        bundles = config.compose_bundles()
-        assert [bundle.name for bundle in bundles] == ["cuda", "rocm"]
-        assert bundles[0].output == tmp_path / "stack/generated/compose/compose.cuda.yaml"
-        assert bundles[0].vars == {"GPU_VARIANT": "cuda"}
+        placeframe = config.services["placeframe"]
+        assert isinstance(placeframe, ServiceGroup)
+        assert list(placeframe.options) == ["cuda", "rocm"]
         livekit = config.services["livekit"]
         assert isinstance(livekit, ServiceEntry)
         assert livekit.remote
@@ -1252,7 +1252,10 @@ def test_direct_model_construction_is_valid_for_tests(tmp_path: Path) -> None:
     })
     config.root = tmp_path
 
-    assert config.compose_bundles()[0].name == "core"
+    core = config.services["core"]
+    assert isinstance(core, ServiceEntry)
+    assert not core.remote
+    assert core.workloads == ["api.yaml"]
 
 
 def _write_raw_lock(tmp_path: Path, text: str) -> Path:
