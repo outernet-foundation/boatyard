@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import shlex
-from itertools import chain
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Annotated
@@ -12,7 +11,7 @@ import typer
 from bashrun.bash import bash, bash_output
 
 from boatyard import dockerfiles
-from boatyard.config import Config, ServiceGroup
+from boatyard.config import Config, compose_bundle_output
 from boatyard.config_lock import LOCK_PATH, parse_config_lock
 from boatyard.crane import install_crane
 from boatyard.lock import env_entries
@@ -50,14 +49,7 @@ def publish_compose(
     root = Path.cwd()
     config = Config.load(root)
     bundles = (
-        [
-            (name, root / "stack/generated/compose" / f"compose.{name}.yaml")
-            for name, entry in chain.from_iterable(
-                entry.options.items() if isinstance(entry, ServiceGroup) else ((name, entry),)
-                for name, entry in config.services.items()
-            )
-            if not entry.remote
-        ]
+        [(name, compose_bundle_output(root, name)) for name, _entry in config.local_service_entries()]
         if config is not None
         else []
     )

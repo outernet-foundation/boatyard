@@ -14,7 +14,6 @@ from pydantic import (
 
 from boatyard.config import (
     DEV_TOGGLES_ANNOTATION,
-    ServiceGroup,
     WorkloadDocument,
     Yaml,
     Config,
@@ -74,13 +73,7 @@ def generate_k8s(
     score_dir = root / config.score_dir
     rendering_vars = {**k8s.vars, STORAGE_CLASS_VAR: storage_class}
 
-    compose_workloads = {
-        workload
-        for service in config.services.values()
-        for entry in (service.options.values() if isinstance(service, ServiceGroup) else (service,))
-        if not entry.remote
-        for workload in entry.workloads
-    }
+    compose_workloads = {workload for _, entry in config.local_service_entries() for workload in entry.workloads}
     for name in k8s.workloads:
         if name in compose_workloads:
             continue

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 import shutil
-from itertools import chain
 from pathlib import Path
 from typing import Literal, Self
 
@@ -20,8 +19,8 @@ from boatyard.config import (
     CONSUMER_INTERPOLATED_ANNOTATION,
     ComposeWorkloadDocument,
     EDGE_SERVICE_NAME,
-    ServiceGroup,
     Yaml,
+    compose_bundle_output,
     double_dollars,
     is_mapping,
     Config,
@@ -122,14 +121,7 @@ def generate_compose(
     config: Config, lock: ConfigLock, service_shas: dict[str, str], secrets: SecretsDeclaration
 ) -> list[Path]:
     # Local bundles (group options and bare entries) in declaration order.
-    bundles = [
-        (name, entry)
-        for name, entry in chain.from_iterable(
-            entry.options.items() if isinstance(entry, ServiceGroup) else ((name, entry),)
-            for name, entry in config.services.items()
-        )
-        if not entry.remote
-    ]
+    bundles = config.local_service_entries()
     if not bundles:
         raise ValueError("the compose target requires local service entries (workloads:)")
     root = config.root
@@ -160,7 +152,7 @@ def generate_compose(
 
         # Recreate the shared state dir and render the bundle through the spine.
         shutil.rmtree(score_state, ignore_errors=True)
-        output = root / "stack/generated/compose" / f"compose.{name}.yaml"
+        output = compose_bundle_output(root, name)
         render_score(
             config,
             is_k8s=False,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.metadata
 import re
 import tomllib
+from itertools import chain
 from pathlib import Path
 from typing import Annotated, Literal, Self, TypeIs
 
@@ -87,6 +88,8 @@ AUTH_GROUP_NAME = "auth"
 EDGE_SERVICE_NAME = "edge"
 CADDY_IMAGE = "CADDY_IMAGE"
 DEV_TOGGLES_ANNOTATION = "outernet.internal/dev-toggles"
+
+COMPOSE_OUTPUT_DIR = Path("stack/generated/compose")
 
 Target = Literal["both", "compose", "k8s"]
 
@@ -244,6 +247,17 @@ class Config(BaseModel):
     @property
     def declared_charts(self) -> dict[str, str]:
         return self.k8s.charts if self.k8s is not None else {}
+
+    def local_service_entries(self) -> list[tuple[str, ServiceEntry]]:
+        # Group options and bare entries in declaration order, remote refs excluded.
+        return [
+            (name, entry)
+            for name, entry in chain.from_iterable(
+                entry.options.items() if isinstance(entry, ServiceGroup) else ((name, entry),)
+                for name, entry in self.services.items()
+            )
+            if not entry.remote
+        ]
 
     @field_validator("requires")
     @classmethod
@@ -595,6 +609,10 @@ class ComposeWorkloadDocument(WorkloadDocument):
 def require_workload_reference(name: str) -> None:
     if re.fullmatch(r"[A-Za-z0-9._-]+\.yaml", name) is None:
         raise ValueError(f"workload reference {name!r} must be a flat .yaml file name")
+
+
+def compose_bundle_output(root: Path, name: str) -> Path:
+    return root / COMPOSE_OUTPUT_DIR / f"compose.{name}.yaml"
 
 
 def load_yaml_file(path: Path) -> Yaml:

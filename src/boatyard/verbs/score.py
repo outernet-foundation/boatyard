@@ -9,7 +9,7 @@ import typer
 from bashrun.bash import bash, bash_check, bash_output
 
 from boatyard import dockerfiles
-from boatyard.config import Config, ServiceGroup, Target, load_yaml_file
+from boatyard.config import Config, Target, load_yaml_file
 from boatyard.config_lock import LOCK_PATH, parse_config_lock
 from boatyard.score import (
     SECRETS_FILE,
@@ -50,12 +50,8 @@ def generate_score(
         raise typer.BadParameter("--check and --local are mutually exclusive")
     root = Path.cwd()
     config = Config.load(root)
-    has_local_entries = config is not None and any(
-        not entry.remote
-        for service in config.services.values()
-        for entry in (service.options.values() if isinstance(service, ServiceGroup) else (service,))
-    )
-    if config is None or not (has_local_entries or config.k8s):
+    local_entries = config.local_service_entries() if config is not None else []
+    if config is None or not (local_entries or config.k8s):
         if not check:
             raise ValueError("boatyard.yml declares no local service entries and no k8s section")
         print("no local service entries and no k8s section; nothing to check")

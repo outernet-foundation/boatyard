@@ -1258,6 +1258,37 @@ def test_direct_model_construction_is_valid_for_tests(tmp_path: Path) -> None:
     assert core.workloads == ["api.yaml"]
 
 
+def test_local_service_entries_flatten_in_declaration_order_skipping_refs(tmp_path: Path) -> None:
+    write_config(
+        tmp_path,
+        {
+            "requires": ">=0.1",
+            "repository": "ghcr.io/org/repo",
+            "project_name": "example",
+            "services": {
+                "identity": {"options": {"keycloak": {"ref": "oci://ghcr.io/org/repo/keycloak@" + DIGEST}}},
+                "placeframe": {
+                    "options": {
+                        "cuda": {"workloads": ["api.yaml"]},
+                        "rocm": {"workloads": ["api.yaml"]},
+                    },
+                },
+                "livekit": {"ref": "oci://ghcr.io/org/repo/livekit@" + DIGEST},
+                "solo": {"workloads": ["solo.yaml"]},
+            },
+        },
+    )
+
+    config = Config.load(tmp_path)
+
+    assert config is not None
+    assert [(name, entry.workloads) for name, entry in config.local_service_entries()] == [
+        ("cuda", ["api.yaml"]),
+        ("rocm", ["api.yaml"]),
+        ("solo", ["solo.yaml"]),
+    ]
+
+
 def _write_raw_lock(tmp_path: Path, text: str) -> Path:
     lock = tmp_path / LOCK_PATH
     lock.write_text(text, encoding="utf-8")
