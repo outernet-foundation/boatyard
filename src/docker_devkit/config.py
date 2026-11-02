@@ -248,10 +248,8 @@ class DockerDevkitConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> Self:
-        # Require gateway and project_name exactly when services are declared.
+        # Require project_name exactly when services are declared.
         if self.services:
-            if self.gateway is None:
-                raise ValueError("services are declared; gateway is required")
             if not self.project_name:
                 raise ValueError("services are declared; project_name is required")
             any_local = any(

@@ -30,15 +30,15 @@ class AssemblyCapture:
             self.document = yaml.safe_load(Path(match.group(1)).read_text(encoding="utf-8"))
 
 
-def _assembly_document(
+def _write_edge_tree(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     routes: list[dict[str, object]],
     *,
     auth: bool = False,
-    gateway: str = "${GATEWAY_PORT:?err}",
+    gateway: str | None = "${GATEWAY_PORT:?err}",
     public_url: str = "http://192.168.8.10:58080",
-) -> dict[str, Any]:
+) -> None:
     services: dict[str, object] = {
         "livekit": {"ref": LIVEKIT_REF, "routes": routes},
     }
@@ -52,18 +52,16 @@ def _assembly_document(
             }
         }
         services = {"auth": services.pop("auth"), **services}
+    payload: dict[str, object] = {
+        "requires": ">=0.0",
+        "project_name": "edge-demo",
+        "platforms": ["linux/amd64"],
+        "services": services,
+    }
+    if gateway is not None:
+        payload["gateway"] = gateway
     (tmp_path / "docker-devkit.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "requires": ">=0.0",
-                "project_name": "edge-demo",
-                "platforms": ["linux/amd64"],
-                "gateway": gateway,
-                "services": services,
-            },
-            default_flow_style=False,
-            sort_keys=False,
-        ),
+        yaml.safe_dump(payload, default_flow_style=False, sort_keys=False),
         encoding="utf-8",
     )
     tmp_path.joinpath(*LOCK_PATH.parts).write_text(
@@ -86,9 +84,21 @@ def _assembly_document(
     monkeypatch.delenv("PUBLIC_URL", raising=False)
     monkeypatch.delenv("GATEWAY_PORT", raising=False)
     monkeypatch.chdir(tmp_path)
-    capture = AssemblyCapture()
     monkeypatch.setattr(assembly, "bash_output", _probe_present_and_services)
     monkeypatch.setattr(up, "bash_output", _probe_present_and_services)
+
+
+def _assembly_document(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    routes: list[dict[str, object]],
+    *,
+    auth: bool = False,
+    gateway: str | None = "${GATEWAY_PORT:?err}",
+    public_url: str = "http://192.168.8.10:58080",
+) -> dict[str, Any]:
+    _write_edge_tree(tmp_path, monkeypatch, routes, auth=auth, gateway=gateway, public_url=public_url)
+    capture = AssemblyCapture()
     monkeypatch.setattr(up, "bash_handoff", capture.run)
 
     result = runner.invoke(up.app, [])
@@ -215,6 +225,15 @@ class TestEdgeStanza:
         )
 
         assert document["services"]["edge"]["ports"] == [{"target": "8443", "published": "8080", "protocol": "tcp"}]
+
+    def test_routes_without_a_gateway_refuse_at_assembly(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _write_edge_tree(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], gateway=None)
+
+        result = runner.invoke(up.app, [])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, RuntimeError)
+        assert "routes are declared; gateway is required" in str(result.exception)
 
 
 class TestMergedEnvironment:

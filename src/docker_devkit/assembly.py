@@ -163,7 +163,8 @@ class Assembly:
         assert self.config.project_name is not None
         services: dict[str, object] = {}
         if self.routes:
-            assert self.config.gateway is not None
+            if self.config.gateway is None:
+                raise RuntimeError("routes are declared; gateway is required")
             services[EDGE_SERVICE_NAME] = {
                 "image": f"${{{CADDY_IMAGE}:?err}}",
                 "configs": [{"source": EDGE_CONFIG_NAME, "target": "/etc/caddy/Caddyfile"}],

@@ -916,24 +916,6 @@ class TestGatewayKey:
         with pytest.raises(RuntimeError, match="CADDY_IMAGE"):
             load_config(tmp_path)
 
-    def test_services_without_gateway_refuse(self, tmp_path: Path) -> None:
-        write_config(
-            tmp_path,
-            {
-                "requires": ">=0.1",
-                "project_name": "example",
-                "services": {
-                    "livekit": {
-                        "ref": "oci://ghcr.io/org/repo/x@" + DIGEST,
-                        "routes": [{"path": "/*", "upstream": "livekit:8000"}],
-                    }
-                },
-            },
-        )
-
-        with pytest.raises(ValidationError, match=r"gateway.*required"):
-            load_config(tmp_path)
-
     def test_a_routeless_stack_carries_an_inert_gateway(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,
