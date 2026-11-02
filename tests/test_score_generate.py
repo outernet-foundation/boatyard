@@ -10,16 +10,14 @@ from bashrun.bash import CalledProcessError, bash, bash_output
 from pydantic import ValidationError
 
 from docker_devkit import config as config_module
-from docker_devkit import score as score_generate_module
+from docker_devkit import score_compose as score_compose_module
+from docker_devkit import score_k8s as score_k8s_module
+from docker_devkit.verbs import score as score_verb_module
 from docker_devkit.config import Config
 from docker_devkit.config_lock import ConfigLock
-from docker_devkit.score import BindVolume, ComposeService
-from docker_devkit.score import CLOUD_STORAGE_CLASS
-from docker_devkit.score import (
-    generate_k8s,
-    write_generated_file,
-)
-from docker_devkit.score import compiled_provisioners
+from docker_devkit.score import compiled_provisioners, write_generated_file
+from docker_devkit.score_compose import BindVolume, ComposeService
+from docker_devkit.score_k8s import CLOUD_STORAGE_CLASS, generate_k8s
 
 DIGEST = "sha256:" + "a" * 64
 
@@ -142,8 +140,8 @@ def _generate_with_chart(
     output = Path("stack/generated/k8s/manifests.yaml")
     k8s = K8sBashRecorder(tmp_path / output, tmp_path / "stack/generated/k8s/.score-k8s/state.yaml")
     helm = HelmRecorder()
-    monkeypatch.setattr(score_generate_module, "bash", k8s.run)
-    monkeypatch.setattr(score_generate_module, "bash_output", helm.run)
+    monkeypatch.setattr(score_k8s_module, "bash", k8s.run)
+    monkeypatch.setattr(score_k8s_module, "bash_output", helm.run)
     assert config.k8s is not None
     config.root = tmp_path
     lock = ConfigLock.model_validate({
@@ -287,8 +285,8 @@ class TestMarkerSubstrateResolution:
         ) -> None:
             captured["images"] = images
 
-        monkeypatch.setattr(score_generate_module, "generate_compose", _capture)
-        score_generate_module.generate_artifacts(config, "compose", local=False)
+        monkeypatch.setattr(score_verb_module, "generate_compose", _capture)
+        score_verb_module.generate_artifacts(config, "compose", local=False)
         return captured["images"]
 
     def test_compose_generation_receives_the_selected_platform_manifests(
@@ -314,8 +312,8 @@ class TestMarkerSubstrateResolution:
         output = Path("stack/generated/k8s/manifests.yaml")
         k8s = K8sBashRecorder(tmp_path / output, tmp_path / "stack/generated/k8s/.score-k8s/state.yaml")
         helm = HelmRecorder()
-        monkeypatch.setattr(score_generate_module, "bash", k8s.run)
-        monkeypatch.setattr(score_generate_module, "bash_output", helm.run)
+        monkeypatch.setattr(score_k8s_module, "bash", k8s.run)
+        monkeypatch.setattr(score_k8s_module, "bash_output", helm.run)
         config = _root_config(
             platforms=["linux/amd64"],
             k8s={"workloads": [], "charts": {"loki": CHART_REF}},
@@ -362,7 +360,7 @@ def _generate_compose(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, generated
     (tmp_path / "workloads" / "api").mkdir(parents=True)
     (tmp_path / "workloads" / "api" / "config.yaml").write_text("key: ${FOO}\n", encoding="utf-8")
     recorder = ComposeBashRecorder(generated)
-    monkeypatch.setattr(score_generate_module, "bash", recorder.run)
+    monkeypatch.setattr(score_compose_module, "bash", recorder.run)
     config = _root_config(
         repository="ghcr.io/org/repo",
         project_name="example",
@@ -370,7 +368,7 @@ def _generate_compose(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, generated
     )
     config.root = tmp_path
 
-    score_generate_module.generate_compose(tmp_path, config, {}, {}, None)
+    score_compose_module.generate_compose(tmp_path, config, {}, {}, None)
     return tmp_path / "stack" / "generated" / "compose" / "compose.core.yaml"
 
 
@@ -452,7 +450,7 @@ def test_generate_compose_gate_names_differ_per_entry(tmp_path: Path, monkeypatc
     (tmp_path / "stack" / "score" / "api.yaml").write_text("containers: {}\n", encoding="utf-8")
     (tmp_path / "stack" / "score" / "edge.yaml").write_text("containers: {}\n", encoding="utf-8")
     recorder = ComposeBashRecorder(GATED_COMPOSE)
-    monkeypatch.setattr(score_generate_module, "bash", recorder.run)
+    monkeypatch.setattr(score_compose_module, "bash", recorder.run)
     config = _root_config(
         repository="ghcr.io/org/repo",
         project_name="example",
@@ -463,7 +461,7 @@ def test_generate_compose_gate_names_differ_per_entry(tmp_path: Path, monkeypatc
     )
     config.root = tmp_path
 
-    score_generate_module.generate_compose(tmp_path, config, {}, {}, None)
+    score_compose_module.generate_compose(tmp_path, config, {}, {}, None)
 
     core = yaml.safe_load((tmp_path / "stack/generated/compose/compose.core.yaml").read_text(encoding="utf-8"))
     edge = yaml.safe_load((tmp_path / "stack/generated/compose/compose.edge.yaml").read_text(encoding="utf-8"))
@@ -501,7 +499,7 @@ def test_workload_lock_markers_resolve_into_the_rendered_copy(tmp_path: Path, mo
         encoding="utf-8",
     )
     recorder = WorkloadContentsRecorder()
-    monkeypatch.setattr(score_generate_module, "bash", recorder.run)
+    monkeypatch.setattr(score_compose_module, "bash", recorder.run)
     config = _root_config(
         repository="ghcr.io/org/repo",
         project_name="example",
@@ -509,7 +507,7 @@ def test_workload_lock_markers_resolve_into_the_rendered_copy(tmp_path: Path, mo
     )
     config.root = tmp_path
 
-    score_generate_module.generate_compose(
+    score_compose_module.generate_compose(
         tmp_path, config, {"API_IMAGE": "ghcr.io/org/api@sha256:" + "a" * 64}, {}, None
     )
 
@@ -525,7 +523,7 @@ def test_workload_lock_marker_naming_no_lock_entry_refuses(tmp_path: Path, monke
         "containers:\n  api:\n    image:\n      lock: API_IMAGE\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(score_generate_module, "bash", WorkloadContentsRecorder().run)
+    monkeypatch.setattr(score_compose_module, "bash", WorkloadContentsRecorder().run)
     config = _root_config(
         repository="ghcr.io/org/repo",
         project_name="example",
@@ -534,7 +532,7 @@ def test_workload_lock_marker_naming_no_lock_entry_refuses(tmp_path: Path, monke
     config.root = tmp_path
 
     with pytest.raises(ValueError, match=r"workload api\.yaml.*API_IMAGE.*does not exist"):
-        score_generate_module.generate_compose(tmp_path, config, {}, {}, None)
+        score_compose_module.generate_compose(tmp_path, config, {}, {}, None)
 
 
 SHIPPED_TEMPLATES = {
@@ -630,9 +628,9 @@ def _compose_init_templates(
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_text(text, encoding="utf-8")
     recorder = ComposeBashRecorder(generated)
-    monkeypatch.setattr(score_generate_module, "bash", recorder.run)
+    monkeypatch.setattr(score_compose_module, "bash", recorder.run)
     config.root = tmp_path
-    score_generate_module.generate_compose(tmp_path, config, images, {}, None)
+    score_compose_module.generate_compose(tmp_path, config, images, {}, None)
     inits = [command for command in recorder.commands if command.startswith("score-compose init")]
     return [[Path(token).name for token in command.split() if token.endswith(".tpl")] for command in inits]
 
@@ -723,9 +721,9 @@ def test_provisioners_register_by_resource_type_closure(tmp_path: Path, monkeypa
     config = _bundle_config(workloads=["api.yaml", "gateway.yaml"])
     config.root = tmp_path
     recorder = ComposeBashRecorder("services: {}\n")
-    monkeypatch.setattr(score_generate_module, "bash", recorder.run)
+    monkeypatch.setattr(score_compose_module, "bash", recorder.run)
 
-    score_generate_module.generate_compose(tmp_path, config, GATE_LOCK, {}, None)
+    score_compose_module.generate_compose(tmp_path, config, GATE_LOCK, {}, None)
 
     init = next(command for command in recorder.commands if command.startswith("score-compose init"))
     provisioners = [token for token in init.split() if token.endswith(".yaml")]
@@ -938,7 +936,7 @@ def test_dev_toggles_on_a_k8s_only_workload_refuses(tmp_path: Path) -> None:
     assert config.k8s is not None
     config.root = tmp_path
     with pytest.raises(ValueError, match="renders k8s-only"):
-        score_generate_module.generate_k8s(
+        generate_k8s(
             tmp_path,
             config,
             config.k8s,
@@ -1016,7 +1014,7 @@ def test_consumer_interpolated_binds_ride_undoubled(tmp_path: Path, monkeypatch:
         score_dir / ".score-compose/mounts/files/rathole-client-files-client.toml",
         'remote_addr = "${TUNNEL_CONTROL_ENDPOINT:?err}"\n',
     )
-    monkeypatch.setattr(score_generate_module, "bash", recorder.run)
+    monkeypatch.setattr(score_compose_module, "bash", recorder.run)
     config = _root_config(
         repository="ghcr.io/org/repo",
         project_name="example",
@@ -1024,7 +1022,7 @@ def test_consumer_interpolated_binds_ride_undoubled(tmp_path: Path, monkeypatch:
     )
     config.root = tmp_path
 
-    score_generate_module.generate_compose(tmp_path, config, {}, {}, None)
+    score_compose_module.generate_compose(tmp_path, config, {}, {}, None)
 
     output = tmp_path / "stack" / "generated" / "compose" / "compose.rathole-client.yaml"
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
@@ -1069,8 +1067,8 @@ def test_k8s_builtin_templates_register_on_every_init(tmp_path: Path, monkeypatc
     (tmp_path / "stack" / "score" / "api.yaml").write_text("containers: {}\n", encoding="utf-8")
     output = Path("stack/generated/k8s/manifests.yaml")
     recorder = K8sBashRecorder(tmp_path / output, tmp_path / "stack/generated/k8s/.score-k8s/state.yaml")
-    monkeypatch.setattr(score_generate_module, "bash", recorder.run)
-    monkeypatch.setattr(score_generate_module, "bash_output", HelmRecorder().run)
+    monkeypatch.setattr(score_k8s_module, "bash", recorder.run)
+    monkeypatch.setattr(score_k8s_module, "bash_output", HelmRecorder().run)
     config = _root_config(k8s={"workloads": ["api.yaml"]})
     config.root = tmp_path
 
@@ -1091,8 +1089,8 @@ def test_k8s_instance_suffixes_are_preseeded_deterministically(tmp_path: Path, m
     (tmp_path / "stack" / "score" / "api.yaml").write_text("metadata:\n  name: api\ncontainers: {}\n", encoding="utf-8")
     output = Path("stack/generated/k8s/manifests.yaml")
     recorder = K8sBashRecorder(tmp_path / output, tmp_path / "stack/generated/k8s/.score-k8s/state.yaml")
-    monkeypatch.setattr(score_generate_module, "bash", recorder.run)
-    monkeypatch.setattr(score_generate_module, "bash_output", HelmRecorder().run)
+    monkeypatch.setattr(score_k8s_module, "bash", recorder.run)
+    monkeypatch.setattr(score_k8s_module, "bash_output", HelmRecorder().run)
     config = _root_config(k8s={"workloads": ["api.yaml"]})
     config.root = tmp_path
 

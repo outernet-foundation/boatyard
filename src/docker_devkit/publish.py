@@ -8,7 +8,7 @@ from typing import NamedTuple
 import yaml
 
 from docker_devkit.config import Yaml, double_dollars
-from docker_devkit.score import ComposeDocument
+from docker_devkit.score_compose import ComposeDocument
 from docker_devkit.lock import resolve_remote_digest
 
 VAR_PATTERN = re.compile(r"\$\{([A-Z][A-Z0-9_]*)(:[?\-+][^}]*)?\}")
