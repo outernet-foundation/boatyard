@@ -247,7 +247,7 @@ variants:
 A service declaring an ARG named in `variants:` builds one target per
 declared value, the first declared value the default cell (the ARG is the
 receiver convention, the `ARG {SERVICE}_SHA` shape); `derive_services` takes
-the declared axes from `load_config` as a parameter — the one-way law holds,
+the declared axes from `Config.resolve` as a parameter — the one-way law holds,
 dockerfiles still imports nothing from config. Selection rides
 `--targets`: a variant-bearing target is addressable by cell (`api/cuda`),
 a bare name selects the default cell, an unknown cell refuses listing the

@@ -37,8 +37,9 @@ The module-tiers refactor delivers:
   no `ParsedDockerfile`.
 - The compose boundary is `compose.py`: `select` (pure `BUNDLES=` laws) and
   `render` beside the invocation kit; the `Assembly` class is gone.
-- `config.py` loads in three steps — `read_config`, `resolve_config`,
-  `load_config` — with the schema models unchanged.
+- `config.py` loads through `Config.load` (classmethod) and `Config.resolve`
+  (member) on the schema model itself, renamed from `DockerDevkitConfig`
+  (the lock model is `ConfigLock`, renamed from `ImageLock`).
 
 The Part 1 precision material is not a prerequisite — it is this plan's own
 opening cluster (phases 8–11), landing before the change detection that
@@ -185,8 +186,8 @@ Verify: fixture tests — one per loud failure, one per attributed construct.
 ## Phase 9 — Attribution-based service hashes
 
 Cluster precision · docker-devkit · absorbed Part 1, "Over-inclusion fates"
-and "Soundness argument". Load: `config.py` (`compute_service_shas`,
-`service_sha_env`, `build_partitions`), `dockerfiles.py` (`derive_services`),
+and "Soundness argument". Load: `dockerfiles.py` (`derive_services`,
+`compute_service_shas`, `service_sha_env`), `config.py` (`build_partitions`),
 `tests/test_service_builds.py`.
 
 End state:
@@ -413,7 +414,7 @@ refusal.
 
 Cluster P3+P4a · docker-devkit · ADR Part 3, "Ref grammar and lock entries".
 Load: `config.py` (the entry `ref:` grammar), `config_lock.py`
-(`parse_image_lock`), `bake.py`
+(`parse_config_lock`), `bake.py`
 (the lock writer inside `run_build`), `verbs/mirror.py`.
 
 End state:
