@@ -176,9 +176,9 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 ## Deployment-surface annotations
 
 - Everything the substrate needs that score's container model doesn't carry lives in the workload file as `outernet.internal/*` annotations — `docker-devkit.yaml` never carries a per-workload runtime fact; the shipped patch templates
-  (package data under `src/docker_devkit/patch_templates/`, resolved via `importlib.resources`; a packaging test asserts every shipped template resolves) are the annotation reader — one annotation, one template, one behavior; consumer
-  repos never author one; refusal laws live in devkit code (templates are data and cannot refuse); score propagates `metadata.annotations` into both renderings, so adding or renaming an annotation changes the committed artifacts —
-  regeneration diff expectations must include the annotation lines.
+  (package data under `src/docker_devkit/patch_templates/`) are the annotation reader — one annotation, one template, one behavior; consumer repos never author one; refusal laws live in devkit code (templates are data and cannot
+  refuse); annotation vocabulary refusals fire at the lens (`WorkloadDocument` in config.py, strict `dict[str, str]` annotations) at every parse — one validity for every reader (`up` and `generate-score` alike); placement
+  laws stay at their consumers (httpGet-requires-probe-adapter in the compose path, dev-toggles-on-k8s-only in the k8s path); score propagates `metadata.annotations` into both renderings — regeneration diff expectations must include the annotation lines.
 
 | Annotation | Behavior |
 |---|---|
@@ -186,7 +186,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 | `outernet.internal/restart` | compose enum (`no`/`always`/`on-failure`/`unless-stopped`); outside refuses |
 | `outernet.internal/probe-adapter` | `python-urllib` or `bash-http`; an httpGet probe without the annotation refuses loudly — score-compose silently drops httpGet |
 | `outernet.internal/consumer-interpolated` | declared `files:` names ride un-doubled; a name matching no declared file refuses |
-| `outernet.internal/dev-toggles` | consumed at `up --dev`; no template, no artifact change |
+| `outernet.internal/dev-toggles` | consumed at `up --dev`; no template, no artifact change; on a k8s-only workload refuses (compose vocabulary) |
 
 ## This file's rules
 
