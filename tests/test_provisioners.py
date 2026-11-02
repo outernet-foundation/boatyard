@@ -63,10 +63,20 @@ def parse_entries(text: str) -> Any:
 
 
 def compile_entry(text: str, name: str, tmp_path: Path, images: dict[str, str] | None = None) -> str:
-    source = tmp_path / name
-    source.parent.mkdir(parents=True, exist_ok=True)
-    source.write_text(text, encoding="utf-8")
-    with compiled_provisioners(tmp_path, [name], tmp_path, images or {}) as compiled:
+    rendering = Path(name).parts[0] if len(Path(name).parts) > 1 else "compose"
+    provisioner_path = tmp_path / rendering / Path(name).name
+    provisioner_path.parent.mkdir(parents=True, exist_ok=True)
+    provisioner_path.write_text(text, encoding="utf-8")
+    document: list[dict[str, Any]] = parse_entries(text)
+    resource_types: list[str] = []
+    for entry in document:
+        resource_type = entry.get("type")
+        if isinstance(resource_type, str):
+            resource_types.append(resource_type)
+    resource_types.sort()
+    resources = {f"res{index}": {"type": resource_type} for index, resource_type in enumerate(sorted(resource_types))}
+    (tmp_path / "workload.yaml").write_text(yaml.safe_dump({"resources": resources}), encoding="utf-8")
+    with compiled_provisioners(tmp_path, rendering, ["workload.yaml"], tmp_path, images or {}) as compiled:
         return compiled.paths[0].read_text(encoding="utf-8")
 
 
@@ -224,21 +234,6 @@ def test_none_valued_fields_are_dropped(tmp_path: Path) -> None:
     assert set(compiled) == {"uri", "type"}
 
 
-def test_non_list_document_is_rejected(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="non-empty YAML list"):
-        compile_entry("uri: template://example/x\ntype: example-x\n", "x.yaml", tmp_path)
-
-
-def test_empty_file_is_rejected(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="non-empty YAML list"):
-        compile_entry("", "x.yaml", tmp_path)
-
-
-def test_empty_document_list_is_rejected(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="non-empty YAML list"):
-        compile_entry("[]\n", "x.yaml", tmp_path)
-
-
 def test_validation_errors_carry_the_source_name(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match=r"database\.yaml"):
         compile_entry(
@@ -257,8 +252,9 @@ def test_validation_errors_carry_the_source_name(tmp_path: Path) -> None:
 def test_compiled_provisioners_write_tempdir_copies_under_the_source_dir(tmp_path: Path) -> None:
     (tmp_path / "compose").mkdir()
     (tmp_path / "compose" / "database.yaml").write_text(COMPOSE_ENTRY, encoding="utf-8")
+    (tmp_path / "workload.yaml").write_text("resources:\n  db:\n    type: example-database\n", encoding="utf-8")
 
-    with compiled_provisioners(tmp_path, ["compose/database.yaml"], tmp_path, {}) as compiled:
+    with compiled_provisioners(tmp_path, "compose", ["workload.yaml"], tmp_path, {}) as compiled:
         assert len(compiled.paths) == 1
         compiled_path = compiled.paths[0]
         assert tmp_path in compiled_path.parents
@@ -270,8 +266,8 @@ def test_compiled_provisioners_write_tempdir_copies_under_the_source_dir(tmp_pat
     assert list(tmp_path.glob("compiled-provisioners-*")) == []
 
 
-def test_compiled_provisioners_yield_nothing_without_names(tmp_path: Path) -> None:
-    with compiled_provisioners(tmp_path, [], tmp_path, {}) as compiled:
+def test_compiled_provisioners_yield_nothing_without_workloads(tmp_path: Path) -> None:
+    with compiled_provisioners(tmp_path, "compose", [], tmp_path, {}) as compiled:
         assert compiled.paths == []
         assert not compiled.declares_services
 
@@ -283,16 +279,18 @@ def test_compile_reports_whether_provisioners_declare_services(tmp_path: Path) -
     (tmp_path / "compose" / "database.yaml").write_text(COMPOSE_ENTRY, encoding="utf-8")
     (tmp_path / "k8s").mkdir()
     (tmp_path / "k8s" / "database-k8s.yaml").write_text(K8S_ENTRY, encoding="utf-8")
+    (tmp_path / "workload.yaml").write_text("resources:\n  db:\n    type: example-database\n", encoding="utf-8")
 
-    with compiled_provisioners(tmp_path, ["compose/database.yaml"], tmp_path, {}) as compiled:
+    with compiled_provisioners(tmp_path, "compose", ["workload.yaml"], tmp_path, {}) as compiled:
         assert compiled.declares_services
 
-    with compiled_provisioners(tmp_path, ["k8s/database-k8s.yaml"], tmp_path, {}) as compiled:
+    with compiled_provisioners(tmp_path, "k8s", ["workload.yaml"], tmp_path, {}) as compiled:
         assert not compiled.declares_services
 
 
 def test_compiled_provisioners_reject_string_form_before_any_writes(tmp_path: Path) -> None:
-    (tmp_path / "legacy.yaml").write_text(
+    (tmp_path / "compose").mkdir()
+    (tmp_path / "compose" / "legacy.yaml").write_text(
         """
 - uri: template://example/x
   type: example-x
@@ -301,10 +299,11 @@ def test_compiled_provisioners_reject_string_form_before_any_writes(tmp_path: Pa
 """,
         encoding="utf-8",
     )
+    (tmp_path / "workload.yaml").write_text("resources:\n  x:\n    type: example-x\n", encoding="utf-8")
 
     with (
         pytest.raises(ValueError, match=r"legacy\.yaml"),
-        compiled_provisioners(tmp_path, ["legacy.yaml"], tmp_path, {}),
+        compiled_provisioners(tmp_path, "compose", ["workload.yaml"], tmp_path, {}),
     ):
         pass
 
@@ -318,7 +317,7 @@ def test_compiled_output_is_independent_of_working_directory(tmp_path: Path) -> 
     expected = compile_entry(COMPOSE_ENTRY, "compose/database.yaml", tmp_path)
 
     with chdir(Path("/")):
-        with compiled_provisioners(tmp_path, ["compose/database.yaml"], tmp_path, {}) as compiled:
+        with compiled_provisioners(tmp_path, "compose", ["workload.yaml"], tmp_path, {}) as compiled:
             compiled_text = compiled.paths[0].read_text(encoding="utf-8")
 
     assert compiled_text == expected

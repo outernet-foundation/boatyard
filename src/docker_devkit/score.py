@@ -144,8 +144,12 @@ def builtin_patch_templates() -> Generator[Path]:
         yield directory
 
 
-def closure_provisioners(score_dir: Path, rendering: str, workloads: list[str]) -> list[str]:
-    # Select the provisioner files whose resource types the workloads reference.
+@contextmanager
+def compiled_provisioners(
+    score_dir: Path, rendering: str, workloads: list[str], root: Path, images: dict[str, str]
+) -> Generator[CompiledProvisioners]:
+    # Select the provisioner files whose resource types the workloads reference,
+    # then compile into a per-run tempdir under score_dir.
     referenced: set[str] = set()
     for name in workloads:
         document = load_yaml_file(score_dir / name)
@@ -155,40 +159,32 @@ def closure_provisioners(score_dir: Path, rendering: str, workloads: list[str]) 
                 resource_type = resource.get("type") if is_mapping(resource) else None
                 if isinstance(resource_type, str):
                     referenced.add(resource_type)
-    selected: list[str] = []
-    directory = score_dir / rendering
-    if not directory.is_dir():
-        return selected
-    for path in sorted(directory.glob("*.yaml")):
-        entries = load_yaml_file(path)
-        if not is_list(entries):
-            continue
-        if any(is_mapping(entry) and entry.get("type") in referenced for entry in entries):
-            selected.append(f"{rendering}/{path.name}")
-    return selected
+    names: list[str] = []
+    rendering_dir = score_dir / rendering
+    if rendering_dir.is_dir():
+        for path in sorted(rendering_dir.glob("*.yaml")):
+            entries = load_yaml_file(path)
+            if not is_list(entries):
+                continue
+            if any(is_mapping(entry) and entry.get("type") in referenced for entry in entries):
+                names.append(f"{rendering}/{path.name}")
 
-
-@contextmanager
-def compiled_provisioners(
-    source_dir: Path, names: list[str], root: Path, images: dict[str, str]
-) -> Generator[CompiledProvisioners]:
-    # Compile into a per-run tempdir under source_dir.
     if not names:
         yield CompiledProvisioners(paths=[], declares_services=False)
         return
 
-    with TemporaryDirectory(prefix="compiled-provisioners-", dir=source_dir) as temporary_directory:
+    with TemporaryDirectory(prefix="compiled-provisioners-", dir=score_dir) as temporary_directory:
         directory = Path(temporary_directory)
         paths: list[Path] = []
         declares_services = False
         for name in names:
             document = resolve_lock_refs(
-                resolve_includes(yaml.safe_load((source_dir / name).read_text(encoding="utf-8")), root, name),
+                resolve_includes(yaml.safe_load((score_dir / name).read_text(encoding="utf-8")), root, name),
                 images,
                 name,
             )
-            if not is_list(document) or not document:
-                raise ValueError(f"{name}: an authored provisioner file must be a non-empty YAML list")
+            if not is_list(document):
+                continue
             compiled_entries: list[Yaml] = []
             for entry in document:
                 validate(AuthoredProvisioner, entry, name)

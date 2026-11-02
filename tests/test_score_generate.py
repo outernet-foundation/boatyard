@@ -1245,10 +1245,10 @@ ORDER_INDEPENDENCE_SECOND_PROVISIONER = """\
 def test_provisioner_registration_order_does_not_change_generated_output(tmp_path: Path) -> None:
     _skip_unless_pinned_score_compose()
     source = tmp_path / "score"
-    source.mkdir()
-    (source / "first.yaml").write_text(ORDER_INDEPENDENCE_PROVISIONER, encoding="utf-8")
-    (source / "second.yaml").write_text(ORDER_INDEPENDENCE_SECOND_PROVISIONER, encoding="utf-8")
-    workload = tmp_path / "workload.yaml"
+    (source / "compose").mkdir(parents=True)
+    (source / "compose" / "first.yaml").write_text(ORDER_INDEPENDENCE_PROVISIONER, encoding="utf-8")
+    (source / "compose" / "second.yaml").write_text(ORDER_INDEPENDENCE_SECOND_PROVISIONER, encoding="utf-8")
+    workload = source / "workload.yaml"
     workload.write_text(
         "apiVersion: score.dev/v1b1\n"
         "metadata:\n"
@@ -1269,7 +1269,7 @@ def test_provisioner_registration_order_does_not_change_generated_output(tmp_pat
         "SERVICE_IMAGE": "ghcr.io/example/service@sha256:" + "a" * 64,
         "OTHER_IMAGE": "ghcr.io/example/other@sha256:" + "b" * 64,
     }
-    with compiled_provisioners(source, ["first.yaml", "second.yaml"], tmp_path, order_lock) as compiled:
+    with compiled_provisioners(source, "compose", ["workload.yaml"], tmp_path, order_lock) as compiled:
         registrations = {
             "forward": compiled.paths,
             "reversed": list(reversed(compiled.paths)),

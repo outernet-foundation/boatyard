@@ -26,7 +26,6 @@ from docker_devkit.config_lock import ConfigLock
 from docker_devkit.lock import env_entries
 from docker_devkit.score import (
     builtin_patch_templates,
-    closure_provisioners,
     compiled_provisioners,
     contains_marker,
     dump_compose,
@@ -90,9 +89,7 @@ def generate_k8s(
 
     with (
         builtin_patch_templates() as builtin_templates,
-        compiled_provisioners(
-            score_dir, closure_provisioners(score_dir, "k8s", k8s.workloads), root, images
-        ) as provisioners,
+        compiled_provisioners(score_dir, "k8s", k8s.workloads, root, images) as provisioners,
     ):
         init_state(
             "score-k8s init --no-sample",

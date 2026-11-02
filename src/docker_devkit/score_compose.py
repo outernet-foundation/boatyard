@@ -29,7 +29,6 @@ from docker_devkit.config import (
 from docker_devkit.config_lock import LOCK_PATH
 from docker_devkit.score import (
     builtin_patch_templates,
-    closure_provisioners,
     compiled_provisioners,
     dump_compose,
     init_state,
@@ -163,8 +162,7 @@ def generate_compose(
                             f"{DEV_TOGGLES_ANNOTATION} for {service_name}"
                         )
                     toggle_services[service_name] = name
-            provisioner_names = closure_provisioners(score_dir, "compose", bundle.workloads)
-            with compiled_provisioners(score_dir, provisioner_names, root, images) as provisioners:
+            with compiled_provisioners(score_dir, "compose", bundle.workloads, root, images) as provisioners:
                 if provisioners.declares_services and "ALPINE_IMAGE" not in images:
                     raise ValueError(
                         f"bundle {bundle.name!r}: its provisioners declare services; "
