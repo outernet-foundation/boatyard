@@ -87,13 +87,14 @@ class _DaemonConfig(BaseModel):
 def run_build(
     *,
     config: Config,
-    push: str | None = None,
+    push: bool = False,
+    push_to: str | None = None,
     targets: list[str] | None = None,
     no_cache: bool = False,
     dev: bool = False,
 ) -> None:
-    pushing = push is not None
-    destination = push if push else None
+    pushing = push or push_to is not None
+    destination = push_to
 
     service_shas = dockerfiles.compute_service_shas(config.root, config.service_builds)
     os.environ.update(service_shas)

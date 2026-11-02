@@ -11,11 +11,11 @@ from boatyard.config import Config
 
 def build(
     push: Annotated[
+        bool, typer.Option("--push", help="Push images and registry caches to the repository declared in the config.")
+    ] = False,
+    push_to: Annotated[
         str | None,
-        typer.Option(
-            "--push",
-            help="Push images and registry caches: alone builds for the config's repository, --push <addr> for that registry.",
-        ),
+        typer.Option("--push-to", help="Push images and registry caches to this registry address instead."),
     ] = None,
     targets: Annotated[
         list[str] | None,
@@ -33,18 +33,24 @@ def build(
     if config is None:
         raise RuntimeError("No docker-devkit.yaml at the repo root")
 
-    if dev and push is not None:
-        raise typer.BadParameter("--dev builds local-only images; --push is not allowed")
+    if push and push_to is not None:
+        raise typer.BadParameter(
+            "--push and --push-to are mutually exclusive: --push targets the config's repository, --push-to targets that address"
+        )
 
-    if push:
-        registry_host = push.partition("/")[0]
-        if "://" in push or push.endswith("/") or ("." not in registry_host and ":" not in registry_host):
+    if dev and (push or push_to is not None):
+        raise typer.BadParameter("--dev builds local-only images; --push/--push-to are not allowed")
+
+    if push_to is not None:
+        registry_host = push_to.partition("/")[0]
+        if "://" in push_to or push_to.endswith("/") or ("." not in registry_host and ":" not in registry_host):
             raise typer.BadParameter(
-                f"--push destination {push!r} must be a registry address (localhost:5000, ghcr.io/org) "
+                f"--push-to destination {push_to!r} must be a registry address (localhost:5000, ghcr.io/org) "
                 "with no scheme and no trailing slash"
             )
-    elif push is not None and config.repository is None:
-        raise typer.BadParameter("--push is declared with no address; repository is required")
+
+    if push and config.repository is None:
+        raise typer.BadParameter("--push targets the config's repository; repository is required")
 
     targets = [address for value in targets or [] for address in value.split()] or None
-    run_build(config=config, push=push, targets=targets, no_cache=no_cache, dev=dev)
+    run_build(config=config, push=push, push_to=push_to, targets=targets, no_cache=no_cache, dev=dev)

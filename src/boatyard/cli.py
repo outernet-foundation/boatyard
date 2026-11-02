@@ -1,6 +1,5 @@
 import typer
 
-from boatyard.optional_value_option import DestinationCommand
 from boatyard.verbs.build import build
 from boatyard.verbs.down import down
 from boatyard.verbs.lock import lock
@@ -15,7 +14,7 @@ app = typer.Typer()
 
 app.command()(up)
 app.command()(down)
-app.command(cls=DestinationCommand)(build)
+app.command()(build)
 app.command()(lock)
 app.command()(tree_tags)
 app.command()(mirror)

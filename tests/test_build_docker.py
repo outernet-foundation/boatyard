@@ -392,7 +392,7 @@ class TestDevBuilds:
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": DEV_STAGE})
 
-        result = runner.invoke(app, ["build", "--dev", "--push", LOCAL_REGISTRY])
+        result = runner.invoke(app, ["build", "--dev", "--push-to", LOCAL_REGISTRY])
 
         assert result.exit_code != 0
         assert "local-only" in result.output
@@ -465,7 +465,7 @@ class TestPushDestination:
         recorder = _prepare(
             monkeypatch,
             tmp_path,
-            ["--push", LOCAL_REGISTRY, "--targets", "zed-capture"],
+            ["--push-to", LOCAL_REGISTRY, "--targets", "zed-capture"],
             dockerfiles={"zed-capture": EXTERNAL},
         )
 
@@ -517,13 +517,13 @@ class TestPushDestination:
         assert "does not cover" in str(result.exception)
 
     def test_an_address_with_a_scheme_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        self._refuse_address(monkeypatch, tmp_path, ["--push", "http://localhost:5000"])
+        self._refuse_address(monkeypatch, tmp_path, ["--push-to", "http://localhost:5000"])
 
     def test_an_address_with_a_trailing_slash_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        self._refuse_address(monkeypatch, tmp_path, ["--push", "localhost:5000/"])
+        self._refuse_address(monkeypatch, tmp_path, ["--push-to", "localhost:5000/"])
 
     def test_a_single_word_destination_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        self._refuse_address(monkeypatch, tmp_path, ["--push", "zed-capture"])
+        self._refuse_address(monkeypatch, tmp_path, ["--push-to", "zed-capture"])
 
     def _refuse_address(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, arguments: list[str]) -> None:
         monkeypatch.setattr(bake_module, "bash", BakeRunner().run)
@@ -735,7 +735,7 @@ class TestRenderBakeCache:
         recorder = _prepare(
             monkeypatch,
             tmp_path,
-            ["--push", LOCAL_REGISTRY],
+            ["--push-to", LOCAL_REGISTRY],
             dockerfiles={"localizer": FANNED},
             variants={"TORCH_DEVICE": ["cuda"]},
         )
@@ -882,35 +882,48 @@ class TestHostPlatform:
             bake_module.host_platform()
 
 
-class TestOptionalPushFlag:
-    def _parse(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, arguments: list[str]) -> str | None:
+class TestPushFlags:
+    def _parse(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, arguments: list[str]) -> tuple[bool, str | None]:
         (tmp_path / "docker-devkit.yaml").write_text(
             yaml.safe_dump({"requires": ">=0.0", "repository": "ghcr.io/org/demo"}), encoding="utf-8"
         )
         monkeypatch.chdir(tmp_path)
-        values: dict[str, str | None] = {}
+        values: dict[str, bool | str | None] = {}
 
-        def _record(push: str | None = None, **kwargs: object) -> None:
-            values["push"] = push
+        def _record(push: bool = False, push_to: str | None = None, **kwargs: object) -> None:
+            values["push"], values["push_to"] = push, push_to
 
         monkeypatch.setattr(build, "run_build", _record)
 
         result = runner.invoke(app, ["build", *arguments])
 
         assert result.exit_code == 0, result.output
-        return values["push"]
+        return values["push"], values["push_to"]
 
-    def test_absent_push_passes_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        assert self._parse(tmp_path, monkeypatch, []) is None
+    def test_absent_flags_pass_bool_false_and_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        assert self._parse(tmp_path, monkeypatch, []) == (False, None)
 
-    def test_bare_push_passes_the_empty_destination(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        assert self._parse(tmp_path, monkeypatch, ["--push"]) == ""
+    def test_bare_push_targets_the_config_repository(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        assert self._parse(tmp_path, monkeypatch, ["--push"]) == (True, None)
 
-    def test_address_push_passes_the_address(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        assert self._parse(tmp_path, monkeypatch, ["--push", LOCAL_REGISTRY]) == LOCAL_REGISTRY
+    def test_push_to_passes_the_address(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        assert self._parse(tmp_path, monkeypatch, ["--push-to", LOCAL_REGISTRY]) == (False, LOCAL_REGISTRY)
 
-    def test_attached_address_push_passes_the_address(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        assert self._parse(tmp_path, monkeypatch, [f"--push={LOCAL_REGISTRY}"]) == LOCAL_REGISTRY
+    def test_attached_push_to_passes_the_address(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        assert self._parse(tmp_path, monkeypatch, [f"--push-to={LOCAL_REGISTRY}"]) == (False, LOCAL_REGISTRY)
 
-    def test_push_does_not_eat_a_following_flag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        assert self._parse(tmp_path, monkeypatch, ["--push", "--no-cache"]) == ""
+    def test_push_and_push_to_refuse_together(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        (tmp_path / "docker-devkit.yaml").write_text(
+            yaml.safe_dump({"requires": ">=0.0", "repository": "ghcr.io/org/demo"}), encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(build, "run_build", _record_failure)
+
+        result = runner.invoke(app, ["build", "--push", "--push-to", LOCAL_REGISTRY])
+
+        assert result.exit_code != 0
+        assert "mutually exclusive" in result.output
+
+
+def _record_failure(**kwargs: object) -> None:
+    raise AssertionError("run_build must not run")
