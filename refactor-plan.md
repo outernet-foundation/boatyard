@@ -444,7 +444,8 @@ Commit: `Fix dead code and validation-ordering guards`.
   `PROFILES_VARIABLE`, `DEV_MOUNT_TARGET`, `EDGE_CONFIG_TARGET`,
   `CADDY_IMAGE_HOLE`; up.py: `_MANIFEST_ABSENT_PATTERN`. Multi-reference
   constants stay. Verb single-use locals: `partitions` (verbs/matrix.py:16),
-  `entries` (verbs/lock_env.py:24), `names` (verbs/publish.py:64 — if Phase 7
+  `entries` (verbs/lock_env.py:24 — the verb was killed by operator decision
+  after Phase 8, no replacement), `names` (verbs/publish.py:64 — if Phase 7
   left it), `selected` (bake.py:138), the `artifact` aliases (score.py:510/517).
 - verbs/build.py:28 `no_cache` — convert from the default-value
   `typer.Option` form to `Annotated` (B008-avoidance convention).
