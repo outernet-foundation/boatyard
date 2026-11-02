@@ -14,6 +14,34 @@ from pydantic import (
 from docker_devkit.config import DEV_TOGGLES_ANNOTATION
 
 
+class ComposeDocument(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    services: dict[str, ComposeService] | None = None
+    configs: dict[str, ComposeConfig] | None = None
+
+    @model_validator(mode="after")
+    def _reject_colliding_bind_basenames(self) -> Self:
+        # Config names are bind basenames, so two binds sharing one collide however each
+        # resolves; the model sees the raw sources, and their basenames never change.
+        seen: dict[str, str] = {}
+        for service in (self.services or {}).values():
+            for volume in service.volumes or []:
+                if not isinstance(volume, BindVolume):
+                    continue
+                source = volume.source
+                known = seen.setdefault(Path(source).name, source)
+                if known != source:
+                    raise ValueError(f"bind sources {known} and {source} collide on config name {Path(source).name}")
+        return self
+
+
+class ComposeService(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    volumes: list[BindVolume | OtherVolume] | None = None
+
+
 class BindVolume(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -42,38 +70,10 @@ class OtherVolume(BaseModel):
         return self
 
 
-class ComposeService(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    volumes: list[BindVolume | OtherVolume] | None = None
-
-
 class ComposeConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     file: str | None = None
-
-
-class ComposeDocument(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    services: dict[str, ComposeService] | None = None
-    configs: dict[str, ComposeConfig] | None = None
-
-    @model_validator(mode="after")
-    def _reject_colliding_bind_basenames(self) -> Self:
-        # Config names are bind basenames, so two binds sharing one collide however each
-        # resolves; the model sees the raw sources, and their basenames never change.
-        seen: dict[str, str] = {}
-        for service in (self.services or {}).values():
-            for volume in service.volumes or []:
-                if not isinstance(volume, BindVolume):
-                    continue
-                source = volume.source
-                known = seen.setdefault(Path(source).name, source)
-                if known != source:
-                    raise ValueError(f"bind sources {known} and {source} collide on config name {Path(source).name}")
-        return self
 
 
 class WorkloadMetadata(BaseModel):

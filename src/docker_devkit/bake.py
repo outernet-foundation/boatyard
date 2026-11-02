@@ -25,6 +25,15 @@ MIN_KEEP_STORAGE_GB = 60
 type BakeValue = str | list[str] | dict[str, str]
 
 
+class BakeMetadata(RootModel[dict[str, "BakedImage"]]):
+    @model_validator(mode="after")
+    def _require_tagged_references(self) -> Self:
+        for target, image in self.root.items():
+            if not image.tags:
+                raise ValueError(f"target '{target}' produced no tagged image references from '{image.image_name}'")
+        return self
+
+
 class BakedImage(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -40,15 +49,6 @@ class BakedImage(BaseModel):
             _repository, separator, tag = reference.split("@", 1)[0].rpartition(":")
             if separator:
                 self.tags.append(tag)
-        return self
-
-
-class BakeMetadata(RootModel[dict[str, BakedImage]]):
-    @model_validator(mode="after")
-    def _require_tagged_references(self) -> Self:
-        for target, image in self.root.items():
-            if not image.tags:
-                raise ValueError(f"target '{target}' produced no tagged image references from '{image.image_name}'")
         return self
 
 

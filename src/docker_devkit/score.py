@@ -117,33 +117,19 @@ class ManifestDocument(BaseModel):
     metadata: ManifestMetadata = Field(default_factory=ManifestMetadata)
 
 
-class WorkloadState(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    instance_suffix: str = ""
-
-
 class ScoreState(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     workloads: dict[str, WorkloadState] = {}
 
 
-class SecretKey(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class WorkloadState(BaseModel):
+    model_config = ConfigDict(extra="ignore")
 
-    description: str
-    mint: bool = False
-
-    @field_validator("description")
-    @classmethod
-    def _require_description(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("every declared key needs a one-line description")
-        return value
+    instance_suffix: str = ""
 
 
-class SecretsDeclaration(RootModel[dict[str, SecretKey]]):
+class SecretsDeclaration(RootModel[dict[str, "SecretKey"]]):
     @model_validator(mode="before")
     @classmethod
     def _coerce_string_specs(cls, value: object, info: ValidationInfo) -> object:
@@ -171,16 +157,18 @@ class SecretsDeclaration(RootModel[dict[str, SecretKey]]):
             )
 
 
-class ComposeDumper(yaml.SafeDumper):
-    pass
+class SecretKey(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
+    description: str
+    mint: bool = False
 
-def _represent_multiline(dumper: yaml.SafeDumper, value: str) -> yaml.ScalarNode:
-    # Force literal block style for multiline strings, building the node directly to satisfy strict typing.
-    return yaml.ScalarNode("tag:yaml.org,2002:str", value, style="|" if "\n" in value else None)
-
-
-ComposeDumper.add_representer(str, _represent_multiline)
+    @field_validator("description")
+    @classmethod
+    def _require_description(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("every declared key needs a one-line description")
+        return value
 
 
 class LockImageSpec(BaseModel):
@@ -229,6 +217,18 @@ class CompiledProvisioners(NamedTuple):
     # devkit's built-in gate-pin template registers on it.
     paths: list[Path]
     declares_services: bool
+
+
+class ComposeDumper(yaml.SafeDumper):
+    pass
+
+
+def _represent_multiline(dumper: yaml.SafeDumper, value: str) -> yaml.ScalarNode:
+    # Force literal block style for multiline strings, building the node directly to satisfy strict typing.
+    return yaml.ScalarNode("tag:yaml.org,2002:str", value, style="|" if "\n" in value else None)
+
+
+ComposeDumper.add_representer(str, _represent_multiline)
 
 
 def generate_artifacts(config: DockerDevkitConfig, target: Target, local: bool) -> list[Path]:
