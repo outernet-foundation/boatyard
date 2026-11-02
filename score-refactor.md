@@ -157,12 +157,16 @@ inconsistent per field.
 
 ### D6 — Validation-scope ripple
 
-Status: OPEN.
-
-Moving annotation validation onto `WorkloadDocument` makes it fire for
-every reader: `up`/`select` parse workload documents too, so a bad probe
-annotation that today only fails `generate-score` would fail `up` as
-well. Lean: accept the wider, earlier refusal.
+Ruling: (a) — one validity, all readers. The annotation validators live on
+`WorkloadDocument` and fire at every parse: a workload file that violates
+a deployment-surface law refuses `up` as well as `generate-score`, with
+the same message. A file valid for one verb and invalid for another is a
+distinction nobody can explain; the ripple only lands on repos whose
+committed artifacts are already un-generatable. Carve-out: the
+dev-toggles-on-k8s-only-workload refusal is a rendering-placement law,
+not intrinsic document validity — it stays at its consumer in the k8s
+path. Generation-scoped validation was rejected: it keeps the ladder in a
+function and invents a lens-valid vs surface-valid split.
 
 ### D7 — Module homes
 
