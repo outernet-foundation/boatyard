@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import os
 import re
-import shlex
-from collections.abc import Callable, Generator
+from collections.abc import Generator
 from contextlib import contextmanager
 from functools import partial
 from importlib.resources import as_file, files
@@ -280,13 +278,20 @@ def resolve_lock_refs(node: Yaml, images: dict[str, str], source: str) -> Yaml:
         reference = images[image_spec.key]
         path_part, _, digest = reference.rpartition("@")
 
-        fields: dict[str, Yaml] = {}
         tagged = path_part.rpartition(":")
         if tagged[1] and "/" not in tagged[2]:
-            fields["registry"], fields["repository"] = _split_path(tagged[0], reference, source)
-            fields["tag"] = tagged[2]
+            registry_part, tag = tagged[0], tagged[2]
         else:
-            fields["registry"], fields["repository"] = _split_path(path_part, reference, source)
+            registry_part, tag = path_part, None
+
+        fields: dict[str, Yaml] = {}
+        registry, separator, repository = registry_part.rpartition("/")
+        if not separator or not registry or not repository:
+            raise ValueError(f"{source}: lock reference {reference!r} has no registry/repository split")
+        fields["registry"] = registry
+        fields["repository"] = repository
+        if tag is not None:
+            fields["tag"] = tag
 
         if image_spec.digest_field == "sha":
             # Spell the digest bare.
@@ -305,13 +310,6 @@ def resolve_lock_refs(node: Yaml, images: dict[str, str], source: str) -> Yaml:
         return [resolve_lock_refs(item, images, source) for item in node]
 
     return node
-
-
-def _split_path(path: str, reference: str, source: str) -> tuple[str, str]:
-    registry, separator, repository = path.rpartition("/")
-    if not separator or not registry or not repository:
-        raise ValueError(f"{source}: lock reference {reference!r} has no registry/repository split")
-    return registry, repository
 
 
 def _marker_entry(node: Yaml, markers: tuple[str, ...]) -> tuple[str, Yaml] | None:
@@ -337,27 +335,6 @@ def collect_secret_keys(node: Yaml, secret_name: str, consumed: set[str]) -> Non
     elif is_list(node):
         for item in node:
             collect_secret_keys(item, secret_name, consumed)
-
-
-def init_state(
-    command: str,
-    provisioners: list[Path],
-    patch_templates: list[Path],
-    *,
-    working_dir: Path,
-    environment: dict[str, str] | None,
-    bash: Callable[..., None],
-) -> None:
-    # Init idempotently with POSIX-relative paths.
-    flags = "".join(
-        f" --provisioners {shlex.quote(Path(os.path.relpath(provisioner, working_dir)).as_posix())}"
-        for provisioner in provisioners
-    )
-    flags += "".join(
-        f" --patch-templates {shlex.quote(Path(os.path.relpath(patch_template, working_dir)).as_posix())}"
-        for patch_template in patch_templates
-    )
-    bash(f"{command}{flags}", cwd=working_dir, env=environment)
 
 
 @contextmanager
