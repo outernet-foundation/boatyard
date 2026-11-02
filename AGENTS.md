@@ -53,7 +53,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 - Load refusals (`Config.resolve`): Dockerfile services or local entries without `repository`; `base_images`/`k8s.charts` without the committed lock (pairing law); a declared chart without `stack/score/k8s/values/{chart}.yaml`; routes without `CADDY_IMAGE` in
   the lock.
 - `mirrored_ref(reference, prefix)` = the only prefix join — injects the prefix, rejects an already-prefixed reference (double-prefix guard).
-- Derivation shape law: multi-consumer derivations ride `Config` (`compose_bundles`, `image_lock`, `declared_charts`, `service_shas`); single-call-site derivations inline at their consumer;
+- Derivation shape law: multi-consumer derivations ride `Config` (`compose_bundles`, `lock`, `declared_charts`, `service_shas`); single-call-site derivations inline at their consumer;
   `score_dir_path()` is the only path member; `root` load-injected, excluded, never-authored; `compute_service_shas` stays a module-level late-bound global (test seam), never inlined into the member; `parse_dev_toggles` = the one
   dev-toggles parser (ALL_CAPS, non-empty defaults, no duplicates).
 - `.env` carries `BUNDLES=`, `COMPOSE_PROFILES`, `PLATFORM=`, dev-toggle overrides, the consumer's interpolation variables.
@@ -69,7 +69,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 
 - Format: `images:` name → `{index, platforms: {os/arch: reference}}`; `charts:` name → flat digest-pinned reference; written only by the `lock` verb and `build`'s incremental freeze (`relock`/`write_lock`), over declared third-party names only — built-image
   digests are unrepresentable, orphans prune by construction; never hand-authored.
-- `parse_image_lock` = the only reader (path:line errors; duplicate keys, non-digest-pinned entries reject; empty lock legal); `ImageLock.require` = the one "lock lacks NAME" refusal; `recorded_digests` = the digest set the probes walk; the
+- `parse_config_lock` = the only reader (path:line errors; duplicate keys, non-digest-pinned entries reject; empty lock legal); `ConfigLock.require` = the one "lock lacks NAME" refusal; `recorded_digests` = the digest set the probes walk; the
   reference grammar (`LOCK_PATH`, `PLATFORM_PATTERN`, `SHA256_DIGEST_REGEX`) homes in `config_lock.py`.
 - `relock` computes per `base_images` entry the mirror-prefixed reference resolved into the index digest + one platform-manifest digest per declared platform (`crane copy` byte-identity holds the digests under both names); `@digest`
   declarations pass through prefixed-unresolved, record uniformly; declaration-incremental freeze: unchanged declaration copies its frozen entry forward (same-tag re-pushes never diff a green branch), tag bump or platform-set change
