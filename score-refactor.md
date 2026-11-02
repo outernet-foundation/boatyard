@@ -87,25 +87,16 @@ the next session implements this file and does not redecide.
 
 ### D1 — Typing depth at third-party boundaries
 
-Status: OPEN.
-
-The `Any`/`object` census (~50 sites) splits into what the devkit
-interprets or authors (lenses, generated-compose documents, authored
-fragments, OCI manifests, pyproject tables — typed models, no ambiguity)
-and what passes through third-party formats losslessly (provisioner
-payloads are score's template language; unknown compose/k8s/annotation
-fields ride verbatim). Options:
-
-- (a) Models where we interpret; a recursive `Yaml` alias names the
-  passthrough boundary. Every literal `Any`/`object` disappears; the
-  passthrough is typed as what it is (arbitrary YAML), not modeled.
-- (b) Full pydantic models of the entire Score spec, compose spec, and
-  k8s spec. Maximal modeling; drags in vendor surfaces we never read and
-  do not control; and pydantic dumps declared fields before extras, so
-  round-tripping third-party docs reorders keys — at the provisioner
-  boundary this breaks the pinned authored-order law regardless.
-
-Lean: (a).
+Ruling: (a) — models where the devkit interprets or authors; a recursive
+`type Yaml = str | int | float | bool | None | list[Yaml] | dict[str, Yaml]`
+alias (PEP 695) types the passthrough boundary. Every literal `Any`/
+`object` outside `optional_value_option.py` disappears; the passthrough is
+typed as what it is (arbitrary YAML), never modeled. Rationale: full
+vendor-schema modeling drags in surfaces we never read and cannot control,
+and pydantic dumps declared fields before extras, so round-tripping
+third-party docs reorders keys — at the provisioner boundary that breaks
+the pinned authored-order law regardless. The `Yaml` alias enables the
+type checker where `Any` disabled it; it validates nothing at runtime.
 
 ### D2 — Committed-artifact reordering
 
