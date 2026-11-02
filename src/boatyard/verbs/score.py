@@ -61,6 +61,17 @@ def generate_score(
     if config.k8s is None and local:
         raise typer.BadParameter("--local requires a k8s section; this config declares none")
 
+    # Require the build keys, derive the tree tags, and load the lock.
+    if not (config.repository or config.base_images):
+        raise ValueError("repository or base_images is required in boatyard.yml")
+    service_shas = dockerfiles.compute_service_shas(root, config.service_builds)
+    lock_path = root / LOCK_PATH
+    if not lock_path.is_file():
+        raise ValueError(f"{lock_path.as_posix()}: the image lock is required")
+    lock = parse_config_lock(lock_path)
+    if not lock.images and not lock.charts:
+        raise ValueError(f"{lock_path.as_posix()}: the image lock carries no entries")
+
     ensure_tools(
         [
             ToolRequirement(
@@ -89,24 +100,12 @@ def generate_score(
         ]
     )
 
-    # Require the build keys, derive the tree tags, and load the lock.
-    if not (config.repository or config.base_images):
-        raise ValueError("repository or base_images is required in boatyard.yml")
-    service_shas = dockerfiles.compute_service_shas(root, config.service_builds)
-    lock_path = root / LOCK_PATH
-    if not lock_path.is_file():
-        raise ValueError(f"{lock_path.as_posix()}: the image lock is required")
-    lock = parse_config_lock(lock_path)
-    if not lock.images and not lock.charts:
-        raise ValueError(f"{lock_path.as_posix()}: the image lock carries no entries")
     outputs: list[Path] = []
-    k8s_output: Path | None = None
     if target in ("both", "compose"):
         outputs.extend(generate_compose(config, lock, service_shas))
 
     if target in ("both", "k8s") and config.k8s is not None:
-        k8s_output = generate_k8s(config, lock, service_shas, local)
-        outputs.append(k8s_output)
+        outputs.append(generate_k8s(config, lock, service_shas, local))
 
     secrets_path = root / SECRETS_FILE
     if secrets_path.is_file():
