@@ -12,7 +12,7 @@ from docker_devkit.config import (
     Config,
     ServiceEntry,
 )
-from docker_devkit.config_lock import LOCK_PATH, parse_image_lock
+from docker_devkit.config_lock import LOCK_PATH, parse_config_lock
 
 DIGEST = "sha256:" + "a" * 64
 
@@ -1235,16 +1235,16 @@ def _write_raw_lock(tmp_path: Path, text: str) -> Path:
     return lock
 
 
-class TestImageLockParse:
+class TestConfigLockParse:
     def test_the_empty_lock_stays_legal(self, tmp_path: Path) -> None:
-        assert parse_image_lock(_write_raw_lock(tmp_path, "")).images == {}
-        assert parse_image_lock(_write_raw_lock(tmp_path, "{}\n")).charts == {}
+        assert parse_config_lock(_write_raw_lock(tmp_path, "")).images == {}
+        assert parse_config_lock(_write_raw_lock(tmp_path, "{}\n")).charts == {}
 
     def test_malformed_yaml_refuses_naming_the_line(self, tmp_path: Path) -> None:
         lock = _write_raw_lock(tmp_path, "images:\n  A_IMAGE: [unclosed\n")
 
         with pytest.raises(ValueError, match=rf"^{re.escape(lock.as_posix())}:\d+: "):
-            parse_image_lock(lock)
+            parse_config_lock(lock)
 
     def test_duplicate_keys_refuse_naming_the_line(self, tmp_path: Path) -> None:
         lock = _write_raw_lock(
@@ -1253,19 +1253,19 @@ class TestImageLockParse:
         )
 
         with pytest.raises(ValueError, match=rf"{re.escape(lock.as_posix())}: line 4: duplicate key 'A_IMAGE'"):
-            parse_image_lock(lock)
+            parse_config_lock(lock)
 
     def test_the_env_line_format_refuses_as_a_bare_scalar(self, tmp_path: Path) -> None:
         lock = _write_raw_lock(tmp_path, f"A_IMAGE=ghcr.io/x/a:1@{DIGEST}\n")
 
         with pytest.raises(TypeError, match="mapping of images:/charts:"):
-            parse_image_lock(lock)
+            parse_config_lock(lock)
 
     def test_a_non_digest_pinned_index_refuses(self, tmp_path: Path) -> None:
         lock = _write_raw_lock(tmp_path, "images:\n  A_IMAGE:\n    index: ghcr.io/x/a:1.2.3\n")
 
         with pytest.raises(ValueError, match="not digest-pinned"):
-            parse_image_lock(lock)
+            parse_config_lock(lock)
 
     def test_a_non_digest_pinned_platform_entry_refuses(self, tmp_path: Path) -> None:
         lock = _write_raw_lock(
@@ -1275,13 +1275,13 @@ class TestImageLockParse:
         )
 
         with pytest.raises(ValueError, match="not digest-pinned"):
-            parse_image_lock(lock)
+            parse_config_lock(lock)
 
     def test_a_non_digest_pinned_chart_refuses(self, tmp_path: Path) -> None:
         lock = _write_raw_lock(tmp_path, "charts:\n  LOKI_CHART: ghcr.io/x/loki:7.3.0\n")
 
         with pytest.raises(ValueError, match="chart LOKI_CHART is not digest-pinned"):
-            parse_image_lock(lock)
+            parse_config_lock(lock)
 
     def test_a_malformed_platform_key_refuses(self, tmp_path: Path) -> None:
         lock = _write_raw_lock(
@@ -1291,7 +1291,7 @@ class TestImageLockParse:
         )
 
         with pytest.raises(ValueError, match="os/arch pair"):
-            parse_image_lock(lock)
+            parse_config_lock(lock)
 
     def test_a_name_in_both_sections_refuses(self, tmp_path: Path) -> None:
         lock = _write_raw_lock(
@@ -1300,10 +1300,10 @@ class TestImageLockParse:
         )
 
         with pytest.raises(ValueError, match=r"images or charts, not both"):
-            parse_image_lock(lock)
+            parse_config_lock(lock)
 
     def test_require_answers_the_index_for_images_and_the_flat_entry_for_charts(self, tmp_path: Path) -> None:
-        lock = parse_image_lock(
+        lock = parse_config_lock(
             _write_raw_lock(
                 tmp_path,
                 f"images:\n  A_IMAGE:\n    index: ghcr.io/x/a:1@{DIGEST}\n"
@@ -1315,7 +1315,7 @@ class TestImageLockParse:
         assert lock.require("LOKI_CHART", "subject") == f"ghcr.io/x/loki:7.3.0@{DIGEST}"
 
     def test_require_refuses_naming_the_lock_verb(self, tmp_path: Path) -> None:
-        lock = parse_image_lock(_write_raw_lock(tmp_path, "{}\n"))
+        lock = parse_config_lock(_write_raw_lock(tmp_path, "{}\n"))
 
         with pytest.raises(RuntimeError, match=r"lacks the CADDY_IMAGE entry.*lock verb writes it"):
             lock.require("CADDY_IMAGE", "routes are declared")

@@ -591,8 +591,8 @@ def test_build_no_longer_carries_the_lock_flags() -> None:
     assert result.exit_code == 2
 
 
-def _selection_lock() -> lock_module.ImageLock:
-    return lock_module.ImageLock.model_validate({
+def _selection_lock() -> lock_module.ConfigLock:
+    return lock_module.ConfigLock.model_validate({
         "images": {
             "LOKI_IMAGE": {
                 "index": f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.5.0@{DIGEST_A}",
@@ -704,7 +704,7 @@ class TestPlatformSelectionLaw:
             lock_module.compose_env_entries(_selection_lock(), config, {"PLATFORM": "linux/arm64"})
 
     def test_a_platform_less_declaring_repo_answers_none(self) -> None:
-        charts_only = lock_module.ImageLock(
+        charts_only = lock_module.ConfigLock(
             charts={"GRAFANA_CHART": f"{MIRROR_PREFIX}/ghcr.io/grafana/chart@{DIGEST_A}"}
         )
 

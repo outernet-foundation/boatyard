@@ -16,8 +16,8 @@ from docker_devkit.config_lock import (
     LOCK_PATH,
     PLATFORM_PATTERN,
     SHA256_DIGEST_REGEX,
-    ImageLock,
-    parse_image_lock,
+    ConfigLock,
+    parse_config_lock,
 )
 from docker_devkit.dockerfiles import (
     DOCKERFILE_NAME,
@@ -193,7 +193,7 @@ class Config(BaseModel):
             for entry in self.services.values()
         )
         if declares_routes:
-            self.image_lock().require(
+            self.lock().require(
                 CADDY_IMAGE,
                 "routes are declared",
                 hint="declare CADDY_IMAGE in base_images and run lock",
@@ -209,10 +209,10 @@ class Config(BaseModel):
         assert self.root is not None
         return dockerfiles.compute_service_shas(self.root, self.service_builds)
 
-    def image_lock(self) -> ImageLock:
+    def lock(self) -> ConfigLock:
         assert self.root is not None
         lock_path = self.root / LOCK_PATH
-        return parse_image_lock(lock_path) if lock_path.is_file() else ImageLock()
+        return parse_config_lock(lock_path) if lock_path.is_file() else ConfigLock()
 
     @property
     def declared_charts(self) -> dict[str, str]:

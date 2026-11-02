@@ -37,7 +37,7 @@ from docker_devkit.config import (
     Config,
     chart_lock_key,
 )
-from docker_devkit.config_lock import LOCK_PATH, ImageLock, parse_image_lock
+from docker_devkit.config_lock import LOCK_PATH, ConfigLock, parse_config_lock
 from docker_devkit.documents import BindVolume, ComposeDocument, WorkloadDocument
 from docker_devkit.compose import merged_environment
 from docker_devkit.lock import compose_env_entries, env_entries
@@ -225,7 +225,7 @@ def generate_artifacts(config: Config, target: Target, local: bool) -> list[Path
     lock_path = root / LOCK_PATH
     if not lock_path.is_file():
         raise RuntimeError(f"{lock_path.as_posix()}: the image lock is required")
-    lock = parse_image_lock(lock_path)
+    lock = parse_config_lock(lock_path)
     if not lock.images and not lock.charts:
         raise RuntimeError(f"{lock_path.as_posix()}: the image lock carries no entries")
     k8s_output = root / (config.k8s_local_output if local else config.k8s_output)
@@ -520,7 +520,7 @@ def compiled_provisioners(
         yield CompiledProvisioners(paths=paths, declares_services=declares_services)
 
 
-def generate_k8s(config: Config, k8s: K8sConfig, output_path: Path, lock: ImageLock) -> None:
+def generate_k8s(config: Config, k8s: K8sConfig, output_path: Path, lock: ConfigLock) -> None:
     # Run score-k8s in the output's directory, where it writes its .score-k8s state.
     assert config.root is not None
     root = config.root

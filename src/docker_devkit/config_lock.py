@@ -14,10 +14,10 @@ PLATFORM_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$")
 SHA256_DIGEST_REGEX = r"sha256:[a-f0-9]{64}"
 
 
-class ImageLock(BaseModel):
+class ConfigLock(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    images: dict[str, ImageLockEntry] = Field(default_factory=dict)
+    images: dict[str, ConfigLockEntry] = Field(default_factory=dict)
     charts: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -43,7 +43,7 @@ class ImageLock(BaseModel):
         raise RuntimeError(f"{subject}: {LOCK_PATH.as_posix()} lacks the {name} entry ({hint})")
 
 
-class ImageLockEntry(BaseModel):
+class ConfigLockEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     index: str
@@ -66,7 +66,7 @@ class ImageLockEntry(BaseModel):
         return [self.index, *self.platforms.values()]
 
 
-def parse_image_lock(path: Path) -> ImageLock:
+def parse_config_lock(path: Path) -> ConfigLock:
     text = path.read_text(encoding="utf-8")
     source = path.as_posix()
     try:
@@ -84,7 +84,7 @@ def parse_image_lock(path: Path) -> ImageLock:
         raise TypeError(
             f"{source}: the lock must be a mapping of images:/charts: sections, not a bare {type(loaded).__name__}"
         )
-    return ImageLock.model_validate(loaded, context={"path": source})
+    return ConfigLock.model_validate(loaded, context={"path": source})
 
 
 def _reject_duplicate_keys(node: yaml.Node, source: str) -> None:

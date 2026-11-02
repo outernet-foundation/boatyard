@@ -22,8 +22,8 @@ from docker_devkit.config import (
 from docker_devkit.config_lock import (
     LOCK_PATH,
     SHA256_DIGEST_REGEX,
-    ImageLock,
-    ImageLockEntry,
+    ConfigLock,
+    ConfigLockEntry,
 )
 
 DIGEST_TAIL_PATTERN = re.compile(rf"@{SHA256_DIGEST_REGEX}$")
@@ -68,28 +68,28 @@ def run_lock(*, upgrade: bool = False, check: bool = False) -> None:
         raise SystemExit("image lock is stale")
 
 
-def write_lock(config: Config, *, upgrade: bool = False) -> ImageLock:
+def write_lock(config: Config, *, upgrade: bool = False) -> ConfigLock:
     lock = relock(config, upgrade=upgrade)
     assert config.root is not None
     (config.root / LOCK_PATH).write_text(render_lock(lock), encoding="utf-8")
     return lock
 
 
-def relock(config: Config, *, upgrade: bool = False) -> ImageLock:
+def relock(config: Config, *, upgrade: bool = False) -> ConfigLock:
     assert config.root is not None
     prefix = config.mirror_prefix
-    committed = config.image_lock()
+    committed = config.lock()
 
-    images: dict[str, ImageLockEntry] = {}
+    images: dict[str, ConfigLockEntry] = {}
     for name, reference in config.base_images.items():
         base = mirrored_ref(reference, prefix)
         if DIGEST_TAIL_PATTERN.search(reference):
-            images[name] = ImageLockEntry(index=base, platforms=dict.fromkeys(config.platforms, base))
+            images[name] = ConfigLockEntry(index=base, platforms=dict.fromkeys(config.platforms, base))
         elif not upgrade and _declaration_frozen(committed.images.get(name), base, config.platforms):
             images[name] = committed.images[name]
         else:
             resolved = resolve_remote_manifests(reference, config.platforms, f"base_images entry {name}")
-            images[name] = ImageLockEntry(
+            images[name] = ConfigLockEntry(
                 index=f"{base}@{resolved.index_digest}",
                 platforms={platform: f"{base}@{digest}" for platform, digest in resolved.platforms.items()},
             )
@@ -107,10 +107,10 @@ def relock(config: Config, *, upgrade: bool = False) -> ImageLock:
         else:
             charts[key] = f"{base}@{resolve_remote_digest(reference)}"
 
-    return ImageLock(images=images, charts=charts)
+    return ConfigLock(images=images, charts=charts)
 
 
-def render_lock(lock: ImageLock) -> str:
+def render_lock(lock: ConfigLock) -> str:
     # Render names and platform keys in sorted order.
     document: dict[str, object] = {}
     if lock.images:
@@ -201,7 +201,7 @@ def _child_digest(child: object, subject: str) -> str:
     return digest
 
 
-def compose_env_entries(lock: ImageLock, config: Config, environment: Mapping[str, str]) -> dict[str, str]:
+def compose_env_entries(lock: ConfigLock, config: Config, environment: Mapping[str, str]) -> dict[str, str]:
     selected = environment.get(PLATFORM_VARIABLE, "").strip()
     if selected:
         if selected not in config.platforms:
@@ -222,7 +222,7 @@ def compose_env_entries(lock: ImageLock, config: Config, environment: Mapping[st
     return env_entries(lock, platform)
 
 
-def env_entries(lock: ImageLock, platform: str | None = None) -> dict[str, str]:
+def env_entries(lock: ConfigLock, platform: str | None = None) -> dict[str, str]:
     images: dict[str, str] = {}
     for name, entry in lock.images.items():
         if platform is None:
@@ -242,7 +242,7 @@ def render_env_entries(entries: Mapping[str, str]) -> str:
     return "".join(f"{name}={reference}\n" for name, reference in sorted(entries.items()))
 
 
-def _declaration_frozen(entry: ImageLockEntry | None, base: str, platforms: list[str]) -> bool:
+def _declaration_frozen(entry: ConfigLockEntry | None, base: str, platforms: list[str]) -> bool:
     if entry is None:
         return False
     return entry.index.startswith(base + "@") and sorted(entry.platforms) == sorted(platforms)

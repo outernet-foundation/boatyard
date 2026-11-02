@@ -11,7 +11,7 @@ import typer
 from bashrun.bash import bash, bash_output
 
 from docker_devkit.config import Config
-from docker_devkit.config_lock import LOCK_PATH, parse_image_lock
+from docker_devkit.config_lock import LOCK_PATH, parse_config_lock
 from docker_devkit.crane import install_crane
 from docker_devkit.lock import env_entries
 from docker_devkit.publish import (
@@ -78,7 +78,7 @@ def publish_compose(
 
     substitutions = {
         **config.service_shas(),
-        **env_entries(parse_image_lock(root / LOCK_PATH)),
+        **env_entries(parse_config_lock(root / LOCK_PATH)),
     }
 
     published: list[PublishedEntry] = []

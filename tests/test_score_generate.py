@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from docker_devkit import score as score_generate_module
 from docker_devkit.config import Config
-from docker_devkit.config_lock import ImageLock
+from docker_devkit.config_lock import ConfigLock
 from docker_devkit.documents import BindVolume, ComposeService
 from docker_devkit.score import (
     generate_k8s,
@@ -138,7 +138,7 @@ def _generate_with_chart(
     monkeypatch.setattr(score_generate_module, "bash_output", helm.run)
     assert config.k8s is not None
     config.root = tmp_path
-    lock = ImageLock.model_validate({
+    lock = ConfigLock.model_validate({
         "images": {name: {"index": ref} for name, ref in images.items() if not name.endswith("_CHART")},
         "charts": {name: ref for name, ref in images.items() if name.endswith("_CHART")},
     })
@@ -236,8 +236,8 @@ def test_values_lock_markers_resolve_after_includes(tmp_path: Path, monkeypatch:
 
 
 class TestMarkerSubstrateResolution:
-    def _multi_arch_lock(self) -> ImageLock:
-        return ImageLock.model_validate({
+    def _multi_arch_lock(self) -> ConfigLock:
+        return ConfigLock.model_validate({
             "images": {
                 "LOKI_IMAGE": {
                     "index": LOKI_INDEX,
@@ -923,7 +923,7 @@ def test_dev_toggles_on_a_k8s_only_workload_refuses(tmp_path: Path) -> None:
     config.root = tmp_path
     with pytest.raises(SystemExit, match="renders k8s-only"):
         score_generate_module.generate_k8s(
-            config, config.k8s, tmp_path / Path("stack/generated/k8s/manifests.yaml"), ImageLock.model_validate({})
+            config, config.k8s, tmp_path / Path("stack/generated/k8s/manifests.yaml"), ConfigLock.model_validate({})
         )
 
 
@@ -1052,7 +1052,7 @@ def test_k8s_builtin_templates_register_on_every_init(tmp_path: Path, monkeypatc
     config.root = tmp_path
 
     assert config.k8s is not None
-    generate_k8s(config, config.k8s, tmp_path / output, ImageLock.model_validate({}))
+    generate_k8s(config, config.k8s, tmp_path / output, ConfigLock.model_validate({}))
 
     init = next(command for command in recorder.commands if command.startswith("score-k8s init"))
     assert [Path(token).name for token in init.split() if token.endswith(".tpl")] == [

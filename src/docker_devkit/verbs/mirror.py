@@ -23,7 +23,7 @@ def mirror() -> None:
         raise RuntimeError("a docker-devkit.yaml with base_images (or k8s.charts) is required to mirror")
     prefix = config.mirror_prefix
 
-    lock = config.image_lock()
+    lock = config.lock()
     mirror_targets: list[tuple[str, list[str]]] = []
     for name, reference in sorted(config.base_images.items(), key=lambda item: item[1]):
         entry = lock.images.get(name)

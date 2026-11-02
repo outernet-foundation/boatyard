@@ -77,7 +77,7 @@ def up(
 
 
 def _probe_lock_entries(config: Config) -> None:
-    lock = config.image_lock()
+    lock = config.lock()
     references = sorted(
         set(
             [reference for entry in lock.images.values() for reference in entry.recorded_digests]

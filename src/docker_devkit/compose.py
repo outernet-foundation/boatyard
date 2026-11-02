@@ -27,7 +27,7 @@ from docker_devkit.config import (
     parse_dev_toggles,
     require_compose_stack,
 )
-from docker_devkit.config_lock import LOCK_PATH, parse_image_lock
+from docker_devkit.config_lock import LOCK_PATH, parse_config_lock
 from docker_devkit.documents import WorkloadDocument
 from docker_devkit.lock import compose_env_entries, render_env_entries
 
@@ -381,7 +381,7 @@ def write_lock_env_file(root: Path, config: Config, environment: Mapping[str, st
     lock_path = root / LOCK_PATH
     if not lock_path.is_file():
         return None
-    entries = compose_env_entries(parse_image_lock(lock_path), config, environment)
+    entries = compose_env_entries(parse_config_lock(lock_path), config, environment)
     with NamedTemporaryFile("w", suffix=".env", prefix="devkit-lock-env-", delete=False, encoding="utf-8") as handle:
         handle.write(render_env_entries(entries))
         path = Path(handle.name)
