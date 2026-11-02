@@ -519,9 +519,17 @@ class WorkloadProbe(BaseModel):
 class WorkloadContainer(BaseModel):
     model_config = ConfigDict(extra="allow")
 
+    image: str | None = None
     files: dict[str, Yaml] = Field(default_factory=dict)
     readiness_probe: WorkloadProbe | None = Field(default=None, alias="readinessProbe")
     liveness_probe: WorkloadProbe | None = Field(default=None, alias="livenessProbe")
+
+    @field_validator("image")
+    @classmethod
+    def _require_image_hole(cls, value: str | None) -> str | None:
+        if value is not None and "${" not in value and "{{" not in value:
+            raise ValueError(f"image {value!r} must bind to the lock or a service sha via a ${{NAME}} hole")
+        return value
 
 
 class WorkloadDocument(BaseModel):

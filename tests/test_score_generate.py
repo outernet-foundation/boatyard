@@ -492,10 +492,12 @@ class WorkloadContentsRecorder:
             output.write_text("services: {}\n", encoding="utf-8")
 
 
-def test_workload_lock_markers_resolve_into_the_rendered_copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_workload_image_holes_resolve_from_the_lock_into_the_rendered_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "api.yaml").write_text(
-        "containers:\n  api:\n    image:\n      lock: API_IMAGE\n",
+        "containers:\n  api:\n    image: ${API_IMAGE}\n",
         encoding="utf-8",
     )
     recorder = WorkloadContentsRecorder()
@@ -517,10 +519,10 @@ def test_workload_lock_markers_resolve_into_the_rendered_copy(tmp_path: Path, mo
     )
 
 
-def test_workload_lock_marker_naming_no_lock_entry_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_workload_image_hole_with_no_lock_entry_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "api.yaml").write_text(
-        "containers:\n  api:\n    image:\n      lock: API_IMAGE\n",
+        "containers:\n  api:\n    image: ${API_IMAGE}\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(score_compose_module, "bash", WorkloadContentsRecorder().run)
@@ -531,7 +533,7 @@ def test_workload_lock_marker_naming_no_lock_entry_refuses(tmp_path: Path, monke
     )
     config.root = tmp_path
 
-    with pytest.raises(ValueError, match=r"workload api\.yaml.*API_IMAGE.*does not exist"):
+    with pytest.raises(ValueError, match=r"api\.yaml.*API_IMAGE.*image lock"):
         score_compose_module.generate_compose(tmp_path, config, {}, {}, None)
 
 
@@ -862,6 +864,23 @@ def test_restart_annotation_with_an_enum_value_passes(tmp_path: Path, monkeypatc
     )
 
     assert templates == [["probe-adapter-healthchecks.tpl", "restart.tpl"]]
+
+
+def test_bare_literal_workload_image_refuses_naming_the_workload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _bundle_config()
+
+    with pytest.raises(ValueError, match=r"api\.yaml.*image.*must bind"):
+        _compose_init_templates(
+            monkeypatch,
+            tmp_path,
+            config,
+            {},
+            {
+                "stack/score/api.yaml": "containers:\n  api:\n    image: ghcr.io/example/api:1\n",
+            },
+        )
 
 
 def _toggles_workload(annotation: object) -> str:

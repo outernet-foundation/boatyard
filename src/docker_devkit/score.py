@@ -351,22 +351,25 @@ def rendered_workloads(
 
         for name in workloads:
             source_path = config.root / config.score_dir / name
-            document = resolve_lock_refs(load_yaml_file(source_path), images, f"workload {name}")
-            source = dump_compose(document)
-            rendered = PLACEHOLDER.sub(partial(_placeholder_value, rendering_vars, service_shas, name), source)
+            source = dump_compose(load_yaml_file(source_path))
+            rendered = PLACEHOLDER.sub(partial(_placeholder_value, rendering_vars, service_shas, images, name), source)
             (directory / name).write_text(rendered, "utf-8")
 
         yield " ".join((directory / name).as_posix() for name in workloads)
 
 
 def _placeholder_value(
-    rendering_vars: dict[str, str], service_shas: dict[str, str], workload_name: str, match: re.Match[str]
+    rendering_vars: dict[str, str],
+    service_shas: dict[str, str],
+    images: dict[str, str],
+    workload_name: str,
+    match: re.Match[str],
 ) -> str:
     variable = match.group(1)
-    value = rendering_vars.get(variable) or service_shas.get(variable)
+    value = rendering_vars.get(variable) or service_shas.get(variable) or images.get(variable)
     if not value:
         raise ValueError(
-            f"{workload_name}: ${{{variable}}} is set in neither the rendering's vars map nor the derived service shas"
+            f"{workload_name}: ${{{variable}}} is set in none of the rendering vars, the service shas, or the image lock"
         )
     return value
 
