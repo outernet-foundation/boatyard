@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import shlex
 from collections.abc import Mapping
+from contextlib import ExitStack
 from itertools import combinations, groupby
 from os import environ
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from types import TracebackType
+from typing import Self
 
 import yaml
 from bashrun.bash import bash_output
@@ -57,7 +60,7 @@ class Assembly:
     compose_files: list[Path]
     lock_env_file: Path | None
 
-    def __init__(self, root: Path, config: DockerDevkitConfig | None, dev: bool = False) -> None:
+    def __init__(self, root: Path, config: DockerDevkitConfig | None, stack: ExitStack, dev: bool = False) -> None:
         self.root = root
         require_env_file(root)
         environment = merged_environment(root)
@@ -100,7 +103,23 @@ class Assembly:
         auth_option = choices.get(AUTH_GROUP_NAME)
 
         self.profiles = _split_names(environment.get(PROFILES_VARIABLE, ""))
-        self.forwarded = forwarded_pair(environment) if auth_option is not None else None
+        self.forwarded = None
+        if auth_option is not None:
+            public_url = environment.get("PUBLIC_URL", "").strip()
+            if not public_url:
+                raise RuntimeError(
+                    "an auth option is selected, so the edge derives the forwarded scheme and port from PUBLIC_URL; "
+                    "PUBLIC_URL is missing from the environment"
+                )
+            scheme, _, rest = public_url.partition("://")
+            hostport = rest.partition("/")[0]
+            if ":" in hostport:
+                forwarded_port = hostport.rpartition(":")[2]
+            elif scheme == "https":
+                forwarded_port = "443"
+            else:
+                forwarded_port = "80"
+            self.forwarded = {"FORWARDED_PROTO": scheme, "FORWARDED_PORT": forwarded_port}
 
         # The declaration-order flatten every assembly view reads: each group yields
         # itself (its riding routes and ports) plus its selected option, each bare
@@ -133,7 +152,12 @@ class Assembly:
             local_outputs.append(output)
 
         # Refuse selected outputs that define the same service name.
-        file_services = [(path, _service_names(path)) for path in local_outputs]
+        file_services: list[tuple[Path, set[str]]] = []
+        for path in local_outputs:
+            # Extract names only; authored files never promised the bind-law lens.
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+            document_services = loaded.get("services") if is_mapping(loaded) else None
+            file_services.append((path, set(document_services) if is_mapping(document_services) else set()))
         for (path, service_names), (other_path, other_service_names) in combinations(file_services, 2):
             shared = sorted(service_names & other_service_names)
             if shared:
@@ -151,62 +175,15 @@ class Assembly:
         if isinstance(auth, ServiceGroup) and auth_option is not None:
             self.auth_route = auth.options[auth_option].routes[0]
 
-        # Materialize and validate in one step: the per-run compose files (root
-        # first, dev overlay last — the -f order, so the overlay overrides) and
-        # compose's own resolution over them; a failure unlinks what was written.
-        # The lock's env projection rides the same lifecycle as its second --env-file.
-        self.lock_env_file = write_lock_env_file(root, self.config, environment)
+        # Materialize and validate, each temp write pushing its own unwind onto the
+        # caller's stack: the per-run compose files (root first, dev overlay last —
+        # the -f order, so the overlay overrides) and compose's own resolution over
+        # them. The lock's env projection rides the same stack as its second --env-file.
+        self.lock_env_file = write_lock_env_file(root, self.config, environment, stack)
         self.compose_files = []
-        try:
-            self._materialize_and_validate(dev)
-        except BaseException:
-            self.keep_lock_env_file()
-            self.cleanup()
-            raise
 
-    def _materialize_and_validate(self, dev: bool) -> None:
-        self.compose_files.append(write_temp_compose_file(self._render_root_document(), "devkit-assembly-"))
-        if dev:
-            self.compose_files.append(write_temp_compose_file(self._render_dev_overlay(), "devkit-dev-overlay-"))
-        if self.routes or self.ports:
-            # Validate every wired upstream and port owner against compose's own
-            # resolution (the auth option's route rides the routes list by
-            # construction, its option being a selected entry).
-            resolved = set(
-                _compose_config(self.root, self.compose_files, "--services", lock_env_file=self.lock_env_file)
-            )
-            for route in self.routes:
-                upstream = route.upstream.partition(":")[0]
-                if upstream not in resolved:
-                    raise RuntimeError(
-                        f"route {route.path} upstream {upstream} resolves to no service in the selected assembly"
-                    )
-            for port in self.ports:
-                if port.service not in resolved:
-                    raise RuntimeError(
-                        f"ports for service {port.service!r} resolve to no service in the selected assembly"
-                    )
-        if self.profiles:
-            # Refuse profile names the compose files do not define.
-            assert_known_profiles(
-                self.profiles,
-                _compose_config(self.root, self.compose_files, "--profiles", lock_env_file=self.lock_env_file),
-            )
-
-    def cleanup(self) -> None:
-        for compose_file in self.compose_files:
-            compose_file.unlink(missing_ok=True)
-        if self.lock_env_file is not None:
-            self.lock_env_file.unlink(missing_ok=True)
-
-    def keep_lock_env_file(self) -> None:
-        # The shared failure dance: print the materialized file (path and content) and
-        # null the reference so a later cleanup unlinks the rest but keeps it.
-        keep_lock_env_file(self.lock_env_file)
-        self.lock_env_file = None
-
-    def _render_root_document(self) -> dict[str, object]:
-        # The per-run root compose file: name, includes, the edge, parent port stanzas, Caddyfile.
+        # The per-run root compose file: name, includes, the edge, parent port
+        # stanzas, Caddyfile.
         assert self.config.project_name is not None
         services: dict[str, object] = {}
         if self.routes:
@@ -238,69 +215,128 @@ class Assembly:
         if services:
             document["services"] = services
         if self.routes:
-            document["configs"] = {EDGE_CONFIG_NAME: {"content": self._render_caddyfile()}}
-        return document
+            # One site on the internal port; each route one handle block, in
+            # declaration order (caddy sorts them longest-path-first, so the
+            # order cannot shadow).
+            lines = [f":{EDGE_LISTEN_PORT} {{"]
+            for route in self.routes:
+                matcher = "" if route.path == "/*" else f" {route.path}"
+                if route.raw is not None:
+                    block = ["\t\t" + line for line in route.raw.splitlines()]
+                elif route is self.auth_route:
+                    block = [
+                        f"\t\treverse_proxy {route.upstream} {{",
+                        "\t\t\theader_up X-Forwarded-Proto {$FORWARDED_PROTO}",
+                        "\t\t\theader_up X-Forwarded-Port {$FORWARDED_PORT}",
+                        "\t\t}",
+                    ]
+                else:
+                    block = [f"\t\treverse_proxy {route.upstream}"]
+                head = "\thandle_path" if route.strip_prefix else "\thandle"
+                lines.extend((f"{head}{matcher} {{", *block, "\t}"))
+            lines.append("}")
+            # Every $ doubles: compose interpolation would otherwise eat caddy's {$ENV} placeholders.
+            document["configs"] = {EDGE_CONFIG_NAME: {"content": ("\n".join(lines) + "\n").replace("$", "$$")}}
+        self.compose_files.append(write_temp_compose_file(stack, document, "devkit-assembly-"))
 
-    def _render_caddyfile(self) -> str:
-        # One site on the internal port; each route one handle block, in declaration order
-        # (caddy sorts them longest-path-first, so the order cannot shadow).
-        lines = [f":{EDGE_LISTEN_PORT} {{"]
-        for route in self.routes:
-            matcher = "" if route.path == "/*" else f" {route.path}"
-            if route.raw is not None:
-                block = ["\t\t" + line for line in route.raw.splitlines()]
-            elif route is self.auth_route:
-                block = [
-                    f"\t\treverse_proxy {route.upstream} {{",
-                    "\t\t\theader_up X-Forwarded-Proto {$FORWARDED_PROTO}",
-                    "\t\t\theader_up X-Forwarded-Port {$FORWARDED_PORT}",
-                    "\t\t}",
-                ]
-            else:
-                block = [f"\t\treverse_proxy {route.upstream}"]
-            head = "\thandle_path" if route.strip_prefix else "\thandle"
-            lines.extend((f"{head}{matcher} {{", *block, "\t}"))
-        lines.append("}")
-        # Every $ doubles: compose interpolation would otherwise eat caddy's {$ENV} placeholders.
-        return ("\n".join(lines) + "\n").replace("$", "$$")
-
-    def _render_dev_overlay(self) -> dict[str, object]:
-        # The --dev overlay: dev-stage images with the repo bind, plus dev-toggle env holes.
-        declared = self.output_services
-        services: dict[str, dict[str, object]] = {
-            name: {
-                "image": f"{self.config.repository}/{name}:dev",
-                "volumes": [
-                    {
-                        "type": "bind",
-                        "source": self.root.resolve().as_posix(),
-                        "target": DEV_MOUNT_TARGET,
-                        "read_only": True,
-                    }
-                ],
+        if dev:
+            # The --dev overlay: dev-stage images with the repo bind, plus dev-toggle env holes.
+            declared = self.output_services
+            overlay_services: dict[str, dict[str, object]] = {
+                name: {
+                    "image": f"{self.config.repository}/{name}:dev",
+                    "volumes": [
+                        {
+                            "type": "bind",
+                            "source": self.root.resolve().as_posix(),
+                            "target": DEV_MOUNT_TARGET,
+                            "read_only": True,
+                        }
+                    ],
+                }
+                for name, service in self.config.service_builds.items()
+                if service.dev_stage and name in declared
             }
-            for name, service in self.config.service_builds.items()
-            if service.dev_stage and name in declared
-        }
-        for bundle in self.config.compose_bundles():
-            for workload in bundle.workloads:
-                document = WorkloadDocument.model_validate(
-                    yaml.safe_load((self.config.score_dir_path() / workload).read_text(encoding="utf-8"))
+            for bundle in self.config.compose_bundles():
+                for workload in bundle.workloads:
+                    workload_document = WorkloadDocument.model_validate(
+                        yaml.safe_load((self.config.score_dir_path() / workload).read_text(encoding="utf-8"))
+                    )
+                    raw, service_name = workload_document.dev_toggles
+                    # Only the absent annotation and the outside-selection name skip;
+                    # the generation-refused shapes refuse here too.
+                    if not isinstance(raw, str | None):
+                        raise TypeError(f"workload {workload} carries a malformed {DEV_TOGGLES_ANNOTATION} annotation")
+                    if raw is None or not raw.strip():
+                        continue
+                    if not isinstance(service_name, str):
+                        raise TypeError(
+                            f"workload {workload} carries {DEV_TOGGLES_ANNOTATION} but no string metadata name"
+                        )
+                    if service_name not in declared:
+                        continue
+                    toggles = parse_dev_toggles(service_name, raw)
+                    service = overlay_services.setdefault(service_name, {})
+                    service["environment"] = {key: f"${{{key}:-{value}}}" for key, value in toggles.items()}
+            if not overlay_services:
+                raise RuntimeError(
+                    "--dev found no dev shape in the assembly: a service Dockerfile declaring a "
+                    f"dev stage or a workload carrying {DEV_TOGGLES_ANNOTATION}"
                 )
-                raw, service_name = document.dev_toggles
-                if not isinstance(raw, str) or not raw.strip():
-                    continue
-                if not isinstance(service_name, str) or not service_name or service_name not in declared:
-                    continue
-                toggles = parse_dev_toggles(service_name, raw)
-                service = services.setdefault(service_name, {})
-                service["environment"] = {key: f"${{{key}:-{value}}}" for key, value in toggles.items()}
-        if not services:
-            raise RuntimeError(
-                "--dev found no dev shape in the assembly: a service Dockerfile declaring a "
-                f"dev stage or a workload carrying {DEV_TOGGLES_ANNOTATION}"
+            self.compose_files.append(write_temp_compose_file(stack, {"services": overlay_services}, "devkit-dev-overlay-"))
+
+        if self.routes or self.ports:
+            # Validate every wired upstream and port owner against compose's own
+            # resolution (the auth option's route rides the routes list by
+            # construction, its option being a selected entry).
+            resolved = set(
+                _compose_config(self.root, self.compose_files, "--services", lock_env_file=self.lock_env_file)
             )
-        return {"services": services}
+            for route in self.routes:
+                upstream = route.upstream.partition(":")[0]
+                if upstream not in resolved:
+                    raise RuntimeError(
+                        f"route {route.path} upstream {upstream} resolves to no service in the selected assembly"
+                    )
+            for port in self.ports:
+                if port.service not in resolved:
+                    raise RuntimeError(
+                        f"ports for service {port.service!r} resolve to no service in the selected assembly"
+                    )
+        if self.profiles:
+            # Refuse profile names the compose files do not define.
+            defined = _compose_config(self.root, self.compose_files, "--profiles", lock_env_file=self.lock_env_file)
+            unknown = [profile for profile in self.profiles if profile not in defined]
+            if unknown:
+                raise RuntimeError(
+                    f"COMPOSE_PROFILES selects unknown profile(s) {unknown}; "
+                    f"profiles defined by the compose files: {defined}"
+                )
+
+
+class LockEnvUnwind:
+    # The lock env file's stack unwind: a failure prints and keeps the file (the
+    # diagnostic of what the run saw), a clean return unlinks it, and a successful
+    # handoff execs before any unwind runs.
+    def __init__(self, path: Path | None) -> None:
+        self.path = path
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None:
+        if self.path is None:
+            return None
+        if exc_type is not None:
+            keep_lock_env_file(self.path)
+        else:
+            self.path.unlink(missing_ok=True)
+        return None
 
 
 def require_env_file(root: Path) -> None:
@@ -308,23 +344,19 @@ def require_env_file(root: Path) -> None:
         raise RuntimeError("No .env file found; create one first (e.g., copy .env.example)")
 
 
-def parse_env_file(path: Path) -> dict[str, str]:
-    result: dict[str, str] = {}
-    for raw_line in path.read_text().splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        result[key.strip()] = value.strip().strip("'\"")
-    return result
-
-
 def merged_environment(root: Path) -> dict[str, str]:
     # The shell-over-.env view every selection read uses (BUNDLES, COMPOSE_PROFILES,
     # PLATFORM): an explicitly empty shell assignment overrides a set .env value. A
     # missing .env reads as empty so the lock-env valve stays runnable on fresh checkouts.
     path = root / ENV_FILE
-    environment = parse_env_file(path) if path.is_file() else {}
+    environment: dict[str, str] = {}
+    if path.is_file():
+        for raw_line in path.read_text().splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            environment[key.strip()] = value.strip().strip("'\"")
     environment.update(environ)
     return environment
 
@@ -348,7 +380,9 @@ def compose_command(root: Path, compose_files: list[Path], *arguments: str, lock
     return " ".join([prefix, *quoted_arguments])
 
 
-def write_lock_env_file(root: Path, config: DockerDevkitConfig, environment: Mapping[str, str]) -> Path | None:
+def write_lock_env_file(
+    root: Path, config: DockerDevkitConfig, environment: Mapping[str, str], stack: ExitStack
+) -> Path | None:
     # The committed lock is structured YAML; compose consumes its selected-platform env
     # projection as a per-run --env-file beside the per-run compose files.
     lock_path = root / LOCK_PATH
@@ -357,7 +391,9 @@ def write_lock_env_file(root: Path, config: DockerDevkitConfig, environment: Map
     entries = compose_env_entries(parse_image_lock(lock_path), config, environment)
     with NamedTemporaryFile("w", suffix=".env", prefix="devkit-lock-env-", delete=False, encoding="utf-8") as handle:
         handle.write(render_env_entries(entries))
-        return Path(handle.name)
+        path = Path(handle.name)
+    stack.enter_context(LockEnvUnwind(path))
+    return path
 
 
 def keep_lock_env_file(path: Path | None) -> None:
@@ -370,10 +406,12 @@ def keep_lock_env_file(path: Path | None) -> None:
     print(path.read_text(encoding="utf-8"), end="")
 
 
-def write_temp_compose_file(document: Mapping[str, object], prefix: str) -> Path:
+def write_temp_compose_file(stack: ExitStack, document: Mapping[str, object], prefix: str) -> Path:
     with NamedTemporaryFile("w", suffix=".yaml", prefix=prefix, delete=False, encoding="utf-8") as handle:
         handle.write(yaml.safe_dump(document, sort_keys=False, default_flow_style=False))
-        return Path(handle.name)
+        path = Path(handle.name)
+    stack.callback(path.unlink, missing_ok=True)
+    return path
 
 
 def _compose_config(
@@ -388,38 +426,5 @@ def _compose_config(
     ]
 
 
-def assert_known_profiles(profiles: list[str], defined: list[str]) -> None:
-    unknown = [profile for profile in profiles if profile not in defined]
-    if unknown:
-        raise RuntimeError(
-            f"COMPOSE_PROFILES selects unknown profile(s) {unknown}; profiles defined by the compose files: {defined}"
-        )
-
-
-def forwarded_pair(environment: dict[str, str]) -> dict[str, str]:
-    public_url = environment.get("PUBLIC_URL", "").strip()
-    if not public_url:
-        raise RuntimeError(
-            "an auth option is selected, so the edge derives the forwarded scheme and port from PUBLIC_URL; "
-            "PUBLIC_URL is missing from the environment"
-        )
-    scheme, _, rest = public_url.partition("://")
-    hostport = rest.partition("/")[0]
-    if ":" in hostport:
-        forwarded_port = hostport.rpartition(":")[2]
-    elif scheme == "https":
-        forwarded_port = "443"
-    else:
-        forwarded_port = "80"
-    return {"FORWARDED_PROTO": scheme, "FORWARDED_PORT": forwarded_port}
-
-
 def _split_names(value: str) -> list[str]:
     return list(dict.fromkeys(part.strip() for part in value.split(",") if part.strip()))
-
-
-def _service_names(path: Path) -> set[str]:
-    # Extract names only; authored files never promised the bind-law lens.
-    document = yaml.safe_load(path.read_text(encoding="utf-8"))
-    services = document.get("services") if is_mapping(document) else None
-    return set(services) if is_mapping(services) else set()

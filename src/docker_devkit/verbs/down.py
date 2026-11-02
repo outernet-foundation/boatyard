@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Annotated
 
@@ -8,7 +9,6 @@ from bashrun.bash import bash_handoff
 
 from docker_devkit.assembly import (
     compose_command,
-    keep_lock_env_file,
     merged_environment,
     require_compose_stack,
     require_env_file,
@@ -29,21 +29,15 @@ def down(
     require_env_file(root)
     config = require_compose_stack(load_config(root))
 
-    # Tear down by project name, covering every selection and profile.
-    assembly_root = write_temp_compose_file({"name": config.project_name}, "devkit-assembly-")
-    lock_env_file = write_lock_env_file(root, config, merged_environment(root))
+    # Tear down by project name, covering every selection and profile. Both writes
+    # push their own unwind, so a refusing run strands nothing; the handoff execs,
+    # so a successful run never unwinds.
+    with ExitStack() as stack:
+        lock_env_file = write_lock_env_file(root, config, merged_environment(root), stack)
+        assembly_root = write_temp_compose_file(stack, {"name": config.project_name}, "devkit-assembly-")
 
-    command = compose_command(root, [assembly_root], "down", "--remove-orphans", lock_env_file=lock_env_file)
-    if volumes:
-        command += " -v"
+        command = compose_command(root, [assembly_root], "down", "--remove-orphans", lock_env_file=lock_env_file)
+        if volumes:
+            command += " -v"
 
-    try:
         bash_handoff(command)
-    except BaseException:
-        keep_lock_env_file(lock_env_file)
-        lock_env_file = None
-        raise
-    finally:
-        assembly_root.unlink(missing_ok=True)
-        if lock_env_file is not None:
-            lock_env_file.unlink(missing_ok=True)

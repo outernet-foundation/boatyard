@@ -154,7 +154,30 @@ def run_build(
     if targets_opt:
         targets: list[str] = []
         for address in targets_opt:
-            target = _resolve_target(address, config.service_builds, target_variants)
+            # A bare name selects the default cell; name/cell addresses one declared cell;
+            # a suffixed target name (what the matrix emits) addresses it directly.
+            if "/" in address:
+                service_name, _, cell = address.partition("/")
+                service = config.service_builds.get(service_name)
+                if service is None:
+                    raise typer.BadParameter(
+                        f"Unknown target {address!r}. Available: {_address_vocabulary(config.service_builds)}"
+                    )
+                if not service.variants:
+                    raise typer.BadParameter(f"{service_name} declares no variant cells; build it as {service_name!r}")
+                if cell not in service.variants:
+                    raise typer.BadParameter(
+                        f"Unknown cell {cell!r} for {service_name}; it declares the cells {service.variants}"
+                    )
+                target = f"{service_name}-{cell}"
+            elif address in config.service_builds:
+                target = config.service_builds[address].target_variants[0][0]
+            elif address in target_variants:
+                target = address
+            else:
+                raise typer.BadParameter(
+                    f"Unknown target {address!r}. Available: {_address_vocabulary(config.service_builds)}"
+                )
             if target not in targets:
                 targets.append(target)
         if dev:
@@ -197,7 +220,18 @@ def run_build(
     with TemporaryDirectory(prefix="bake-") as bake_dir:
         bake_file = Path(bake_dir) / "bake.yaml"
         bake_file.write_text(rendered, encoding="utf-8")
-        _run_bake(bake_file, command_arguments, rendered)
+        # The temp bake file vanishes with its directory, so a failed bake re-raises with
+        # the rendered content attached — the failure stays inspectable after the run.
+        try:
+            bash(
+                " ".join(
+                    ["docker buildx bake", f"-f {bake_file}", f"--metadata-file {METADATA_PATH}", *command_arguments]
+                )
+            )
+        except CalledProcessError as error:
+            raise RuntimeError(
+                f"docker buildx bake failed (exit {error.returncode}); rendered bake file:\n{rendered}"
+            ) from error
 
     metadata_json: dict[str, Any] = (
         json.loads(METADATA_PATH.read_text(encoding="utf-8")) if METADATA_PATH.exists() else {}
@@ -248,48 +282,9 @@ def host_platform() -> str:
     raise RuntimeError(f"Unsupported host architecture: {machine}")
 
 
-def _resolve_target(
-    address: str,
-    services: dict[str, ServiceBuild],
-    target_variants: dict[str, str | None],
-) -> str:
-    # A bare name selects the default cell; name/cell addresses one declared cell; a
-    # suffixed target name (what the matrix emits) addresses it directly.
-    if "/" in address:
-        service_name, _, cell = address.partition("/")
-        service = services.get(service_name)
-        if service is None:
-            raise typer.BadParameter(f"Unknown target {address!r}. Available: {_address_vocabulary(services)}")
-        if not service.variants:
-            raise typer.BadParameter(f"{service_name} declares no variant cells; build it as {service_name!r}")
-        if cell not in service.variants:
-            raise typer.BadParameter(
-                f"Unknown cell {cell!r} for {service_name}; it declares the cells {service.variants}"
-            )
-        return f"{service_name}-{cell}"
-    if address in services:
-        return services[address].target_variants[0][0]
-    if address in target_variants:
-        return address
-    raise typer.BadParameter(f"Unknown target {address!r}. Available: {_address_vocabulary(services)}")
-
-
 def _address_vocabulary(services: dict[str, ServiceBuild]) -> list[str]:
     addresses: list[str] = []
     for name in sorted(services):
         addresses.append(name)
         addresses.extend(f"{name}/{variant}" for variant in services[name].variants)
     return addresses
-
-
-def _run_bake(bake_file: Path, command_arguments: list[str], rendered: str) -> None:
-    # The temp bake file vanishes with its directory, so a failed bake re-raises with the
-    # rendered content attached — the failure stays inspectable after the run.
-    try:
-        bash(
-            " ".join(["docker buildx bake", f"-f {bake_file}", f"--metadata-file {METADATA_PATH}", *command_arguments])
-        )
-    except CalledProcessError as error:
-        raise RuntimeError(
-            f"docker buildx bake failed (exit {error.returncode}); rendered bake file:\n{rendered}"
-        ) from error
