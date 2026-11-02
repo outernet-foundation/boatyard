@@ -1,24 +1,25 @@
-# docker-devkit
+# boatyard
 
-Docker-stack lifecycle verbs as a generic package for any repo shipping a compose graph: bring-up/tear-down, cross-build, score generation; `up` derives the whole assembly, edge caddy included, from the root `docker-devkit.yaml`. No Python
-  API — the contracts are the verb CLI, the declaration schema (`docker-devkit.yaml` + `docker-devkit.lock`), and committed artifact formats. Three-class principle: authored facts in the config, registry-resolved in the lock, tree-derived
-  (`tree-<hash>`) computed on demand, never committed. PyPI identity starts at `0.1.0` (`stack-toolkit` ≤0.1.1 = deprecation signposts, not history); deps resolve from PyPI, git-source pins only in scratch branches. github-actions-toolkit
-  owns the consumer workflow contract and is never a project dependency (resolver cycle); from 1.0 on breaking changes ship with a manually bumped `major_minor`. Fresh-repo assumption: no code handles an obsolete format or dead annotation
+Docker-stack lifecycle verbs as a generic package for any repo shipping a compose graph: bring-up/tear-down, cross-build, score generation; `up` derives the whole assembly, edge caddy included, from the root `boatyard.yml`. No Python
+  API — the contracts are the verb CLI (`boatyard <verb>`), the declaration schema (`boatyard.yml` + `boatyard.lock.yml`), and committed artifact formats. Three-class principle: authored facts in the config, registry-resolved in the lock, tree-derived
+  (  `tree-<hash>`) computed on demand, never committed. PyPI identity starts at `0.1.0` (`stack-toolkit` ≤0.1.1 = signposts); deps resolve from PyPI, git-source pins only in scratch branches. github-actions-toolkit
+  owns the consumer workflow contract and is never a project dependency (resolver cycle); from 1.0 on breaking changes ship with a manually bumped `major_minor`. Fresh-repo assumption: no code handles an obsolete format
   — a past artifact gets the plain parse refusal, never a migration path.
 
 ## Commands
 
 - Quick loop: `uv run pytest`, `uv run ruff check`.
-- Full gate: `uv run --locked scripts/preflight.py` (wraps `preflight-python`: uv sync, ruff check + format --check, basedpyright, deptry src, pytest, lock/ruff-sync checks).
+- Full gate: `uv run --locked scripts/preflight.py` (wraps `preflight-python`: uv sync, ruff, basedpyright, deptry, pytest, lock checks).
 
 ## Verbs
 
-One module per command under `verbs/`; the app object is `app`; the command function names the command underscore-spelled; both Typer flag suppressions always set. Error-channel law: every authored-input refusal in library code is a bare
-`ValueError` with byte-stable text; `verbs/entry.py` is the boundary — `@entry` converts `ValueError` to one-line stderr + exit 1; `typer.BadParameter` keeps the CLI-flag layer; bug-class exceptions keep tracebacks.
+One module per command under `verbs/`, each with its local bare `app = typer.Typer()` + `@app.command()` on the function; `cli.py` composes them with nameless `app.add_typer(...)` — flat top-level verbs (a named `add_typer` nests a group); one `boatyard`
+console script; `--install-completion` once covers all verbs. Error-channel law: no verb boundary — authored-input refusals in library code are bare `ValueError` with byte-stable text, propagating with full traceback (locals shown); `typer.BadParameter`
+owns the CLI-flag layer; the two explicit `raise SystemExit` sites are `verbs/publish.py` (registry credentials) and `verbs/score.py` (stale artifacts).
 
 - `up`: `--attached/-a` `--quiet-pull/-q` `--build` `--dev`
 - `down`: `--volumes/-v`
-- `build`: `--push` (optional value) `--targets/-t` `--no-cache` `--dev`
+- `build`: `--push` (bool, the config's repository) `--push-to <addr>` (mutually exclusive) `--targets/-t` `--no-cache` `--dev`
 - `lock`: `--upgrade/-u` `--check`
 - `tree-tags`: positional service names, bare `tree-` tags on stdout
 - `mirror`: no flags
@@ -32,7 +33,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 
 `config.py` schema + load; `dockerfiles.py` Dockerfile declarations + sha machinery (`ServiceBuild`, `derive_services`); `config_lock.py` lock schema + parsers; `lock.py` lock engine + projections; `compose.py` compose invocation
   (`select`/`render` + kit); `bake.py` build pipeline; `score.py` score shared base; `score_compose.py`/`score_k8s.py` rendering pipelines; `verbs/score.py` owns `generate_artifacts`;
-  `publish.py` publish preparation; `crane.py` pinned crane installer; `optional_value_option.py` typer `--push` seam (`# noqa-wrapper:` boundary); `verbs/entry.py` the verb boundary; `verbs/*` one module per command. Model modules run root → leaves: root record first
+  `publish.py` publish preparation; `crane.py` pinned crane installer; `cli.py` the single console-script app composing the verb apps namelessly; `verbs/*` one module per command. Model modules run root → leaves: root record first
   (`RootModel` subscripts quote forward refs; the one inversion is a parent whose field default constructs the child), functions callers-before-callees; imports absolute; `config_lock`/`dockerfiles` ← `config` one-way. Also in `config.py` (the shared leaf): `Yaml`,
   `is_mapping`/`is_list`, `double_dollars` (the one `$`-doubling home), `PLACEHOLDER`/`COMPOSE_HOLE`/`ENV_NAME_PATTERN`, `EDGE_SERVICE_NAME`, `chart_lock_key`. Lifecycle stays a separate package from codegen (disjoint dependency surfaces — bundling would force
   stack-only consumers to install `sqlacodegen`, `psycopg`, `datamodel-code-generator`).
@@ -87,19 +88,19 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
   never teaches them to.
 - Declarations are upstream-native; the prefixed form is derived; `mirrored_ref` = the single join.
 - `up` fails closed over the lock: probes every recorded digest (index + platform manifests + charts) before bring-up; only a registry 404 / manifest-unknown stderr verdict = the not-mirrored error — unauthorized or transport failures
-  report as probe failures carrying the underlying text, so a host-side problem can't masquerade as unmirrored CI debt; no escape flag; the fix is to let CI's mirror job run.
+  report as probe failures carrying the underlying text; no escape flag; the fix is to let CI's mirror job run.
 - The `mirror` verb probes presence per reference over every recorded digest (`crane digest`; partially mirrored still triggers the copy; probe failure falls through to `crane copy`, the loud gate — probe errors never classified); one
   `crane copy {ref} {prefix}/{ref}` per lacking reference copies the whole index; every declared reference is a target — nothing filtered, so drifted declarations cannot silently mirror zero; zero declared targets = a loud error; the
   footer splits copied/present; bashrun + plain prints; crane from the shared pinned installer (`crane.py` — install always runs so the pin, not a preexisting binary, decides the version).
-- `build --push` leaves bake's `metadata.json` in the working directory — the handoff the toolkit's builds_ref step reads; builds_ref distilling + ORAS knowledge live toolkit-side; the devkit reads no `REGISTRY` facts.
+- `build --push` leaves bake's `metadata.json` in the working directory — the handoff the toolkit's builds_ref step reads; builds_ref distilling + ORAS knowledge live toolkit-side; boatyard reads no `REGISTRY` facts.
 
 ## Compose assembly and BUNDLES=
 
 - Selection law: `BUNDLES=` names options only (a bare entry's name refuses as unselectable); ≤ one option per group; zero options legal exactly when riders or routes carry the assembly (omitting the auth pick = the anonymous edge); an
   options-only repo with an empty selection refuses; unknown names refuse listing the vocabulary; the `up` verb owns the entry gate — no config or no `services:` refuses, a set `BUNDLES=` refuses first; `select()` owns the selection laws. `COMPOSE_PROFILES`: shell-env-over-`.env`, comma-split,
-  deduped, forwarded as explicit `--profile` flags; unknown profiles refuse before probe and build. Membership law: everything about the docker compose invocation — selection, rendering, invocation spelling, staged inputs — lives in `compose.py`; nothing else lands there.
+  deduped, forwarded as `--profile` flags; unknown profiles refuse before probe and build. Membership law: everything about the docker compose invocation — selection, rendering, invocation spelling, staged inputs — lives in `compose.py`; nothing else lands there.
 - The materialized root carries the project `name:`, the `include:` list (remote refs verbatim, local outputs by absolute path, in `services:` declaration order), the emitted edge (iff any route rides), parent-file port stanzas; compose
-  merges parent ports into included services and honors `!reset` — the merge needs compose ≥ 2.40 (2.24–2.39 answer `conflicts with imported resource`; a test pins this).
+  merges parent ports into included services and honors `!reset` — the merge needs compose ≥ 2.40 (2.24–2.39 answer `conflicts with imported resource`).
 - Validation teeth, in `render()`: with routes or ports, `docker compose config --services` must list every route upstream + every port's owning service; selected profiles must appear in `config --profiles`; a selected
   bundle output that does not exist refuses naming generate-score; two selected local outputs sharing a service name refuse.
 - Edge stanza: `image: ${CADDY_IMAGE:?err}` (the lock hole), the Caddyfile configs entry, `gateway:` as published port, `FORWARDED_PROTO`/`FORWARDED_PORT` derived from `PUBLIC_URL` under a selected auth option (refusing when absent); the
@@ -117,8 +118,8 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 
 - `run_build` renders the deterministic per-run bake file (authored key order, byte-identical for identical configs; bake validates its own input — no document model); it takes the already-loaded `config` — the
   build verb loads the config and owns its flag refusals; a failed bake re-raises with the rendered content attached.
-- Push axis: `push=None` local `--load`; `push=""` pushes for the config's `repository`; `push=<addr>` re-roots tags + cache refs under that registry (one law for both destinations); an address with a scheme, trailing slash, or host
-  carrying neither `.` nor `:` refuses; `--push` alone without a declared `repository` refuses; `--dev` with a push destination refuses (dev stages are local-only).
+- Push axis: `--push` (bool) pushes for the config's `repository`;   `--push-to <addr>` re-roots tags + cache refs under that registry; the flags together refuse; an address with a scheme, trailing slash, or host
+  carrying neither `.` nor `:` refuses; `--push` without a declared `repository` refuses; `--dev` with either push flag refuses (dev stages are local-only).
 - `host_platform()` = the one host fact left: default targets are every service's default cell restricted to this machine's arch, and an empty default set refuses naming the arch + `--targets` (bake with no target arguments builds every
   service, silently defeating the selection); `--targets`: bare name = default cell, `name/cell`, suffixed target name; unknown names/cells refuse listing the vocabulary.
 - Per target: dockerfile by convention; `target: dev` only under `--dev`; platforms collapse to the host arch in load mode (a single declared platform rides through); args — every `base_images` key as `${KEY:-}` on every service, the axis
@@ -140,8 +141,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 - `--check` = the CI staleness gate: self-skips (exit 0) where nothing generates; otherwise regenerates in-process, and any `git status` change over the written outputs exits 1 printing the diff; `--check` + `--local` are mutually
   exclusive.
 - Post-passes on compose output are typed transformations on `ComposeDocument`, dumped exactly once — pydantic's declared-fields-first order is the artifacts' deterministic key order: service-name collapse
-  (`{workload}-{container}` → workload, collision loud); per-entry gate rename `wait-for-resources` → `wait-for-resources-{entry}` with `depends_on` following (collision loud — compose merges same-name services
-  across includes silently); the edge-reserved check; bind inlining — every `type: bind` volume becomes a top-level `configs.content` entry, zero host-filesystem references in committed artifacts (the `$`-doubling law's single exception: `outernet.internal/consumer-interpolated` files).
+  (`{workload}-{container}` → workload, collision loud); per-entry gate rename `wait-for-resources` → `wait-for-resources-{entry}` with `depends_on` following (collision loud); the edge-reserved check; bind inlining — every `type: bind` volume becomes a top-level `configs.content` entry, zero host-filesystem references in committed artifacts (the `$`-doubling law's single exception: `outernet.internal/consumer-interpolated` files).
 - The image lock is required and non-empty; a gate-forming run additionally requires `ALPINE_IMAGE`.
 - `$`-doubling law, stated once: a literal `$` doubles whenever file text rides inside a compose document (edge Caddyfile, publish's file-sourced configs, score's bind inlining); text outside a compose document (k8s-side inclusion, k8s
   manifests) never doubles.
@@ -175,8 +175,8 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 
 ## Deployment-surface annotations
 
-- Everything the substrate needs that score's container model doesn't carry lives in the workload file as `outernet.internal/*` annotations — `docker-devkit.yaml` never carries a per-workload runtime fact; the shipped patch templates
-  (package data under `src/docker_devkit/patch_templates/`) are the annotation reader — one annotation, one template, one behavior; consumer repos never author one; refusal laws live in devkit code (templates are data and cannot
+- Everything the substrate needs that score's container model doesn't carry lives in the workload file as `outernet.internal/*` annotations — `boatyard.yml` never carries a per-workload runtime fact; the shipped patch templates
+  (package data under `src/boatyard/patch_templates/`) are the annotation reader — one annotation, one template, one behavior; consumer repos never author one; refusal laws live in boatyard code (templates are data and cannot
   refuse); the lens is two models — `WorkloadDocument` (strict `dict[str, str]` annotations, `metadata.name` pinned to the workload file stem) and `ComposeWorkloadDocument` (adds httpGet-requires-probe-adapter) at every compose-side parse — one validity for every reader
   (`up` and `generate-score` alike); dev-toggles-on-k8s-only stays at its consumer (score_k8s); score propagates `metadata.annotations` into both renderings — regeneration diff expectations must include the annotation lines.
 
@@ -190,7 +190,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 
 ## This file's rules
 
-This file's only reader is a coding agent. It is an operations manual, not an architecture description — the code is the source of truth for mechanism, and this file carries only what an agent would otherwise get wrong.
+This file's only reader is a coding agent — an operations manual: the code is the source of truth for mechanism; this file carries only what an agent would otherwise get wrong.
 
 - Budget: 200 lines and 26KB, both hard — an addition crossing either cap cuts something else here in the same change; admit a line only if removing it would cause an agent to make a mistake it otherwise wouldn't.
 - One law, one home: search this file before adding a statement; if the law already exists, update it in place — never state it a second time. The module map carries one line per module and no laws; laws live in sections named for the concern.
