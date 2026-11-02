@@ -1,5 +1,6 @@
 import os
 import shutil
+from hashlib import sha256
 from importlib.resources import files
 from pathlib import Path
 
@@ -96,13 +97,18 @@ class K8sBashRecorder:
         self.output_path = output_path
         self.state_path = state_path
         self.commands: list[str] = []
+        self.state_at_generate: dict[str, str] = {}
 
     def run(self, command: str, *, cwd: Path | None = None) -> None:
         self.commands.append(command)
+        if command.startswith("score-k8s init"):
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            self.state_path.write_text("workloads: {}\n", encoding="utf-8")
         if command.startswith("score-k8s generate"):
             self.output_path.parent.mkdir(parents=True, exist_ok=True)
             self.output_path.write_text(WORKLOAD_MANIFEST, encoding="utf-8")
             self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            self.state_at_generate[self.output_path.name] = self.state_path.read_text(encoding="utf-8")
             self.state_path.write_text("workloads: {}\n", encoding="utf-8")
 
 
@@ -1059,6 +1065,25 @@ def test_k8s_builtin_templates_register_on_every_init(tmp_path: Path, monkeypatc
         "gpu-pod.tpl",
         "scale-to-zero.tpl",
     ]
+
+
+def test_k8s_instance_suffixes_are_preseeded_deterministically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "stack" / "score").mkdir(parents=True)
+    (tmp_path / "stack" / "score" / "api.yaml").write_text("metadata:\n  name: api\ncontainers: {}\n", encoding="utf-8")
+    output = Path("stack/generated/k8s/manifests.yaml")
+    recorder = K8sBashRecorder(tmp_path / output, tmp_path / "stack/generated/k8s/.score-k8s/state.yaml")
+    monkeypatch.setattr(score_generate_module, "bash", recorder.run)
+    monkeypatch.setattr(score_generate_module, "bash_output", HelmRecorder().run)
+    config = _root_config(k8s={"workloads": ["api.yaml"]})
+    config.root = tmp_path
+
+    assert config.k8s is not None
+    generate_k8s(config, config.k8s, tmp_path / output, ConfigLock.model_validate({}))
+
+    seeded = yaml.safe_load(recorder.state_at_generate[output.name])
+    assert seeded["workloads"]["api"]["instance_suffix"] == "-" + sha256(b"api").hexdigest()[:10]
 
 
 A0_ESCAPED_WORKLOAD = """\

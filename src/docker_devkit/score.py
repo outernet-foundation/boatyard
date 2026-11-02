@@ -166,18 +166,6 @@ class ManifestDocument(BaseModel):
     metadata: ManifestMetadata = Field(default_factory=ManifestMetadata)
 
 
-class ScoreState(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    workloads: dict[str, WorkloadState] = {}
-
-
-class WorkloadState(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    instance_suffix: str = ""
-
-
 class SecretsDeclaration(RootModel[dict[str, "SecretKey"]]):
     @model_validator(mode="before")
     @classmethod
@@ -616,6 +604,8 @@ def generate_k8s(config: Config, k8s: K8sConfig, output_path: Path, lock: Config
             working_dir=output_path.parent,
         )
 
+        _seed_instance_suffixes(state_dir / "state.yaml", score_dir, k8s.workloads)
+
         with _rendered_workloads(config, k8s.workloads, k8s.vars, images) as workloads:
             bash(f"score-k8s generate {workloads} --output {output_path.as_posix()}", cwd=output_path.parent)
 
@@ -657,28 +647,6 @@ def generate_k8s(config: Config, k8s: K8sConfig, output_path: Path, lock: Config
         decorated.append((manifest.kind, manifest.metadata.namespace, manifest.metadata.name, index, block))
     decorated.sort()
     write_generated_file(output_path, "".join(f"---\n{block}" for *_, block in decorated))
-
-    # Reduce recorded workload paths to bare filenames.
-    state_path = state_dir / "state.yaml"
-    state_text = state_path.read_text(encoding="utf-8")
-    for name in k8s.workloads:
-        state_text = re.sub(rf"(?m)^(\s*file:\s*).*/{re.escape(name)}$", rf"\g<1>{name}", state_text)
-    write_generated_file(state_path, state_text)
-
-    # Rewrite each random instance_suffix to a name-derived hash.
-    state = ScoreState.model_validate(yaml.safe_load(state_text) or {})
-    manifest_text = output_path.read_text(encoding="utf-8")
-    for name, entry in state.workloads.items():
-        current = entry.instance_suffix
-        if not current:
-            continue
-        wanted = "-" + sha256(name.encode()).hexdigest()[:10]
-        if current == wanted:
-            continue
-        state_text = state_text.replace(f"instance_suffix: {current}", f"instance_suffix: {wanted}")
-        manifest_text = manifest_text.replace(f"{name}{current}", f"{name}{wanted}")
-    write_generated_file(state_path, state_text)
-    write_generated_file(output_path, manifest_text)
 
     shutil.rmtree(state_dir, ignore_errors=True)
 
@@ -827,6 +795,30 @@ def _init_state(
         for patch_template in patch_templates
     )
     bash(f"{command}{flags}", cwd=working_dir)
+
+
+def _seed_instance_suffixes(state_path: Path, score_dir: Path, workloads: list[str]) -> None:
+    # Pre-seed each workload's instance suffix so the tool names instances
+    # deterministically by construction; init's other state keys ride through.
+    state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
+    if not is_mapping(state):
+        state = {}
+    entries = state.get("workloads")
+    if not is_mapping(entries):
+        entries = {}
+        state["workloads"] = entries
+    for name in workloads:
+        document = _load_yaml_file(score_dir / name)
+        metadata = document.get("metadata") if is_mapping(document) else None
+        workload_name = metadata.get("name") if is_mapping(metadata) else None
+        if not isinstance(workload_name, str) or not workload_name:
+            continue
+        entry = entries.get(workload_name)
+        if not is_mapping(entry):
+            entry = {}
+            entries[workload_name] = entry
+        entry["instance_suffix"] = "-" + sha256(workload_name.encode()).hexdigest()[:10]
+    write_generated_file(state_path, dump_compose(state))
 
 
 @contextmanager
