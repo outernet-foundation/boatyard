@@ -23,11 +23,11 @@ from docker_devkit.config import (
     RouteConfig,
     ServiceEntry,
     ServiceGroup,
+    WorkloadDocument,
     is_mapping,
     parse_dev_toggles,
 )
 from docker_devkit.config_lock import LOCK_PATH, parse_config_lock
-from docker_devkit.documents import WorkloadDocument
 from docker_devkit.lock import compose_env_entries, render_env_entries
 
 ENV_FILE = Path(".env")

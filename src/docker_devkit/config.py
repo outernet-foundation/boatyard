@@ -458,6 +458,23 @@ class K8sConfig(BaseModel):
         return self
 
 
+class WorkloadMetadata(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    name: object = None
+    annotations: dict[str, object] = Field(default_factory=dict)
+
+
+class WorkloadDocument(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    metadata: WorkloadMetadata = Field(default_factory=WorkloadMetadata)
+
+    @property
+    def dev_toggles(self) -> tuple[object | None, object]:
+        return self.metadata.annotations.get(DEV_TOGGLES_ANNOTATION), self.metadata.name
+
+
 class ComposeBundle(NamedTuple):
     name: str
     output: Path

@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from docker_devkit import score as score_generate_module
 from docker_devkit.config import Config
 from docker_devkit.config_lock import ConfigLock
-from docker_devkit.documents import BindVolume, ComposeService
+from docker_devkit.score import BindVolume, ComposeService
 from docker_devkit.score import (
     generate_k8s,
     write_generated_file,

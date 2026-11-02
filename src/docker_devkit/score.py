@@ -11,7 +11,7 @@ from hashlib import sha256
 from importlib.resources import as_file, files
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, NamedTuple, Self
+from typing import Any, Literal, NamedTuple, Self
 
 import yaml
 from bashrun.bash import bash, bash_output
@@ -26,12 +26,14 @@ from pydantic import (
 )
 
 from docker_devkit import dockerfiles
+from docker_devkit.compose import merged_environment
 from docker_devkit.config import (
     DEV_TOGGLES_ANNOTATION,
     EDGE_SERVICE_NAME,
     ENV_NAME_PATTERN,
     K8sConfig,
     Target,
+    WorkloadDocument,
     is_list,
     is_mapping,
     parse_dev_toggles,
@@ -39,9 +41,69 @@ from docker_devkit.config import (
     chart_lock_key,
 )
 from docker_devkit.config_lock import LOCK_PATH, ConfigLock, parse_config_lock
-from docker_devkit.documents import BindVolume, ComposeDocument, WorkloadDocument
-from docker_devkit.compose import merged_environment
 from docker_devkit.lock import compose_env_entries, env_entries
+
+
+class ComposeDocument(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    services: dict[str, ComposeService] | None = None
+    configs: dict[str, ComposeConfig] | None = None
+
+    @model_validator(mode="after")
+    def _reject_colliding_bind_basenames(self) -> Self:
+        # Refuse bind sources sharing one basename.
+        seen: dict[str, str] = {}
+        for service in (self.services or {}).values():
+            for volume in service.volumes or []:
+                if not isinstance(volume, BindVolume):
+                    continue
+                source = volume.source
+                known = seen.setdefault(Path(source).name, source)
+                if known != source:
+                    raise ValueError(f"bind sources {known} and {source} collide on config name {Path(source).name}")
+        return self
+
+
+class ComposeService(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    volumes: list[BindVolume | OtherVolume] | None = None
+
+
+class BindVolume(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: Literal["bind"]
+    source: str
+    target: str
+
+    @field_validator("source")
+    @classmethod
+    def _require_relative(cls, value: str) -> str:
+        if Path(value).is_absolute():
+            raise ValueError(f"bind source {value} must be relative")
+        return value
+
+
+class OtherVolume(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: str
+
+    # Reject malformed binds.
+    @model_validator(mode="after")
+    def _reject_bind(self) -> Self:
+        if self.type == "bind":
+            raise ValueError("a bind volume is missing its source or target")
+        return self
+
+
+class ComposeConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    file: str | None = None
+
 
 # Match only ${ALL_CAPS} placeholders.
 PLACEHOLDER = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
