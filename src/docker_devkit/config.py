@@ -378,11 +378,21 @@ class ComposeBundle(NamedTuple):
 
 
 def load_config(root: Path) -> DockerDevkitConfig | None:
-    # Parse the config and self-check the installed version.
+    config = read_config(root)
+    if config is None:
+        return None
+    return resolve_config(root, config)
+
+
+def read_config(root: Path) -> DockerDevkitConfig | None:
     path = root / DEFAULT_CONFIG_PATH
     if not path.exists():
         return None
-    config = DockerDevkitConfig.model_validate(load_strict_yaml(path.read_text(encoding="utf-8")).data)
+    return DockerDevkitConfig.model_validate(load_strict_yaml(path.read_text(encoding="utf-8")).data)
+
+
+def resolve_config(root: Path, config: DockerDevkitConfig) -> DockerDevkitConfig:
+    # Self-check the installed version.
     installed = importlib.metadata.version("docker-devkit")
     if installed != DEV_SENTINEL and not SpecifierSet(config.requires).contains(installed, prereleases=True):
         raise SystemExit(f"docker-devkit {installed} does not satisfy requires={config.requires!r}")
@@ -473,6 +483,12 @@ def load_config(root: Path) -> DockerDevkitConfig | None:
         if not values.is_file():
             raise RuntimeError(f"{values.as_posix()}: the chart's values file is required")
 
+    return config
+
+
+def require_compose_stack(config: DockerDevkitConfig | None) -> DockerDevkitConfig:
+    if config is None or not config.services:
+        raise RuntimeError("docker-devkit.yaml must exist and declare services")
     return config
 
 

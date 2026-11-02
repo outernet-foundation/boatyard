@@ -10,12 +10,11 @@ from bashrun.bash import bash_handoff
 from docker_devkit.assembly import (
     compose_command,
     merged_environment,
-    require_compose_stack,
     require_env_file,
     write_lock_env_file,
     write_temp_compose_file,
 )
-from docker_devkit.config import load_config
+from docker_devkit.config import load_config, require_compose_stack
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 

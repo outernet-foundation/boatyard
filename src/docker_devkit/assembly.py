@@ -25,6 +25,7 @@ from docker_devkit.config import (
     ServiceGroup,
     is_mapping,
     parse_dev_toggles,
+    require_compose_stack,
 )
 from docker_devkit.config_lock import LOCK_PATH, parse_image_lock
 from docker_devkit.documents import WorkloadDocument
@@ -327,12 +328,6 @@ def merged_environment(root: Path) -> dict[str, str]:
             environment[key.strip()] = value.strip().strip("'\"")
     environment.update(environ)
     return environment
-
-
-def require_compose_stack(config: DockerDevkitConfig | None) -> DockerDevkitConfig:
-    if config is None or not config.services:
-        raise RuntimeError("docker-devkit.yaml must exist and declare services")
-    return config
 
 
 def _compose_config(
