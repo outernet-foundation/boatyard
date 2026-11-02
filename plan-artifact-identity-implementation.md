@@ -21,7 +21,7 @@ Before phase 8 opens, the consumer-contract release and its catch-up wave
 have landed (tracked by that initiative's plan), and the module-tiers
 refactor (`refactor-plan.md`) has landed in its single session:
 
-- `docker-devkit.lock` is structured YAML — per image the index digest plus
+- `boatyard.lock.yml` is structured YAML — per image the index digest plus
   one concrete manifest digest per declared platform, charts flat — written
   by the `lock` verb and `build`'s incremental freeze; env consumption is
   synthesized per-run at the compose/bake edges, with a `lock-env` verb.
@@ -57,7 +57,7 @@ These rulings bind every phase:
   env consumption is synthesized per-run at the edges.
 - The PR channel publishes nothing permanent anywhere — only content-keyed
   ephemera (`tree-`, `sha-`).
-- Exact tags only. Digests live exclusively in `docker-devkit.lock`, written only
+- Exact tags only. Digests live exclusively in `boatyard.lock.yml`, written only
   by the lock writer (the `lock` verb and `build`'s incremental freeze). `latest`
   is never a pin and is aliased only by stable releases.
 - No tag GC and no retention policies on image repos carrying release tags; ghcr
@@ -74,13 +74,13 @@ These rulings bind every phase:
 prerequisite       Plan A       consumer-contract initiative delivers the
                                  P0 foundation: structured lock, relock +
                                  catch-up wave
-precision          phases 8-11  docker-devkit: the absorbed Part 1 —
+precision          phases 8-11  boatyard: the absorbed Part 1 —
                                  attribution parser, precise tree-tag
                                  hashes, dirty-tree guard, release, and the
                                  consumer re-key wave
 P2 semver          phases 12-16 toolkit + build-artifact-registry + devkit:
                                  version lines, sha-only publishes
-P3+P4a consumer    phases 17-21 docker-devkit: qualified grammar, lock
+P3+P4a consumer    phases 17-21 boatyard: qualified grammar, lock
                                  pinning, overrides, release
 adoption wave      phases 22-24 one commit per consumer repo
 P4b overlay        phase 25     cross-repo dev overlay — trigger-gated,
@@ -106,7 +106,7 @@ the branch keeps needing to match.
 
 | Repo | Branch | Commit |
 |---|---|---|
-| docker-devkit | refactor | 149f3579fc0ec7b65d0d52feccc05e44f30553f7 |
+| boatyard | refactor | 149f3579fc0ec7b65d0d52feccc05e44f30553f7 |
 | build-artifact-registry | dev | ed88c3a338cd64627185c7dac73342b6d08f1c58 |
 | github-actions-toolkit | dev | 44bcf9be6f4456ba978ae4e1438be9e8fbf35a32 |
 | placeframe | compose-bundles | 71994eace2dabb17389ccb9e2ead1dd75f062eed |
@@ -125,24 +125,24 @@ holds and its verify list passes green.
 
 | # | Phase | Repo | ADR |
 |---|---|---|---|
-| 8 | Attribution parser and construct guard | docker-devkit | absorbed Part 1 |
-| 9 | Attribution-based service hashes | docker-devkit | absorbed Part 1 |
-| 10 | Dirty-tree guard | docker-devkit | absorbed Part 1 |
-| 11 | Precision release and re-key wave | docker-devkit + consumers | absorbed Part 1 |
+| 8 | Attribution parser and construct guard | boatyard | absorbed Part 1 |
+| 9 | Attribution-based service hashes | boatyard | absorbed Part 1 |
+| 10 | Dirty-tree guard | boatyard | absorbed Part 1 |
+| 11 | Precision release and re-key wave | boatyard + consumers | absorbed Part 1 |
 | 12 | Registry aliasing primitive | build-artifact-registry | Part 2 |
 | 13 | Image and bundle declarations | github-actions-toolkit | Part 2 |
 | 14 | Change detection | github-actions-toolkit | Part 2 |
 | 15 | Release verb channels | github-actions-toolkit | Part 2 |
-| 16 | Publish-side cleanup release | docker-devkit + toolkit | Part 2 |
-| 17 | Qualified selection grammar | docker-devkit | Part 3 |
-| 18 | Bundle pinning through the lock | docker-devkit | Part 3 |
-| 19 | Lock probing at bring-up | docker-devkit | Part 3 |
-| 20 | Local bundle overrides | docker-devkit | Part 4 |
-| 21 | Consumer-surface release | docker-devkit | Sequencing |
+| 16 | Publish-side cleanup release | boatyard + toolkit | Part 2 |
+| 17 | Qualified selection grammar | boatyard | Part 3 |
+| 18 | Bundle pinning through the lock | boatyard | Part 3 |
+| 19 | Lock probing at bring-up | boatyard | Part 3 |
+| 20 | Local bundle overrides | boatyard | Part 4 |
+| 21 | Consumer-surface release | boatyard | Sequencing |
 | 22 | placeframe adoption | placeframe | Consumer adoption |
 | 23 | Make-it-Sing adoption and tag hygiene | Make-it-Sing | Consumer adoption, Hygiene |
 | 24 | capture-tool adoption; infra at leisure | placeframe-capture-tool, infra | Consumer adoption |
-| 25 | Cross-repo dev overlay (trigger-gated) | docker-devkit | Part 4 |
+| 25 | Cross-repo dev overlay (trigger-gated) | boatyard | Part 4 |
 
 "Absorbed Part 1" anchors point at the design the consumer-contract ADR
 (`plan-consumer-contract.md`, Absorption section) holds for tree-tag
@@ -150,7 +150,7 @@ precision; the design detail is lifted into the phases below.
 
 ## Phase 8 — Attribution parser and construct guard
 
-Cluster precision · docker-devkit · absorbed Part 1, "The design" and "The
+Cluster precision · boatyard · absorbed Part 1, "The design" and "The
 fail-closed construct guard". Load: `dockerfiles.py` (`ServiceBuild`,
 `derive_services`, `_effective_axis`), `config.py` (`build_partitions` — the
 context-edge closure), the Dockerfile fixtures under `tests/`.
@@ -165,7 +165,7 @@ End state:
   the bake manifest document, so the derivation itself is the serialization;
   tag lists are not inputs), and its `additional_contexts` edges in
   `target:` form only. The Dockerfile is the declaration; no input
-  declarations join `docker-devkit.yaml` — a config-declared input list is a
+  declarations join `boatyard.yml` — a config-declared input list is a
   second source of truth that drifts, and verifying it against the Dockerfile
   requires the parser anyway.
 - Every construct that can read the build context is either fully attributed
@@ -185,7 +185,7 @@ Verify: fixture tests — one per loud failure, one per attributed construct.
 
 ## Phase 9 — Attribution-based service hashes
 
-Cluster precision · docker-devkit · absorbed Part 1, "Over-inclusion fates"
+Cluster precision · boatyard · absorbed Part 1, "Over-inclusion fates"
 and "Soundness argument". Load: `dockerfiles.py` (`derive_services`,
 `compute_service_shas`, `service_sha_env`), `config.py` (`build_partitions`),
 `tests/test_service_builds.py`.
@@ -223,7 +223,7 @@ dependency-dir edit → dependent re-keys; declared-arg lock edit → re-key.
 
 ## Phase 10 — Dirty-tree guard
 
-Cluster precision · docker-devkit · absorbed Part 1, "Dirty-tree guard".
+Cluster precision · boatyard · absorbed Part 1, "Dirty-tree guard".
 Load: `bake.py` (`run_build`), `verbs/build.py`, `verbs/up.py` (the `--build`
 wiring).
 
@@ -245,13 +245,13 @@ permitted on `build --dev` and bare `up`.
 
 ## Phase 11 — Precision release and re-key wave
 
-Cluster precision · docker-devkit + image-building consumers · absorbed
+Cluster precision · boatyard + image-building consumers · absorbed
 Part 1, "One-time re-key choreography" and "Delivery". Load: the release
 flow (github-actions-toolkit's AGENTS.md), the consumers' `uv.lock` files.
 
 End state:
 
-- docker-devkit ships one patch release carrying phases 8–10 (pre-1.0;
+- boatyard ships one patch release carrying phases 8–10 (pre-1.0;
   breaking rides the patch flow). The image-building consumers — placeframe,
   placeframe-capture-tool, Make-it-Sing — repin onto it before phase 14 ever
   runs: the toolkit compares tree tags recorded by consumer CI builds, so
@@ -328,12 +328,12 @@ End state:
   no tag yet ⇒ first release ships. Tree tags are trustworthy change signals
   precisely because the precision cluster (phases 8–11) landed them
   source-precise.
-- The toolkit imports no docker-devkit anywhere in this path.
+- The toolkit imports no boatyard anywhere in this path.
 - Stable ships when any package, app, image unit, or bundle changed; the dev
   gate tightens from manifest-presence to the same change-based gate (a
   docs-only landing in an images-only repo cuts nothing).
 - Bundle gate: any image unit advanced OR path-diff over `sources` (which
-  includes `docker-devkit.lock` — a runtime third-party bump changes bundle
+  includes `boatyard.lock.yml` — a runtime third-party bump changes bundle
   bits).
 
 Verify: stubbed shelf — changed, unchanged, first-release, missing-shard;
@@ -367,7 +367,7 @@ aliases changed units only; note rendering for the three channels.
 
 ## Phase 16 — Publish-side cleanup release
 
-Cluster P2 · docker-devkit + github-actions-toolkit · ADR Part 2, "`:latest`
+Cluster P2 · boatyard + github-actions-toolkit · ADR Part 2, "`:latest`
 repoint" and the branch-tag retirement in "Compose bundles". Load:
 `publish.py` + `verbs/publish.py` (the `--branch` flag and the `crane tag`
 aliasing), `bake.py` (the bake rendering's derived tags), the
@@ -382,7 +382,7 @@ End state:
 - The toolkit's reusable workflow stops passing `--branch`. Consumers relock
   devkit and bump the toolkit pin in one commit (the adoption wave), so no CI
   window ever passes a dead flag.
-- docker-devkit ships this as its second release of this plan, after the
+- boatyard ships this as its second release of this plan, after the
   precision release.
 
 Verify: bake-rendering golden tests for push vs load mode; sha-only publish
@@ -390,7 +390,7 @@ tests; the toolkit reusable renders without the flag.
 
 ## Phase 17 — Qualified selection grammar
 
-Cluster P3+P4a · docker-devkit · ADR Part 3, "Qualified selection names".
+Cluster P3+P4a · boatyard · ADR Part 3, "Qualified selection names".
 Load: `config.py` (the services schema, the flat-vocabulary collision law),
 `compose.py` (`select`'s `BUNDLES=` resolution),
 `tests/test_config.py`, `tests/test_compose.py`.
@@ -412,7 +412,7 @@ refusal.
 
 ## Phase 18 — Bundle pinning through the lock
 
-Cluster P3+P4a · docker-devkit · ADR Part 3, "Ref grammar and lock entries".
+Cluster P3+P4a · boatyard · ADR Part 3, "Ref grammar and lock entries".
 Load: `config.py` (the entry `ref:` grammar), `config_lock.py`
 (`parse_config_lock`), `bake.py`
 (the lock writer inside `run_build`), `verbs/mirror.py`.
@@ -440,7 +440,7 @@ collision refusal; missing-entry refusal naming the relock.
 
 ## Phase 19 — Lock probing at bring-up
 
-Cluster P3+P4a · docker-devkit · ADR Part 3 plus Closed decision 12. Load:
+Cluster P3+P4a · boatyard · ADR Part 3 plus Closed decision 12. Load:
 `verbs/up.py` (the fail-closed probe), `compose.py` (`render`'s include
 materialization), `crane.py`.
 
@@ -457,7 +457,7 @@ materialized root carries digest refs.
 
 ## Phase 20 — Local bundle overrides
 
-Cluster P3+P4a · docker-devkit · ADR Part 4, Stage 1. Load: `compose.py`
+Cluster P3+P4a · boatyard · ADR Part 4, Stage 1. Load: `compose.py`
 (`select` and `render`; `merged_environment` lives here), `config.py`
 (`EDGE_SERVICE_NAME`) and `score.py` (the edge-reserved generation refusal,
 `ComposeDocument`).
@@ -491,9 +491,9 @@ teeth.
 
 ## Phase 21 — Consumer-surface release
 
-Cluster P3+P4a · docker-devkit · ADR "Sequencing", step 3.
+Cluster P3+P4a · boatyard · ADR "Sequencing", step 3.
 
-End state: one docker-devkit patch release carrying phases 17–20. Consumers
+End state: one boatyard patch release carrying phases 17–20. Consumers
 relock only in the wave — the grammar flip breaks `.env` spellings, so relock
 and flip are atomic per repo.
 
@@ -502,7 +502,7 @@ Verify: the battery green; the release published.
 ## Phase 22 — placeframe adoption
 
 Adoption wave · placeframe · ADR "Consumer adoption". Load: placeframe's
-`publish.yml`, `docker-devkit.yaml`, `.env` (and any committed example), CI
+`publish.yml`, `boatyard.yml`, `.env` (and any committed example), CI
 workflows.
 
 End state:
@@ -524,7 +524,7 @@ Verify: CI green through the first release; versions resolvable in ghcr; the
 ## Phase 23 — Make-it-Sing adoption and tag hygiene
 
 Adoption wave · Make-it-Sing · ADR "Consumer adoption" and "Hygiene". Load:
-Make-it-Sing's `publish.yml`, `docker-devkit.yaml`, `.env`, `docker-devkit.lock`.
+Make-it-Sing's `publish.yml`, `boatyard.yml`, `.env`, `boatyard.lock.yml`.
 
 End state:
 
@@ -556,7 +556,7 @@ Verify: CI green per repo.
 
 ## Phase 25 — Cross-repo dev overlay (trigger-gated)
 
-P4b · docker-devkit · ADR Part 4, Stage 2, and Closed decision 10.
+P4b · boatyard · ADR Part 4, Stage 2, and Closed decision 10.
 
 Build only when the trigger holds: the phase-20 commit → rebuild loop proves too
 slow in daily consumer-driven development. A session taking this phase first

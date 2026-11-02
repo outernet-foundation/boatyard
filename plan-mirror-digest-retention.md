@@ -3,7 +3,7 @@
 ## Incident
 
 On 2026-10-29, during the compose-consumer-model delivery, placeframe's committed
-`docker-devkit.lock` entry for `KEYCLOAK_IMAGE` named a digest the org mirror no longer
+`boatyard.lock.yml` entry for `KEYCLOAK_IMAGE` named a digest the org mirror no longer
 held, with no path to regain it:
 
 - Old lock entry: `ghcr.io/outernet-foundation/mirror/quay.io/keycloak/keycloak:26.8.1@sha256:79c623a2…`
@@ -20,7 +20,7 @@ held, with no path to regain it:
 Every `up` on the frozen lock failed closed at the mirror probe ("not mirrored"), and the
 documented remedy — let CI's mirror job run — cannot fix it: the mirror job copies the
 upstream **tag**, which now resolves to `a78d6b79`, never restoring `79c623a2`. The only
-recovery was `build --lock-only --upgrade` (re-resolve everything against upstream),
+recovery was re-resolving everything against upstream (`boatyard lock --upgrade`; then spelled `build --lock-only --upgrade`),
 landed as placeframe commit `e896998c`.
 
 ## Mechanism
@@ -81,5 +81,5 @@ Two secondary candidates, likely complements rather than alternatives:
   today it is silent by design, which is why the stranding surfaced as a runtime probe
   failure instead of at the lock layer.
 - **Freeze acknowledgement at `up`**: the not-mirrored error could name the recovery
-  path explicitly (`build --lock-only --upgrade`) since "let CI's mirror job run" is
+  path explicitly (`boatyard lock --upgrade`) since "let CI's mirror job run" is
   provably insufficient for this failure class.

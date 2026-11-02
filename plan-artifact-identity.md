@@ -3,7 +3,7 @@
 Pre-implementation ADR, three linked initiatives: give images and compose
 bundles per-unit semver release lines in github-actions-toolkit (Part 2); let
 consumers pin external compose bundles by version tag through
-`docker-devkit.lock` (Part 3); and give consumers a per-machine
+`boatyard.lock.yml` (Part 3); and give consumers a per-machine
 local-override surface for iterating on producer checkouts (Part 4). This
 file absorbs and replaces `plan-image-identity.md` and
 `plan-platform-resolved-lock.md` (both deleted in absorbing commits; git is
@@ -44,7 +44,7 @@ packages          —                       {base}.dev{count} /     {base}
 compose bundle    {sha} only              {base}-dev.{count}      semver
                   (post-Part-2; branch tags retired)
 consumer pin      —                       —                        {version} in
-(bundles,                                                                   docker-devkit.yaml,
+(bundles,                                                                   boatyard.yml,      
 post-Part-3)                                                                digest in the lock
 ```
 
@@ -94,9 +94,9 @@ receive the same version tag (`reconstructor-cuda:0.1.3` and
 `reconstructor-rocm:0.1.3` share the `reconstructor` line and the
 `reconstructor-v0.1.3` git tag). placeframe has 15 services / 13 units.
 
-### Change detection via the shelf — no docker-devkit dependency
+### Change detection via the shelf — no boatyard dependency
 
-The release verb does not import docker-devkit. Per unit: resolve the highest
+The release verb does not import boatyard. Per unit: resolve the highest
 `{unit}-v*` git tag → its commit → pull that SHA's digest manifest from the
 shelf → compare tree tags (recorded in each entry's `tags[]` by the build
 push) against the certified head's. Differing tree tag in any variant ⇒ ship
@@ -174,7 +174,7 @@ toolkit, not placeframe-locally.
   new information, not duplicated state). Variants (`placeframe-cuda`,
   `placeframe-rocm`) share one line.
 - Change detection: any image unit advanced OR path-diff over `sources`
-  (which includes `docker-devkit.lock` — a runtime third-party bump like a
+  (which includes `boatyard.lock.yml` — a runtime third-party bump like a
   loki upgrade changes bundle bits without any local tree moving).
 - Mechanism: release-time aliasing with the same verified primitive. Every
   certified head's bundle is already published under an immutable `{sha}` tag
@@ -207,12 +207,12 @@ nothing-to-ship including images and bundles; aliasing calls against a stub
 registry; bundle gate (image-advanced, source-diff, lock-diff); `latest`
 aliased on stable only.
 
-## Part 3 — docker-devkit: consumers pin bundles by version through the lock
+## Part 3 — boatyard: consumers pin bundles by version through the lock
 
 ### The defect being fixed
 
 Make-it-Sing consumes placeframe's published compose bundle by hand-copying a
-digest into `docker-devkit.yaml`:
+digest into `boatyard.yml`:
 
 ```yaml
 placeframe:
@@ -224,8 +224,8 @@ placeframe:
 Every producer change forces push → CI publish → hand-copy digest → commit →
 reup. Meanwhile `base_images` and `k8s.charts` already have the right shape:
 yaml declares a human-meaningful tag, the lock resolves it to a digest, and
-`build --lock-only` is the only writer. Bundles become the third instance of
-that law. This un-defers the item the absorbed plan deferred ("docker-devkit
+`boatyard lock` is the only writer. Bundles become the third instance of
+that law. This un-defers the item the absorbed plan deferred ("boatyard
 lock support for `include: oci://` refs: future, not now") — the future
 arrived with the first real consumer.
 
@@ -278,12 +278,12 @@ BUNDLES=placeframe-cuda,tunnel-rathole
 - Lock entries: `{QUALIFIED_NAME}_BUNDLE={reference}@sha256:…` — the
   qualified selection name upper-cased plus `_BUNDLE`
   (`PLACEFRAME_CUDA_BUNDLE`, `TUNNEL_RATHOLE_BUNDLE`, bare `LIVEKIT_BUNDLE`)
-  — written by `build --lock-only`, declaration-incremental like every lock
+  — written by `boatyard lock`, declaration-incremental like every lock
   line (an unchanged tag copies its frozen digest forward; a tag bump
   re-resolves; `--upgrade` re-resolves everything), collision-refused
   against `base_images` keys at load.
 - A version-tagged ref without its lock entry refuses loudly naming
-  `build --lock-only` — the charts law, verbatim.
+  `boatyard lock` — the charts law, verbatim.
 - First-party artifacts resolve direct — org ghcr refs, un-prefixed. The
   mirror is for upstreams that can hurt us; ours can't, so ours don't get
   copied. The `mirror` verb never enumerates bundle declarations.
@@ -300,7 +300,7 @@ consumer's upgrade is a yaml tag bump (Renovate-native) plus a relock, with
 the digest movement visible as a one-line lock diff in review — no registry
 pages, no hand-copying, no drift.
 
-## Part 4 — docker-devkit: local bundle overrides
+## Part 4 — boatyard: local bundle overrides
 
 The other half of the loop: iterating on a producer checkout against the
 consumer stack without publishing anything. The exact artifact
@@ -338,7 +338,7 @@ BUNDLE_OVERRIDE_PLACEFRAME_CUDA=../placeframe/stack/generated/compose/compose.cu
   names are identical, so the door resolves as before).
 - Producer-lock attachment (path form only): the bundle's third-party holes
   (`${LOKI_IMAGE:?err}`, …) have no declaration source in the consumer, and
-  lock lines are never hand-authored — so the producer's `docker-devkit.lock`
+  lock lines are never hand-authored — so the producer's `boatyard.lock.yml`
   attaches as an extra `--env-file`, derived deterministically from the
   override path's fixed `stack/generated/compose/` layout (three parents up),
   ordered so the consumer's own declarations win any shared key. The ref form
@@ -408,7 +408,7 @@ explicitly a non-goal.
       re-key wave land before step 2's change detection consumes the tags
 2. P2  semver lines + {sha}-only publishes (github-actions-toolkit
       + build-artifact-registry) → versions exist
-3. P3 + P4a as ONE docker-devkit consumer-surface release
+3. P3 + P4a as ONE boatyard consumer-surface release
       (qualified grammar, version pinning, lock writer, probe, override)
       → consumers adopt in one wave (.env spellings + yaml versions + locks)
 4. P4b dev overlay — trigger-gated, anytime after 3
@@ -465,7 +465,7 @@ Parts 2–4; the step-1 P0 breakdown lives in
    certified-only pins.
 6. Consumer ref grammar: tag-only in yaml; digests live exclusively in the
    lock; a version-tagged ref without its lock entry refuses naming
-   `build --lock-only` (the charts law).
+   `boatyard lock` (the charts law).
 7. Selection names: qualified `group-dash-option`, uniform, no short forms;
    the flat-vocabulary law repealed (qualified names structurally unique);
    at-most-one-per-group unchanged.

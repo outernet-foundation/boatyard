@@ -34,7 +34,7 @@ runtime path reads the system CA bundle.
 
 The rest of the pipeline is closed:
 
-- base images: per-arch arm64 **manifest digests** in `docker-devkit.lock`, resolved by
+- base images: per-arch arm64 **manifest digests** in `boatyard.lock.yml`, resolved by
   the `lock` verb (never index digests, never attestations)
 - hand-written image references: refused outright at the devkit's parse boundaries
   (`FROM`/`COPY --from=` in `derive_services`, yaml `image:` in lock-marker resolution)
@@ -46,7 +46,7 @@ The rest of the pipeline is closed:
 - score-compose / score-k8s / helm: version-pinned constants in `config.py`
 - devkits/toolkit: `uv.lock` + full-SHA `uses:` refs
 
-Nothing in docker-devkit parses `RUN apt-get …` lines. The literal-reference refusals
+Nothing in boatyard parses `RUN apt-get …` lines. The literal-reference refusals
 read `FROM`, `COPY --from=`, and `image:` at their parse boundaries — apt is invisible
 to every existing gate. The lock has no
 vocabulary for "which archive state the apt layer resolved against".
@@ -85,8 +85,8 @@ unpinned. This is a larger hole than any apt line and belongs in the same pass.
 2. **Snapshot-pin the remainder through the lock.** Rewrite `sources.list` at the top
    of each apt-using Dockerfile to a dated snapshot, with the snapshot date as a
    **no-default ARG** — a missing key is a hard bake error, exactly the base-image ARG
-   law. `build --lock-only` records the dates as lock entries; a declaration surface in
-   `docker-devkit.yaml` (archive → suite) keeps it explicit rather than derived from
+   law. `boatyard lock` records the dates as lock entries; a declaration surface in
+   `boatyard.yml` (archive → suite) keeps it explicit rather than derived from
    base images. Snapshot services: `snapshot.debian.org` for the Debian bases
    (`python:3.13-slim`, the trixie uv image), `snapshot.ubuntu.com` for the jammy-based
    ZED images. Two archives cover the whole estate.

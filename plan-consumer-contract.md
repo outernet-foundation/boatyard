@@ -20,7 +20,7 @@ archaeological catch-up.
 The deeper problem the session exposed: the Python library was an
 implementation with accidental customers. ~15 import sites across
 placeframe/scripts and placeframe-capture-tool/scripts consumed module
-internals (`docker_devkit.host`, `documents.compute_service_shas`,
+internals (`boatyard.host`, `documents.compute_service_shas`,
 `score_generate`, the `compose_bundles` free function) that the refactor
 renamed wholesale — while the CLI surface (verbs, flags, declaration schema,
 artifact formats) did not move at all. Nothing in `AGENTS.md` ever documented
@@ -34,7 +34,7 @@ Consumer inventory (the full blast radius):
 |---|---|
 | placeframe | CLI (via workspace member dep) + library imports in `scripts/preflight.py`, two utility scripts, two test modules |
 | placeframe-capture-tool | CLI + library imports in `scripts/src/scripts/install_zed/` (orchestrator, box_install, constants) |
-| infra-rathole, lbe-toolkit, Make-it-Sing | CLI only; root `docker-devkit.yaml` + lock; no imports |
+| infra-rathole, lbe-toolkit, Make-it-Sing | CLI only; root `boatyard.yml` + lock; no imports |
 | github-actions-toolkit | CLI only, invoked inside its reusable workflows; never a dependency (the resolver-cycle law) |
 
 ## The three-class principle
@@ -43,8 +43,8 @@ The lens every decision below follows:
 
 | Class | Examples | Lives in |
 |---|---|---|
-| Authored | repository, platforms, `base_images` tags | `docker-devkit.yaml` |
-| Registry-resolved | digests | `docker-devkit.lock` |
+| Authored | repository, platforms, `base_images` tags | `boatyard.yml` |
+| Registry-resolved | digests | `boatyard.lock.yml` |
 | Tree-derived | service set, `tree-` sha tags | computed on demand, recorded nowhere |
 
 Drift surface = independently-authored sources for one fact. Derived
@@ -59,10 +59,10 @@ its disabled score-staleness gate).
 
 ### D1 — The library is internal; consumption is CLI, declarations, artifacts
 
-docker-devkit's public contracts are exactly three: the verb CLI, the
-declaration schema (`docker-devkit.yaml` + `docker-devkit.lock`), and the
+boatyard's public contracts are exactly three: the verb CLI, the
+declaration schema (`boatyard.yml` + `boatyard.lock.yml`), and the
 committed artifact formats (`stack/generated/**`). Every Python import of
-`docker_devkit` in consuming repos is eliminated. The AGENTS release-flow law
+`boatyard` in consuming repos is eliminated. The AGENTS release-flow law
 is restated accordingly: what ships with a bumped `major_minor` from 1.0 on is
 schema/CLI/artifact-breaking change — there is no Python API to break. The
 stale "pulsar's bake_bundle" consumer reference in the `publish.py` row dies
@@ -129,8 +129,8 @@ system.)
 
 ### D6 — The read surface is four sources
 
-1. `docker-devkit.yaml` — authored facts; direct read.
-2. `docker-devkit.lock` — resolved facts, structured YAML per absorbed Part 0;
+1. `boatyard.yml` — authored facts; direct read.
+2. `boatyard.lock.yml` — resolved facts, structured YAML per absorbed Part 0;
    direct read with plain `yaml.safe_load` (the env-line format that forced
    `parse_env_file` imports dies here). install-zed selects its arm64 manifest by
    reading `images.<NAME>.platforms[linux/arm64]` directly.
@@ -206,7 +206,7 @@ consumer edits this ADR does not enumerate.
 
 ### D10 — The resolve-only lock surface is the `lock` verb; `build` also locks
 
-`build --lock-only` was a second intent (resolve third-party digests,
+`boatyard lock` was a second intent (resolve third-party digests,
 build nothing) squatting on the build verb. The resolve-only surface moves
 to its own verb: `lock`, with `--check` (freshness assert, the
 `uv lock --check` analog) and `--upgrade` (re-resolve everything),
@@ -237,7 +237,7 @@ code: `FAN_ARG = "TORCH_DEVICE"`, `GpuFamily = Literal["cuda","rocm"]`, the
 `Gpu` flag literal, and `detect_gpu()`'s hardcoded probes — one consumer's
 domain (a single Dockerfile in placeframe) embedded in a domain-neutral
 devkit at six layers. The concept is a variant axis: a build ARG whose value
-set is authored in `docker-devkit.yaml`:
+set is authored in `boatyard.yml`:
 
 ```yaml
 variants:
