@@ -18,7 +18,6 @@ from docker_devkit.verbs import build
 DIGEST_A = "sha256:" + "a" * 64
 MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
 REPOSITORY = "ghcr.io/example"
-REPO_ZED = "ghcr.io/example/zed-capture"
 LOCAL_REGISTRY = "localhost:5000"
 TORCH_AXIS = {"TORCH_DEVICE": ["cuda", "rocm"]}
 

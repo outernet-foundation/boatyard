@@ -15,18 +15,6 @@ FAKE_DIGEST = "sha256:" + "a" * 64
 DIGEST_AMD64 = "sha256:" + "c" * 64
 DIGEST_ARM64 = "sha256:" + "d" * 64
 
-MANIFEST = (
-    "x-base-images:\n"
-    "  UV_IMAGE: ghcr.io/astral-sh/uv:0.12.15\n"
-    "  API_IMAGE: ghcr.io/outernet-foundation/placeframe/api:1.2.3\n"
-    "services:\n"
-    "  api:\n"
-    "    build:\n"
-    "      dockerfile: workloads/api/Dockerfile\n"
-    "      tags:\n"
-    "        - localhost:5000/api:${API_SHA}\n"
-)
-
 runner = CliRunner()
 
 

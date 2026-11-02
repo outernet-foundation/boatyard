@@ -1010,7 +1010,6 @@ class TestPorts:
                 },
             }),
         )
-        write_edge_lock(tmp_path)
 
         config = load_config(tmp_path)
 
@@ -1054,7 +1053,6 @@ class TestPorts:
                 },
             }),
         )
-        write_edge_lock(tmp_path)
 
         config = load_config(tmp_path)
 
