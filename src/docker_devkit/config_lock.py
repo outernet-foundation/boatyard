@@ -7,8 +7,6 @@ from typing import Self
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 
-# The lock pairs with the root config at the repo root: build keys declared
-# (base_images or charts) => the committed lock is required.
 LOCK_PATH = Path("docker-devkit.lock")
 
 PLATFORM_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$")
@@ -17,8 +15,6 @@ SHA256_DIGEST_REGEX = r"sha256:[a-f0-9]{64}"
 
 
 class ImageLock(BaseModel):
-    # The structured lock beside the root config: registry-resolved facts, written by the
-    # lock verb and build's incremental freeze, never hand-authored.
     model_config = ConfigDict(extra="forbid")
 
     images: dict[str, ImageLockEntry] = Field(default_factory=dict)
@@ -35,14 +31,11 @@ class ImageLock(BaseModel):
         shared = sorted(self.images.keys() & self.charts.keys())
         if shared:
             raise ValueError(
-                f"{context.get('path', 'the image lock')}: names {shared} appear under both images and charts; "
-                "the env projection carries one flat vocabulary"
+                f"{context.get('path', 'the image lock')}: names {shared} must appear under images or charts, not both"
             )
         return self
 
     def require(self, name: str, subject: str, hint: str = "the lock verb writes it") -> str:
-        # The one "lock lacks NAME" refusal every lock consumer raises; the image entry
-        # answers by its index reference, the chart entry flat.
         if name in self.images:
             return self.images[name].index
         if name in self.charts:
@@ -70,7 +63,6 @@ class ImageLockEntry(BaseModel):
 
     @property
     def recorded_digests(self) -> list[str]:
-        # The digest set the up/mirror presence probes walk: the index plus every platform manifest.
         return [self.index, *self.platforms.values()]
 
 
@@ -90,14 +82,12 @@ def parse_image_lock(path: Path) -> ImageLock:
         loaded = {}
     if not isinstance(loaded, dict):
         raise TypeError(
-            f"{source}: the lock is a YAML mapping of images:/charts: sections, not a bare {type(loaded).__name__}"
+            f"{source}: the lock must be a mapping of images:/charts: sections, not a bare {type(loaded).__name__}"
         )
     return ImageLock.model_validate(loaded, context={"path": source})
 
 
 def _reject_duplicate_keys(node: yaml.Node, source: str) -> None:
-    # The stock loader silently keeps the last of duplicate mapping keys; the lock
-    # refuses them, with the offending line from the node mark.
     if isinstance(node, yaml.MappingNode):
         seen: set[object] = set()
         for key_node, value_node in node.value:

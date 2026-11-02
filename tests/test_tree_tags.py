@@ -29,8 +29,6 @@ def _write_service(root: Path, name: str, text: str = "ARG PY_IMAGE\nFROM ${PY_I
 
 
 def _tags(repo: Path, capfd: pytest.CaptureFixture[str], *services: str) -> list[str]:
-    # Direct command calls: the git hashing underneath shells out through bashrun, whose
-    # inherited stdout has no fileno under the CliRunner's capture.
     tree_tags(services=list(services) or None)
     return capfd.readouterr().out.splitlines()
 
@@ -95,7 +93,7 @@ class TestTreeTags:
     ) -> None:
         monkeypatch.chdir(repo)
 
-        with pytest.raises(typer.BadParameter, match=r"name at least one service.*\['api', 'worker'\]"):
+        with pytest.raises(typer.BadParameter, match=r"at least one service name is required.*\['api', 'worker'\]"):
             tree_tags(services=None)
 
     def test_a_repo_without_config_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -16,11 +16,7 @@ def docker_build_matrix() -> None:
     if config is None:
         print(json.dumps([]))
         return
-    # The CI fanout partitions: a union-find over the derived context edges groups
-    # dependency closures, and load-time coherence guarantees one variant set per
-    # closure, so one partition builds a whole closure group in a single bake
-    # invocation; one partition per closure × variant cell. The cell schema
-    # (targets, variant) is a named contract with the toolkit binding.
+    # Partition the services into dependency closures x variant cells.
     services = config.service_builds
     parent = {service: service for service in services}
 

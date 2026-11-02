@@ -1303,7 +1303,7 @@ class TestImageLockParse:
             f"images:\n  A_IMAGE:\n    index: ghcr.io/x/a:1@{DIGEST}\ncharts:\n  A_IMAGE: ghcr.io/x/a:1@{DIGEST}\n",
         )
 
-        with pytest.raises(ValueError, match="both images and charts"):
+        with pytest.raises(ValueError, match=r"images or charts, not both"):
             parse_image_lock(lock)
 
     def test_require_answers_the_index_for_images_and_the_flat_entry_for_charts(self, tmp_path: Path) -> None:
@@ -1322,4 +1322,4 @@ class TestImageLockParse:
         lock = parse_image_lock(_write_raw_lock(tmp_path, "{}\n"))
 
         with pytest.raises(RuntimeError, match=r"lacks the CADDY_IMAGE entry.*lock verb writes it"):
-            lock.require("CADDY_IMAGE", "routes are declared, so the edge rides")
+            lock.require("CADDY_IMAGE", "routes are declared")
