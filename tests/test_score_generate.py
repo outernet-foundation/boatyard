@@ -14,6 +14,7 @@ from docker_devkit import score as score_generate_module
 from docker_devkit.config import Config
 from docker_devkit.config_lock import ConfigLock
 from docker_devkit.score import BindVolume, ComposeService
+from docker_devkit.score import CLOUD_STORAGE_CLASS
 from docker_devkit.score import (
     generate_k8s,
     write_generated_file,
@@ -100,7 +101,7 @@ class K8sBashRecorder:
         self.commands: list[str] = []
         self.state_at_generate: dict[str, str] = {}
 
-    def run(self, command: str, *, cwd: Path | None = None) -> None:
+    def run(self, command: str, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
         self.commands.append(command)
         if command.startswith("score-k8s init"):
             self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -118,7 +119,7 @@ class HelmRecorder:
         self.commands: list[str] = []
         self.values_contents: list[str] = []
 
-    def run(self, command: str) -> str:
+    def run(self, command: str, env: dict[str, str] | None = None) -> str:
         self.commands.append(command)
         for argument in command.split("--values ")[1:]:
             self.values_contents.append(Path(argument.split()[0]).read_text(encoding="utf-8"))
@@ -149,7 +150,7 @@ def _generate_with_chart(
         "images": {name: {"index": ref} for name, ref in images.items() if not name.endswith("_CHART")},
         "charts": {name: ref for name, ref in images.items() if name.endswith("_CHART")},
     })
-    generate_k8s(config, config.k8s, tmp_path / output, lock)
+    generate_k8s(tmp_path, config, config.k8s, tmp_path / output, lock, {}, CLOUD_STORAGE_CLASS, None)
     return helm
 
 
@@ -277,7 +278,7 @@ class TestMarkerSubstrateResolution:
         config.root = tmp_path
         captured: dict[str, dict[str, str]] = {}
 
-        def _capture(_config: Config, images: dict[str, str]) -> None:
+        def _capture(root, _config: Config, images: dict[str, str], service_shas, tool_environment) -> None:
             captured["images"] = images
 
         monkeypatch.setattr(score_generate_module, "generate_compose", _capture)
@@ -317,7 +318,7 @@ class TestMarkerSubstrateResolution:
         lock = self._multi_arch_lock()
         assert config.k8s is not None
 
-        generate_k8s(config, config.k8s, tmp_path / output, lock)
+        generate_k8s(tmp_path, config, config.k8s, tmp_path / output, lock, {}, CLOUD_STORAGE_CLASS, None)
 
         resolved = yaml.safe_load(helm.values_contents[0])
         assert resolved["image"] == LOKI_INDEX
@@ -328,7 +329,7 @@ class ComposeBashRecorder:
         self.generated = generated
         self.commands: list[str] = []
 
-    def run(self, command: str, *, cwd: Path | None = None) -> None:
+    def run(self, command: str, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
         self.commands.append(command)
         if command.startswith("score-compose generate"):
             output = Path(command.rsplit("--output ", 1)[1].split()[0])
@@ -363,7 +364,7 @@ def _generate_compose(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, generated
     )
     config.root = tmp_path
 
-    score_generate_module.generate_compose(config, {})
+    score_generate_module.generate_compose(tmp_path, config, {}, {}, None)
     return tmp_path / "stack" / "generated" / "compose" / "compose.core.yaml"
 
 
@@ -456,7 +457,7 @@ def test_generate_compose_gate_names_differ_per_entry(tmp_path: Path, monkeypatc
     )
     config.root = tmp_path
 
-    score_generate_module.generate_compose(config, {})
+    score_generate_module.generate_compose(tmp_path, config, {}, {}, None)
 
     core = yaml.safe_load((tmp_path / "stack/generated/compose/compose.core.yaml").read_text(encoding="utf-8"))
     edge = yaml.safe_load((tmp_path / "stack/generated/compose/compose.edge.yaml").read_text(encoding="utf-8"))
@@ -475,7 +476,7 @@ class WorkloadContentsRecorder:
     def __init__(self) -> None:
         self.workload_contents: dict[str, str] = {}
 
-    def run(self, command: str, *, cwd: Path | None = None) -> None:
+    def run(self, command: str, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
         if command.startswith("score-compose generate"):
             for argument in command.split()[2:]:
                 if argument.startswith("--output"):
@@ -502,7 +503,7 @@ def test_workload_lock_markers_resolve_into_the_rendered_copy(tmp_path: Path, mo
     )
     config.root = tmp_path
 
-    score_generate_module.generate_compose(config, {"API_IMAGE": "ghcr.io/org/api@sha256:" + "a" * 64})
+    score_generate_module.generate_compose(tmp_path, config, {"API_IMAGE": "ghcr.io/org/api@sha256:" + "a" * 64}, {}, None)
 
     assert (
         recorder.workload_contents["api.yaml"]
@@ -525,7 +526,7 @@ def test_workload_lock_marker_naming_no_lock_entry_refuses(tmp_path: Path, monke
     config.root = tmp_path
 
     with pytest.raises(RuntimeError, match=r"workload api\.yaml.*API_IMAGE.*does not exist"):
-        score_generate_module.generate_compose(config, {})
+        score_generate_module.generate_compose(tmp_path, config, {}, {}, None)
 
 
 SHIPPED_TEMPLATES = {
@@ -623,7 +624,7 @@ def _compose_init_templates(
     recorder = ComposeBashRecorder(generated)
     monkeypatch.setattr(score_generate_module, "bash", recorder.run)
     config.root = tmp_path
-    score_generate_module.generate_compose(config, images)
+    score_generate_module.generate_compose(tmp_path, config, images, {}, None)
     inits = [command for command in recorder.commands if command.startswith("score-compose init")]
     return [[Path(token).name for token in command.split() if token.endswith(".tpl")] for command in inits]
 
@@ -716,7 +717,7 @@ def test_provisioners_register_by_resource_type_closure(tmp_path: Path, monkeypa
     recorder = ComposeBashRecorder("services: {}\n")
     monkeypatch.setattr(score_generate_module, "bash", recorder.run)
 
-    score_generate_module.generate_compose(config, GATE_LOCK)
+    score_generate_module.generate_compose(tmp_path, config, GATE_LOCK, {}, None)
 
     init = next(command for command in recorder.commands if command.startswith("score-compose init"))
     provisioners = [token for token in init.split() if token.endswith(".yaml")]
@@ -930,7 +931,14 @@ def test_dev_toggles_on_a_k8s_only_workload_refuses(tmp_path: Path) -> None:
     config.root = tmp_path
     with pytest.raises(SystemExit, match="renders k8s-only"):
         score_generate_module.generate_k8s(
-            config, config.k8s, tmp_path / Path("stack/generated/k8s/manifests.yaml"), ConfigLock.model_validate({})
+            tmp_path,
+            config,
+            config.k8s,
+            tmp_path / Path("stack/generated/k8s/manifests.yaml"),
+            ConfigLock.model_validate({}),
+            {},
+            CLOUD_STORAGE_CLASS,
+            None,
         )
 
 
@@ -984,8 +992,8 @@ class MaterializingComposeRecorder(ComposeBashRecorder):
         self.materialized = materialized
         self.text = text
 
-    def run(self, command: str, *, cwd: Path | None = None) -> None:
-        super().run(command, cwd=cwd)
+    def run(self, command: str, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
+        super().run(command, cwd=cwd, env=env)
         if command.startswith("score-compose generate"):
             self.materialized.parent.mkdir(parents=True, exist_ok=True)
             self.materialized.write_text(self.text, encoding="utf-8")
@@ -1008,7 +1016,7 @@ def test_consumer_interpolated_binds_ride_undoubled(tmp_path: Path, monkeypatch:
     )
     config.root = tmp_path
 
-    score_generate_module.generate_compose(config, {})
+    score_generate_module.generate_compose(tmp_path, config, {}, {}, None)
 
     output = tmp_path / "stack" / "generated" / "compose" / "compose.rathole-client.yaml"
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
@@ -1059,7 +1067,9 @@ def test_k8s_builtin_templates_register_on_every_init(tmp_path: Path, monkeypatc
     config.root = tmp_path
 
     assert config.k8s is not None
-    generate_k8s(config, config.k8s, tmp_path / output, ConfigLock.model_validate({}))
+    generate_k8s(
+        tmp_path, config, config.k8s, tmp_path / output, ConfigLock.model_validate({}), {}, CLOUD_STORAGE_CLASS, None
+    )
 
     init = next(command for command in recorder.commands if command.startswith("score-k8s init"))
     assert [Path(token).name for token in init.split() if token.endswith(".tpl")] == [
@@ -1079,7 +1089,9 @@ def test_k8s_instance_suffixes_are_preseeded_deterministically(tmp_path: Path, m
     config.root = tmp_path
 
     assert config.k8s is not None
-    generate_k8s(config, config.k8s, tmp_path / output, ConfigLock.model_validate({}))
+    generate_k8s(
+        tmp_path, config, config.k8s, tmp_path / output, ConfigLock.model_validate({}), {}, CLOUD_STORAGE_CLASS, None
+    )
 
     seeded = yaml.safe_load(recorder.state_at_generate[output.name])
     assert seeded["workloads"]["api"]["instance_suffix"] == "-" + sha256(b"api").hexdigest()[:10]

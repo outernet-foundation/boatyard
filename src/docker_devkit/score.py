@@ -250,14 +250,14 @@ def _represent_multiline(dumper: yaml.SafeDumper, value: str) -> yaml.ScalarNode
 ComposeDumper.add_representer(str, _represent_multiline)
 
 
-def generate_artifacts(config: Config, target: Target, local: bool) -> list[Path]:
-    # Require the build keys, export the tree tags, and load the lock.
+def generate_artifacts(
+    config: Config, target: Target, local: bool, tool_environment: dict[str, str] | None = None
+) -> list[Path]:
+    # Require the build keys, derive the tree tags, and load the lock.
     if not (config.repository or config.base_images):
         raise RuntimeError("repository or base_images is required in docker-devkit.yaml")
     root = config.root
-    os.environ.update(dockerfiles.compute_service_shas(config.root, config.service_builds))
-    if config.k8s is not None:
-        os.environ[STORAGE_CLASS_VAR] = LOCAL_STORAGE_CLASS if local else CLOUD_STORAGE_CLASS
+    service_shas = dockerfiles.compute_service_shas(root, config.service_builds)
     lock_path = root / LOCK_PATH
     if not lock_path.is_file():
         raise RuntimeError(f"{lock_path.as_posix()}: the image lock is required")
@@ -269,11 +269,14 @@ def generate_artifacts(config: Config, target: Target, local: bool) -> list[Path
     outputs: list[Path] = []
 
     if target in ("both", "compose"):
-        generate_compose(config, compose_env_entries(lock, config, merged_environment(root)))
+        generate_compose(
+            root, config, compose_env_entries(lock, config, merged_environment(root)), service_shas, tool_environment
+        )
         outputs.extend(bundle.output for bundle in config.compose_bundles())
 
     if target in ("both", "k8s") and config.k8s is not None:
-        generate_k8s(config, config.k8s, k8s_output, lock)
+        storage_class = LOCAL_STORAGE_CLASS if local else CLOUD_STORAGE_CLASS
+        generate_k8s(root, config, config.k8s, k8s_output, lock, service_shas, storage_class, tool_environment)
         outputs.append(k8s_output)
 
     if (root / SECRETS_FILE).is_file():
@@ -309,8 +312,13 @@ def generate_artifacts(config: Config, target: Target, local: bool) -> list[Path
     return outputs
 
 
-def generate_compose(config: Config, images: dict[str, str]) -> None:
-    root = config.root
+def generate_compose(
+    root: Path,
+    config: Config,
+    images: dict[str, str],
+    service_shas: dict[str, str],
+    tool_environment: dict[str, str] | None,
+) -> None:
     bundles = config.compose_bundles()
     if not bundles:
         raise RuntimeError("the compose target requires local service entries (workloads:)")
@@ -364,14 +372,16 @@ def generate_compose(config: Config, images: dict[str, str]) -> None:
                     provisioners.paths,
                     templates,
                     working_dir=score_dir,
+                    environment=tool_environment,
                 )
 
                 output = bundle.output
                 output.parent.mkdir(parents=True, exist_ok=True)
-                with _rendered_workloads(config, bundle.workloads, bundle.vars, images) as workloads:
+                with _rendered_workloads(config, bundle.workloads, bundle.vars, images, service_shas) as workloads:
                     bash(
                         f"score-compose generate {workloads} --output {output.as_posix()}",
                         cwd=score_dir,
+                        env=tool_environment,
                     )
 
                 # Collapse doubled {workload}-{container} service names.
@@ -525,13 +535,22 @@ def compiled_provisioners(
         yield CompiledProvisioners(paths=paths, declares_services=declares_services)
 
 
-def generate_k8s(config: Config, k8s: K8sConfig, output_path: Path, lock: ConfigLock) -> None:
+def generate_k8s(
+    root: Path,
+    config: Config,
+    k8s: K8sConfig,
+    output_path: Path,
+    lock: ConfigLock,
+    service_shas: dict[str, str],
+    storage_class: str,
+    tool_environment: dict[str, str] | None,
+) -> None:
     # Run score-k8s in the output's directory, where it writes its .score-k8s state.
-    root = config.root
     images = env_entries(lock)
     state_dir = output_path.parent / ".score-k8s"
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    score_dir = config.root / config.score_dir
+    score_dir = root / config.score_dir
+    rendering_vars = {**k8s.vars, STORAGE_CLASS_VAR: storage_class}
 
     compose_workloads = {name for bundle in config.compose_bundles() for name in bundle.workloads}
     for name in k8s.workloads:
@@ -557,12 +576,17 @@ def generate_k8s(config: Config, k8s: K8sConfig, output_path: Path, lock: Config
                 builtin_templates / SCALE_TO_ZERO_TEMPLATE,
             ],
             working_dir=output_path.parent,
+            environment=tool_environment,
         )
 
         _seed_instance_suffixes(state_dir / "state.yaml", score_dir, k8s.workloads)
 
-        with _rendered_workloads(config, k8s.workloads, k8s.vars, images) as workloads:
-            bash(f"score-k8s generate {workloads} --output {output_path.as_posix()}", cwd=output_path.parent)
+        with _rendered_workloads(config, k8s.workloads, rendering_vars, images, service_shas) as workloads:
+            bash(
+                f"score-k8s generate {workloads} --output {output_path.as_posix()}",
+                cwd=output_path.parent,
+                env=tool_environment,
+            )
 
     # Render the charts through helm template.
     if k8s.charts:
@@ -587,7 +611,7 @@ def generate_k8s(config: Config, k8s: K8sConfig, output_path: Path, lock: Config
                     write_generated_file(target, dump_compose(resolved))
                     values_arguments.append(target.as_posix())
                 values = "".join(f" --values {argument}" for argument in values_arguments)
-                rendered = bash_output(f"helm template {chart_name} oci://{entry}{values}")
+                rendered = bash_output(f"helm template {chart_name} oci://{entry}{values}", env=tool_environment)
                 chart_blocks.extend(_split_documents(rendered))
         write_generated_file(
             output_path,
@@ -742,6 +766,7 @@ def _init_state(
     patch_templates: list[Path],
     *,
     working_dir: Path,
+    environment: dict[str, str] | None,
 ) -> None:
     # Init idempotently with POSIX-relative paths.
     flags = "".join(
@@ -752,7 +777,7 @@ def _init_state(
         f" --patch-templates {shlex.quote(Path(os.path.relpath(patch_template, working_dir)).as_posix())}"
         for patch_template in patch_templates
     )
-    bash(f"{command}{flags}", cwd=working_dir)
+    bash(f"{command}{flags}", cwd=working_dir, env=environment)
 
 
 def _seed_instance_suffixes(state_path: Path, score_dir: Path, workloads: list[str]) -> None:
@@ -783,6 +808,7 @@ def _rendered_workloads(
     workloads: list[str],
     rendering_vars: dict[str, str],
     images: dict[str, str],
+    service_shas: dict[str, str],
 ) -> Generator[str]:
     # Expand ${ALL_CAPS} placeholders into tempdir copies.
     with TemporaryDirectory() as temporary_directory:
@@ -792,18 +818,20 @@ def _rendered_workloads(
             source_path = config.root / config.score_dir / name
             document = resolve_lock_refs(_load_yaml_file(source_path), images, f"workload {name}")
             source = dump_compose(document)
-            rendered = PLACEHOLDER.sub(partial(_placeholder_value, rendering_vars, name), source)
+            rendered = PLACEHOLDER.sub(partial(_placeholder_value, rendering_vars, service_shas, name), source)
             (directory / name).write_text(rendered, "utf-8")
 
         yield " ".join((directory / name).as_posix() for name in workloads)
 
 
-def _placeholder_value(rendering_vars: dict[str, str], workload_name: str, match: re.Match[str]) -> str:
+def _placeholder_value(
+    rendering_vars: dict[str, str], service_shas: dict[str, str], workload_name: str, match: re.Match[str]
+) -> str:
     variable = match.group(1)
-    value = rendering_vars.get(variable) or os.environ.get(variable)
+    value = rendering_vars.get(variable) or service_shas.get(variable)
     if not value:
         raise SystemExit(
-            f"{workload_name}: ${{{variable}}} is set in neither the rendering's vars map nor the environment"
+            f"{workload_name}: ${{{variable}}} is set in neither the rendering's vars map nor the derived service shas"
         )
     return value
 

@@ -89,12 +89,12 @@ def generate_score(
             bin_dir = Path(temporary_directory) / "bin"
             bin_dir.mkdir()
             for requirement in requirements:
-                archive = Path(requirement.archive).name
-                bash(f"curl -fsSLO {requirement.archive}")
-                bash(f"tar -xzf {archive} -C {bin_dir} {requirement.extract}")
-                Path(archive).unlink()
-            os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
-            outputs = generate_artifacts(config, target, False)
+                archive = bin_dir / Path(requirement.archive).name
+                bash(f"curl -fsSL {requirement.archive} -o {archive.as_posix()}")
+                bash(f"tar -xzf {archive.as_posix()} -C {bin_dir} {requirement.extract}")
+                archive.unlink()
+            tool_environment = {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
+            outputs = generate_artifacts(config, target, False, tool_environment)
             pathspec = " ".join(output.as_posix() for output in outputs)
             if bash_output(f"git status --porcelain -- {pathspec}").strip():
                 bash(f"git diff -- {pathspec}")
