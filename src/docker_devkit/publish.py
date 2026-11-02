@@ -3,10 +3,11 @@ from __future__ import annotations
 import re
 from functools import partial
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import NamedTuple
 
 import yaml
 
+from docker_devkit.config import Yaml, double_dollars
 from docker_devkit.score import ComposeDocument
 from docker_devkit.lock import resolve_remote_digest
 
@@ -41,14 +42,14 @@ def finalize_baked(baked_path: Path, repository: str) -> None:
     document = yaml.safe_load(baked_path.read_text(encoding="utf-8"))
     parsed = ComposeDocument.model_validate(document)
     if parsed.configs is not None:
-        inlined: dict[str, dict[str, Any]] = {}
+        inlined: dict[str, dict[str, Yaml]] = {}
         for config_name, compose_config in parsed.configs.items():
             if compose_config.file is None:
                 inlined[config_name] = document["configs"][config_name]
                 continue
             entry = compose_config.model_dump(exclude_defaults=True)
             entry.pop("file", None)
-            entry["content"] = Path(compose_config.file).read_text(encoding="utf-8").replace("$", "$$")
+            entry["content"] = double_dollars(Path(compose_config.file).read_text(encoding="utf-8"))
             inlined[config_name] = entry
         document["configs"] = inlined
         baked_path.write_text(

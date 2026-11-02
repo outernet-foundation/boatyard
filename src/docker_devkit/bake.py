@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from subprocess import CalledProcessError
 from tempfile import TemporaryDirectory
-from typing import Any, Self
+from typing import Self
 
 import typer
 import yaml
@@ -15,7 +15,7 @@ from bashrun.bash import bash, bash_check, bash_output
 from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, model_validator
 
 from docker_devkit import dockerfiles
-from docker_devkit.config import Config
+from docker_devkit.config import Config, Yaml
 from docker_devkit.dockerfiles import ServiceBuild, service_sha_env
 from docker_devkit.lock import env_entries, write_lock
 
@@ -61,7 +61,7 @@ class _DaemonGc(BaseModel):
 
     @field_validator("gigabytes", mode="before")
     @classmethod
-    def _measure(cls, value: object) -> object:
+    def _measure(cls, value: Yaml) -> Yaml:
         if value is None:
             return None
         match = re.match(r"^(\d+(?:\.\d+)?)\s*([TGMK]i?B)?$", str(value), re.IGNORECASE)
@@ -242,7 +242,7 @@ def run_build(
                 f"docker buildx bake failed (exit {error.returncode}); rendered bake file:\n{rendered}"
             ) from error
 
-    metadata_json: dict[str, Any] = (
+    metadata_json: dict[str, Yaml] = (
         json.loads(METADATA_PATH.read_text(encoding="utf-8")) if METADATA_PATH.exists() else {}
     )
     baked = BakeMetadata.model_validate(metadata_json)

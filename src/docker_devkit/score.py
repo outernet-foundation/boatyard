@@ -11,7 +11,7 @@ from hashlib import sha256
 from importlib.resources import as_file, files
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Literal, NamedTuple, Self
+from typing import Literal, NamedTuple, Self
 
 import yaml
 from bashrun.bash import bash, bash_output
@@ -28,12 +28,16 @@ from pydantic import (
 from docker_devkit import dockerfiles
 from docker_devkit.compose import merged_environment
 from docker_devkit.config import (
+    COMPOSE_HOLE,
     DEV_TOGGLES_ANNOTATION,
     EDGE_SERVICE_NAME,
     ENV_NAME_PATTERN,
     K8sConfig,
+    PLACEHOLDER,
     Target,
     WorkloadDocument,
+    Yaml,
+    double_dollars,
     is_list,
     is_mapping,
     parse_dev_toggles,
@@ -105,16 +109,10 @@ class ComposeConfig(BaseModel):
     file: str | None = None
 
 
-# Match only ${ALL_CAPS} placeholders.
-PLACEHOLDER = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
-
 STATE_PREFIX = ".score-compose/"
 
 # Match doubled {workload}-{container} service names.
 DOUBLED_SERVICE_NAME = re.compile(r"^(.+)-\1$")
-
-# Match a brace hole with its preceding dollar run.
-COMPOSE_HOLE = re.compile(r"(\$+)\{([A-Z][A-Z0-9_]*)(?::[^{}]*)?\}")
 
 PATCH_TEMPLATES_DIR = "patch_templates"
 GATE_PIN_TEMPLATE = "wait-for-resources-image.tpl"
@@ -227,11 +225,11 @@ class AuthoredProvisioner(BaseModel):
     uri: str
     type: str
     description: str = ""
-    state: dict[str, object] | None = None
-    outputs: dict[str, object] | None = None
-    volumes: dict[str, object] | None = None
-    services: dict[str, object] | None = None
-    manifests: list[object] | None = None
+    state: dict[str, Yaml] | None = None
+    outputs: dict[str, Yaml] | None = None
+    volumes: dict[str, Yaml] | None = None
+    services: dict[str, Yaml] | None = None
+    manifests: list[Yaml] | None = None
 
     @field_validator(*STRING_FORM_FIELDS, mode="before")
     @classmethod
@@ -339,10 +337,12 @@ def generate_compose(config: Config, images: dict[str, str]) -> None:
             interpolated_targets: set[str] = set()
             toggle_services: dict[str, str] = {}
             for name in bundle.workloads:
-                document = _load_yaml_file(score_dir / name)
+                document_node = _load_yaml_file(score_dir / name)
+                document = document_node if is_mapping(document_node) else {}
                 workload = WorkloadDocument.model_validate(document)
                 annotations = workload.metadata.annotations
-                containers: dict[str, Any] = document.get("containers") or {}
+                containers_node = document.get("containers")
+                containers = containers_node if is_mapping(containers_node) else {}
                 # Validate the deployment-surface annotations.
                 adapter = annotations.get(PROBE_ADAPTER_ANNOTATION)
                 if adapter is not None and adapter not in PROBE_ADAPTERS:
@@ -364,8 +364,11 @@ def generate_compose(config: Config, images: dict[str, str]) -> None:
                         )
                     declared_files: set[str] = set()
                     for container in containers.values():
-                        files: dict[str, Any] = container.get("files") or {}
-                        declared_files.update(files)
+                        if not is_mapping(container):
+                            continue
+                        files = container.get("files")
+                        if is_mapping(files):
+                            declared_files.update(files)
                     for entry in consumer_interpolated.split(","):
                         if entry != entry.strip() or not entry:
                             raise SystemExit(
@@ -380,9 +383,11 @@ def generate_compose(config: Config, images: dict[str, str]) -> None:
                         interpolated_targets.add(entry)
                 if adapter is None:
                     for container in containers.values():
+                        if not is_mapping(container):
+                            continue
                         for probe in ("readinessProbe", "livenessProbe"):
-                            probe_block: dict[str, Any] = container.get(probe) or {}
-                            if probe_block.get("httpGet") is not None:
+                            probe_block = container.get(probe)
+                            if is_mapping(probe_block) and probe_block.get("httpGet") is not None:
                                 raise SystemExit(f"{name}: a {probe} httpGet requires {PROBE_ADAPTER_ANNOTATION}")
                 # Validate the dev-toggles annotation.
                 toggle_raw, service_name = workload.dev_toggles
@@ -434,8 +439,9 @@ def generate_compose(config: Config, images: dict[str, str]) -> None:
 
                 # Collapse doubled {workload}-{container} service names.
                 document = yaml.safe_load(output.read_text(encoding="utf-8"))
-                services: dict[str, Any] = document.get("services") or {}
-                collapsed: dict[str, Any] = {}
+                services_node = document.get("services")
+                services = services_node if is_mapping(services_node) else {}
+                collapsed: dict[str, Yaml] = {}
                 for name, service in services.items():
                     match = DOUBLED_SERVICE_NAME.fullmatch(name)
                     target = match.group(1) if match is not None else name
@@ -449,9 +455,13 @@ def generate_compose(config: Config, images: dict[str, str]) -> None:
                 if GATE_SERVICE in collapsed:
                     if gate in collapsed:
                         raise SystemExit(f"gate rename {GATE_SERVICE} -> {gate} collides with an existing service")
-                    collapsed[gate] = collapsed.pop(GATE_SERVICE)
+                    gate_entry = collapsed.pop(GATE_SERVICE)
+                    if gate_entry is not None:
+                        collapsed[gate] = gate_entry
                     for service in collapsed.values():
-                        depends_on: dict[str, Any] | list[str] | None = service.get("depends_on")
+                        if not is_mapping(service):
+                            continue
+                        depends_on = service.get("depends_on")
                         if isinstance(depends_on, dict) and GATE_SERVICE in depends_on:
                             depends_on[gate] = depends_on.pop(GATE_SERVICE)
                         elif isinstance(depends_on, list) and GATE_SERVICE in depends_on:
@@ -466,27 +476,35 @@ def generate_compose(config: Config, images: dict[str, str]) -> None:
 
                 # Inline every bind as configs.content with $ doubled.
                 parsed = ComposeDocument.model_validate(document)
-                contents: dict[str, dict[str, str]] = {}
+                contents: dict[str, Yaml] = {}
                 for name, service in (parsed.services or {}).items():
                     binds = [volume for volume in service.volumes or [] if isinstance(volume, BindVolume)]
                     if not binds:
                         continue
-                    references: list[dict[str, str]] = []
+                    references: list[Yaml] = []
                     for bind in binds:
                         # Resolve state-dir sources against score_dir, other sources against the repo root.
                         path = score_dir / bind.source if bind.source.startswith(STATE_PREFIX) else root / bind.source
                         text = path.read_text(encoding="utf-8")
                         if bind.target not in interpolated_targets:
-                            text = text.replace("$", "$$")
+                            text = double_dollars(text)
                         contents[path.name] = {"content": text}
                         references.append({"source": path.name, "target": bind.target})
                     raw = document["services"][name]
-                    raw["configs"] = [*(raw.get("configs") or []), *references]
-                    remaining = [volume for volume in raw["volumes"] if volume.get("type") != "bind"]
-                    if remaining:
-                        raw["volumes"] = remaining
-                    else:
-                        del raw["volumes"]
+                    if is_mapping(raw):
+                        existing = raw.get("configs")
+                        raw["configs"] = [*(existing if is_list(existing) else []), *references]
+                        volumes = raw.get("volumes")
+                        volume_list = volumes if is_list(volumes) else []
+                        remaining = [
+                            volume
+                            for volume in volume_list
+                            if not (is_mapping(volume) and volume.get("type") == "bind")
+                        ]
+                        if remaining:
+                            raw["volumes"] = remaining
+                        else:
+                            del raw["volumes"]
 
                 if contents:
                     document["configs"] = {**(document.get("configs") or {}), **contents}
@@ -505,7 +523,7 @@ def closure_provisioners(score_dir: Path, rendering: str, workloads: list[str]) 
     # Select the provisioner files whose resource types the workloads reference.
     referenced: set[str] = set()
     for name in workloads:
-        document: Any = _load_yaml_file(score_dir / name)
+        document = _load_yaml_file(score_dir / name)
         resources = document.get("resources") if is_mapping(document) else None
         if is_mapping(resources):
             for resource in resources.values():
@@ -517,7 +535,7 @@ def closure_provisioners(score_dir: Path, rendering: str, workloads: list[str]) 
     if not directory.is_dir():
         return selected
     for path in sorted(directory.glob("*.yaml")):
-        entries: Any = _load_yaml_file(path)
+        entries = _load_yaml_file(path)
         if not is_list(entries):
             continue
         if any(is_mapping(entry) and entry.get("type") in referenced for entry in entries):
@@ -546,7 +564,7 @@ def compiled_provisioners(
             )
             if not is_list(document) or not document:
                 raise RuntimeError(f"{name}: an authored provisioner file must be a non-empty YAML list")
-            compiled_entries: list[dict[str, object]] = []
+            compiled_entries: list[Yaml] = []
             for entry in document:
                 AuthoredProvisioner.model_validate(entry, context={"name": name})
                 assert is_mapping(entry)
@@ -554,7 +572,7 @@ def compiled_provisioners(
                     declares_services = True
 
                 # Compile each entry in authored key order.
-                compiled: dict[str, object] = {}
+                compiled: dict[str, Yaml] = {}
                 for key, value in entry.items():
                     if key in STRING_FORM_FIELDS:
                         if value is not None:
@@ -581,7 +599,7 @@ def generate_k8s(config: Config, k8s: K8sConfig, output_path: Path, lock: Config
     for name in k8s.workloads:
         if name in compose_workloads:
             continue
-        k8s_document: Any = _load_yaml_file(score_dir / name)
+        k8s_document = _load_yaml_file(score_dir / name)
         k8s_annotations = WorkloadDocument.model_validate(k8s_document).metadata.annotations
         if DEV_TOGGLES_ANNOTATION in k8s_annotations:
             raise SystemExit(
@@ -651,7 +669,7 @@ def generate_k8s(config: Config, k8s: K8sConfig, output_path: Path, lock: Config
     shutil.rmtree(state_dir, ignore_errors=True)
 
 
-def contains_marker(node: Any) -> bool:
+def contains_marker(node: Yaml) -> bool:
     if _marker_entry(node, MARKERS) is not None:
         return True
 
@@ -664,7 +682,7 @@ def contains_marker(node: Any) -> bool:
     return False
 
 
-def resolve_includes(node: Any, root: Path, source: str, ancestors: tuple[Path, ...] = ()) -> Any:
+def resolve_includes(node: Yaml, root: Path, source: str, ancestors: tuple[Path, ...] = ()) -> Yaml:
     entry = _marker_entry(node, INCLUDE_MARKERS)
     if entry is not None:
         key, value = entry
@@ -695,7 +713,7 @@ def resolve_includes(node: Any, root: Path, source: str, ancestors: tuple[Path, 
     return node
 
 
-def resolve_lock_refs(node: Any, images: dict[str, str], source: str) -> Any:
+def resolve_lock_refs(node: Yaml, images: dict[str, str], source: str) -> Yaml:
     entry = _marker_entry(node, LOCK_MARKERS)
     if entry is not None:
         marker, value = entry
@@ -719,7 +737,7 @@ def resolve_lock_refs(node: Any, images: dict[str, str], source: str) -> Any:
         reference = images[image_spec.key]
         path_part, _, digest = reference.rpartition("@")
 
-        fields: dict[str, str] = {}
+        fields: dict[str, Yaml] = {}
         tagged = path_part.rpartition(":")
         if tagged[1] and "/" not in tagged[2]:
             fields["registry"], fields["repository"] = _split_path(tagged[0], reference, source)
@@ -753,7 +771,7 @@ def _split_path(path: str, reference: str, source: str) -> tuple[str, str]:
     return registry, repository
 
 
-def _marker_entry(node: Any, markers: tuple[str, ...]) -> tuple[str, Any] | None:
+def _marker_entry(node: Yaml, markers: tuple[str, ...]) -> tuple[str, Yaml] | None:
     if is_mapping(node) and len(node) == 1:
         key, value = next(iter(node.items()))
         if key in markers:
@@ -762,7 +780,7 @@ def _marker_entry(node: Any, markers: tuple[str, ...]) -> tuple[str, Any] | None
     return None
 
 
-def collect_secret_keys(node: object, secret_name: str, consumed: set[str]) -> None:
+def collect_secret_keys(node: Yaml, secret_name: str, consumed: set[str]) -> None:
     if is_mapping(node):
         reference = node.get("secretKeyRef")
         if is_mapping(reference) and reference.get("name") == secret_name:
@@ -835,7 +853,7 @@ def _rendered_workloads(
         for name in workloads:
             source_path = config.root / config.score_dir / name
             document = resolve_lock_refs(_load_yaml_file(source_path), images, f"workload {name}")
-            source = yaml.safe_dump(document, sort_keys=False, width=1000)
+            source = dump_compose(document)
             rendered = PLACEHOLDER.sub(partial(_placeholder_value, rendering_vars, name), source)
             (directory / name).write_text(rendered, "utf-8")
 
@@ -852,7 +870,7 @@ def _placeholder_value(rendering_vars: dict[str, str], workload_name: str, match
     return value
 
 
-def dump_compose(value: object) -> str:
+def dump_compose(value: Yaml) -> str:
     return yaml.dump(
         value,
         Dumper=ComposeDumper,
@@ -872,7 +890,7 @@ def write_generated_file(path: Path, text: str) -> None:
     path.chmod(0o644)
 
 
-def _load_yaml_file(path: Path) -> Any:
+def _load_yaml_file(path: Path) -> Yaml:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 

@@ -14,6 +14,7 @@ from bashrun.bash import bash_output
 from docker_devkit.config import (
     CHART_REFERENCE_PREFIX,
     Config,
+    Yaml,
     chart_lock_key,
     is_list,
     is_mapping,
@@ -113,7 +114,7 @@ def relock(config: Config, *, upgrade: bool = False) -> ConfigLock:
 
 def render_lock(lock: ConfigLock) -> str:
     # Render names and platform keys in sorted order.
-    document: dict[str, object] = {}
+    document: dict[str, Yaml] = {}
     if lock.images:
         document["images"] = {
             name: {
@@ -132,7 +133,7 @@ def render_lock(lock: ConfigLock) -> str:
 def resolve_remote_manifests(reference: str, platforms: list[str], subject: str) -> UpstreamManifests:
     print(f"Resolving digests for: {reference}")
     raw = bash_output(f"docker buildx imagetools inspect --raw {shlex.quote(reference)}")
-    document: object = json.loads(raw)
+    document: Yaml = json.loads(raw)
     index_digest = resolve_remote_digest(reference)
     children = document.get("manifests") if is_mapping(document) else None
     if not is_list(children):
@@ -178,7 +179,7 @@ def resolve_remote_digest(reference: str) -> str:
     return match.group(1)
 
 
-def _concrete_platform(child: object) -> tuple[str, str] | None:
+def _concrete_platform(child: Yaml) -> tuple[str, str] | None:
     if not is_mapping(child):
         return None
     platform = child.get("platform")
@@ -193,7 +194,7 @@ def _concrete_platform(child: object) -> tuple[str, str] | None:
     return (os_name, architecture)
 
 
-def _child_digest(child: object, subject: str) -> str:
+def _child_digest(child: Yaml, subject: str) -> str:
     if not is_mapping(child):
         raise RuntimeError(f"{subject}: upstream index child {child!r} must be a manifest descriptor")
     digest = child.get("digest")

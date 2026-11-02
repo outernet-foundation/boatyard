@@ -24,6 +24,8 @@ from docker_devkit.config import (
     ServiceEntry,
     ServiceGroup,
     WorkloadDocument,
+    Yaml,
+    double_dollars,
     is_mapping,
     parse_dev_toggles,
 )
@@ -226,18 +228,20 @@ def render(
 
     # Render the per-run root compose file.
     assert config.project_name is not None
-    services: dict[str, object] = {}
+    services: dict[str, Yaml] = {}
     if selection.routes:
         if config.gateway is None:
             raise RuntimeError("routes are declared; gateway is required")
-        services[EDGE_SERVICE_NAME] = {
+        edge: dict[str, Yaml] = {
             "image": f"${{{CADDY_IMAGE}:?err}}",
             "configs": [{"source": EDGE_CONFIG_NAME, "target": "/etc/caddy/Caddyfile"}],
             "ports": [{"target": str(EDGE_LISTEN_PORT), "published": config.gateway, "protocol": "tcp"}],
-            **({"environment": selection.forwarded} if selection.forwarded is not None else {}),
         }
+        if selection.forwarded is not None:
+            edge["environment"] = {key: value for key, value in selection.forwarded.items()}
+        services[EDGE_SERVICE_NAME] = edge
     ordered_ports = sorted(selection.ports, key=lambda port: port.service)
-    services.update({
+    port_services: dict[str, Yaml] = {
         service: {
             "ports": [
                 {
@@ -250,10 +254,11 @@ def render(
             ]
         }
         for service, service_ports in groupby(ordered_ports, key=lambda port: port.service)
-    })
-    document: dict[str, object] = {"name": config.project_name}
+    }
+    services.update(port_services)
+    document: dict[str, Yaml] = {"name": config.project_name}
     if selection.includes:
-        document["include"] = selection.includes
+        document["include"] = [include for include in selection.includes]
     if services:
         document["services"] = services
     if selection.routes:
@@ -275,14 +280,16 @@ def render(
             head = "\thandle_path" if route.strip_prefix else "\thandle"
             lines.extend((f"{head}{matcher} {{", *block, "\t}"))
         lines.append("}")
-        # Double every $.
-        document["configs"] = {EDGE_CONFIG_NAME: {"content": ("\n".join(lines) + "\n").replace("$", "$$")}}
+        document["configs"] = {
+            EDGE_CONFIG_NAME: {"content": double_dollars("\n".join(lines) + "\n")},
+        }
     compose_files.append(write_temp_compose_file(stack, document, "devkit-assembly-"))
 
     if dev:
         # Render the dev overlay.
-        overlay_services: dict[str, dict[str, object]] = {
-            name: {
+        overlay_services: dict[str, Yaml] = {}
+        for name in selection.dev_facts.services:
+            overlay_services[name] = {
                 "image": f"{config.repository}/{name}:dev",
                 "volumes": [
                     {
@@ -293,10 +300,11 @@ def render(
                     }
                 ],
             }
-            for name in selection.dev_facts.services
-        }
         for service_name, toggles in selection.dev_facts.toggles.items():
-            service = overlay_services.setdefault(service_name, {})
+            service = overlay_services.get(service_name)
+            if not is_mapping(service):
+                service = {}
+                overlay_services[service_name] = service
             service["environment"] = {key: f"${{{key}:-{value}}}" for key, value in toggles.items()}
         if not overlay_services:
             raise RuntimeError(
@@ -390,7 +398,7 @@ def keep_lock_env_file(path: Path | None) -> None:
     print(path.read_text(encoding="utf-8"), end="")
 
 
-def write_temp_compose_file(stack: ExitStack, document: Mapping[str, object], prefix: str) -> Path:
+def write_temp_compose_file(stack: ExitStack, document: Mapping[str, Yaml], prefix: str) -> Path:
     with NamedTemporaryFile("w", suffix=".yaml", prefix=prefix, delete=False, encoding="utf-8") as handle:
         handle.write(yaml.safe_dump(document, sort_keys=False, default_flow_style=False))
         path = Path(handle.name)

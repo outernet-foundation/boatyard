@@ -34,6 +34,14 @@ PYTHON_VERSION_PATH = Path(".python-version")
 
 ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
+# Match ${ALL_CAPS} placeholder holes in workload files.
+PLACEHOLDER = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
+
+# Match a compose brace hole with its preceding dollar run.
+COMPOSE_HOLE = re.compile(r"(\$+)\{([A-Z][A-Z0-9_]*)(?::[^{}]*)?\}")
+
+type Yaml = str | int | float | bool | list[Yaml] | dict[str, Yaml] | None
+
 
 def _require_port_or_hole(value: str) -> str:
     if PORT_PATTERN.fullmatch(value) is None and ENV_HOLE_PATTERN.fullmatch(value) is None:
@@ -121,12 +129,12 @@ class Config(BaseModel):
         for key in used:
             if key == "uv":
                 pyproject = root / PYPROJECT_PATH
-                tool_document: dict[str, object] = (
+                tool_document: dict[str, Yaml] = (
                     tomllib.loads(pyproject.read_text(encoding="utf-8")) if pyproject.is_file() else {}
                 )
-                tool_table: object = tool_document.get("tool")
-                uv_table: object = tool_table.get("uv") if is_mapping(tool_table) else None
-                declared: object = uv_table.get("required-version") if is_mapping(uv_table) else None
+                tool_table = tool_document.get("tool")
+                uv_table = tool_table.get("uv") if is_mapping(tool_table) else None
+                declared = uv_table.get("required-version") if is_mapping(uv_table) else None
                 if not isinstance(declared, str) or not declared:
                     raise RuntimeError(
                         f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version is not declared; "
@@ -391,7 +399,7 @@ class ServiceEntry(BaseModel):
         return self
 
 
-def _service_member_kind(value: object) -> str:
+def _service_member_kind(value: Yaml) -> str:
     return "group" if is_mapping(value) and "options" in value else "entry"
 
 
@@ -514,9 +522,13 @@ def mirrored_ref(reference: str, prefix: str) -> str:
     return f"{prefix}/{reference}"
 
 
-def is_mapping(value: object) -> TypeIs[dict[str, object]]:
+def is_mapping(value: object) -> TypeIs[dict[str, Yaml]]:
     return isinstance(value, dict)
 
 
-def is_list(value: object) -> TypeIs[list[object]]:
+def is_list(value: object) -> TypeIs[list[Yaml]]:
     return isinstance(value, list)
+
+
+def double_dollars(text: str) -> str:
+    return text.replace("$", "$$")
