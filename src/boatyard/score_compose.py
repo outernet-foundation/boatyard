@@ -144,12 +144,6 @@ def generate_compose(
             if consumer_interpolated is not None:
                 interpolated_targets.update(consumer_interpolated.split(","))
 
-        # Assemble the patch templates, adding the GPU template for the bundle's variant.
-        templates = [HEALTHCHECK_TEMPLATE, RESTART_TEMPLATE]
-        gpu_template = GPU_COMPOSE_TEMPLATES.get(entry.vars.get("GPU_VARIANT", ""))
-        if gpu_template is not None:
-            templates.append(gpu_template)
-
         # Recreate the shared state dir and render the bundle through the spine.
         shutil.rmtree(score_state, ignore_errors=True)
         output = compose_bundle_output(root, name)
@@ -158,7 +152,15 @@ def generate_compose(
             is_k8s=False,
             workloads=entry.workloads,
             rendering_vars=entry.vars,
-            templates=templates,
+            templates=[
+                HEALTHCHECK_TEMPLATE,
+                RESTART_TEMPLATE,
+                *(
+                    template
+                    for variant, template in GPU_COMPOSE_TEMPLATES.items()
+                    if variant == entry.vars.get("GPU_VARIANT", "")
+                ),
+            ],
             output=output,
             images=images,
             service_shas=service_shas,
