@@ -14,7 +14,6 @@ from pydantic import (
 
 from boatyard.config import (
     DEV_TOGGLES_ANNOTATION,
-    K8sConfig,
     WorkloadDocument,
     Yaml,
     Config,
@@ -56,15 +55,13 @@ class ManifestDocument(BaseModel):
     metadata: ManifestMetadata = Field(default_factory=ManifestMetadata)
 
 
-def generate_k8s(
-    root: Path,
-    config: Config,
-    k8s: K8sConfig,
-    output_path: Path,
-    lock: ConfigLock,
-    service_shas: dict[str, str],
-    storage_class: str,
-) -> None:
+def generate_k8s(config: Config, lock: ConfigLock, service_shas: dict[str, str], local: bool) -> Path:
+    k8s = config.k8s
+    if k8s is None:
+        raise ValueError("the k8s target requires a k8s section")
+    root = config.root
+    storage_class = LOCAL_STORAGE_CLASS if local else CLOUD_STORAGE_CLASS
+    output_path = root / (config.k8s_local_output if local else config.k8s_output)
     # Run score-k8s in the output's directory, where it writes its .score-k8s state.
     images = env_entries(lock)
     state_dir = output_path.parent / ".score-k8s"
@@ -130,6 +127,7 @@ def generate_k8s(
     write_generated_file(output_path, "".join(f"---\n{block}" for *_, block in decorated))
 
     shutil.rmtree(state_dir, ignore_errors=True)
+    return output_path
 
 
 def contains_marker(node: Yaml) -> bool:

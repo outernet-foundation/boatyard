@@ -10,10 +10,8 @@ import yaml
 from bashrun.bash import bash, bash_check, bash_output
 
 from boatyard import dockerfiles
-from boatyard.compose import merged_environment
 from boatyard.config import COMPOSE_HOLE, Config, Target, load_yaml_file
 from boatyard.config_lock import LOCK_PATH, parse_config_lock
-from boatyard.lock import compose_env_entries
 from boatyard.score import (
     SECRETS_FILE,
     SECRETS_OUTPUT,
@@ -23,7 +21,7 @@ from boatyard.score import (
     write_generated_file,
 )
 from boatyard.score_compose import generate_compose
-from boatyard.score_k8s import CLOUD_STORAGE_CLASS, LOCAL_STORAGE_CLASS, generate_k8s
+from boatyard.score_k8s import generate_k8s
 
 app = typer.Typer()
 
@@ -106,16 +104,13 @@ def generate_score(
     lock = parse_config_lock(lock_path)
     if not lock.images and not lock.charts:
         raise ValueError(f"{lock_path.as_posix()}: the image lock carries no entries")
-    k8s_output = root / (config.k8s_local_output if local else config.k8s_output)
-
     outputs: list[Path] = []
+    k8s_output: Path | None = None
     if compose_rendering:
-        generate_compose(root, config, compose_env_entries(lock, config, merged_environment(root)), service_shas)
-        outputs.extend(bundle.output for bundle in config.compose_bundles())
+        outputs.extend(generate_compose(config, lock, service_shas))
 
-    if k8s_rendering and config.k8s is not None:
-        storage_class = LOCAL_STORAGE_CLASS if local else CLOUD_STORAGE_CLASS
-        generate_k8s(root, config, config.k8s, k8s_output, lock, service_shas, storage_class)
+    if k8s_rendering:
+        k8s_output = generate_k8s(config, lock, service_shas, local)
         outputs.append(k8s_output)
 
     if (root / SECRETS_FILE).is_file():
@@ -133,7 +128,7 @@ def generate_score(
                         consumed.add(match.group(2))
             declaration.validate_consumed(consumed, "compose", SECRETS_FILE.as_posix())
 
-        if k8s_rendering:
+        if k8s_rendering and k8s_output is not None:
             consumed = set()
             for block in split_documents(k8s_output.read_text(encoding="utf-8")):
                 collect_secret_keys(yaml.safe_load(block), k8s_secret, consumed)

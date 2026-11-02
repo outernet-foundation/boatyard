@@ -14,6 +14,7 @@ from pydantic import (
     model_validator,
 )
 
+from boatyard.compose import merged_environment
 from boatyard.config import (
     CONSUMER_INTERPOLATED_ANNOTATION,
     ComposeWorkloadDocument,
@@ -23,7 +24,8 @@ from boatyard.config import (
     is_mapping,
     Config,
 )
-from boatyard.config_lock import LOCK_PATH
+from boatyard.config_lock import LOCK_PATH, ConfigLock
+from boatyard.lock import compose_env_entries
 from boatyard.score import (
     CompiledProvisioners,
     dump_compose,
@@ -113,18 +115,15 @@ class ComposeConfig(BaseModel):
     content: str | None = None
 
 
-def generate_compose(
-    root: Path,
-    config: Config,
-    images: dict[str, str],
-    service_shas: dict[str, str],
-) -> None:
+def generate_compose(config: Config, lock: ConfigLock, service_shas: dict[str, str]) -> list[Path]:
     # Refuse the compose target without local service entries.
     bundles = config.compose_bundles()
     if not bundles:
         raise ValueError("the compose target requires local service entries (workloads:)")
-    score_dir = config.root / config.score_dir
+    root = config.root
+    score_dir = root / config.score_dir
     score_state = score_dir / STATE_PREFIX
+    images = compose_env_entries(lock, config, merged_environment(root))
 
     for bundle in bundles:
         # Collect per-workload annotation facts and enforce the compose placement laws.
@@ -226,6 +225,7 @@ def generate_compose(
 
     # Remove the compose state dir after the last entry.
     shutil.rmtree(score_state, ignore_errors=True)
+    return [bundle.output for bundle in bundles]
 
 
 def _require_alpine_when_declaring_services(
