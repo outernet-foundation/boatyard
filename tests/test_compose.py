@@ -9,7 +9,7 @@ from bashrun.bash import CalledProcessError, bash, bash_output
 from typer.testing import CliRunner
 
 from docker_devkit import assembly
-from docker_devkit.verbs import down, lock_env, up
+from docker_devkit.verbs import down, up
 from docker_devkit.config import LOCK_PATH
 
 MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
@@ -1049,9 +1049,9 @@ class TestLockRequirement:
 
 class TestLockEnvSynthesis:
     # The compose edge selects platform manifests: up/down attach the selected entries as
-    # the second --env-file, lock-env emits the same synthesis on stdout, and the
-    # selection itself is declaration-driven — a singleton self-selects, a multi-platform
-    # repo names PLATFORM= through the merged shell-over-.env view.
+    # the second --env-file, and the selection itself is declaration-driven — a singleton
+    # self-selects, a multi-platform repo names PLATFORM= through the merged
+    # shell-over-.env view.
     ALPINE_INDEX = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST
     ALPINE_MANIFEST = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + PLATFORM_DIGEST
 
@@ -1090,21 +1090,6 @@ class TestLockEnvSynthesis:
 
         assert len(recorder.env_contents) == 2
         assert recorder.env_contents[0] == recorder.env_contents[1]
-
-    def test_lock_env_stdout_is_what_up_attaches(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
-        _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST})
-        recorder = LockEnvRecorder()
-        monkeypatch.delenv("PLATFORM", raising=False)
-        monkeypatch.chdir(tmp_path)
-
-        emitted = runner.invoke(lock_env.app, [])
-
-        assert emitted.exit_code == 0, emitted.output
-        assert emitted.output == f"ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
-        self._invoke_up_with_lock(tmp_path, monkeypatch, recorder)
-        assert recorder.env_contents[0] == emitted.output
 
     def test_a_multi_platform_repo_selects_the_named_platform(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1203,16 +1188,6 @@ class TestLockEnvSynthesis:
         kept = [Path(line.split(":", 1)[1].strip()) for line in result.output.splitlines() if "kept for inspection" in line]
         assert len(kept) == 1
         assert kept[0].read_text(encoding="utf-8") == f"ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
-
-    def test_lock_env_self_skips_without_a_lock(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(lock_env.app, [])
-
-        assert result.exit_code == 0, result.output
-        assert result.output == ""
 
 
 class TestMirroredLockEnforcement:

@@ -248,7 +248,7 @@ def env_entries(lock: ImageLock, platform: str | None = None) -> dict[str, str]:
 
 
 def render_env_entries(entries: Mapping[str, str]) -> str:
-    # The env-grammar render both the per-run --env-file writer and the lock-env verb emit.
+    # The env-grammar render the per-run --env-file writer emits.
     return "".join(f"{name}={reference}\n" for name, reference in sorted(entries.items()))
 
 

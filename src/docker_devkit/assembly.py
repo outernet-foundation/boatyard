@@ -347,7 +347,7 @@ def require_env_file(root: Path) -> None:
 def merged_environment(root: Path) -> dict[str, str]:
     # The shell-over-.env view every selection read uses (BUNDLES, COMPOSE_PROFILES,
     # PLATFORM): an explicitly empty shell assignment overrides a set .env value. A
-    # missing .env reads as empty so the lock-env valve stays runnable on fresh checkouts.
+    # missing .env reads as empty so score generation stays runnable on fresh checkouts.
     path = root / ENV_FILE
     environment: dict[str, str] = {}
     if path.is_file():
