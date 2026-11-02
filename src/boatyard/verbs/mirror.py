@@ -21,7 +21,7 @@ def mirror() -> None:
     root = Path.cwd()
     config = Config.load(root)
     if config is None:
-        raise RuntimeError("a boatyard.yml with base_images (or k8s.charts) is required to mirror")
+        raise ValueError("a boatyard.yml with base_images (or k8s.charts) is required to mirror")
     prefix = config.mirror_prefix
 
     lock = read_config_lock(root)
@@ -35,7 +35,7 @@ def mirror() -> None:
         mirror_targets.append((chart_ref.removeprefix("oci://"), [entry]))
 
     if not mirror_targets:
-        raise RuntimeError("nothing is declared to mirror (base_images and k8s.charts are empty)")
+        raise ValueError("nothing is declared to mirror (base_images and k8s.charts are empty)")
 
     install_crane()
     copied = 0

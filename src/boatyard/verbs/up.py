@@ -48,7 +48,7 @@ def up(
     environment = merged_environment(root)
     if config is None or not config.services:
         if split_names(environment.get(BUNDLES_VARIABLE, "")):
-            raise RuntimeError(f"{BUNDLES_VARIABLE}= is set but this repo declares no services")
+            raise ValueError(f"{BUNDLES_VARIABLE}= is set but this repo declares no services")
         config = require_compose_stack(config)
 
     # Refuse --build in a repo with no build declarations.
@@ -102,7 +102,7 @@ def _probe_lock_entries(config: Config) -> None:
         except CalledProcessError as error:
             stderr = (error.stderr or str(error)).strip()
             if re.search(r"\b404\b|not found|manifest unknown", stderr, re.IGNORECASE):
-                raise RuntimeError(f"Image {reference or value} (digest {digest or 'unknown'}) is not mirrored")
-            raise RuntimeError(
+                raise ValueError(f"Image {reference or value} (digest {digest or 'unknown'}) is not mirrored")
+            raise ValueError(
                 f"Image {reference or value} (digest {digest or 'unknown'}): the mirror probe failed: {stderr}"
             )

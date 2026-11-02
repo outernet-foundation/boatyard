@@ -251,7 +251,7 @@ class TestMirrorVerb:
         result = runner.invoke(app, ["mirror"])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, RuntimeError)
+        assert isinstance(result.exception, ValueError)
 
     def test_zero_declared_targets_is_a_loud_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_config(tmp_path, {"requires": ">=0.1"})
@@ -260,7 +260,7 @@ class TestMirrorVerb:
         result = runner.invoke(app, ["mirror"])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, RuntimeError)
+        assert isinstance(result.exception, ValueError)
         assert "nothing is declared to mirror" in str(result.exception)
 
     def test_rejects_unpinned_declarations_loudly(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

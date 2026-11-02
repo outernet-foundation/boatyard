@@ -298,7 +298,7 @@ class TestPublishComposeVerb:
         result = runner.invoke(app, ["publish-compose"])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, RuntimeError)
+        assert isinstance(result.exception, ValueError)
 
     def test_errors_without_registry_credentials(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._write_tree(tmp_path)

@@ -103,5 +103,5 @@ class TestTreeTags:
         result = runner.invoke(app, ["tree-tags", "api"])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, RuntimeError)
+        assert isinstance(result.exception, ValueError)
         assert "no boatyard.yml" in str(result.exception)

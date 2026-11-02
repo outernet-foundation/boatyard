@@ -513,7 +513,7 @@ class TestSelectionLaw:
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, RuntimeError)
+        assert isinstance(result.exception, ValueError)
         assert "declares no services" in str(result.exception)
 
     def test_up_without_config_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

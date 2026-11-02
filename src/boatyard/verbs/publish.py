@@ -53,7 +53,7 @@ def publish_compose(
         if plan:
             print(json.dumps([]))
             return
-        raise RuntimeError("publishing requires local entries (workloads:) in boatyard.yml")
+        raise ValueError("publishing requires local entries (workloads:) in boatyard.yml")
 
     if plan:
         entries = [{"bundle": entry.name} for entry in bundles]
@@ -70,7 +70,7 @@ def publish_compose(
         raise SystemExit("REGISTRY_USERNAME and REGISTRY_TOKEN must be set for registry login")
     repository = config.repository
     if repository is None:
-        raise RuntimeError("local entries (workloads:) are declared; repository is required")
+        raise ValueError("local entries (workloads:) are declared; repository is required")
     registry_host = repository.partition("/")[0]
     print(f"Login to {registry_host}")
     bash(f"docker login {shlex.quote(registry_host)} -u {shlex.quote(username)} --password-stdin", stdin_text=token)

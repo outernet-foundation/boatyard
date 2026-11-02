@@ -22,7 +22,7 @@ def tree_tags(
     root = Path.cwd()
     config = Config.load(root)
     if config is None:
-        raise RuntimeError("no boatyard.yml at the repo root")
+        raise ValueError("no boatyard.yml at the repo root")
     vocabulary = sorted(config.service_builds)
     if not services:
         raise typer.BadParameter(
