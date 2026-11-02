@@ -342,7 +342,7 @@ class TestBaseImageTemplates:
         )
         write_lock(tmp_path)
 
-        with pytest.raises(RuntimeError, match="not an exact pin"):
+        with pytest.raises(RuntimeError, match="must be an exact == pin"):
             load_config(tmp_path)
 
     def test_missing_uv_pin_refuses(self, tmp_path: Path) -> None:
@@ -480,7 +480,7 @@ class TestCharts:
         )
         write_lock(tmp_path)
 
-        with pytest.raises(RuntimeError, match=r"values/loki\.yaml.*derived path"):
+        with pytest.raises(RuntimeError, match=r"values/loki\.yaml.*values file is required"):
             load_config(tmp_path)
 
 
@@ -511,7 +511,7 @@ class TestK8sSection:
     def test_vars_only_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "k8s": {"vars": {"GPU_VARIANT": "cuda"}}})
 
-        with pytest.raises(ValidationError, match="neither workloads nor charts"):
+        with pytest.raises(ValidationError, match="must declare workloads or charts"):
             load_config(tmp_path)
 
 
@@ -578,7 +578,7 @@ class TestServices:
             },
         )
 
-        with pytest.raises(ValidationError, match="exactly one source"):
+        with pytest.raises(ValidationError, match="ref: or workloads:, not both"):
             load_config(tmp_path)
 
     def test_an_entry_carrying_neither_source_refuses(self, tmp_path: Path) -> None:
@@ -592,7 +592,7 @@ class TestServices:
             },
         )
 
-        with pytest.raises(ValidationError, match="never neither"):
+        with pytest.raises(ValidationError, match="ref: or workloads: is required"):
             load_config(tmp_path)
 
     def test_vars_beside_a_ref_refuse(self, tmp_path: Path) -> None:
@@ -610,7 +610,7 @@ class TestServices:
             },
         )
 
-        with pytest.raises(ValidationError, match="a ref carries its producer's vars"):
+        with pytest.raises(ValidationError, match="vars is not allowed with ref:"):
             load_config(tmp_path)
 
     def test_an_unpinned_ref_refuses(self, tmp_path: Path) -> None:
@@ -627,7 +627,7 @@ class TestServices:
             load_config(tmp_path)
 
     def test_an_empty_workloads_list_refuses(self) -> None:
-        with pytest.raises(ValidationError, match="never neither"):
+        with pytest.raises(ValidationError, match="ref: or workloads: is required"):
             DockerDevkitConfig.model_validate({
                 "requires": ">=0.1",
                 "repository": "ghcr.io/org/repo",
@@ -695,7 +695,7 @@ class TestFlatVocabulary:
             }),
         )
 
-        with pytest.raises(ValidationError, match=r"one vocabulary.*livekit"):
+        with pytest.raises(ValidationError, match=r"livekit is already an entry or option name"):
             load_config(tmp_path)
 
     def test_an_option_colliding_across_groups_refuses(self, tmp_path: Path) -> None:
@@ -707,7 +707,7 @@ class TestFlatVocabulary:
             }),
         )
 
-        with pytest.raises(ValidationError, match=r"one vocabulary.*cuda"):
+        with pytest.raises(ValidationError, match=r"cuda is already an entry or option name"):
             load_config(tmp_path)
 
 
@@ -1163,7 +1163,7 @@ class TestLockPairing:
             },
         )
 
-        with pytest.raises(RuntimeError, match="image lock is required"):
+        with pytest.raises(RuntimeError, match="the committed lock is required"):
             load_config(tmp_path)
 
     def test_charts_without_lock_refuse(self, tmp_path: Path) -> None:
@@ -1174,7 +1174,7 @@ class TestLockPairing:
         (tmp_path / "stack" / "score" / "k8s" / "values").mkdir(parents=True)
         (tmp_path / "stack" / "score" / "k8s" / "values" / "loki.yaml").write_text("loki: {}\n", encoding="utf-8")
 
-        with pytest.raises(RuntimeError, match="image lock is required"):
+        with pytest.raises(RuntimeError, match="the committed lock is required"):
             load_config(tmp_path)
 
     def test_lock_beside_base_images_loads(self, tmp_path: Path) -> None:

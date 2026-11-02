@@ -117,21 +117,19 @@ class TestDeriveServices:
     def test_literal_from_refuses_naming_base_images(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "migrator", "FROM golang:1.22-alpine AS build\nFROM ghcr.io/org/base:1\n")
 
-        with pytest.raises(
-            RuntimeError, match=r"FROM golang:1\.22-alpine is a hand-written image reference.*base_images"
-        ):
+        with pytest.raises(RuntimeError, match=r"FROM golang:1\.22-alpine must reference a base_images build arg"):
             _derive(tmp_path)
 
     def test_registry_path_with_an_arg_suffix_still_refuses(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "FROM ghcr.io/org/uv${UV_BASE_DIGEST}\n")
 
-        with pytest.raises(RuntimeError, match=r"FROM ghcr\.io/org/uv\$\{UV_BASE_DIGEST\} is a hand-written"):
+        with pytest.raises(RuntimeError, match=r"FROM ghcr\.io/org/uv\$\{UV_BASE_DIGEST\} must reference"):
             _derive(tmp_path)
 
     def test_literal_copy_from_refuses_naming_base_images(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "ARG PY_IMAGE\nFROM ${PY_IMAGE}\nCOPY --from=ghcr.io/org/uv:1 /uv /bin/\n")
 
-        with pytest.raises(RuntimeError, match=r"COPY --from=ghcr\.io/org/uv:1 is a hand-written image reference"):
+        with pytest.raises(RuntimeError, match=r"COPY --from=ghcr\.io/org/uv:1 must reference a base_images build arg"):
             _derive(tmp_path)
 
     def test_stage_and_build_arg_copy_from_pass(self, tmp_path: Path) -> None:
@@ -199,7 +197,7 @@ class TestDeriveServices:
         write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
         write_dockerfile(tmp_path, "localizer", "FROM neural-networks-base AS dev\nARG TORCH_DEVICE\n")
 
-        with pytest.raises(RuntimeError, match="inherits its base's variant cells"):
+        with pytest.raises(RuntimeError, match="variant-bearing base"):
             _derive(tmp_path, {"TORCH_DEVICE": ["cuda", "rocm"]})
 
     def test_parents_disagreeing_on_variant_cells_refuse(self, tmp_path: Path) -> None:
@@ -213,7 +211,7 @@ class TestDeriveServices:
     def test_sha_arg_naming_no_service_refuses(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\nARG GHOST_SHA\n")
 
-        with pytest.raises(RuntimeError, match="ARG GHOST_SHA names no derived service"):
+        with pytest.raises(RuntimeError, match="ARG GHOST_SHA names no service directory"):
             _derive(tmp_path)
 
     def test_dockerfiles_spanning_multiple_top_level_dirs_refuse(self, tmp_path: Path) -> None:
