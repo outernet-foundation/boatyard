@@ -46,8 +46,8 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
   `.python-version`); a literal value in place of a template = the deliberate-skew escape hatch.
 - `variants`: ALL_CAPS axis → bare lowercase values, first = the default cell; declared, never probed. `platforms` required exactly when `base_images` is; charts arch-neutral, exempt.
 - `project_name` required iff `services`; `gateway` is optional — it refuses at assembly only when routes need it.
-- `services`: groups (`options:` mutually exclusive) + bare riding entries; every entry/option is `ref:` (digest-pinned OCI include) or `workloads:`/`vars:`; one flat name vocabulary, collide-refuse; `auth` reserved — its options declare
-  exactly one route; routes `/`-rooted, edge-wide unique, `strip_prefix` requires a wildcard; ports use the mapping form (service, published, target).
+- `services`: groups (`options:` mutually exclusive) + bare riding entries; every entry/option is `ref:` (digest-pinned OCI include) or `workloads:`/`vars:`; workload references are flat `*.yaml` names (both sections; the `metadata.name` pin keys on stems); one flat name vocabulary, collide-refuse;
+  `auth` reserved — its options declare exactly one route; routes `/`-rooted, edge-wide unique, `strip_prefix` requires a wildcard; ports use the mapping form (service, published, target).
 - `k8s`: `workloads`, `vars`, `charts` name → `oci://…:tag|@digest`; the map key IS the `{NAME}_CHART` lock key; a section declaring neither workloads nor charts refuses.
 - `mirror_prefix`: root override (non-empty, no trailing slash), else `DEFAULT_MIRROR_PREFIX` (`ghcr.io/outernet-foundation/mirror`).
 - Root-model invisible defaults: `score_dir` (`stack/score`), k8s output paths, the three tool pins.
@@ -177,8 +177,8 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 
 - Everything the substrate needs that score's container model doesn't carry lives in the workload file as `outernet.internal/*` annotations — `docker-devkit.yaml` never carries a per-workload runtime fact; the shipped patch templates
   (package data under `src/docker_devkit/patch_templates/`) are the annotation reader — one annotation, one template, one behavior; consumer repos never author one; refusal laws live in devkit code (templates are data and cannot
-  refuse); annotation vocabulary refusals fire at the lens (`WorkloadDocument` in config.py, strict `dict[str, str]` annotations) at every parse — one validity for every reader (`up` and `generate-score` alike); placement
-  laws stay at their consumers (httpGet-requires-probe-adapter in the compose path, dev-toggles-on-k8s-only in the k8s path); score propagates `metadata.annotations` into both renderings — regeneration diff expectations must include the annotation lines.
+  refuse); the lens is two models — `WorkloadDocument` (strict `dict[str, str]` annotations, `metadata.name` pinned to the workload file stem) and `ComposeWorkloadDocument` (adds httpGet-requires-probe-adapter) at every compose-side parse — one validity for every reader
+  (`up` and `generate-score` alike); dev-toggles-on-k8s-only stays at its consumer (score_k8s); score propagates `metadata.annotations` into both renderings — regeneration diff expectations must include the annotation lines.
 
 | Annotation | Behavior |
 |---|---|
