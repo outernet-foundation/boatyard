@@ -645,7 +645,11 @@ class TestServices:
     def test_services_require_project_name(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,
-            {"requires": ">=0.1", "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x@" + DIGEST}}},
+            {
+                "requires": ">=0.1",
+                "gateway": "8080",
+                "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x@" + DIGEST}},
+            },
         )
 
         with pytest.raises(ValidationError, match="project_name is required"):
@@ -657,6 +661,7 @@ class TestServices:
             {
                 "requires": ">=0.1",
                 "project_name": "example",
+                "gateway": "8080",
                 "services": {"core": {"workloads": ["api.yaml"]}},
             },
         )
@@ -892,7 +897,7 @@ class TestGatewayKey:
         with pytest.raises(RuntimeError, match="CADDY_IMAGE"):
             load_config(tmp_path)
 
-    def test_routes_without_gateway_refuse(self, tmp_path: Path) -> None:
+    def test_services_without_gateway_refuse(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,
             {
@@ -910,7 +915,7 @@ class TestGatewayKey:
         with pytest.raises(ValidationError, match=r"gateway.*required"):
             load_config(tmp_path)
 
-    def test_gateway_without_routes_refuses(self, tmp_path: Path) -> None:
+    def test_a_routeless_stack_carries_an_inert_gateway(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,
             {
@@ -921,8 +926,9 @@ class TestGatewayKey:
             },
         )
 
-        with pytest.raises(ValidationError, match="no route exists"):
-            load_config(tmp_path)
+        config = load_config(tmp_path)
+
+        assert config is not None
 
     def test_a_literal_port_loads(self, tmp_path: Path) -> None:
         write_edge_lock(tmp_path)
@@ -1096,6 +1102,7 @@ class TestRepository:
                 "requires": ">=0.1",
                 "repository": "ghcr.io/org/repo",
                 "project_name": "example",
+                "gateway": "8080",
                 "services": {"rathole-client": {"workloads": ["rathole-client.yaml"]}},
             },
         )
@@ -1182,6 +1189,7 @@ class TestLockPairing:
             tmp_path,
             {
                 "requires": ">=0.1",
+                "gateway": "8080",
                 "services": {"livekit": {"ref": "oci://ghcr.io/x/y@" + DIGEST}},
                 "project_name": "example",
             },
@@ -1213,6 +1221,7 @@ def test_direct_model_construction_is_valid_for_tests(tmp_path: Path) -> None:
         "requires": ">=0.1",
         "repository": "ghcr.io/org/repo",
         "project_name": "example",
+        "gateway": "8080",
         "services": {"core": {"workloads": ["api.yaml"]}},
     })
     config.root = tmp_path

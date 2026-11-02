@@ -47,6 +47,8 @@ def _write_config(root: Path, sections: dict[str, object] | None = None) -> None
     payload: dict[str, object] = {"requires": ">=0.0"}
     if sections is not None:
         payload.update(sections)
+    if "services" in payload and "gateway" not in payload:
+        payload["gateway"] = "8080"
     (root / "docker-devkit.yaml").write_text(
         yaml.safe_dump(payload, default_flow_style=False, sort_keys=False), encoding="utf-8"
     )

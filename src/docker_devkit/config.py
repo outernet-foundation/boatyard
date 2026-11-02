@@ -211,14 +211,10 @@ class DockerDevkitConfig(BaseModel):
                         f"services.{AUTH_GROUP_NAME}.options.{option_name}: an auth option declares exactly one route"
                     )
 
-        # Require gateway exactly when any route is declared.
-        any_route = any(route_sites)
-        if any_route and self.gateway is None:
-            raise ValueError("routes are declared; gateway is required")
-        if not any_route and self.gateway is not None:
-            raise ValueError("gateway is declared but no route exists")
-
+        # Require gateway and project_name exactly when services are declared.
         if self.services:
+            if self.gateway is None:
+                raise ValueError("services are declared; gateway is required")
             if not self.project_name:
                 raise ValueError("services are declared; project_name is required")
             any_local = False
@@ -475,7 +471,11 @@ def load_config(root: Path) -> DockerDevkitConfig | None:
         raise RuntimeError(
             f"{LOCK_PATH.as_posix()}: base_images or k8s.charts are declared; the committed lock is required"
         )
-    if config.gateway is not None:
+    declares_routes = any(
+        entry.routes or (isinstance(entry, ServiceGroup) and any(option.routes for option in entry.options.values()))
+        for entry in config.services.values()
+    )
+    if declares_routes:
         config.image_lock().require(
             CADDY_IMAGE,
             "routes are declared",

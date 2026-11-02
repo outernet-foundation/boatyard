@@ -24,6 +24,8 @@ DIGEST = "sha256:" + "a" * 64
 def _root_config(**sections: object) -> DockerDevkitConfig:
     payload: dict[str, object] = {"requires": ">=0.1"}
     payload.update(sections)
+    if "services" in payload and "gateway" not in payload:
+        payload["gateway"] = "8080"
     return DockerDevkitConfig.model_validate(payload)
 
 
