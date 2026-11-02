@@ -110,7 +110,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
   selected-platform entries as a per-run second `--env-file`; `compose_command` = the one docker compose invocation spelling; `down` never reads the selection, never resolves an include — a name-only root + `--remove-orphans` removes
   every container the project ever created; a config-less or `services:`-less repo refuses loudly on both verbs.
 - Dev overlay under `--dev`: an assembly-defined service with a genuine dev stage gets `image: {repository}/{service}:dev` + the repo-root → `/app:ro` bind; dev-toggles pairs become `${NAME:-default}` environment holes (`.env` overrides
-  apply only under `--dev`); overlay keys outside the selected local outputs are filtered; `--dev` with no dev shape refuses.
+  apply only under `--dev`); overlay keys outside the selected local outputs are filtered; `--dev` without a dev shape refuses.
 
 ## Build
 
@@ -154,7 +154,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
   orphan provisioner files silently no-ship.
 - Marker grammar: a single-key mapping (authored sources stay plain-YAML-parseable); `include:` inserts bytes verbatim, `include-yaml:` inserts parsed structure; neither transforms content (`${VAR}` holes pass through; `$`-handling is
   per-consumer); paths anchor at the repo root — absolute paths, `..` escapes, missing files, cycles = loud errors; text content is never scanned for markers; `lock: NAME` substitutes the full reference (the single digest source for k8s
-  provisioners, which have no runtime env file); `lock-image: NAME` expands to registry/repository/tag/digest (grafana's `digest_field: sha` spelling); a hand-written literal `image:` value (no `${` hole, no `{{ }}` fill) refuses at lock
+  provisioners, which have no runtime env file); `lock-image: NAME` expands to registry/repository/tag/digest (grafana's `digest_field: sha` spelling); a literal `image:` value (no `${` hole, no `{{ }}` fill) refuses at lock
   resolution.
 
 ## Secrets
