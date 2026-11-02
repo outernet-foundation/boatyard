@@ -1,219 +1,187 @@
-# Score generate-function unification (plan; O1 + S1 open)
+# Score generate-function unification (plan; toward one unified spine)
 
-The 2026-11-02 sessions audited `generate_compose` (score_compose.py) and
-`generate_k8s` (score_k8s.py) and found an accreted duplicated invocation
-spine. `init_score_tool` (commit 7793a07) folded the flags+init half into
-score.py; this plan closes the rest. It follows on from the landed
-score-refactor.md work (D1–D7 in flight or done); it does not revisit
-them. Two items are OPEN and must be worked through with the operator
-before implementation begins — a consolidation drill on the two
-non-absorbing bits (O1) and the shape decision (S1) whose options O1 may
-revise. Both are below. The executing session does not implement until
-they are closed.
+The 2026-11-02 sessions found an accreted duplicated invocation spine
+across `generate_compose` (score_compose.py) and `generate_k8s`
+(score_k8s.py). `init_score_tool` (commit 7793a07) folded the flags+init
+half into score.py; the gate-pin image pin moved from a patch-template to
+the compose post-pass (commit 09603db). This plan drives toward one
+unified spine function and supersedes the earlier O1/S1/shape-A/shape-B
+framing — the operator diverged from the parallel-skeleton/hook shapes
+toward a single function, and that is the direction below.
+
+## End state (the operator's vision)
+
+One function in score.py owns the whole rendering spine for both
+substrates — compose calls it per-bundle, k8s calls it once:
+
+`with builtin_patch_templates() + compiled_provisioners(...)` → init →
+seed (k8s only) → generate.
+
+Minimal parameters (config + is_k8s + per-rendering scalars; root,
+score_dir, tool, rendering, state-prefix derived, not passed). Every
+non-lifecycle helper eliminated — init command-building, generate
+invocation, and the seed logic inline in the one function. The three
+context managers that own resource lifecycles stay as the only helpers:
+`builtin_patch_templates` (package-resource handle), `compiled_provisioners`
+(tempdir), `rendered_workloads` (tempdir) — they cannot inline
+(try/finally lifecycle). The operator believes the two remaining substrate
+differences (the GPU template selection and the k8s seed) can also be
+eliminated; the agent has reservations on both (see moves 3 and 4).
+
+## Landed
+
+- **init_score_tool lift** (7793a07): flags+init half folded into
+  score.py.
+- **gate-pin → post-pass** (09603db): the `wait-for-resources` gate's
+  image is pinned to `${ALPINE_IMAGE:?err}` as a pre-model raw-dict
+  mutation in `generate_compose`, replacing the
+  `wait-for-resources-image.tpl` patch-template (deleted). Removed the
+  `declares_services`-gated templates conditional from `_compose_templates`
+  (the ALPINE_IMAGE check at score_compose.py:165 still consumes
+  `declares_services`, unchanged). Verified safe — see "Settled facts".
+
+## Moves (ordered by the agent's certainty the move is correct)
+
+### 1. Build the unified spine function [HIGH]
+
+One function in score.py owning `with builtin_patch_templates() +
+compiled_provisioners(...)` → init (inlined) → seed (`if is_k8s:`,
+inlined) → generate (inlined). Both pipelines call it. Templates passed
+in as a param — compose computes `[healthcheck, restart,
+gpu-cuda|gpu-rocm]` per bundle's `GPU_VARIANT`, k8s passes its fixed
+`[gpu-pod, scale-to-zero]`. The init command-building (currently
+`init_score_tool`), the generate invocation (currently inline in each
+pipeline), and the seed (currently `_seed_instance_suffixes`) become
+inline logic in the one function — no `init_score_tool` /
+`generate_score_tool` / `_seed_instance_suffixes` helpers. The context
+managers stay.
+
+This supersedes the earlier "settled step: lift generate_score_tool" —
+the generate code goes directly into the unified function inline, not via
+a transient helper that the unified function would then absorb.
+
+Test retarget: after this, all `bash` calls (init + generate) live in
+score.py. score_compose drops the `bash` import entirely; score_k8s
+narrows to `bash_output` (helm stays). The per-module `bash` patches
+(`score_compose_module.bash`, `score_k8s_module.bash`) retire at every
+site — those attrs no longer exist and `monkeypatch.setattr` would raise.
+The `score_module.bash` patches (already present from the init lift)
+intercept both init and generate through the same recorder. Keep
+`score_k8s_module.bash_output` patches (helm stays in score_k8s).
+
+This realizes the vision with two honest remaining differences
+(templates-param, seed-if-line). Correct regardless of whether those
+differences are later eliminated by moves 3–4.
+
+### 2. Seed: line, not fold [HIGH — open disagreement]
+
+The seed (`_seed_instance_suffixes`) writes deterministic instance
+suffixes to score-k8s's `state.yaml` between init (creates it) and
+generate (reads it) — pinning `InstanceSuffix` to `-` + first 10 hex of
+sha256(metadata.name) so regeneration is byte-stable. k8s-only by
+construction (compose has no instances).
+
+**Agent recommendation: keep it as one `if is_k8s:` line in the unified
+function.** Do NOT fold it into `init_score_tool` via a boolean (the
+operator's proposal). Reasons: `init_score_tool`'s job is "run `<tool>
+init`"; the seed is a devkit determinism concern (different
+reason-to-change); folding makes the name a lie and grows the signature
+with three k8s-only params (`state_dir`, `score_dir`, `workloads`) that
+are null/ignored in compose. The boolean-for-string swap is only
+motivated by the fold; keep the string. The one `if is_k8s:` line is
+honest — k8s genuinely has a determinism step compose doesn't, and the
+unified function is exactly where that substrate divergence should be
+visible.
+
+Open disagreement — the operator proposed the fold. Resolved in the
+line's favor in move 1's shape unless overruled.
+
+### 3. GPU collapse drill [LOW — open, operator's lead]
+
+The cuda/rocm pair: one annotation (`outernet.internal/gpu`), two compose
+templates (`gpu-cuda.tpl`, `gpu-rocm.tpl`), one registered, selected by
+the `GPU_VARIANT` build axis. The k8s analog (`gpu-pod.tpl`) is one
+template — proof the one-template shape is natural. The operator believes
+a consolidation key is unfound.
+
+Verify-bits constrain it hard (see "Settled facts"): the score-compose
+patch-template context is only `.Compose` + `.Workloads` — no env, no
+rendering vars. `GPU_VARIANT` is a rendering-level variable that never
+enters the template context. The only channel to thread it in is the
+annotation *value* at render time (compose-only; k8s has no
+`GPU_VARIANT`), which couples the shared `rendered_workloads` to the gpu
+annotation — a real cost. The agent does not believe this collapses
+cleanly; the operator does. Drill continues.
+
+If the key is found, the compose templates list becomes a fixed
+`[healthcheck, restart, gpu]` and the templates param is a plain
+per-substrate constant (no computation at the call site) — eliminating
+the templates difference. If not found, templates stay computed at the
+call site, which is already the move 1 shape; the unified function is
+correct either way.
+
+## Settled facts (do not re-derive)
+
+- **score-compose patch-template context** = `.Compose` (the generated
+  compose project) + `.Workloads` (map of workload name → Score spec).
+  No env, no rendering vars. Sprig helpers available. (Official docs,
+  docs.score.dev/score-compose/patch-templates.)
+- **score-k8s patch-template context** = `.Manifests` + `.Workloads` +
+  `.Namespace`.
+- **Patch templates fire after conversion/provisioning, before the final
+  file is written** — nothing post-patch touches the patched fields.
+- **score-compose synthesizes `wait-for-resources` with bare `image:
+  alpine`** (real generated output confirms it; synthesis in
+  internal/compose/convert.go). The gate emits only where a provisioner
+  carries services.
+- **The gate-pin move is byte-identical**: the post-pass already re-dumps
+  the whole ComposeDocument; rewriting the gate's image pre-model
+  produces the same artifact as the old patch-template rewrite.
 
 ## Standing constraints
 
 - Behavior-preserving: refusal messages byte-identical, artifact formats
   and verb CLI contracts unchanged. Test edits are import retargets and
-  construction swaps only — never fixtures or expectations.
+  construction swaps only — never fixtures or expectations. (The gate-pin
+  collapse was a mechanism change, not a unification step; its test edits
+  deleted the obsolete registration test and added an image assertion.)
 - One-way import law unchanged (`config_lock`/`dockerfiles` ← `config`;
   score.py ← config; the pipeline modules ← score.py).
 - score.py purity is WAIVED (decided 2026-11-02): `bash` may live in
   score.py; `init_score_tool` already imports it. Do not re-litigate.
 - Bash-patch law: the tests monkeypatch `bash` per-module. `bash` calls
-  in score.py are intercepted via `score_module.bash` patches. As of
-  commit 7793a07, every score-generation patch site carries both the
-  pipeline-module `bash` patch AND a `score_module.bash` patch (same
-  recorder). `monkeypatch.setattr` raises on an absent attr by default,
-  so lifting any further `bash` call out of the pipeline modules forces
-  retiring the now-dead pipeline-module patches (see Settled step).
+  in score.py are intercepted via `score_module.bash` patches. After move
+  1, every score-generation patch site carries only the `score_module.bash`
+  patch (the per-module pipeline patches retire). `monkeypatch.setattr`
+  raises on an absent attr by default.
 - Commit as you go; prose and code in separate commits; an AGENTS.md line
   a change invalidates updates in the same change.
-
-## Open — work through these first
-
-Two items are open and must be worked through with the operator before
-implementation. O1 is a consolidation drill on the two bits this session
-could not absorb; S1 is the shape decision, whose options O1's outcome
-may revise. Do not implement until both are closed.
-
-### O1 — Drill the two non-absorbing bits (templates, seed)
-
-The operator's read: these two resist every consolidation tried this
-session (run-in-both, hoist, plain input), but the operator believes a
-consolidation opportunity is still unfound and wants to keep drilling
-before accepting them as irreducible. They are NOT closed. The next
-session picks each up with the operator:
-
-**Templates.** A per-tool value, not a runnable step: compose computes
-`[healthcheck, restart, gate-pin?, gpu-cuda/rocm?]`; k8s is
-`[gpu-pod, scale-to-zero]`. Blockers found so far:
-- run-in-both fails: the union breaks one-annotation-one-template —
-  `outernet.internal/gpu` maps to gpu-cuda/rocm in compose AND gpu-pod
-  in k8s, so one annotation → two templates in a single tool.
-- hoist fails: compose's list needs `provisioners.declares_services`
-  (known only inside `compiled_provisioners`) and `bundle`.
-- plain input fails: same `declares_services` dependency.
-Only-known shapes: inline per-consumer (A) or a `templates_for` hook (B).
-Drill: is there a restructure (splitting always-registered vs conditional
-templates; deferring registration; rethinking what each tool registers)
-that lets one line serve both?
-
-**Seed.** `_seed_instance_suffixes` reads `<state_dir>/state.yaml` and
-writes score-k8s's `workloads.<name>.instance_suffix` schema, between
-init (creates state.yaml) and generate (reads it). Blockers found so far:
-- run-in-both fails: in compose, `<state_dir>` is `.score-compose/` —
-  `.score-compose/state.yaml` may not exist (read crashes) or has a
-  different schema (injects dead data / corrupts). Semantically void
-  (compose has no instances).
-- hoist fails: must sit between init and generate.
-- k8s-only by construction: instance suffixes are a score-k8s concept.
-Only-known shapes: inline k8s-only (A) or a `post_init` hook (B). Drill:
-is there a restructure (achieving instance-suffix determinism without the
-between-init-generate state write — recall D3's rejected fallback (b)
-parse-mutate-dump over manifest scalars; or making the state write a
-guarded no-op in compose; or folding the seed into init_score_tool
-conditionally) that lets it share a home?
-
-### S1 — Unification shape (decide after O1)
-
-The generate half (`with rendered_workloads(...) + bash generate`) is
-byte-identical apart from scalars and is agreed to lift (settled, below).
-The open question is how much further to push:
-
-- **A — parallel skeleton.** Lift `generate_score_tool` into score.py;
-  run the absorbable in-between bits (ALPINE check, rmtree, mkdir) in
-  both cases — they no-op in the other. Templates computation and the
-  seed remain as per-consumer lines (templates pre-init; seed post-init,
-  k8s-only). The two functions read as parallel skeletons with honest
-  differing lines. No callbacks. Carrying cost: the differing lines (two,
-  assuming O1 yields nothing and the ALPINE invariant holds — audit bit
-  1); `generate_score_tool` carries ~9 params (config, workloads,
-  rendering_vars, images, service_shas, tool, cwd, output,
-  tool_environment).
-
-- **B — full identity.** A `render_score_tool` in score.py owns
-  `compiled_provisioners` + init + generate and takes two hooks: a
-  `templates_for(builtin_templates, provisioners) -> list[Path]` (folding
-  the ALPINE check + templates for compose; k8s returns its fixed list)
-  and a `post_init` hook (k8s's seed). Call sites become byte-identical.
-  Carrying cost: a ~14-param function plus two callbacks; the no-closures
-  rule forces module-level callback functions reached via `partial`
-  (e.g. `templates_for=partial(_compose_prepare, bundle=bundle,
-  images=images)`), which re-scatters the differences into partials.
-  Partial hooking (one hook, one differing line) is possible mid-spectrum.
-
-The decision turns on: is "basically identical" (differing lines, no
-callbacks) acceptable, or must the call sites be byte-identical (hooks)?
-
-**A's differing-line count depends on O1 and on the ALPINE invariant
-(audit bit 1): if O1 finds a consolidation for templates or seed, A
-improves or full identity becomes achievable hooklessly — reweigh B
-then. If the ALPINE invariant fails, A gains a third differing line.**
-
-The next session works O1 and S1 with the operator, takes the rulings,
-then implements the corresponding branch. Do not implement until both
-are closed.
-
-## Audit (settled findings — do not re-derive)
-
-### Common spine (both functions)
-
-`with builtin_patch_templates() + compiled_provisioners(...)` →
-`init_score_tool(...)` → (in-between bits) → `with rendered_workloads(...)
-+ bash(f"{tool} generate ...")`. The wrapping, init, and generate are
-shared; the in-between bits and the per-bundle loop (compose, N
-renderings) vs single (k8s, 1 monolith) differ.
-
-### In-between bits — absorb status (run-in-both analysis)
-
-1. **ALPINE check** — absorbs, conditionally. In k8s,
-   `provisioners.declares_services` is False (the `services` field is the
-   compose-gate concept; k8s provisioner files don't carry it), so the
-   `and` short-circuits. Assumption: k8s provisioner files never author
-   `services` — unenforced. A k8s provisioner misusing `services` would
-   falsely demand ALPINE_IMAGE. Verify before relying on it; else the
-   check stays compose-only (a third differing line in A).
-2. **rmtree score_state** — absorbs. `.score-compose/` is absent in k8s,
-   `.score-k8s/` absent in compose; `ignore_errors=True` no-ops both ways.
-3. **output.parent.mkdir** — absorbs. `exist_ok=True` is idempotent.
-
-The two bits that did NOT absorb (templates, seed) are open for further
-drilling — see O1, not settled.
-
-### Generate half — settled: lift
-
-The `with rendered_workloads(...) + bash generate` is byte-identical
-apart from scalars. Lifting `generate_score_tool` into score.py is agreed
-(the init_score_tool lift under-delivered by leaving it inline).
-
-## Implementation
-
-### Settled step (either shape): lift generate_score_tool
-
-Add `generate_score_tool(tool, cwd, output, config, workloads,
-rendering_vars, images, service_shas, tool_environment)` to score.py,
-owning `with rendered_workloads(...) + bash(generate)`. Both pipeline
-files call it.
-
-Test retarget (consequence of moving the generate `bash` call into
-score.py): after this lift, score_compose calls `bash` directly nowhere,
-and score_k8s calls only `bash_output` (helm). So:
-
-- Drop the `bashrun.bash` import from score_compose entirely; narrow
-  score_k8s's to `from bashrun.bash import bash_output`.
-- Retire the `score_compose_module.bash` and `score_k8s_module.bash`
-  patches at every site — those attrs no longer exist and
-  `monkeypatch.setattr` would raise. The `score_module.bash` patches
-  (already present from the init lift) now intercept both init and
-  generate through the same recorder.
-- Keep `score_k8s_module.bash_output` patches (helm stays in score_k8s).
-
-Verify: `uv run pytest tests/test_score_generate.py` green.
-
-### If S1 = A (parallel skeleton)
-
-1. In each pipeline function, structure the `with compiled_provisioners`
-   block as: ALPINE check (both, no-op k8s) → templates (per-consumer) →
-   rmtree (both) → `init_score_tool` → seed (k8s only; compose omits) →
-   `output.parent.mkdir` (both) → `generate_score_tool`.
-2. Factor each consumer's templates into a `_<x>_templates(...)` helper
-   so the line reads `templates = _<x>_templates(...)` in both (parallel,
-   not identical).
-3. The two functions are now parallel skeletons differing on the
-   templates line and the seed line (three if the ALPINE invariant fails).
-
-### If S1 = B (full identity)
-
-1. Add `render_score_tool(tool, cwd, project_name, rendering, workloads,
-   rendering_vars, output, config, images, service_shas, tool_environment,
-   templates_for, post_init=None)` to score.py. It owns
-   `with builtin_patch_templates() + compiled_provisioners(...)`:
-   `templates = templates_for(builtin_templates, provisioners)` →
-   `init_score_tool(...)` → `post_init(...)` if set →
-   `generate_score_tool(...)`.
-2. compose call site (per bundle):
-   `render_score_tool(..., templates_for=partial(_compose_prepare,
-   bundle=bundle, images=images))`. `_compose_prepare` does the ALPINE
-   check and returns `_compose_templates(...)`.
-3. k8s call site:
-   `render_score_tool(..., templates_for=_k8s_templates,
-   post_init=partial(_seed_instance_suffixes, state_path, score_dir,
-   k8s.workloads))`.
-4. Module-level callback functions; `partial` bakes the consumer-specific
-   args (no closures).
-
-## Verify
-
-`uv run --locked scripts/preflight.py` (the full gate) green at session
-end; `uv run pytest tests/test_score_generate.py` green between steps.
 
 ## Out of scope
 
 - The pre-validation loops (compose probe-adapter/dev-toggles; k8s
   dev-toggles-on-k8s-only) stay at their consumers — different placement
   laws, not accretion.
-- The post-passes (compose ComposeDocument transforms; k8s chart
-  rendering + document sort) stay at their consumers — different
-  substrates.
+- The post-passes (compose ComposeDocument transforms — service-name
+  collapse, gate rename, edge-reserved check, bind inlining, gate image
+  pin; k8s chart rendering + document sort) stay at their consumers —
+  different substrates.
 - The bundle loop (compose N, k8s 1) stays — it is the spec.
+- The ALPINE_IMAGE check (score_compose.py:165, keyed on
+  `declares_services`) stays pre-generate at the compose consumer.
+
+## Verify
+
+`uv run pytest tests/test_score_generate.py` green between steps; `uv run
+ruff check`, `uv run ruff format --check`, `uv run basedpyright`, `uv run
+deptry src` green. `uv run --locked scripts/preflight.py` currently fails
+on a pre-existing ruff config issue (`lint.per-file-ignores` should be
+`lint.extend-per-file-ignores` in the repo's ruff extend layer) —
+unrelated to this work, reproduces on clean HEAD 5e5494d.
+
+## Cross-repo note
+
+`placeframe/stack/AGENTS.md:289` references "the devkit's built-in
+gate-pin template." It describes the released devkit placeframe currently
+pins, so it is accurate for placeframe today and goes stale only when
+placeframe upgrades its devkit pin past 09603db. Update then, not now.
