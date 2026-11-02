@@ -53,7 +53,7 @@ def _write_repo(
             values = root / "stack" / "score" / "k8s" / "values" / f"{chart}.yaml"
             values.parent.mkdir(parents=True, exist_ok=True)
             values.write_text("chart: {}\n", encoding="utf-8")
-    (root / "docker-devkit.yaml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    (root / "boatyard.yml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     if (base_images or charts) and not (root / LOCK_PATH).exists():
         (root / LOCK_PATH).write_text("", encoding="utf-8")
 
@@ -248,7 +248,7 @@ class TestDefaultTargets:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, RuntimeError)
-        assert "No docker-devkit.yaml" in str(result.exception)
+        assert "No boatyard.yml" in str(result.exception)
 
 
 class TestCellSelection:
@@ -884,7 +884,7 @@ class TestHostPlatform:
 
 class TestPushFlags:
     def _parse(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, arguments: list[str]) -> tuple[bool, str | None]:
-        (tmp_path / "docker-devkit.yaml").write_text(
+        (tmp_path / "boatyard.yml").write_text(
             yaml.safe_dump({"requires": ">=0.0", "repository": "ghcr.io/org/demo"}), encoding="utf-8"
         )
         monkeypatch.chdir(tmp_path)
@@ -913,7 +913,7 @@ class TestPushFlags:
         assert self._parse(tmp_path, monkeypatch, [f"--push-to={LOCAL_REGISTRY}"]) == (False, LOCAL_REGISTRY)
 
     def test_push_and_push_to_refuse_together(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        (tmp_path / "docker-devkit.yaml").write_text(
+        (tmp_path / "boatyard.yml").write_text(
             yaml.safe_dump({"requires": ">=0.0", "repository": "ghcr.io/org/demo"}), encoding="utf-8"
         )
         monkeypatch.chdir(tmp_path)

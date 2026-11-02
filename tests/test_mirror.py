@@ -22,7 +22,7 @@ def _write_config(root: Path, sections: dict[str, object] | None = None) -> None
     payload: dict[str, object] = {"requires": ">=0.0"}
     if sections is not None:
         payload.update(sections)
-    (root / "docker-devkit.yaml").write_text(
+    (root / "boatyard.yml").write_text(
         yaml.safe_dump(payload, default_flow_style=False, sort_keys=False), encoding="utf-8"
     )
 

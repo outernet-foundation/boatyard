@@ -57,7 +57,7 @@ def generate_score(
     bundles = config.compose_bundles() if config is not None else []
     if config is None or (not bundles and config.k8s is None):
         if not check:
-            raise RuntimeError("docker-devkit.yaml declares no local service entries and no k8s section")
+            raise RuntimeError("boatyard.yml declares no local service entries and no k8s section")
         print("no local service entries and no k8s section; nothing to check")
         return
     k8s_rendering = config.k8s is not None
@@ -128,7 +128,7 @@ def generate_artifacts(
 ) -> list[Path]:
     # Require the build keys, derive the tree tags, and load the lock.
     if not (config.repository or config.base_images):
-        raise ValueError("repository or base_images is required in docker-devkit.yaml")
+        raise ValueError("repository or base_images is required in boatyard.yml")
     root = config.root
     service_shas = dockerfiles.compute_service_shas(root, config.service_builds)
     lock_path = root / LOCK_PATH

@@ -35,7 +35,7 @@ from boatyard.dockerfiles import (
     service_sha_env,
 )
 
-DEFAULT_CONFIG_PATH = Path("docker-devkit.yaml")
+DEFAULT_CONFIG_PATH = Path("boatyard.yml")
 DEV_SENTINEL = "0.0.0.dev0"
 
 DEFAULT_MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
@@ -147,7 +147,7 @@ class Config(BaseModel):
         # Self-check the installed version.
         installed = importlib.metadata.version("boatyard")
         if installed != DEV_SENTINEL and not SpecifierSet(self.requires).contains(installed, prereleases=True):
-            raise ValueError(f"docker-devkit {installed} does not satisfy requires={self.requires!r}")
+            raise ValueError(f"boatyard {installed} does not satisfy requires={self.requires!r}")
         self.root = root
 
         # Resolve {uv} and {python} templates in base_images against the toolchain pins.
@@ -639,7 +639,7 @@ def _validation_error_text(error: ValidationError) -> str:
 
 def require_compose_stack(config: Config | None) -> Config:
     if config is None or not config.services:
-        raise ValueError("docker-devkit.yaml must exist and declare services")
+        raise ValueError("boatyard.yml must exist and declare services")
     return config
 
 

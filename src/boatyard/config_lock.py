@@ -7,7 +7,7 @@ from typing import Self
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 
-LOCK_PATH = Path("docker-devkit.lock")
+LOCK_PATH = Path("boatyard.lock.yml")
 
 PLATFORM_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$")
 

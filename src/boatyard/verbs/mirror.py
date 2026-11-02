@@ -17,7 +17,7 @@ def mirror() -> None:
     root = Path.cwd()
     config = Config.load(root)
     if config is None:
-        raise RuntimeError("a docker-devkit.yaml with base_images (or k8s.charts) is required to mirror")
+        raise RuntimeError("a boatyard.yml with base_images (or k8s.charts) is required to mirror")
     prefix = config.mirror_prefix
 
     lock = read_config_lock(root)

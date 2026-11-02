@@ -24,7 +24,7 @@ def _write_repo(root: Path, dockerfiles: dict[str, str], *, config: dict[str, An
         payload["repository"] = "ghcr.io/example"
     if config is not None:
         payload.update(config)
-    (root / "docker-devkit.yaml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    (root / "boatyard.yml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
 
 def _invoke_matrix(

@@ -73,7 +73,7 @@ class OciIndex(BaseModel):
 def run_lock(*, upgrade: bool = False, check: bool = False) -> None:
     config = Config.load(Path.cwd())
     if config is None:
-        print("no docker-devkit.yaml; no lock declarations to relock")
+        print("no boatyard.yml; no lock declarations to relock")
         return
     declared_charts = config.declared_charts
     if not config.base_images and not declared_charts:
@@ -236,7 +236,7 @@ def compose_env_entries(lock: ConfigLock, config: Config, environment: Mapping[s
     else:
         raise ValueError(f"platforms {config.platforms} are declared; {PLATFORM_VARIABLE}= must be named in .env")
     if platform is None and lock.images:
-        raise ValueError(f"{LOCK_PATH.as_posix()}: records image entries but docker-devkit.yaml declares no platforms")
+        raise ValueError(f"{LOCK_PATH.as_posix()}: records image entries but boatyard.yml declares no platforms")
     return env_entries(lock, platform)
 
 

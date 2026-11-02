@@ -38,7 +38,7 @@ def _tags(repo: Path, capfd: pytest.CaptureFixture[str], *services: str) -> list
 def repo(tmp_path: Path) -> Path:
     _init_repo(tmp_path)
     (tmp_path / ".dockerignore").write_text("*\n!workloads/\n", encoding="utf-8")
-    (tmp_path / "docker-devkit.yaml").write_text(
+    (tmp_path / "boatyard.yml").write_text(
         yaml.safe_dump({"requires": ">=0", "repository": "ghcr.io/org/demo"}), encoding="utf-8"
     )
     _write_service(tmp_path, "api")
@@ -104,4 +104,4 @@ class TestTreeTags:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, RuntimeError)
-        assert "no docker-devkit.yaml" in str(result.exception)
+        assert "no boatyard.yml" in str(result.exception)

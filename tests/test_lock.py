@@ -114,7 +114,7 @@ def _write_repo(
             values = root / "stack" / "score" / "k8s" / "values" / f"{chart}.yaml"
             values.parent.mkdir(parents=True, exist_ok=True)
             values.write_text("chart: {}\n", encoding="utf-8")
-    (root / "docker-devkit.yaml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    (root / "boatyard.yml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     if (base_images or charts) and not (root / LOCK_PATH).exists():
         (root / LOCK_PATH).write_text("", encoding="utf-8")
 
@@ -658,7 +658,7 @@ class TestComposeProjection:
     def test_compose_entries_refuse_image_entries_without_declared_platforms(self) -> None:
         config = _selection_config()
 
-        with pytest.raises(ValueError, match=r"records image entries but docker-devkit\.yaml declares no platforms"):
+        with pytest.raises(ValueError, match=r"records image entries but boatyard\.yml declares no platforms"):
             lock_module.compose_env_entries(_selection_lock(), config, {})
 
     def test_the_env_render_is_sorted_and_stable(self) -> None:

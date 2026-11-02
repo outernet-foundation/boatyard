@@ -257,7 +257,7 @@ class TestMarkerSubstrateResolution:
     def _compose_seam(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, platforms: list[str]) -> dict[str, str]:
         (tmp_path / "stack" / "score").mkdir(parents=True)
         (tmp_path / "stack" / "score" / "api.yaml").write_text("containers: {}\n", encoding="utf-8")
-        (tmp_path / "docker-devkit.lock").write_text(
+        (tmp_path / "boatyard.lock.yml").write_text(
             yaml.safe_dump({
                 "images": {
                     "LOKI_IMAGE": {

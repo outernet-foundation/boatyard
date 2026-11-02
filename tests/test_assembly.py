@@ -61,7 +61,7 @@ def _write_edge_tree(
     }
     if gateway is not None:
         payload["gateway"] = gateway
-    (tmp_path / "docker-devkit.yaml").write_text(
+    (tmp_path / "boatyard.yml").write_text(
         yaml.safe_dump(payload, default_flow_style=False, sort_keys=False),
         encoding="utf-8",
     )

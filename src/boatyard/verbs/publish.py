@@ -50,7 +50,7 @@ def publish_compose(
         if plan:
             print(json.dumps([]))
             return
-        raise RuntimeError("publishing requires local entries (workloads:) in docker-devkit.yaml")
+        raise RuntimeError("publishing requires local entries (workloads:) in boatyard.yml")
 
     if plan:
         entries = [{"bundle": entry.name} for entry in bundles]

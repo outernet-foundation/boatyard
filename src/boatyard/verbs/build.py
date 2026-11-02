@@ -31,7 +31,7 @@ def build(
     root = Path.cwd()
     config = Config.load(root)
     if config is None:
-        raise RuntimeError("No docker-devkit.yaml at the repo root")
+        raise RuntimeError("No boatyard.yml at the repo root")
 
     if push and push_to is not None:
         raise typer.BadParameter(

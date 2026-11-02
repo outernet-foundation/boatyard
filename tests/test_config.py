@@ -18,7 +18,7 @@ DIGEST = "sha256:" + "a" * 64
 
 
 def write_config(tmp_path: Path, payload: dict[str, object]) -> None:
-    (tmp_path / "docker-devkit.yaml").write_text(
+    (tmp_path / "boatyard.yml").write_text(
         yaml.safe_dump(payload, default_flow_style=False, sort_keys=False), encoding="utf-8"
     )
 
@@ -106,7 +106,7 @@ class TestRequires:
 
 
 def test_load_rejects_duplicate_keys(tmp_path: Path) -> None:
-    (tmp_path / "docker-devkit.yaml").write_text('requires: ">=0.1"\nrequires: ">=0.2"\n', encoding="utf-8")
+    (tmp_path / "boatyard.yml").write_text('requires: ">=0.1"\nrequires: ">=0.2"\n', encoding="utf-8")
 
     with pytest.raises(Exception, match=r"Duplicate key"):
         Config.load(tmp_path)
@@ -528,7 +528,7 @@ class TestK8sSection:
     def test_empty_section_rejected(self, tmp_path: Path) -> None:
         # strictyaml hands a bare section key an empty string, so an empty k8s section is
         # only spellable as the bare key — which refuses shape validation.
-        (tmp_path / "docker-devkit.yaml").write_text('requires: ">=0.1"\nk8s:\n', encoding="utf-8")
+        (tmp_path / "boatyard.yml").write_text('requires: ">=0.1"\nk8s:\n', encoding="utf-8")
 
         with pytest.raises(ValidationError, match="Input should be a valid dictionary"):
             Config.load(tmp_path)

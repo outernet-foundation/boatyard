@@ -50,9 +50,7 @@ def up(
 
     # Refuse --build in a repo with no build declarations.
     if build and not (config.repository or config.base_images):
-        raise typer.BadParameter(
-            "--build requires build declarations (repository or base_images) in docker-devkit.yaml"
-        )
+        raise typer.BadParameter("--build requires build declarations (repository or base_images) in boatyard.yml")
 
     # Select, render, and validate the invocation.
     with ExitStack() as stack:
