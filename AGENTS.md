@@ -30,10 +30,10 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 
 ## Modules
 
-`config.py` schema + record + sha machinery; `config_lock.py` lock schema + parsers; `lock.py` lock engine + projections; `assembly.py` resolve/render/validate; `bake.py` build pipeline; `score.py` score generation; `publish.py` publish
-  preparation; `documents.py` shared typed lenses; `crane.py` pinned crane installer; `optional_value_option.py` typer `--push` seam (`# noqa-wrapper:` boundary); `verbs/*` one module per command. Model modules run root → leaves: root
-  record first (`RootModel` subscripts quote forward refs; the one inversion is a parent whose field default constructs the child), functions callers-before-callees; imports absolute; `config_lock` ← `config` one-way. Also in `config.py`:
-  `is_mapping`/`is_list`, `EDGE_SERVICE_NAME`, `chart_lock_key`, `service_sha_env`; shell-outs via bashrun. Lifecycle stays a separate package from codegen (disjoint dependency surfaces — bundling would force stack-only consumers to install `sqlacodegen`, `psycopg`, `datamodel-code-generator`).
+`config.py` schema + sha machinery; `dockerfiles.py` Dockerfile declarations (`ServiceBuild`, `derive_services`); `config_lock.py` lock schema + parsers; `lock.py` lock engine + projections; `assembly.py` resolve/render/validate; `bake.py` build pipeline; `score.py` score generation;
+  `publish.py` publish preparation; `documents.py` shared typed lenses; `crane.py` pinned crane installer; `optional_value_option.py` typer `--push` seam (`# noqa-wrapper:` boundary); `verbs/*` one module per command. Model modules run root → leaves: root record first
+  (`RootModel` subscripts quote forward refs; the one inversion is a parent whose field default constructs the child), functions callers-before-callees; imports absolute; `config_lock`/`dockerfiles` ← `config` one-way. Also in `config.py`: `is_mapping`/`is_list`,
+  `EDGE_SERVICE_NAME`, `chart_lock_key`, `service_sha_env`; shell-outs via bashrun. Lifecycle stays a separate package from codegen (disjoint dependency surfaces — bundling would force stack-only consumers to install `sqlacodegen`, `psycopg`, `datamodel-code-generator`).
 
 ## Config schema
 
@@ -59,7 +59,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 
 ## Service derivation
 
-- The Dockerfile-derived build set computes inside `load_config`, never authored: Dockerfile dirs one level below a top-level dir = services (spanning several top-level dirs refuses); context edges from bare-identifier `FROM`s naming a
+- The Dockerfile-derived build set computes in `dockerfiles.py`'s `derive_services` (called from `load_config`), never authored: Dockerfile dirs one level below a top-level dir = services (spanning several top-level dirs refuses); context edges from bare-identifier `FROM`s naming a
   sibling (stage names skipped); a literal `FROM` or slash-bearing `COPY --from=` refuses (base images ride as build args); `ARG <axis>` fans over the axis's declared values, dependents inherit the base's cells exactly (independent axes
   over fanned bases, disagreeing parents, cycles refuse); `ARG {SERVICE}_SHA` declares the stamp receiver; a genuine dev stage = an `AS dev` among several stages — single-stage `AS dev` names the published image.
 - `.dockerignore` (where images build locally) = the allowlist the sha machinery hashes over `git ls-tree HEAD`; an empty service set returns `{}` without touching git.
