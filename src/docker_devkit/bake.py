@@ -10,17 +10,19 @@ from tempfile import TemporaryDirectory
 from typing import Any, Self
 
 import typer
+import yaml
 from bashrun.bash import bash, bash_check, bash_output
 from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, model_validator
 
-from docker_devkit.config import DockerDevkitConfig, load_config
+from docker_devkit.config import DockerDevkitConfig, ServiceBuild, load_config, service_sha_env
 from docker_devkit.lock import env_entries, write_lock
-from docker_devkit.config import ServiceBuild
 
 
 METADATA_PATH = Path("metadata.json")
 
 MIN_KEEP_STORAGE_GB = 60
+
+type BakeValue = str | list[str] | dict[str, str]
 
 
 class BakedImage(BaseModel):
@@ -200,7 +202,49 @@ def run_build(
     written = write_lock(config)
     os.environ.update(env_entries(written))
 
-    rendered = config.render_bake(push=pushing, host=host, destination=destination, dev=dev)
+    # The deterministic per-run bake file: authored key order, byte-identical for identical
+    # configs; tags and cache refs root under the destination when one is given, else the
+    # config's repository — one law for both push destinations. Bake validates its own
+    # input by failing on it — no document model sits behind the render.
+    namespace = destination if destination is not None else config.repository
+    services: dict[str, dict[str, dict[str, BakeValue]]] = {}
+    for service in config.service_builds.values():
+        for target, variant in service.target_variants:
+            args: dict[str, str] = {key: f"${{{key}:-}}" for key in config.base_images}
+            if variant is not None:
+                assert service.axis is not None
+                args[service.axis] = variant
+            args.update({sha: f"${{{sha}:?err}}" for sha in service.sha_args})
+            build: dict[str, BakeValue] = {"dockerfile": service.dockerfile}
+            if dev:
+                build["target"] = "dev"
+            if config.platforms:
+                # A --load run writes a single arch, so a multi-arch declaration collapses
+                # to the host; a single declared platform rides through in both modes.
+                build["platforms"] = [host] if not pushing and len(config.platforms) > 1 else list(config.platforms)
+            build["args"] = args
+            if dev:
+                # The dev tag is per service, not per target: whichever cell a host
+                # builds, the overlay references one {repository}/{service}:dev image.
+                build["tags"] = [f"{namespace}/{service.name}:dev"]
+            else:
+                build["tags"] = [
+                    f"{namespace}/{target}:latest",
+                    f"{namespace}/{target}:${{{service_sha_env(service.name)}}}",
+                ]
+            if service.contexts:
+                build["additional_contexts"] = {
+                    context: f"target:{context}-{variant}" if variant is not None else f"target:{context}"
+                    for context in service.contexts
+                }
+            if pushing:
+                cache = f"{namespace}/build-cache"
+                build["cache_to"] = [
+                    f"type=registry,ref={cache}:{target},mode=max,image-manifest=true,oci-mediatypes=true"
+                ]
+                build["cache_from"] = [f"type=registry,ref={cache}:{target}"]
+            services[target] = {"build": build}
+    rendered = yaml.safe_dump({"services": services}, sort_keys=False)
 
     # Drop stale metadata so the coverage check cannot pass against a previous run; the
     # file left in the working directory after the run is the shelf handoff the toolkit's

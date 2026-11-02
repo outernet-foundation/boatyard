@@ -9,7 +9,6 @@ from tempfile import TemporaryDirectory
 from typing import Literal, NamedTuple, Self, TypeIs
 
 import pathspec
-import yaml
 from bashrun.bash import bash, bash_output
 from packaging.specifiers import SpecifierSet
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -69,8 +68,6 @@ BUILD_ARG_REFERENCE_PATTERN = re.compile(r"^\$\{[A-Za-z0-9_]+\}$")
 # The compose-edge platform selector, read from the merged shell-over-.env view (the
 # COMPOSE_PROFILES precedence); never host introspection.
 PLATFORM_VARIABLE = "PLATFORM"
-
-type BakeValue = str | list[str] | dict[str, str]
 
 Target = Literal["both", "compose", "k8s"]
 
@@ -373,51 +370,6 @@ class DockerDevkitConfig(BaseModel):
             elif not entry.remote:
                 bundles.append(ComposeBundle(name, self.bundle_output(name), list(entry.workloads), dict(entry.vars)))
         return bundles
-
-    def render_bake(self, *, push: bool, host: str, destination: str | None = None, dev: bool = False) -> str:
-        # The per-run temp bake file: bake validates its own input by failing on it, so no
-        # document model sits behind the render. Identical configs render byte-identical
-        # files. Tags and cache refs root under the destination when one is given, else
-        # the config's repository — one law for both push destinations.
-        namespace = destination if destination is not None else self.repository
-        services: dict[str, dict[str, dict[str, BakeValue]]] = {}
-        for service in self.service_builds.values():
-            for target, variant in service.target_variants:
-                args: dict[str, str] = {key: f"${{{key}:-}}" for key in self.base_images}
-                if variant is not None:
-                    assert service.axis is not None
-                    args[service.axis] = variant
-                args.update({sha: f"${{{sha}:?err}}" for sha in service.sha_args})
-                build: dict[str, BakeValue] = {"dockerfile": service.dockerfile}
-                if dev:
-                    build["target"] = "dev"
-                if self.platforms:
-                    # A --load run writes a single arch, so a multi-arch declaration collapses
-                    # to the host; a single declared platform rides through in both modes.
-                    build["platforms"] = [host] if not push and len(self.platforms) > 1 else list(self.platforms)
-                build["args"] = args
-                if dev:
-                    # The dev tag is per service, not per target: whichever cell a host
-                    # builds, the overlay references one {repository}/{service}:dev image.
-                    build["tags"] = [f"{namespace}/{service.name}:dev"]
-                else:
-                    build["tags"] = [
-                        f"{namespace}/{target}:latest",
-                        f"{namespace}/{target}:${{{service_sha_env(service.name)}}}",
-                    ]
-                if service.contexts:
-                    build["additional_contexts"] = {
-                        context: f"target:{context}-{variant}" if variant is not None else f"target:{context}"
-                        for context in service.contexts
-                    }
-                if push:
-                    cache = f"{namespace}/build-cache"
-                    build["cache_to"] = [
-                        f"type=registry,ref={cache}:{target},mode=max,image-manifest=true,oci-mediatypes=true"
-                    ]
-                    build["cache_from"] = [f"type=registry,ref={cache}:{target}"]
-                services[target] = {"build": build}
-        return yaml.safe_dump({"services": services}, sort_keys=False)
 
     def tool_requirements(self, target: Target) -> list[ToolRequirement]:
         # Fetch release binaries rather than go install, since score-spec tags are not valid

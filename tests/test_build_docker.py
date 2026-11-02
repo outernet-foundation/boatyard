@@ -11,9 +11,7 @@ from typer.testing import CliRunner
 
 from docker_devkit import bake as bake_module
 from docker_devkit import config as config_module
-from docker_devkit.config import DockerDevkitConfig
 from docker_devkit.lock import UpstreamManifests
-from docker_devkit.config import ServiceBuild
 from docker_devkit.config_lock import LOCK_PATH
 from docker_devkit.verbs import build
 
@@ -584,57 +582,38 @@ class TestBakeSeesLockValues:
         assert probe.uv_image == f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{DIGEST_A}"
 
 
-def _render_config(
-    services: dict[str, ServiceBuild],
-    *,
-    repository: str | None = REPOSITORY,
-    base_images: dict[str, str] | None = None,
-    platforms: list[str] | None = None,
-) -> DockerDevkitConfig:
-    config = DockerDevkitConfig.model_construct(
-        requires=">=0",
-        repository=repository,
-        base_images=base_images or {},
-        platforms=platforms or [],
-    )
-    config.service_builds = services
-    return config
-
-
 def _rendered_services(rendered: str) -> dict[str, Any]:
     return yaml.safe_load(rendered)["services"]
 
 
 class TestRenderBakeDeterminism:
-    def test_identical_configs_render_byte_identical_files(self):
-        def build() -> DockerDevkitConfig:
-            return _render_config(
-                {
-                    "api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile"),
-                    "localizer": ServiceBuild(
-                        name="localizer",
-                        dockerfile="workloads/localizer/Dockerfile",
-                        contexts=["neural-networks-base"],
-                        axis="TORCH_DEVICE",
-                        variants=["cuda", "rocm"],
-                        sha_args=["LOCALIZER_SHA"],
-                    ),
-                },
-                base_images={"UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"},
-            )
-
-        assert build().render_bake(push=False, host="linux/amd64") == build().render_bake(
-            push=False, host="linux/amd64"
+    def test_identical_configs_render_byte_identical_files(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr("docker_devkit.lock.resolve_remote_manifests", _fixed_manifests)
+        first = _prepare(
+            monkeypatch,
+            tmp_path,
+            [],
+            base_images={"UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"},
+            variants=TORCH_AXIS,
         )
+        second = _prepare(
+            monkeypatch,
+            tmp_path,
+            [],
+            base_images={"UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"},
+            variants=TORCH_AXIS,
+        )
+
+        assert first.rendered == second.rendered
 
 
 class TestRenderBakeTagDerivation:
-    def test_unfanned_service_carries_one_target_with_latest_and_sha_tags(self):
-        services = _rendered_services(
-            _render_config({"api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile")}).render_bake(
-                push=False, host="linux/amd64"
-            )
-        )
+    def test_unfanned_service_carries_one_target_with_latest_and_sha_tags(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        recorder = _prepare(monkeypatch, tmp_path, [], dockerfiles={"api": EXTERNAL})
+
+        services = _rendered_services(recorder.rendered)
 
         assert list(services) == ["api"]
         assert services["api"]["build"]["tags"] == [
@@ -642,17 +621,12 @@ class TestRenderBakeTagDerivation:
             f"{REPOSITORY}/api:${{API_SHA}}",
         ]
 
-    def test_variant_axes_derive_per_cell_targets_sharing_one_sha_env(self):
-        services = _rendered_services(
-            _render_config({
-                "localizer": ServiceBuild(
-                    name="localizer",
-                    dockerfile="workloads/localizer/Dockerfile",
-                    axis="TORCH_DEVICE",
-                    variants=["cuda", "rocm"],
-                )
-            }).render_bake(push=False, host="linux/amd64")
-        )
+    def test_variant_axes_derive_per_cell_targets_sharing_one_sha_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        recorder = _prepare(monkeypatch, tmp_path, [], dockerfiles={"localizer": FANNED}, variants=TORCH_AXIS)
+
+        services = _rendered_services(recorder.rendered)
 
         assert list(services) == ["localizer-cuda", "localizer-rocm"]
         assert services["localizer-cuda"]["build"]["tags"] == [
@@ -666,69 +640,59 @@ class TestRenderBakeTagDerivation:
 
 
 class TestRenderBakeArgs:
-    def test_every_base_image_key_is_injected_on_every_service(self):
-        services = _rendered_services(
-            _render_config(
-                {"api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile")},
-                base_images={"UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:0.12.15", "ALPINE_IMAGE": "alpine:3.20"},
-            ).render_bake(push=False, host="linux/amd64")
+    def test_every_base_image_key_is_injected_on_every_service(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr("docker_devkit.lock.resolve_remote_manifests", _fixed_manifests)
+        recorder = _prepare(
+            monkeypatch,
+            tmp_path,
+            [],
+            dockerfiles={"api": EXTERNAL},
+            base_images={"UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:0.12.15", "ALPINE_IMAGE": "alpine:3.20"},
         )
+
+        services = _rendered_services(recorder.rendered)
 
         assert services["api"]["build"]["args"] == {
             "UV_BASE_IMAGE": "${UV_BASE_IMAGE:-}",
             "ALPINE_IMAGE": "${ALPINE_IMAGE:-}",
         }
 
-    def test_sha_args_render_only_for_declaring_dockerfiles(self):
-        services = _rendered_services(
-            _render_config({
-                "api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile"),
-                "localizer": ServiceBuild(
-                    name="localizer",
-                    dockerfile="workloads/localizer/Dockerfile",
-                    sha_args=["LOCALIZER_SHA"],
-                ),
-            }).render_bake(push=False, host="linux/amd64")
+    def test_sha_args_render_only_for_declaring_dockerfiles(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        recorder = _prepare(
+            monkeypatch,
+            tmp_path,
+            [],
+            dockerfiles={
+                "api": EXTERNAL,
+                "localizer": "ARG PY_IMAGE\nARG LOCALIZER_SHA\nFROM ${PY_IMAGE}\n",
+            },
         )
+
+        services = _rendered_services(recorder.rendered)
 
         assert "LOCALIZER_SHA" not in services["api"]["build"]["args"]
         assert services["localizer"]["build"]["args"] == {"LOCALIZER_SHA": "${LOCALIZER_SHA:?err}"}
 
-    def test_declared_values_reach_the_rendered_axis_arg(self):
-        services = _rendered_services(
-            _render_config({
-                "localizer": ServiceBuild(
-                    name="localizer",
-                    dockerfile="workloads/localizer/Dockerfile",
-                    axis="TORCH_DEVICE",
-                    variants=["cuda", "rocm"],
-                )
-            }).render_bake(push=False, host="linux/amd64")
-        )
+    def test_declared_values_reach_the_rendered_axis_arg(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        recorder = _prepare(monkeypatch, tmp_path, [], dockerfiles={"localizer": FANNED}, variants=TORCH_AXIS)
+
+        services = _rendered_services(recorder.rendered)
 
         assert services["localizer-cuda"]["build"]["args"]["TORCH_DEVICE"] == "cuda"
         assert services["localizer-rocm"]["build"]["args"]["TORCH_DEVICE"] == "rocm"
 
 
 class TestRenderBakeContexts:
-    def test_contexts_render_target_prefixed_and_cell_matched(self):
-        services = _rendered_services(
-            _render_config({
-                "neural-networks-base": ServiceBuild(
-                    name="neural-networks-base",
-                    dockerfile="workloads/neural-networks-base/Dockerfile",
-                    axis="TORCH_DEVICE",
-                    variants=["cuda", "rocm"],
-                ),
-                "localizer": ServiceBuild(
-                    name="localizer",
-                    dockerfile="workloads/localizer/Dockerfile",
-                    contexts=["neural-networks-base"],
-                    axis="TORCH_DEVICE",
-                    variants=["cuda", "rocm"],
-                ),
-            }).render_bake(push=False, host="linux/amd64")
+    def test_contexts_render_target_prefixed_and_cell_matched(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        recorder = _prepare(
+            monkeypatch,
+            tmp_path,
+            [],
+            dockerfiles={"neural-networks-base": FANNED, "localizer": DEPENDENT},
+            variants=TORCH_AXIS,
         )
+
+        services = _rendered_services(recorder.rendered)
 
         assert services["localizer-cuda"]["build"]["additional_contexts"] == {
             "neural-networks-base": "target:neural-networks-base-cuda"
@@ -737,29 +701,30 @@ class TestRenderBakeContexts:
             "neural-networks-base": "target:neural-networks-base-rocm"
         }
 
-    def test_unfanned_context_references_the_bare_target(self):
-        services = _rendered_services(
-            _render_config({
-                "base": ServiceBuild(name="base", dockerfile="workloads/base/Dockerfile"),
-                "app": ServiceBuild(name="app", dockerfile="workloads/app/Dockerfile", contexts=["base"]),
-            }).render_bake(push=False, host="linux/amd64")
+    def test_unfanned_context_references_the_bare_target(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        recorder = _prepare(
+            monkeypatch,
+            tmp_path,
+            [],
+            dockerfiles={"app": "FROM base\n", "base": EXTERNAL},
         )
+
+        services = _rendered_services(recorder.rendered)
 
         assert services["app"]["build"]["additional_contexts"] == {"base": "target:base"}
 
 
 class TestRenderBakeCache:
-    def test_push_mode_renders_registry_cache_refs_per_target(self):
-        services = _rendered_services(
-            _render_config({
-                "localizer": ServiceBuild(
-                    name="localizer",
-                    dockerfile="workloads/localizer/Dockerfile",
-                    axis="TORCH_DEVICE",
-                    variants=["cuda"],
-                )
-            }).render_bake(push=True, host="linux/amd64")
+    def test_push_mode_renders_registry_cache_refs_per_target(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        recorder = _prepare(
+            monkeypatch,
+            tmp_path,
+            ["--push"],
+            dockerfiles={"localizer": FANNED},
+            variants={"TORCH_DEVICE": ["cuda"]},
         )
+
+        services = _rendered_services(recorder.rendered)
 
         assert services["localizer-cuda"]["build"]["cache_to"] == [
             (
@@ -771,17 +736,16 @@ class TestRenderBakeCache:
             f"type=registry,ref={REPOSITORY}/build-cache:localizer-cuda"
         ]
 
-    def test_a_destination_re_roots_tags_and_cache_refs(self):
-        services = _rendered_services(
-            _render_config({
-                "localizer": ServiceBuild(
-                    name="localizer",
-                    dockerfile="workloads/localizer/Dockerfile",
-                    axis="TORCH_DEVICE",
-                    variants=["cuda"],
-                )
-            }).render_bake(push=True, host="linux/amd64", destination=LOCAL_REGISTRY)
+    def test_a_destination_re_roots_tags_and_cache_refs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        recorder = _prepare(
+            monkeypatch,
+            tmp_path,
+            ["--push", LOCAL_REGISTRY],
+            dockerfiles={"localizer": FANNED},
+            variants={"TORCH_DEVICE": ["cuda"]},
         )
+
+        services = _rendered_services(recorder.rendered)
 
         build_block = services["localizer-cuda"]["build"]
         assert build_block["tags"] == [
@@ -796,100 +760,104 @@ class TestRenderBakeCache:
         ]
         assert build_block["cache_from"] == [f"type=registry,ref={LOCAL_REGISTRY}/build-cache:localizer-cuda"]
 
-    def test_load_mode_renders_no_cache_refs(self):
-        services = _rendered_services(
-            _render_config({"api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile")}).render_bake(
-                push=False, host="linux/amd64"
-            )
-        )
+    def test_load_mode_renders_no_cache_refs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        recorder = _prepare(monkeypatch, tmp_path, [], dockerfiles={"api": EXTERNAL})
+
+        services = _rendered_services(recorder.rendered)
 
         assert "cache_to" not in services["api"]["build"]
         assert "cache_from" not in services["api"]["build"]
 
 
 class TestRenderBakeDev:
-    def test_dev_targets_the_dev_stage_under_one_service_dev_tag(self):
-        services = _rendered_services(
-            _render_config({"api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile")}).render_bake(
-                push=False, host="linux/amd64", dev=True
-            )
-        )
+    def test_dev_targets_the_dev_stage_under_one_service_dev_tag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        recorder = _prepare(monkeypatch, tmp_path, ["--dev"], dockerfiles={"api": DEV_STAGE})
+
+        services = _rendered_services(recorder.rendered)
 
         assert services["api"]["build"]["target"] == "dev"
         assert services["api"]["build"]["tags"] == [f"{REPOSITORY}/api:dev"]
 
-    def test_axis_cells_share_the_service_dev_tag(self):
-        services = _rendered_services(
-            _render_config({
-                "localizer": ServiceBuild(
-                    name="localizer",
-                    dockerfile="workloads/localizer/Dockerfile",
-                    axis="TORCH_DEVICE",
-                    variants=["cuda", "rocm"],
-                )
-            }).render_bake(push=False, host="linux/amd64", dev=True)
+    def test_axis_cells_share_the_service_dev_tag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        recorder = _prepare(
+            monkeypatch,
+            tmp_path,
+            ["--dev"],
+            dockerfiles={"localizer": "ARG PY_IMAGE\nARG TORCH_DEVICE\nFROM ${PY_IMAGE} AS base\nFROM base AS dev\n"},
+            variants=TORCH_AXIS,
         )
+
+        services = _rendered_services(recorder.rendered)
 
         assert services["localizer-cuda"]["build"]["tags"] == [f"{REPOSITORY}/localizer:dev"]
         assert services["localizer-rocm"]["build"]["tags"] == [f"{REPOSITORY}/localizer:dev"]
 
 
 class TestRenderBakePlatforms:
-    def test_multi_arch_declaration_collapses_to_the_host_in_load_mode(self):
-        services = _rendered_services(
-            _render_config(
-                {"api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile")},
-                platforms=["linux/amd64", "linux/arm64"],
-            ).render_bake(push=False, host="linux/amd64")
+    def test_multi_arch_declaration_collapses_to_the_host_in_load_mode(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        recorder = _prepare(
+            monkeypatch,
+            tmp_path,
+            [],
+            dockerfiles={"api": EXTERNAL},
+            platforms=["linux/amd64", "linux/arm64"],
         )
+
+        services = _rendered_services(recorder.rendered)
 
         assert services["api"]["build"]["platforms"] == ["linux/amd64"]
 
-    def test_multi_arch_declaration_rides_through_in_push_mode(self):
-        services = _rendered_services(
-            _render_config(
-                {"api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile")},
-                platforms=["linux/amd64", "linux/arm64"],
-            ).render_bake(push=True, host="linux/amd64")
+    def test_multi_arch_declaration_rides_through_in_push_mode(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        recorder = _prepare(
+            monkeypatch,
+            tmp_path,
+            ["--push"],
+            dockerfiles={"api": EXTERNAL},
+            platforms=["linux/amd64", "linux/arm64"],
         )
+
+        services = _rendered_services(recorder.rendered)
 
         assert services["api"]["build"]["platforms"] == ["linux/amd64", "linux/arm64"]
 
-    def test_single_declared_platform_rides_through_in_load_mode(self):
-        services = _rendered_services(
-            _render_config(
-                {"zed-capture": ServiceBuild(name="zed-capture", dockerfile="workloads/zed-capture/Dockerfile")},
-                platforms=["linux/arm64"],
-            ).render_bake(push=False, host="linux/amd64")
+    def test_single_declared_platform_rides_through_in_load_mode(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        recorder = _prepare(
+            monkeypatch,
+            tmp_path,
+            ["--targets", "zed-capture"],
+            dockerfiles={"zed-capture": EXTERNAL},
+            platforms=["linux/arm64"],
         )
+
+        services = _rendered_services(recorder.rendered)
 
         assert services["zed-capture"]["build"]["platforms"] == ["linux/arm64"]
 
-    def test_undeclared_platforms_render_no_key(self):
-        services = _rendered_services(
-            _render_config({"api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile")}).render_bake(
-                push=False, host="linux/amd64"
-            )
-        )
+    def test_undeclared_platforms_render_no_key(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        recorder = _prepare(monkeypatch, tmp_path, [], dockerfiles={"api": EXTERNAL})
+
+        services = _rendered_services(recorder.rendered)
 
         assert "platforms" not in services["api"]["build"]
 
 
-def test_render_bake_carries_only_bake_read_keys():
-    rendered = _render_config(
-        {
-            "api": ServiceBuild(
-                name="api",
-                dockerfile="workloads/api/Dockerfile",
-                contexts=["base"],
-                sha_args=["API_SHA"],
-            ),
-            "base": ServiceBuild(name="base", dockerfile="workloads/base/Dockerfile"),
-        },
+def test_render_bake_carries_only_bake_read_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("docker_devkit.lock.resolve_remote_manifests", _fixed_manifests)
+    recorder = _prepare(
+        monkeypatch,
+        tmp_path,
+        [],
+        dockerfiles={"api": "FROM base\nARG API_SHA\n", "base": EXTERNAL},
         base_images={"UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"},
-    ).render_bake(push=False, host="linux/amd64")
+    )
 
-    document = yaml.safe_load(rendered)
+    document = yaml.safe_load(recorder.rendered)
     assert list(document) == ["services"]
     for build_block in (service["build"] for service in document["services"].values()):
         assert set(build_block) <= {
@@ -901,10 +869,6 @@ def test_render_bake_carries_only_bake_read_keys():
             "cache_to",
             "cache_from",
         }
-
-
-def test_render_bake_with_no_services_renders_an_empty_document():
-    assert _rendered_services(_render_config({}).render_bake(push=False, host="linux/amd64")) == {}
 
 
 class TestHostPlatform:
