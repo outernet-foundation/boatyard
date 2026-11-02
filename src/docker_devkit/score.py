@@ -29,20 +29,22 @@ from docker_devkit import dockerfiles
 from docker_devkit.compose import merged_environment
 from docker_devkit.config import (
     COMPOSE_HOLE,
+    CONSUMER_INTERPOLATED_ANNOTATION,
     DEV_TOGGLES_ANNOTATION,
     EDGE_SERVICE_NAME,
     ENV_NAME_PATTERN,
     K8sConfig,
     PLACEHOLDER,
+    PROBE_ADAPTER_ANNOTATION,
     Target,
     WorkloadDocument,
     Yaml,
     double_dollars,
     is_list,
     is_mapping,
-    parse_dev_toggles,
     Config,
     chart_lock_key,
+    validate,
 )
 from docker_devkit.config_lock import LOCK_PATH, ConfigLock, parse_config_lock
 from docker_devkit.lock import compose_env_entries, env_entries
@@ -123,12 +125,6 @@ GPU_POD_TEMPLATE = "gpu-pod.tpl"
 SCALE_TO_ZERO_TEMPLATE = "scale-to-zero.tpl"
 GPU_COMPOSE_TEMPLATES = {"cuda": "gpu-cuda.tpl", "rocm": "gpu-rocm.tpl"}
 
-PROBE_ADAPTER_ANNOTATION = "outernet.internal/probe-adapter"
-PROBE_ADAPTERS = ("python-urllib", "bash-http")
-RESTART_ANNOTATION = "outernet.internal/restart"
-COMPOSE_RESTART_POLICIES = ("no", "always", "on-failure", "unless-stopped")
-CONSUMER_INTERPOLATED_ANNOTATION = "outernet.internal/consumer-interpolated"
-
 STORAGE_CLASS_VAR = "SCORE_STORAGE_CLASS"
 CLOUD_STORAGE_CLASS = "hcloud-volumes"
 LOCAL_STORAGE_CLASS = "local-path"
@@ -167,20 +163,16 @@ class ManifestDocument(BaseModel):
 class SecretsDeclaration(RootModel[dict[str, "SecretKey"]]):
     @model_validator(mode="before")
     @classmethod
-    def _coerce_string_specs(cls, value: object, info: ValidationInfo) -> object:
-        context: dict[str, object] = info.context or {}
-        source = context.get("source", "the secrets declaration")
+    def _coerce_string_specs(cls, value: Yaml) -> Yaml:
         if not is_mapping(value) or not value:
-            raise ValueError(f"{source}: must be a non-empty KEY: description mapping")
+            raise ValueError("must be a non-empty KEY: description mapping")
         return {name: ({"description": spec} if isinstance(spec, str) else spec) for name, spec in value.items()}
 
     @model_validator(mode="after")
-    def _require_all_caps_keys(self, info: ValidationInfo) -> Self:
-        context: dict[str, object] = info.context or {}
-        source = context.get("source", "the secrets declaration")
+    def _require_all_caps_keys(self) -> Self:
         for name in self.root:
             if not ENV_NAME_PATTERN.match(name):
-                raise ValueError(f"{source}: {name!r} must be an ALL_CAPS key")
+                raise ValueError(f"{name!r} must be an ALL_CAPS key")
         return self
 
     def validate_consumed(self, consumed: set[str], rendering: str, source: str) -> None:
@@ -233,16 +225,12 @@ class AuthoredProvisioner(BaseModel):
 
     @field_validator(*STRING_FORM_FIELDS, mode="before")
     @classmethod
-    def _reject_string_form(cls, value: object, info: ValidationInfo) -> object:
+    def _reject_string_form(cls, value: Yaml, info: ValidationInfo) -> Yaml:
         if not isinstance(value, str):
             return value
 
         shape = "list" if info.field_name == "manifests" else "mapping"
-        context: dict[str, object] = info.context or {}
-        raise ValueError(
-            f"{context.get('name', 'the provisioner file')}: "
-            f"{info.field_name} is in score's compiled string form; a {shape} is required"
-        )
+        raise ValueError(f"{info.field_name} is in score's compiled string form; a {shape} is required")
 
 
 class CompiledProvisioners(NamedTuple):
@@ -293,10 +281,7 @@ def generate_artifacts(config: Config, target: Target, local: bool) -> list[Path
         declaration_path = root / SECRETS_FILE
         k8s_secret = f"{config.project_name}-secrets"
 
-        declaration = SecretsDeclaration.model_validate(
-            yaml.safe_load(declaration_path.read_text(encoding="utf-8")),
-            context={"source": declaration_path.as_posix()},
-        )
+        declaration = validate(SecretsDeclaration, _load_yaml_file(declaration_path), declaration_path.as_posix())
 
         if target in ("both", "compose"):
             consumed: set[str] = set()
@@ -337,68 +322,20 @@ def generate_compose(config: Config, images: dict[str, str]) -> None:
             interpolated_targets: set[str] = set()
             toggle_services: dict[str, str] = {}
             for name in bundle.workloads:
-                document_node = _load_yaml_file(score_dir / name)
-                document = document_node if is_mapping(document_node) else {}
-                workload = WorkloadDocument.model_validate(document)
+                workload = validate(WorkloadDocument, _load_yaml_file(score_dir / name), name)
                 annotations = workload.metadata.annotations
-                containers_node = document.get("containers")
-                containers = containers_node if is_mapping(containers_node) else {}
-                # Validate the deployment-surface annotations.
-                adapter = annotations.get(PROBE_ADAPTER_ANNOTATION)
-                if adapter is not None and adapter not in PROBE_ADAPTERS:
-                    raise SystemExit(
-                        f"{name}: {PROBE_ADAPTER_ANNOTATION} is {adapter!r}; the supported adapters are {list(PROBE_ADAPTERS)}"
-                    )
-                restart = annotations.get(RESTART_ANNOTATION)
-                if restart is not None and restart not in COMPOSE_RESTART_POLICIES:
-                    raise SystemExit(
-                        f"{name}: {RESTART_ANNOTATION} is {restart!r}; the compose restart policies are "
-                        f"{list(COMPOSE_RESTART_POLICIES)}"
-                    )
+
                 consumer_interpolated = annotations.get(CONSUMER_INTERPOLATED_ANNOTATION)
                 if consumer_interpolated is not None:
-                    if not isinstance(consumer_interpolated, str) or not consumer_interpolated.strip():
-                        raise SystemExit(
-                            f"{name}: {CONSUMER_INTERPOLATED_ANNOTATION} must be a non-empty comma-separated "
-                            "list of the workload's files: paths"
-                        )
-                    declared_files: set[str] = set()
-                    for container in containers.values():
-                        if not is_mapping(container):
-                            continue
-                        files = container.get("files")
-                        if is_mapping(files):
-                            declared_files.update(files)
-                    for entry in consumer_interpolated.split(","):
-                        if entry != entry.strip() or not entry:
-                            raise SystemExit(
-                                f"{name}: {CONSUMER_INTERPOLATED_ANNOTATION} entry {entry!r} must be non-empty "
-                                "and unpadded"
-                            )
-                        if entry not in declared_files:
-                            raise SystemExit(
-                                f"{name}: {CONSUMER_INTERPOLATED_ANNOTATION} entry {entry!r} names no declared "
-                                "files: path"
-                            )
-                        interpolated_targets.add(entry)
-                if adapter is None:
-                    for container in containers.values():
-                        if not is_mapping(container):
-                            continue
-                        for probe in ("readinessProbe", "livenessProbe"):
-                            probe_block = container.get(probe)
-                            if is_mapping(probe_block) and probe_block.get("httpGet") is not None:
-                                raise SystemExit(f"{name}: a {probe} httpGet requires {PROBE_ADAPTER_ANNOTATION}")
-                # Validate the dev-toggles annotation.
+                    interpolated_targets.update(consumer_interpolated.split(","))
+
+                # The httpGet requirement is a compose placement law: score-compose drops httpGet probes.
+                if annotations.get(PROBE_ADAPTER_ANNOTATION) is None:
+                    for probe in workload.http_get_probes:
+                        raise SystemExit(f"{name}: a {probe} httpGet requires {PROBE_ADAPTER_ANNOTATION}")
+
                 toggle_raw, service_name = workload.dev_toggles
-                if toggle_raw is not None:
-                    if not isinstance(toggle_raw, str) or not toggle_raw.strip():
-                        raise SystemExit(
-                            f"{name}: {DEV_TOGGLES_ANNOTATION} must be a comma-separated NAME=default string"
-                        )
-                    if not isinstance(service_name, str) or not service_name:
-                        raise SystemExit(f"{name}: metadata.name is required")
-                    parse_dev_toggles(name, toggle_raw)
+                if toggle_raw is not None and service_name is not None:
                     if service_name in toggle_services:
                         raise SystemExit(
                             f"{toggle_services[service_name]} and {name} both declare "
@@ -566,8 +503,9 @@ def compiled_provisioners(
                 raise RuntimeError(f"{name}: an authored provisioner file must be a non-empty YAML list")
             compiled_entries: list[Yaml] = []
             for entry in document:
-                AuthoredProvisioner.model_validate(entry, context={"name": name})
-                assert is_mapping(entry)
+                validate(AuthoredProvisioner, entry, name)
+                if not is_mapping(entry):
+                    continue
                 if entry.get("services"):
                     declares_services = True
 
@@ -599,8 +537,7 @@ def generate_k8s(config: Config, k8s: K8sConfig, output_path: Path, lock: Config
     for name in k8s.workloads:
         if name in compose_workloads:
             continue
-        k8s_document = _load_yaml_file(score_dir / name)
-        k8s_annotations = WorkloadDocument.model_validate(k8s_document).metadata.annotations
+        k8s_annotations = validate(WorkloadDocument, _load_yaml_file(score_dir / name), name).metadata.annotations
         if DEV_TOGGLES_ANNOTATION in k8s_annotations:
             raise SystemExit(
                 f"{name}: {DEV_TOGGLES_ANNOTATION} is compose dev-overlay vocabulary; this workload renders k8s-only"
@@ -699,7 +636,10 @@ def resolve_includes(node: Yaml, root: Path, source: str, ancestors: tuple[Path,
         text = path.read_text(encoding="utf-8")
         if key == TEXT_MARKER:
             return text
-        parsed = yaml.safe_load(text)
+        try:
+            parsed = yaml.safe_load(text)
+        except yaml.YAMLError as error:
+            raise ValueError(f"{source}: include {value!r} is not valid YAML: {error}") from error
         if parsed is None:
             raise RuntimeError(f"{source}: include {value!r} is empty")
         return resolve_includes(parsed, root, source, (*ancestors, path))
@@ -826,10 +766,8 @@ def _seed_instance_suffixes(state_path: Path, score_dir: Path, workloads: list[s
         entries = {}
         state["workloads"] = entries
     for name in workloads:
-        document = _load_yaml_file(score_dir / name)
-        metadata = document.get("metadata") if is_mapping(document) else None
-        workload_name = metadata.get("name") if is_mapping(metadata) else None
-        if not isinstance(workload_name, str) or not workload_name:
+        workload_name = validate(WorkloadDocument, _load_yaml_file(score_dir / name), name).metadata.name
+        if not workload_name:
             continue
         entry = entries.get(workload_name)
         if not is_mapping(entry):
@@ -891,7 +829,10 @@ def write_generated_file(path: Path, text: str) -> None:
 
 
 def _load_yaml_file(path: Path) -> Yaml:
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
+    try:
+        return yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as error:
+        raise ValueError(f"{path.as_posix()}: {error}") from error
 
 
 def _split_documents(text: str) -> list[str]:

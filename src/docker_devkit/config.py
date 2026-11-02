@@ -8,7 +8,17 @@ from pathlib import Path
 from typing import Annotated, Literal, NamedTuple, Self, TypeIs
 
 from packaging.specifiers import SpecifierSet
-from pydantic import AfterValidator, BaseModel, ConfigDict, Discriminator, Field, Tag, field_validator, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Discriminator,
+    Field,
+    Tag,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from strictyaml import load as load_strict_yaml
 
 from docker_devkit.config_lock import (
@@ -466,21 +476,99 @@ class K8sConfig(BaseModel):
         return self
 
 
+PROBE_ADAPTER_ANNOTATION = "outernet.internal/probe-adapter"
+PROBE_ADAPTERS = ("python-urllib", "bash-http")
+RESTART_ANNOTATION = "outernet.internal/restart"
+COMPOSE_RESTART_POLICIES = ("no", "always", "on-failure", "unless-stopped")
+CONSUMER_INTERPOLATED_ANNOTATION = "outernet.internal/consumer-interpolated"
+
+
 class WorkloadMetadata(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    name: object = None
-    annotations: dict[str, object] = Field(default_factory=dict)
+    name: str | None = None
+    annotations: dict[str, str] = Field(default_factory=dict)
+
+
+class WorkloadProbe(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    http_get: Yaml | None = Field(default=None, alias="httpGet")
+
+
+class WorkloadContainer(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    files: dict[str, Yaml] = Field(default_factory=dict)
+    readiness_probe: WorkloadProbe | None = Field(default=None, alias="readinessProbe")
+    liveness_probe: WorkloadProbe | None = Field(default=None, alias="livenessProbe")
 
 
 class WorkloadDocument(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
 
     metadata: WorkloadMetadata = Field(default_factory=WorkloadMetadata)
+    containers: dict[str, WorkloadContainer] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate_deployment_surface_annotations(self) -> Self:
+        annotations = self.metadata.annotations
+
+        adapter = annotations.get(PROBE_ADAPTER_ANNOTATION)
+        if adapter is not None and adapter not in PROBE_ADAPTERS:
+            raise ValueError(
+                f"{PROBE_ADAPTER_ANNOTATION} is {adapter!r}; the supported adapters are {list(PROBE_ADAPTERS)}"
+            )
+
+        restart = annotations.get(RESTART_ANNOTATION)
+        if restart is not None and restart not in COMPOSE_RESTART_POLICIES:
+            raise ValueError(
+                f"{RESTART_ANNOTATION} is {restart!r}; the compose restart policies are "
+                f"{list(COMPOSE_RESTART_POLICIES)}"
+            )
+
+        consumer_interpolated = annotations.get(CONSUMER_INTERPOLATED_ANNOTATION)
+        if consumer_interpolated is not None:
+            if not consumer_interpolated.strip():
+                raise ValueError(
+                    f"{CONSUMER_INTERPOLATED_ANNOTATION} must be a non-empty comma-separated "
+                    "list of the workload's files: paths"
+                )
+            declared_files = {target for container in self.containers.values() for target in container.files}
+            for entry in consumer_interpolated.split(","):
+                if entry != entry.strip() or not entry:
+                    raise ValueError(
+                        f"{CONSUMER_INTERPOLATED_ANNOTATION} entry {entry!r} must be non-empty and unpadded"
+                    )
+                if entry not in declared_files:
+                    raise ValueError(
+                        f"{CONSUMER_INTERPOLATED_ANNOTATION} entry {entry!r} names no declared files: path"
+                    )
+
+        if annotations.get(DEV_TOGGLES_ANNOTATION) is not None:
+            if not annotations[DEV_TOGGLES_ANNOTATION].strip():
+                raise ValueError(f"{DEV_TOGGLES_ANNOTATION} must be a comma-separated NAME=default string")
+            if not self.metadata.name:
+                raise ValueError("metadata.name is required")
+            parse_dev_toggles(annotations[DEV_TOGGLES_ANNOTATION])
+
+        return self
 
     @property
-    def dev_toggles(self) -> tuple[object | None, object]:
+    def dev_toggles(self) -> tuple[str | None, str | None]:
         return self.metadata.annotations.get(DEV_TOGGLES_ANNOTATION), self.metadata.name
+
+    @property
+    def http_get_probes(self) -> list[str]:
+        return [
+            probe
+            for container in self.containers.values()
+            for probe, block in (
+                ("readinessProbe", container.readiness_probe),
+                ("livenessProbe", container.liveness_probe),
+            )
+            if block is not None and block.http_get is not None
+        ]
 
 
 class ComposeBundle(NamedTuple):
@@ -488,6 +576,26 @@ class ComposeBundle(NamedTuple):
     output: Path
     workloads: list[str]
     vars: dict[str, str]
+
+
+def validate[ModelT: BaseModel](model: type[ModelT], value: Yaml, source: str) -> ModelT:
+    try:
+        return model.model_validate(value)
+    except ValidationError as error:
+        raise ValueError(f"{source}: {_validation_error_text(error)}") from error
+
+
+def _validation_error_text(error: ValidationError) -> str:
+    parts: list[str] = []
+    for item in error.errors():
+        message = item["msg"]
+        stripped = message.removeprefix("Value error, ")
+        if stripped != message:
+            parts.append(stripped)
+        else:
+            location = ".".join(str(piece) for piece in item["loc"])
+            parts.append(f"{location}: {message}")
+    return "; ".join(parts)
 
 
 def require_compose_stack(config: Config | None) -> Config:
@@ -500,18 +608,18 @@ def chart_lock_key(name: str) -> str:
     return name.upper().replace("-", "_") + "_CHART"
 
 
-def parse_dev_toggles(where: str, raw: str) -> dict[str, str]:
+def parse_dev_toggles(raw: str) -> dict[str, str]:
     toggles: dict[str, str] = {}
     for item in raw.split(","):
         toggle_name, separator, default = item.strip().partition("=")
         if not separator:
-            raise ValueError(f"{where}: {DEV_TOGGLES_ANNOTATION} entry {item.strip()!r} must be NAME=default")
+            raise ValueError(f"{DEV_TOGGLES_ANNOTATION} entry {item.strip()!r} must be NAME=default")
         if ENV_NAME_PATTERN.fullmatch(toggle_name) is None:
-            raise ValueError(f"{where}: {DEV_TOGGLES_ANNOTATION} name {toggle_name!r} must be ALL_CAPS")
+            raise ValueError(f"{DEV_TOGGLES_ANNOTATION} name {toggle_name!r} must be ALL_CAPS")
         if not default:
-            raise ValueError(f"{where}: {DEV_TOGGLES_ANNOTATION} default for {toggle_name} is empty")
+            raise ValueError(f"{DEV_TOGGLES_ANNOTATION} default for {toggle_name} is empty")
         if toggle_name in toggles:
-            raise ValueError(f"{where}: {DEV_TOGGLES_ANNOTATION} names {toggle_name} twice")
+            raise ValueError(f"{DEV_TOGGLES_ANNOTATION} names {toggle_name} twice")
         toggles[toggle_name] = default
     return toggles
 

@@ -240,7 +240,7 @@ def test_empty_document_list_is_rejected(tmp_path: Path) -> None:
 
 
 def test_validation_errors_carry_the_source_name(tmp_path: Path) -> None:
-    with pytest.raises(ValidationError, match=r"database\.yaml"):
+    with pytest.raises(ValueError, match=r"database\.yaml"):
         compile_entry(
             """
 - uri: template://example/database
@@ -303,7 +303,7 @@ def test_compiled_provisioners_reject_string_form_before_any_writes(tmp_path: Pa
     )
 
     with (
-        pytest.raises(ValidationError, match=r"legacy\.yaml"),
+        pytest.raises(ValueError, match=r"legacy\.yaml"),
         compiled_provisioners(tmp_path, ["legacy.yaml"], tmp_path, {}),
     ):
         pass

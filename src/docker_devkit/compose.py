@@ -16,8 +16,8 @@ from bashrun.bash import bash_output
 from docker_devkit.config import (
     AUTH_GROUP_NAME,
     CADDY_IMAGE,
-    DEV_TOGGLES_ANNOTATION,
     Config,
+    DEV_TOGGLES_ANNOTATION,
     EDGE_SERVICE_NAME,
     PortDeclaration,
     RouteConfig,
@@ -28,6 +28,7 @@ from docker_devkit.config import (
     double_dollars,
     is_mapping,
     parse_dev_toggles,
+    validate,
 )
 from docker_devkit.config_lock import LOCK_PATH, parse_config_lock
 from docker_devkit.lock import compose_env_entries, render_env_entries
@@ -187,20 +188,16 @@ def select(config: Config, environment: Mapping[str, str]) -> Selection:
     dev_toggles: dict[str, dict[str, str]] = {}
     for bundle in config.compose_bundles():
         for workload in bundle.workloads:
-            workload_document = WorkloadDocument.model_validate(
-                yaml.safe_load((config.root / config.score_dir / workload).read_text(encoding="utf-8"))
-            )
+            source_path = config.root / config.score_dir / workload
+            try:
+                document = yaml.safe_load(source_path.read_text(encoding="utf-8"))
+            except yaml.YAMLError as error:
+                raise ValueError(f"{workload}: {error}") from error
+            workload_document = validate(WorkloadDocument, document, workload)
             raw, service_name = workload_document.dev_toggles
-            # Skip absent annotations and outside-selection names; refuse malformed shapes.
-            if not isinstance(raw, str | None):
-                raise TypeError(f"workload {workload} carries a malformed {DEV_TOGGLES_ANNOTATION} annotation")
-            if raw is None or not raw.strip():
+            if raw is None or service_name is None or service_name not in output_services:
                 continue
-            if not isinstance(service_name, str):
-                raise TypeError(f"workload {workload} carries {DEV_TOGGLES_ANNOTATION} but no string metadata name")
-            if service_name not in output_services:
-                continue
-            dev_toggles[service_name] = parse_dev_toggles(service_name, raw)
+            dev_toggles[service_name] = parse_dev_toggles(raw)
 
     return Selection(
         includes=includes,

@@ -100,7 +100,7 @@ def test_non_string_marker_value_is_a_loud_error(tmp_path: Path) -> None:
 def test_invalid_yaml_include_is_a_loud_error(tmp_path: Path) -> None:
     write_repo({"broken.yaml": "key: [unclosed\n"}, tmp_path)
 
-    with pytest.raises(yaml.YAMLError):
+    with pytest.raises(ValueError, match="not valid YAML"):
         resolve_includes({"include-yaml": "broken.yaml"}, tmp_path, "x.yaml")
 
 

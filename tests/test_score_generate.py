@@ -9,6 +9,7 @@ import yaml
 from bashrun.bash import CalledProcessError, bash, bash_output
 from pydantic import ValidationError
 
+from docker_devkit import config as config_module
 from docker_devkit import score as score_generate_module
 from docker_devkit.config import Config
 from docker_devkit.config_lock import ConfigLock
@@ -561,7 +562,7 @@ def test_self_gating_templates_fall_back_to_an_empty_patches_document() -> None:
 def test_the_healthcheck_template_ships_both_probe_adapter_spells() -> None:
     text = (files("docker_devkit") / "patch_templates" / "probe-adapter-healthchecks.tpl").read_text(encoding="utf-8")
 
-    assert score_generate_module.PROBE_ADAPTERS == ("python-urllib", "bash-http")
+    assert config_module.PROBE_ADAPTERS == ("python-urllib", "bash-http")
     assert "urllib.request.urlopen" in text
     assert "/dev/tcp/127.0.0.1" in text
 
@@ -789,7 +790,7 @@ def test_unknown_probe_adapter_values_refuse_naming_the_workload(
 ) -> None:
     config = _bundle_config()
 
-    with pytest.raises(SystemExit, match=r"api\.yaml.*supported adapters"):
+    with pytest.raises(ValueError, match=r"api\.yaml.*supported adapters"):
         _compose_init_templates(
             monkeypatch,
             tmp_path,
@@ -824,7 +825,7 @@ def test_restart_values_outside_the_compose_enum_refuse_naming_the_workload(
 ) -> None:
     config = _bundle_config()
 
-    with pytest.raises(SystemExit, match=r"api\.yaml.*restart policies"):
+    with pytest.raises(ValueError, match=r"api\.yaml.*restart policies"):
         _compose_init_templates(
             monkeypatch,
             tmp_path,
@@ -875,7 +876,7 @@ def test_dev_toggles_spelling_refuses_at_generation(tmp_path: Path, monkeypatch:
 def test_a_non_string_dev_toggles_annotation_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _bundle_config()
 
-    with pytest.raises(SystemExit, match=r"api\.yaml.*NAME=default"):
+    with pytest.raises(ValueError, match=r"api\.yaml.*annotations"):
         _compose_init_templates(monkeypatch, tmp_path, config, {}, {"stack/score/api.yaml": _toggles_workload(True)})
 
 
@@ -883,7 +884,7 @@ def test_dev_toggles_without_metadata_name_refuses(tmp_path: Path, monkeypatch: 
     config = _bundle_config()
     source = "metadata:\n  annotations:\n    outernet.internal/dev-toggles: RELOAD=true\ncontainers: {}\n"
 
-    with pytest.raises(SystemExit, match=r"api\.yaml.*metadata\.name"):
+    with pytest.raises(ValueError, match=r"api\.yaml.*metadata\.name"):
         _compose_init_templates(monkeypatch, tmp_path, config, {}, {"stack/score/api.yaml": source})
 
 
@@ -936,7 +937,7 @@ def test_dev_toggles_on_a_k8s_only_workload_refuses(tmp_path: Path) -> None:
 def test_consumer_interpolated_names_must_match_declared_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _bundle_config()
 
-    with pytest.raises(SystemExit, match=r"api\.yaml.*files:"):
+    with pytest.raises(ValueError, match=r"api\.yaml.*files:"):
         _compose_init_templates(
             monkeypatch,
             tmp_path,
