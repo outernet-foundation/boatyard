@@ -37,7 +37,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 
 ## Config schema
 
-- `extra="forbid"` everywhere; one `model_validator(mode="after")` per model, checks in declaration order; the single `mode="before"` exception: the services port-string coercion.
+- `extra="forbid"` everywhere; one `model_validator(mode="after")` per model, checks in declaration order.
 - `requires` self-checks the installed version at load (`0.0.0.dev0` dev sentinel bypasses the check, not the field); duplicate keys, unknown top-level keys, dead sections (`generate-score`, `publish-compose`, `lifecycle`, `bundles`,
   `lifecycle_prefix`) refuse.
 - `base_images`: ALL_CAPS keys become build args; upstream-native `path:tag`/`path@digest` values; `{uv}`/`{python}` templates over toolchain pins (`{uv}` from `tool.uv.required-version`, exact `==` pin only; `{python}` from
@@ -45,7 +45,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 - `variants`: ALL_CAPS axis → bare lowercase values, first = the default cell; declared, never probed. `platforms` required exactly when `base_images` is; charts arch-neutral, exempt.
 - `project_name` required iff `services`; `gateway` required iff any route anywhere.
 - `services`: groups (`options:` mutually exclusive) + bare riding entries; every entry/option is `ref:` (digest-pinned OCI include) or `workloads:`/`vars:`; one flat name vocabulary, collide-refuse; `auth` reserved — its options declare
-  exactly one route; routes `/`-rooted, edge-wide unique, `strip_prefix` requires a wildcard; string-form ports name their entry's namesake service, group-level ports use the mapping form.
+  exactly one route; routes `/`-rooted, edge-wide unique, `strip_prefix` requires a wildcard; ports use the mapping form (service, published, target).
 - `k8s`: `workloads`, `vars`, `charts` name → `oci://…:tag|@digest`; the map key IS the `{NAME}_CHART` lock key; a section declaring neither workloads nor charts refuses.
 - `mirror_prefix`: root override (non-empty, no trailing slash), else `DEFAULT_MIRROR_PREFIX` (`ghcr.io/outernet-foundation/mirror`).
 - Root-model invisible defaults: `score_dir` (`stack/score`), k8s output paths, the three tool pins.
