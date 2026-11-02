@@ -114,7 +114,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 
 ## Build
 
-- `run_build` renders the deterministic per-run bake file (authored key order, byte-identical for identical configs; bake validates its own input — no document model); it takes the required already-loaded `root`/`config` pair — the
+- `run_build` renders the deterministic per-run bake file (authored key order, byte-identical for identical configs; bake validates its own input — no document model); it takes the already-loaded `config` — the
   build verb loads the config and owns its flag refusals; a failed bake re-raises with the rendered content attached.
 - Push axis: `push=None` local `--load`; `push=""` pushes for the config's `repository`; `push=<addr>` re-roots tags + cache refs under that registry (one law for both destinations); an address with a scheme, trailing slash, or host
   carrying neither `.` nor `:` refuses; `--push` alone without a declared `repository` refuses; `--dev` with a push destination refuses (dev stages are local-only).
