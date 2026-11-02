@@ -6,7 +6,7 @@ from typing import Annotated
 import typer
 
 from docker_devkit.config import load_config
-from docker_devkit.config import service_sha_env
+from docker_devkit.dockerfiles import service_sha_env
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 

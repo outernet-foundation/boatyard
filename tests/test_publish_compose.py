@@ -8,7 +8,7 @@ import yaml
 from pydantic import ValidationError
 from typer.testing import CliRunner
 
-from docker_devkit import config as config_module
+from docker_devkit import dockerfiles as dockerfiles_module
 from docker_devkit import crane
 from docker_devkit import publish as publish_compose
 from docker_devkit.verbs import publish as publish_verb
@@ -77,7 +77,7 @@ def _invoke_publishing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Publi
     monkeypatch.setattr(publish_verb, "bash", recorder.run)
     monkeypatch.setattr(crane, "bash", recorder.run)
     monkeypatch.setattr(publish_verb, "bash_output", _command_output)
-    monkeypatch.setattr(config_module, "compute_service_shas", _service_shas)
+    monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _service_shas)
     monkeypatch.setattr(publish_compose, "resolve_remote_digest", DigestResolver().resolve)
     return recorder
 

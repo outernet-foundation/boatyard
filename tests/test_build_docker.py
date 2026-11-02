@@ -10,7 +10,7 @@ import yaml
 from typer.testing import CliRunner
 
 from docker_devkit import bake as bake_module
-from docker_devkit import config as config_module
+from docker_devkit import dockerfiles as dockerfiles_module
 from docker_devkit.lock import UpstreamManifests
 from docker_devkit.config_lock import LOCK_PATH
 from docker_devkit.verbs import build
@@ -153,7 +153,7 @@ def _prepare(
 ) -> BakeRunner:
     recorder = BakeRunner()
     monkeypatch.setattr(bake_module, "bash", recorder.run)
-    monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
+    monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
     monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
     monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
     monkeypatch.chdir(tmp_path)
@@ -198,7 +198,7 @@ class TestDefaultTargets:
 
     def test_foreign_arch_repo_refuses_bare_build(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(bake_module, "bash", BakeRunner().run)
-        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
@@ -293,7 +293,7 @@ class TestCellSelection:
 
     def _refuse(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, arguments: list[str]) -> Any:
         monkeypatch.setattr(bake_module, "bash", BakeRunner().run)
-        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
@@ -311,7 +311,7 @@ class TestCellSelection:
 
 class TestBuildKeysGuard:
     def test_build_without_derived_services_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(
             tmp_path,
@@ -377,7 +377,7 @@ class TestDevBuilds:
         assert services["localizer-rocm"]["build"]["tags"] == [f"{REPOSITORY}/localizer:dev"]
 
     def test_dev_refuses_push(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": DEV_STAGE})
 
@@ -387,7 +387,7 @@ class TestDevBuilds:
         assert "local-only" in result.output
 
     def test_dev_refuses_a_push_destination(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": DEV_STAGE})
 
@@ -397,7 +397,7 @@ class TestDevBuilds:
         assert "local-only" in result.output
 
     def test_dev_without_any_dev_stage_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
@@ -410,7 +410,7 @@ class TestDevBuilds:
         assert "no service declares a dev stage" in str(result.exception)
 
     def test_dev_explicit_target_without_dev_stage_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": EXTERNAL, "auth": DEV_STAGE})
 
@@ -426,7 +426,7 @@ class TestBakeFailure:
             raise CalledProcessError(returncode=1, cmd=command)
 
         monkeypatch.setattr(bake_module, "bash", _fail)
-        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
@@ -490,7 +490,7 @@ class TestPushDestination:
 
     def test_a_target_with_no_tagged_references_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(bake_module, "bash", BakeRunner(_baked("zed-capture", refs="", digest=DIGEST_A)).run)
-        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
@@ -503,7 +503,7 @@ class TestPushDestination:
 
     def test_bake_output_not_covering_the_targets_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(bake_module, "bash", MissingTargetRunner().run)
-        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
@@ -526,7 +526,7 @@ class TestPushDestination:
 
     def _refuse_address(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, arguments: list[str]) -> None:
         monkeypatch.setattr(bake_module, "bash", BakeRunner().run)
-        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
         monkeypatch.chdir(tmp_path)
@@ -566,7 +566,7 @@ class TestBakeSeesLockValues:
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
         monkeypatch.setattr("docker_devkit.lock.resolve_remote_manifests", _fixed_manifests)
-        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles=LOCK_DOCKERFILES, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
 

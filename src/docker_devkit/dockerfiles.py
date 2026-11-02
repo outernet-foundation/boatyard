@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from tempfile import TemporaryDirectory
 from typing import Self
 
+import pathspec
+from bashrun.bash import bash, bash_output
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 DOCKERFILE_NAME = "Dockerfile"
@@ -47,7 +50,7 @@ def derive_services(root: Path, axes: dict[str, list[str]]) -> dict[str, Service
             if child.is_dir() and (child / DOCKERFILE_NAME).is_file():
                 service_dirs[child.name] = child
                 tops.add(top.name)
-    require_single_top(tops, "Dockerfile service directories")
+    _require_single_top(tops, "Dockerfile service directories")
 
     builds: dict[str, ServiceBuild] = {}
     for name, directory in service_dirs.items():
@@ -111,9 +114,68 @@ def derive_services(root: Path, axes: dict[str, list[str]]) -> dict[str, Service
     return builds
 
 
-def require_single_top(tops: set[str], subject: str) -> None:
+def _require_single_top(tops: set[str], subject: str) -> None:
     if len(tops) > 1:
         raise RuntimeError(f"{subject} span multiple top-level directories: {sorted(tops)}")
+
+
+def service_sha_env(name: str) -> str:
+    return name.upper().replace("-", "_") + "_SHA"
+
+
+def compute_service_shas(repo_root: Path, service_builds: dict[str, ServiceBuild]) -> dict[str, str]:
+    repo_root = repo_root.resolve()
+
+    service_dirs = {str(PurePosixPath(service.dockerfile).parent) for service in service_builds.values()}
+
+    if not service_dirs:
+        # Skip the git and .dockerignore reads when no services exist.
+        return {}
+
+    # Derive the workload root as the single top-level directory holding every service.
+    tops = {PurePosixPath(service_dir).parts[0] for service_dir in service_dirs}
+    _require_single_top(tops, "services")
+    workload_prefix = f"{next(iter(tops))}/"
+
+    tree_entries = bash_output("git ls-tree -r HEAD", cwd=repo_root).splitlines()
+
+    dockerignore = repo_root / ".dockerignore"
+    spec = pathspec.PathSpec.from_lines("gitignore", dockerignore.read_text().splitlines())
+
+    allowed_entries: list[tuple[str, str, str]] = []
+    for entry in tree_entries:
+        meta, path = entry.split("\t", 1)
+        if spec.match_file(path):
+            continue
+        mode, _type, obj_hash = meta.split()
+        allowed_entries.append((mode, obj_hash, path))
+
+    shared_entries: list[tuple[str, str, str]] = []
+    per_service: dict[str, list[tuple[str, str, str]]] = {directory: [] for directory in service_dirs}
+
+    # Sort entries into shared and per-service paths, dropping workload-root files owned by no service.
+    for mode, obj_hash, path in allowed_entries:
+        if path.startswith(workload_prefix):
+            for service_dir in service_dirs:
+                if path.startswith(service_dir + "/"):
+                    per_service[service_dir].append((mode, obj_hash, path))
+                    break
+        else:
+            shared_entries.append((mode, obj_hash, path))
+
+    result: dict[str, str] = {}
+    for service_dir in sorted(service_dirs):
+        entries = shared_entries + per_service[service_dir]
+        index_input = "\n".join(f"{mode} {obj_hash}\t{path}" for mode, obj_hash, path in entries) + "\n"
+
+        with TemporaryDirectory() as tmpdir:
+            index_env = {"GIT_INDEX_FILE": str(Path(tmpdir) / "index")}
+            bash("git update-index --index-info", cwd=repo_root, env=index_env, stdin_text=index_input)
+            tree_hash = bash_output("git write-tree", cwd=repo_root, env=index_env).strip()
+
+        result[service_sha_env(PurePosixPath(service_dir).name)] = f"tree-{tree_hash}"
+
+    return result
 
 
 def _effective_axis(name: str, builds: dict[str, ServiceBuild], path: tuple[str, ...]) -> str | None:

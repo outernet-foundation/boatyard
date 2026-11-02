@@ -7,6 +7,7 @@ import yaml
 from typer.testing import CliRunner
 
 from docker_devkit import config as config_module
+from docker_devkit import dockerfiles as dockerfiles_module
 from docker_devkit import lock as lock_module
 from docker_devkit.config_lock import LOCK_PATH
 from docker_devkit.lock import UpstreamManifests
@@ -134,7 +135,7 @@ def _invoke(
     recorder = ManifestRecorder()
     monkeypatch.setattr(lock_module, "resolve_remote_manifests", recorder.resolve)
     monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
-    monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
+    monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
     monkeypatch.chdir(tmp_path)
     _write_repo(tmp_path, base_images=base_images, charts=charts, platforms=platforms)
     return runner.invoke(lock.app, arguments)
@@ -151,7 +152,7 @@ class TestSelfSkip:
         assert not (tmp_path / LOCK_PATH).exists()
 
     def test_skips_without_declarations(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path)
 
@@ -162,7 +163,7 @@ class TestSelfSkip:
         assert not (tmp_path / LOCK_PATH).exists()
 
     def test_check_self_skips_where_no_declarations_exist(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path)
 
@@ -200,7 +201,7 @@ class TestImageRecording:
 
         recorder = ManifestRecorder()
         monkeypatch.setattr(lock_module, "resolve_remote_manifests", recorder.resolve)
-        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, base_images=LOCK_BASE_IMAGES)
 
@@ -260,7 +261,7 @@ class TestImageRecording:
 
         recorder = ManifestRecorder()
         monkeypatch.setattr(lock_module, "resolve_remote_manifests", recorder.resolve)
-        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
 
@@ -287,7 +288,7 @@ class TestImageRecording:
 
         recorder = ManifestRecorder()
         monkeypatch.setattr(lock_module, "resolve_remote_manifests", recorder.resolve)
-        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(
             tmp_path,
@@ -540,7 +541,7 @@ class TestChartRecording:
 
 class TestLockCheck:
     def _prepare(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.setattr(lock_module, "resolve_remote_manifests", ManifestRecorder().resolve)
         monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
         monkeypatch.chdir(tmp_path)

@@ -5,9 +5,9 @@ from typing import Any
 import pytest
 import yaml
 
-from docker_devkit import config
-from docker_devkit.config import compute_service_shas, load_config
-from docker_devkit.dockerfiles import ServiceBuild
+from docker_devkit import dockerfiles
+from docker_devkit.config import load_config
+from docker_devkit.dockerfiles import ServiceBuild, compute_service_shas
 
 
 def write_dockerfile(tmp_path: Path, service: str, text: str, top: str = "workloads") -> None:
@@ -230,8 +230,8 @@ class TestComputeServiceShasZeroServices:
     def test_a_serviceless_repo_returns_empty_without_git_or_dockerignore_reads(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        monkeypatch.setattr(config, "bash_output", self._fail_bash)
-        monkeypatch.setattr(config, "bash", self._fail_bash)
+        monkeypatch.setattr(dockerfiles, "bash_output", self._fail_bash)
+        monkeypatch.setattr(dockerfiles, "bash", self._fail_bash)
 
         assert compute_service_shas(tmp_path, _service_builds()) == {}
 
