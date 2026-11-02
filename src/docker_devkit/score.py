@@ -29,6 +29,7 @@ from docker_devkit import dockerfiles
 from docker_devkit.compose import merged_environment
 from docker_devkit.config import (
     COMPOSE_HOLE,
+    ComposeBundle,
     CONSUMER_INTERPOLATED_ANNOTATION,
     DEV_TOGGLES_ANNOTATION,
     EDGE_SERVICE_NAME,
@@ -70,11 +71,24 @@ class ComposeDocument(BaseModel):
                     raise ValueError(f"bind sources {known} and {source} collide on config name {Path(source).name}")
         return self
 
+    def dump(self) -> Yaml:
+        # Declared fields dump before extras; this order is the artifacts' deterministic key order.
+        return self.model_dump(exclude_none=True)
+
 
 class ComposeService(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     volumes: list[BindVolume | OtherVolume] | None = None
+    depends_on: dict[str, Yaml] | list[str] | None = None
+    configs: list[ComposeConfigReference] | None = None
+
+
+class ComposeConfigReference(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    source: str
+    target: str
 
 
 class BindVolume(BaseModel):
@@ -109,6 +123,7 @@ class ComposeConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     file: str | None = None
+    content: str | None = None
 
 
 STATE_PREFIX = ".score-compose/"
@@ -357,15 +372,7 @@ def generate_compose(
                         f"bundle {bundle.name!r}: its provisioners declare services; "
                         f"{LOCK_PATH.as_posix()} must carry the ALPINE_IMAGE entry"
                     )
-                templates = [
-                    builtin_templates / HEALTHCHECK_TEMPLATE,
-                    builtin_templates / RESTART_TEMPLATE,
-                ]
-                if provisioners.declares_services:
-                    templates.append(builtin_templates / GATE_PIN_TEMPLATE)
-                gpu_template = GPU_COMPOSE_TEMPLATES.get(bundle.vars.get("GPU_VARIANT", ""))
-                if gpu_template is not None:
-                    templates.append(builtin_templates / gpu_template)
+                templates = _compose_templates(builtin_templates, bundle, provisioners.declares_services)
                 shutil.rmtree(score_state, ignore_errors=True)
                 _init_state(
                     f"score-compose init --project {config.project_name} --no-sample",
@@ -384,35 +391,33 @@ def generate_compose(
                         env=tool_environment,
                     )
 
+                # Post-passes run as typed transformations; the model dumps exactly once.
+                document = validate(
+                    ComposeDocument, yaml.safe_load(output.read_text(encoding="utf-8")), output.as_posix()
+                )
+                services = document.services or {}
+
                 # Collapse doubled {workload}-{container} service names.
-                document = yaml.safe_load(output.read_text(encoding="utf-8"))
-                services_node = document.get("services")
-                services = services_node if is_mapping(services_node) else {}
-                collapsed: dict[str, Yaml] = {}
+                collapsed: dict[str, ComposeService] = {}
                 for name, service in services.items():
                     match = DOUBLED_SERVICE_NAME.fullmatch(name)
                     target = match.group(1) if match is not None else name
                     if target != name and target in services:
                         raise SystemExit(f"service rename {name} -> {target} collides with an existing service")
                     collapsed[target] = service
-                document["services"] = collapsed
 
                 # Rename the gate per entry and follow the depends_on references.
                 gate = f"{GATE_SERVICE}-{bundle.name}"
                 if GATE_SERVICE in collapsed:
                     if gate in collapsed:
                         raise SystemExit(f"gate rename {GATE_SERVICE} -> {gate} collides with an existing service")
-                    gate_entry = collapsed.pop(GATE_SERVICE)
-                    if gate_entry is not None:
-                        collapsed[gate] = gate_entry
+                    collapsed[gate] = collapsed.pop(GATE_SERVICE)
                     for service in collapsed.values():
-                        if not is_mapping(service):
-                            continue
-                        depends_on = service.get("depends_on")
+                        depends_on = service.depends_on
                         if isinstance(depends_on, dict) and GATE_SERVICE in depends_on:
                             depends_on[gate] = depends_on.pop(GATE_SERVICE)
                         elif isinstance(depends_on, list) and GATE_SERVICE in depends_on:
-                            service["depends_on"] = [
+                            service.depends_on = [
                                 gate if dependency == GATE_SERVICE else dependency for dependency in depends_on
                             ]
 
@@ -422,40 +427,30 @@ def generate_compose(
                     )
 
                 # Inline every bind as configs.content with $ doubled.
-                parsed = ComposeDocument.model_validate(document)
-                contents: dict[str, Yaml] = {}
-                for name, service in (parsed.services or {}).items():
+                contents: dict[str, ComposeConfig] = {}
+                for service in collapsed.values():
                     binds = [volume for volume in service.volumes or [] if isinstance(volume, BindVolume)]
                     if not binds:
                         continue
-                    references: list[Yaml] = []
+                    references: list[ComposeConfigReference] = []
                     for bind in binds:
                         # Resolve state-dir sources against score_dir, other sources against the repo root.
                         path = score_dir / bind.source if bind.source.startswith(STATE_PREFIX) else root / bind.source
                         text = path.read_text(encoding="utf-8")
                         if bind.target not in interpolated_targets:
                             text = double_dollars(text)
-                        contents[path.name] = {"content": text}
-                        references.append({"source": path.name, "target": bind.target})
-                    raw = document["services"][name]
-                    if is_mapping(raw):
-                        existing = raw.get("configs")
-                        raw["configs"] = [*(existing if is_list(existing) else []), *references]
-                        volumes = raw.get("volumes")
-                        volume_list = volumes if is_list(volumes) else []
-                        remaining = [
-                            volume
-                            for volume in volume_list
-                            if not (is_mapping(volume) and volume.get("type") == "bind")
-                        ]
-                        if remaining:
-                            raw["volumes"] = remaining
-                        else:
-                            del raw["volumes"]
+                        contents[path.name] = ComposeConfig(content=text)
+                        references.append(ComposeConfigReference(source=path.name, target=bind.target))
+                    service.configs = [*(service.configs or []), *references]
+                    remaining: list[BindVolume | OtherVolume] = [
+                        volume for volume in service.volumes or [] if not isinstance(volume, BindVolume)
+                    ]
+                    service.volumes = remaining or None
 
+                document.services = collapsed
                 if contents:
-                    document["configs"] = {**(document.get("configs") or {}), **contents}
-                write_generated_file(output, dump_compose(document))
+                    document.configs = {**(document.configs or {}), **contents}
+                write_generated_file(output, dump_compose(document.dump()))
 
     shutil.rmtree(score_state, ignore_errors=True)
 
@@ -464,6 +459,16 @@ def generate_compose(
 def _builtin_patch_templates() -> Generator[Path]:
     with as_file(files("docker_devkit") / PATCH_TEMPLATES_DIR) as directory:
         yield directory
+
+
+def _compose_templates(builtin_templates: Path, bundle: ComposeBundle, declares_services: bool) -> list[Path]:
+    names = [HEALTHCHECK_TEMPLATE, RESTART_TEMPLATE]
+    if declares_services:
+        names.append(GATE_PIN_TEMPLATE)
+    gpu_template = GPU_COMPOSE_TEMPLATES.get(bundle.vars.get("GPU_VARIANT", ""))
+    if gpu_template is not None:
+        names.append(gpu_template)
+    return [builtin_templates / name for name in names]
 
 
 def closure_provisioners(score_dir: Path, rendering: str, workloads: list[str]) -> list[str]:

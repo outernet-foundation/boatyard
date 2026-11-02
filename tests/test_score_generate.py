@@ -503,7 +503,9 @@ def test_workload_lock_markers_resolve_into_the_rendered_copy(tmp_path: Path, mo
     )
     config.root = tmp_path
 
-    score_generate_module.generate_compose(tmp_path, config, {"API_IMAGE": "ghcr.io/org/api@sha256:" + "a" * 64}, {}, None)
+    score_generate_module.generate_compose(
+        tmp_path, config, {"API_IMAGE": "ghcr.io/org/api@sha256:" + "a" * 64}, {}, None
+    )
 
     assert (
         recorder.workload_contents["api.yaml"]
