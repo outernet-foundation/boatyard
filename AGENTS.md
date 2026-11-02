@@ -55,7 +55,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 - Load refusals (`Config.resolve`): Dockerfile services or local entries without `repository`; `base_images`/`k8s.charts` without the committed lock (pairing law); a declared chart without `stack/score/k8s/values/{chart}.yaml`; routes without `CADDY_IMAGE` in
   the lock.
 - `mirrored_ref(reference, prefix)` = the only prefix join — injects the prefix, rejects an already-prefixed reference (double-prefix guard).
-- Derivation shape law: `Config` carries authored data and validation; a member may hold real derivation logic (`compose_bundles`, `declared_charts`), but a member that only delegates to another module's function is a
+- Derivation shape law: `Config` carries authored data and validation; a member may hold real derivation logic (`declared_charts`), but a member that only delegates to another module's function is a
   pass-through — call the function at the consumer, `compute_service_shas` module-qualified (test seam); `root` defaults to the working directory, `resolve` injects the load root, excluded, never-authored;
   `parse_dev_toggles` = the one dev-toggles parser (ALL_CAPS, non-empty defaults, no duplicates).
 - `.env` carries `BUNDLES=`, `COMPOSE_PROFILES`, `PLATFORM=`, dev-toggle overrides, the consumer's interpolation variables.
