@@ -11,7 +11,7 @@ from typing import Literal, NamedTuple, Self, TypeIs
 import pathspec
 from bashrun.bash import bash, bash_output
 from packaging.specifiers import SpecifierSet
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from strictyaml import load as load_strict_yaml
 
 from docker_devkit.config_lock import (
@@ -118,57 +118,84 @@ class DockerDevkitConfig(BaseModel):
             if not entry.remote
         ]
 
-    @model_validator(mode="after")
-    def _validate(self) -> Self:
-        if not self.requires:
+    @field_validator("requires")
+    @classmethod
+    def _validate_requires(cls, value: str) -> str:
+        if not value:
             raise ValueError("requires must be a non-empty PEP 440 specifier")
-        SpecifierSet(self.requires)
+        SpecifierSet(value)
+        return value
 
-        if (
-            self.gateway is not None
-            and PORT_PATTERN.fullmatch(self.gateway) is None
-            and ENV_HOLE_PATTERN.fullmatch(self.gateway) is None
-        ):
-            raise ValueError(f"gateway {self.gateway!r} must be a literal port number or a ${{…}} env hole")
+    @field_validator("gateway")
+    @classmethod
+    def _validate_gateway(cls, value: str | None) -> str | None:
+        if value is not None and PORT_PATTERN.fullmatch(value) is None and ENV_HOLE_PATTERN.fullmatch(value) is None:
+            raise ValueError(f"gateway {value!r} must be a literal port number or a ${{…}} env hole")
+        return value
 
-        if self.repository is not None:
-            host, separator, path = self.repository.partition("/")
-            if not separator or not host or not path or self.repository.endswith("/"):
+    @field_validator("repository")
+    @classmethod
+    def _validate_repository(cls, value: str | None) -> str | None:
+        if value is not None:
+            host, separator, path = value.partition("/")
+            if not separator or not host or not path or value.endswith("/"):
                 raise ValueError(
                     "repository must be registry-host/repository-path with no trailing slash (ghcr.io/org/repo)"
                 )
+        return value
 
-        for name, reference in self.base_images.items():
+    @field_validator("base_images")
+    @classmethod
+    def _validate_base_images(cls, value: dict[str, str]) -> dict[str, str]:
+        for name, reference in value.items():
             if ENV_NAME_PATTERN.fullmatch(name) is None:
                 raise ValueError(f"base_images key {name!r} must be an ALL_CAPS env name")
             match = DECLARED_REFERENCE_PATTERN.fullmatch(reference)
             if match is None or not (match.group("tag") or match.group("digest")):
                 raise ValueError(f"base_images.{name}: {reference!r} must be 'path:tag' or 'path@digest'")
+        return value
 
-        for axis, values in self.variants.items():
+    @field_validator("variants")
+    @classmethod
+    def _validate_variants(cls, value: dict[str, list[str]]) -> dict[str, list[str]]:
+        for axis, values in value.items():
             if ENV_NAME_PATTERN.fullmatch(axis) is None:
                 raise ValueError(f"variants key {axis!r} must be an ALL_CAPS ARG name")
             if not values:
                 raise ValueError(f"variants.{axis}: must declare at least one value")
             seen: set[str] = set()
-            for value in values:
-                if re.fullmatch(r"[a-z0-9][a-z0-9_-]*", value) is None:
-                    raise ValueError(f"variants.{axis}: value {value!r} must be a bare lowercase spelling like cuda")
-                if value in seen:
-                    raise ValueError(f"variants.{axis}: value {value!r} is declared twice")
-                seen.add(value)
+            for cell in values:
+                if re.fullmatch(r"[a-z0-9][a-z0-9_-]*", cell) is None:
+                    raise ValueError(f"variants.{axis}: value {cell!r} must be a bare lowercase spelling like cuda")
+                if cell in seen:
+                    raise ValueError(f"variants.{axis}: value {cell!r} is declared twice")
+                seen.add(cell)
+        return value
 
-        for platform in self.platforms:
+    @field_validator("platforms")
+    @classmethod
+    def _validate_platforms(cls, value: list[str]) -> list[str]:
+        for platform in value:
             if PLATFORM_PATTERN.fullmatch(platform) is None:
                 raise ValueError(f"platforms entry {platform!r} must be an os/arch pair like linux/arm64")
+        return value
 
-        if not self.mirror_prefix or self.mirror_prefix.endswith("/"):
+    @field_validator("mirror_prefix")
+    @classmethod
+    def _validate_mirror_prefix(cls, value: str) -> str:
+        if not value or value.endswith("/"):
             raise ValueError("mirror_prefix must be non-empty with no trailing slash")
+        return value
 
+    @field_validator("services")
+    @classmethod
+    def _validate_services(
+        cls, services: dict[str, ServiceGroup | ServiceEntry]
+    ) -> dict[str, ServiceGroup | ServiceEntry]:
         # Reject name collisions between entries and options.
-        entry_names = set(self.services)
+        entry_names = set(services)
         claimed: set[str] = set()
-        for name, entry in self.services.items():
+        for name, entry in services.items():
             if isinstance(entry, ServiceGroup):
                 for option_name in entry.options:
                     if option_name in entry_names or option_name in claimed:
@@ -177,10 +204,10 @@ class DockerDevkitConfig(BaseModel):
                         )
                     claimed.add(option_name)
 
-        # Collect every route with its declaration site.
+        # Collect every route with its declaration site; paths are edge-wide unique.
         route_sites = [
             (where, route)
-            for name, entry in self.services.items()
+            for name, entry in services.items()
             for where, entry_routes in (
                 [(f"services.{name}", entry.routes)]
                 if not isinstance(entry, ServiceGroup)
@@ -201,8 +228,8 @@ class DockerDevkitConfig(BaseModel):
                 )
             owner[route.path] = where
 
-        if AUTH_GROUP_NAME in self.services:
-            auth = self.services[AUTH_GROUP_NAME]
+        if AUTH_GROUP_NAME in services:
+            auth = services[AUTH_GROUP_NAME]
             if not isinstance(auth, ServiceGroup):
                 raise ValueError(f"services.{AUTH_GROUP_NAME}: auth is a reserved group name; it must be a group")
             for option_name, option in auth.options.items():
@@ -210,21 +237,21 @@ class DockerDevkitConfig(BaseModel):
                     raise ValueError(
                         f"services.{AUTH_GROUP_NAME}.options.{option_name}: an auth option declares exactly one route"
                     )
+        return services
 
+    @model_validator(mode="after")
+    def _validate(self) -> Self:
         # Require gateway and project_name exactly when services are declared.
         if self.services:
             if self.gateway is None:
                 raise ValueError("services are declared; gateway is required")
             if not self.project_name:
                 raise ValueError("services are declared; project_name is required")
-            any_local = False
-            for entry in self.services.values():
-                if isinstance(entry, ServiceGroup):
-                    for option in entry.options.values():
-                        if not option.remote:
-                            any_local = True
-                elif not entry.remote:
-                    any_local = True
+            any_local = any(
+                not option.remote
+                for entry in self.services.values()
+                for option in (entry.options.values() if isinstance(entry, ServiceGroup) else (entry,))
+            )
             if any_local and not self.repository:
                 raise ValueError("local entries (workloads:) are declared; repository is required")
 
