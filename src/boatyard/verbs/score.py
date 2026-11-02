@@ -6,18 +6,15 @@ from tempfile import TemporaryDirectory
 from typing import Annotated, NamedTuple
 
 import typer
-import yaml
 from bashrun.bash import bash, bash_check, bash_output
 
 from boatyard import dockerfiles
-from boatyard.config import COMPOSE_HOLE, Config, Target, load_yaml_file
+from boatyard.config import Config, Target, load_yaml_file
 from boatyard.config_lock import LOCK_PATH, parse_config_lock
 from boatyard.score import (
     SECRETS_FILE,
     SECRETS_OUTPUT,
     SecretsDeclaration,
-    collect_secret_keys,
-    split_documents,
     write_generated_file,
 )
 from boatyard.score_compose import generate_compose
@@ -113,27 +110,9 @@ def generate_score(
         k8s_output = generate_k8s(config, lock, service_shas, local)
         outputs.append(k8s_output)
 
-    if (root / SECRETS_FILE).is_file():
-        # Validate the consumed keys and write the mint list.
-        declaration_path = root / SECRETS_FILE
-        k8s_secret = f"{config.project_name}-secrets"
-
-        declaration = SecretsDeclaration.model_validate(load_yaml_file(declaration_path))
-
-        if compose_rendering:
-            consumed: set[str] = set()
-            for bundle in config.compose_bundles():
-                for match in COMPOSE_HOLE.finditer(bundle.output.read_text(encoding="utf-8")):
-                    if len(match.group(1)) % 2 == 1:
-                        consumed.add(match.group(2))
-            declaration.validate_consumed(consumed, "compose", SECRETS_FILE.as_posix())
-
-        if k8s_rendering and k8s_output is not None:
-            consumed = set()
-            for block in split_documents(k8s_output.read_text(encoding="utf-8")):
-                collect_secret_keys(yaml.safe_load(block), k8s_secret, consumed)
-            declaration.validate_consumed(consumed, "k8s", SECRETS_FILE.as_posix())
-
+    secrets_path = root / SECRETS_FILE
+    if secrets_path.is_file():
+        declaration = SecretsDeclaration.model_validate(load_yaml_file(secrets_path))
         output = root / SECRETS_OUTPUT
         output.parent.mkdir(parents=True, exist_ok=True)
         write_generated_file(

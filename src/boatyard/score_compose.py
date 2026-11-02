@@ -16,18 +16,22 @@ from pydantic import (
 
 from boatyard.compose import merged_environment
 from boatyard.config import (
+    COMPOSE_HOLE,
     CONSUMER_INTERPOLATED_ANNOTATION,
     ComposeWorkloadDocument,
     EDGE_SERVICE_NAME,
     Yaml,
     double_dollars,
     is_mapping,
+    load_yaml_file,
     Config,
 )
 from boatyard.config_lock import LOCK_PATH, ConfigLock
 from boatyard.lock import compose_env_entries
 from boatyard.score import (
     CompiledProvisioners,
+    SECRETS_FILE,
+    SecretsDeclaration,
     dump_compose,
     render_score,
     write_generated_file,
@@ -225,6 +229,18 @@ def generate_compose(config: Config, lock: ConfigLock, service_shas: dict[str, s
 
     # Remove the compose state dir after the last entry.
     shutil.rmtree(score_state, ignore_errors=True)
+
+    # Validate the consumed secrets against the declaration.
+    secrets_path = root / SECRETS_FILE
+    if secrets_path.is_file():
+        declaration = SecretsDeclaration.model_validate(load_yaml_file(secrets_path))
+        consumed: set[str] = set()
+        for bundle in bundles:
+            for match in COMPOSE_HOLE.finditer(bundle.output.read_text(encoding="utf-8")):
+                if len(match.group(1)) % 2 == 1:
+                    consumed.add(match.group(2))
+        declaration.validate_consumed(consumed, "compose", SECRETS_FILE.as_posix())
+
     return [bundle.output for bundle in bundles]
 
 
