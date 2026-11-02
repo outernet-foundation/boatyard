@@ -25,6 +25,7 @@ from pydantic import (
     model_validator,
 )
 
+from docker_devkit import dockerfiles
 from docker_devkit.config import (
     DEV_TOGGLES_ANNOTATION,
     EDGE_SERVICE_NAME,
@@ -217,9 +218,8 @@ def generate_artifacts(config: Config, target: Target, local: bool) -> list[Path
     # Require the build keys, export the tree tags, and load the lock.
     if not (config.repository or config.base_images):
         raise RuntimeError("repository or base_images is required in docker-devkit.yaml")
-    assert config.root is not None
     root = config.root
-    os.environ.update(config.service_shas())
+    os.environ.update(dockerfiles.compute_service_shas(config.root, config.service_builds))
     if config.k8s is not None:
         os.environ[STORAGE_CLASS_VAR] = LOCAL_STORAGE_CLASS if local else CLOUD_STORAGE_CLASS
     lock_path = root / LOCK_PATH
@@ -277,12 +277,11 @@ def generate_artifacts(config: Config, target: Target, local: bool) -> list[Path
 
 
 def generate_compose(config: Config, images: dict[str, str]) -> None:
-    assert config.root is not None
     root = config.root
     bundles = config.compose_bundles()
     if not bundles:
         raise RuntimeError("the compose target requires local service entries (workloads:)")
-    score_dir = config.score_dir_path()
+    score_dir = config.root / config.score_dir
     score_state = score_dir / STATE_PREFIX
 
     with _builtin_patch_templates() as builtin_templates:
@@ -522,12 +521,11 @@ def compiled_provisioners(
 
 def generate_k8s(config: Config, k8s: K8sConfig, output_path: Path, lock: ConfigLock) -> None:
     # Run score-k8s in the output's directory, where it writes its .score-k8s state.
-    assert config.root is not None
     root = config.root
     images = env_entries(lock)
     state_dir = output_path.parent / ".score-k8s"
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    score_dir = config.score_dir_path()
+    score_dir = config.root / config.score_dir
 
     compose_workloads = {name for bundle in config.compose_bundles() for name in bundle.workloads}
     for name in k8s.workloads:
@@ -781,7 +779,7 @@ def _rendered_workloads(
         directory = Path(temporary_directory)
 
         for name in workloads:
-            source_path = config.score_dir_path() / name
+            source_path = config.root / config.score_dir / name
             document = resolve_lock_refs(_load_yaml_file(source_path), images, f"workload {name}")
             source = yaml.safe_dump(document, sort_keys=False, width=1000)
             rendered = PLACEHOLDER.sub(partial(_placeholder_value, rendering_vars, name), source)

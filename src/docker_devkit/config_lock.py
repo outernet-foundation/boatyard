@@ -66,6 +66,11 @@ class ConfigLockEntry(BaseModel):
         return [self.index, *self.platforms.values()]
 
 
+def read_config_lock(root: Path) -> ConfigLock:
+    lock_path = root / LOCK_PATH
+    return parse_config_lock(lock_path) if lock_path.is_file() else ConfigLock()
+
+
 def parse_config_lock(path: Path) -> ConfigLock:
     text = path.read_text(encoding="utf-8")
     source = path.as_posix()

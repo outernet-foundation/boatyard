@@ -21,6 +21,7 @@ from docker_devkit.config import (
 )
 from docker_devkit.config_lock import (
     LOCK_PATH,
+    read_config_lock,
     SHA256_DIGEST_REGEX,
     ConfigLock,
     ConfigLockEntry,
@@ -51,7 +52,7 @@ def run_lock(*, upgrade: bool = False, check: bool = False) -> None:
         write_lock(config, upgrade=upgrade)
         return
     computed = render_lock(relock(config, upgrade=upgrade))
-    assert config.root is not None
+
     lock_file = config.root / LOCK_PATH
     committed = lock_file.read_text(encoding="utf-8") if lock_file.exists() else ""
     if committed != computed:
@@ -70,15 +71,15 @@ def run_lock(*, upgrade: bool = False, check: bool = False) -> None:
 
 def write_lock(config: Config, *, upgrade: bool = False) -> ConfigLock:
     lock = relock(config, upgrade=upgrade)
-    assert config.root is not None
+
     (config.root / LOCK_PATH).write_text(render_lock(lock), encoding="utf-8")
     return lock
 
 
 def relock(config: Config, *, upgrade: bool = False) -> ConfigLock:
-    assert config.root is not None
+
     prefix = config.mirror_prefix
-    committed = config.lock()
+    committed = read_config_lock(config.root)
 
     images: dict[str, ConfigLockEntry] = {}
     for name, reference in config.base_images.items():

@@ -83,7 +83,6 @@ class LockEnvUnwind:
 
 def select(config: Config, environment: Mapping[str, str]) -> Selection:
     names = split_names(environment.get(BUNDLES_VARIABLE, ""))
-    assert config.root is not None
     root = config.root
 
     options = {
@@ -187,7 +186,7 @@ def select(config: Config, environment: Mapping[str, str]) -> Selection:
     for bundle in config.compose_bundles():
         for workload in bundle.workloads:
             workload_document = WorkloadDocument.model_validate(
-                yaml.safe_load((config.score_dir_path() / workload).read_text(encoding="utf-8"))
+                yaml.safe_load((config.root / config.score_dir / workload).read_text(encoding="utf-8"))
             )
             raw, service_name = workload_document.dev_toggles
             # Skip absent annotations and outside-selection names; refuse malformed shapes.

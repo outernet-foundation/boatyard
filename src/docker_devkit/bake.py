@@ -14,6 +14,7 @@ import yaml
 from bashrun.bash import bash, bash_check, bash_output
 from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, model_validator
 
+from docker_devkit import dockerfiles
 from docker_devkit.config import Config
 from docker_devkit.dockerfiles import ServiceBuild, service_sha_env
 from docker_devkit.lock import env_entries, write_lock
@@ -95,7 +96,7 @@ def run_build(
     pushing = push is not None
     destination = push if push else None
 
-    service_shas = config.service_shas()
+    service_shas = dockerfiles.compute_service_shas(config.root, config.service_builds)
     os.environ.update(service_shas)
 
     if not config.service_builds:

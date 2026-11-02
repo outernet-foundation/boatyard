@@ -20,6 +20,7 @@ from docker_devkit.compose import (
     split_names,
 )
 from docker_devkit.config import Config, require_compose_stack
+from docker_devkit.config_lock import read_config_lock
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
@@ -89,7 +90,7 @@ def up(
 
 
 def _probe_lock_entries(config: Config) -> None:
-    lock = config.lock()
+    lock = read_config_lock(config.root)
     references = sorted(
         set(
             [reference for entry in lock.images.values() for reference in entry.recorded_digests]

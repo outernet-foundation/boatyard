@@ -10,6 +10,7 @@ from typing import Annotated
 import typer
 from bashrun.bash import bash, bash_output
 
+from docker_devkit import dockerfiles
 from docker_devkit.config import Config
 from docker_devkit.config_lock import LOCK_PATH, parse_config_lock
 from docker_devkit.crane import install_crane
@@ -77,7 +78,7 @@ def publish_compose(
     branch_tag = (branch or bash_output("git rev-parse --abbrev-ref HEAD").strip()).replace("/", "-")
 
     substitutions = {
-        **config.service_shas(),
+        **dockerfiles.compute_service_shas(config.root, config.service_builds),
         **env_entries(parse_config_lock(root / LOCK_PATH)),
     }
 

@@ -10,6 +10,7 @@ from docker_devkit.config import (
     chart_lock_key,
     mirrored_ref,
 )
+from docker_devkit.config_lock import read_config_lock
 from docker_devkit.crane import install_crane
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
@@ -23,7 +24,7 @@ def mirror() -> None:
         raise RuntimeError("a docker-devkit.yaml with base_images (or k8s.charts) is required to mirror")
     prefix = config.mirror_prefix
 
-    lock = config.lock()
+    lock = read_config_lock(root)
     mirror_targets: list[tuple[str, list[str]]] = []
     for name, reference in sorted(config.base_images.items(), key=lambda item: item[1]):
         entry = lock.images.get(name)

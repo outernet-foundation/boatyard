@@ -11,13 +11,11 @@ from packaging.specifiers import SpecifierSet
 from pydantic import AfterValidator, BaseModel, ConfigDict, Discriminator, Field, Tag, field_validator, model_validator
 from strictyaml import load as load_strict_yaml
 
-from docker_devkit import dockerfiles
 from docker_devkit.config_lock import (
     LOCK_PATH,
     PLATFORM_PATTERN,
     SHA256_DIGEST_REGEX,
-    ConfigLock,
-    parse_config_lock,
+    read_config_lock,
 )
 from docker_devkit.dockerfiles import (
     DOCKERFILE_NAME,
@@ -97,7 +95,7 @@ class Config(BaseModel):
     helm_version: str = "3.22.1"
 
     service_builds: dict[str, ServiceBuild] = Field(default_factory=dict, exclude=True)
-    root: Path | None = Field(default=None, exclude=True)
+    root: Path = Field(default_factory=Path.cwd, exclude=True)
 
     @classmethod
     def load(cls, root: Path) -> Config | None:
@@ -193,7 +191,7 @@ class Config(BaseModel):
             for entry in self.services.values()
         )
         if declares_routes:
-            self.lock().require(
+            read_config_lock(root).require(
                 CADDY_IMAGE,
                 "routes are declared",
                 hint="declare CADDY_IMAGE in base_images and run lock",
@@ -205,26 +203,12 @@ class Config(BaseModel):
 
         return self
 
-    def service_shas(self) -> dict[str, str]:
-        assert self.root is not None
-        return dockerfiles.compute_service_shas(self.root, self.service_builds)
-
-    def lock(self) -> ConfigLock:
-        assert self.root is not None
-        lock_path = self.root / LOCK_PATH
-        return parse_config_lock(lock_path) if lock_path.is_file() else ConfigLock()
-
     @property
     def declared_charts(self) -> dict[str, str]:
         return self.k8s.charts if self.k8s is not None else {}
 
-    def score_dir_path(self) -> Path:
-        assert self.root is not None
-        return self.root / self.score_dir
-
     def compose_bundles(self) -> list[ComposeBundle]:
         # Local bundles (group options and bare entries) in declaration order.
-        assert self.root is not None
         return [
             ComposeBundle(
                 name,

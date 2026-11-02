@@ -5,6 +5,7 @@ from typing import Annotated
 
 import typer
 
+from docker_devkit import dockerfiles
 from docker_devkit.config import Config
 from docker_devkit.dockerfiles import service_sha_env
 
@@ -30,6 +31,6 @@ def tree_tags(
     unknown = [name for name in services if name not in config.service_builds]
     if unknown:
         raise typer.BadParameter(f"unknown service(s) {unknown}; this repo derives {vocabulary}")
-    shas = config.service_shas()
+    shas = dockerfiles.compute_service_shas(config.root, config.service_builds)
     for name in services:
         print(shas[service_sha_env(name)])
