@@ -1,16 +1,28 @@
 import subprocess
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 import pytest
+import yaml
 
 from docker_devkit import config
-from docker_devkit.config import ServiceBuild, compute_service_shas, derive_services
+from docker_devkit.config import ServiceBuild, compute_service_shas, load_config
 
 
 def write_dockerfile(tmp_path: Path, service: str, text: str, top: str = "workloads") -> None:
     directory = tmp_path / top / service
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "Dockerfile").write_text(text, encoding="utf-8")
+
+
+def _derive(tmp_path: Path, axes: dict[str, list[str]] | None = None) -> dict[str, ServiceBuild]:
+    payload: dict[str, Any] = {"requires": ">=0", "repository": "ghcr.io/example"}
+    if axes is not None:
+        payload["variants"] = axes
+    (tmp_path / "docker-devkit.yaml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    loaded = load_config(tmp_path)
+    assert loaded is not None
+    return loaded.service_builds
 
 
 def _service_builds(*dockerfiles: str) -> dict[str, ServiceBuild]:
@@ -53,7 +65,7 @@ class TestDeriveServices:
         write_dockerfile(tmp_path, "api", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\n")
         write_dockerfile(tmp_path, "database-manager", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\n")
 
-        services = derive_services(tmp_path)
+        services = _derive(tmp_path)
 
         # The service name IS the directory name — the old manifest's create-database key
         # renames to database-manager under directory-derived naming.
@@ -66,7 +78,7 @@ class TestDeriveServices:
         write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\n")
         write_dockerfile(tmp_path, "localizer", "FROM neural-networks-base AS dev\nARG LOCALIZER_SHA\n")
 
-        services = derive_services(tmp_path)
+        services = _derive(tmp_path)
 
         assert services["localizer"].contexts == ["neural-networks-base"]
         assert services["localizer"].sha_args == ["LOCALIZER_SHA"]
@@ -78,21 +90,21 @@ class TestDeriveServices:
             "ARG UV_IMAGE\nFROM ${UV_IMAGE} AS base\nFROM base AS dev\nFROM base AS prod\n",
         )
 
-        services = derive_services(tmp_path)
+        services = _derive(tmp_path)
 
         assert services["api"].contexts == []
 
     def test_multi_stage_dockerfile_declares_a_dev_stage(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "ARG PY_IMAGE\nFROM ${PY_IMAGE} AS base\nFROM base AS dev\n")
 
-        services = derive_services(tmp_path)
+        services = _derive(tmp_path)
 
         assert services["api"].dev_stage
 
     def test_single_stage_dev_label_is_not_a_dev_stage(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "ARG PY_IMAGE\nFROM ${PY_IMAGE} AS dev\n")
 
-        services = derive_services(tmp_path)
+        services = _derive(tmp_path)
 
         assert not services["api"].dev_stage
 
@@ -100,7 +112,7 @@ class TestDeriveServices:
         write_dockerfile(tmp_path, "api", "FROM python\n")
 
         with pytest.raises(RuntimeError, match="FROM python names no service directory"):
-            derive_services(tmp_path)
+            _derive(tmp_path)
 
     def test_literal_from_refuses_naming_base_images(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "migrator", "FROM golang:1.22-alpine AS build\nFROM ghcr.io/org/base:1\n")
@@ -108,19 +120,19 @@ class TestDeriveServices:
         with pytest.raises(
             RuntimeError, match=r"FROM golang:1\.22-alpine is a hand-written image reference.*base_images"
         ):
-            derive_services(tmp_path)
+            _derive(tmp_path)
 
     def test_registry_path_with_an_arg_suffix_still_refuses(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "FROM ghcr.io/org/uv${UV_BASE_DIGEST}\n")
 
         with pytest.raises(RuntimeError, match=r"FROM ghcr\.io/org/uv\$\{UV_BASE_DIGEST\} is a hand-written"):
-            derive_services(tmp_path)
+            _derive(tmp_path)
 
     def test_literal_copy_from_refuses_naming_base_images(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "ARG PY_IMAGE\nFROM ${PY_IMAGE}\nCOPY --from=ghcr.io/org/uv:1 /uv /bin/\n")
 
         with pytest.raises(RuntimeError, match=r"COPY --from=ghcr\.io/org/uv:1 is a hand-written image reference"):
-            derive_services(tmp_path)
+            _derive(tmp_path)
 
     def test_stage_and_build_arg_copy_from_pass(self, tmp_path: Path) -> None:
         write_dockerfile(
@@ -129,14 +141,14 @@ class TestDeriveServices:
             "ARG PY_IMAGE\nFROM ${PY_IMAGE} AS base\nCOPY --from=base /x /y\nCOPY --from=${UV_IMAGE} /uv /bin/\n",
         )
 
-        services = derive_services(tmp_path)
+        services = _derive(tmp_path)
 
         assert services["api"].contexts == []
 
     def test_a_declared_axis_arg_fans_over_the_declared_values(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
 
-        services = derive_services(tmp_path, {"TORCH_DEVICE": ["cuda", "rocm"]})
+        services = _derive(tmp_path, {"TORCH_DEVICE": ["cuda", "rocm"]})
 
         assert services["neural-networks-base"].axis == "TORCH_DEVICE"
         assert services["neural-networks-base"].variants == ["cuda", "rocm"]
@@ -148,7 +160,7 @@ class TestDeriveServices:
     def test_an_arg_naming_no_declared_axis_stays_plain(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
 
-        services = derive_services(tmp_path)
+        services = _derive(tmp_path)
 
         assert services["neural-networks-base"].axis is None
         assert services["neural-networks-base"].variants == []
@@ -159,7 +171,7 @@ class TestDeriveServices:
     def test_declared_values_keep_their_declared_order(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
 
-        services = derive_services(tmp_path, {"TORCH_DEVICE": ["rocm", "cuda"]})
+        services = _derive(tmp_path, {"TORCH_DEVICE": ["rocm", "cuda"]})
 
         assert services["api"].variants == ["rocm", "cuda"]
         assert [target for target, _variant in services["api"].target_variants] == ["api-rocm", "api-cuda"]
@@ -168,13 +180,13 @@ class TestDeriveServices:
         write_dockerfile(tmp_path, "api", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG ACCEL_FPGA\nARG ACCEL_TPU\n")
 
         with pytest.raises(RuntimeError, match="a service carries one axis"):
-            derive_services(tmp_path, {"ACCEL_FPGA": ["fpga"], "ACCEL_TPU": ["tpu"]})
+            _derive(tmp_path, {"ACCEL_FPGA": ["fpga"], "ACCEL_TPU": ["tpu"]})
 
     def test_the_axis_propagates_along_context_edges(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
         write_dockerfile(tmp_path, "localizer", "FROM neural-networks-base AS dev\n")
 
-        services = derive_services(tmp_path, {"TORCH_DEVICE": ["cuda", "rocm"]})
+        services = _derive(tmp_path, {"TORCH_DEVICE": ["cuda", "rocm"]})
 
         assert services["localizer"].axis == "TORCH_DEVICE"
         assert services["localizer"].variants == ["cuda", "rocm"]
@@ -188,7 +200,7 @@ class TestDeriveServices:
         write_dockerfile(tmp_path, "localizer", "FROM neural-networks-base AS dev\nARG TORCH_DEVICE\n")
 
         with pytest.raises(RuntimeError, match="inherits its base's variant cells"):
-            derive_services(tmp_path, {"TORCH_DEVICE": ["cuda", "rocm"]})
+            _derive(tmp_path, {"TORCH_DEVICE": ["cuda", "rocm"]})
 
     def test_parents_disagreeing_on_variant_cells_refuse(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "fanned-base", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\nARG TORCH_DEVICE\n")
@@ -196,20 +208,20 @@ class TestDeriveServices:
         write_dockerfile(tmp_path, "dependent", "FROM fanned-base AS a\nFROM plain-base AS b\n")
 
         with pytest.raises(RuntimeError, match="disagree on variant cells"):
-            derive_services(tmp_path, {"TORCH_DEVICE": ["cuda", "rocm"]})
+            _derive(tmp_path, {"TORCH_DEVICE": ["cuda", "rocm"]})
 
     def test_sha_arg_naming_no_service_refuses(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\nARG GHOST_SHA\n")
 
         with pytest.raises(RuntimeError, match="ARG GHOST_SHA names no derived service"):
-            derive_services(tmp_path)
+            _derive(tmp_path)
 
     def test_dockerfiles_spanning_multiple_top_level_dirs_refuse(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n")
         write_dockerfile(tmp_path, "bridge", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n", top="docker")
 
         with pytest.raises(RuntimeError, match="span multiple top-level directories"):
-            derive_services(tmp_path)
+            _derive(tmp_path)
 
 
 class TestComputeServiceShasZeroServices:

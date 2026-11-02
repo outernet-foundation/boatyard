@@ -68,6 +68,9 @@ Target = Literal["both", "compose", "k8s"]
 
 
 def load_config(root: Path) -> DockerDevkitConfig | None:
+    # The one load pipeline: parse, the version self-check, then the filesystem-gated
+    # laws in one linear body — the leftover guards, toolchain template resolution, the
+    # Dockerfile service derivation, and the pairing laws over the derived set.
     path = root / DEFAULT_CONFIG_PATH
     if not path.exists():
         return None
@@ -76,7 +79,128 @@ def load_config(root: Path) -> DockerDevkitConfig | None:
     if installed != DEV_SENTINEL and not SpecifierSet(config.requires).contains(installed, prereleases=True):
         raise SystemExit(f"docker-devkit {installed} does not satisfy requires={config.requires!r}")
     config.root = root
-    config.finalize()
+
+    if (root / LEFTOVER_MANIFEST_PATH).exists():
+        raise RuntimeError(
+            f"{LEFTOVER_MANIFEST_PATH.as_posix()} exists; the manifest dissolved — its declarations live in "
+            f"{DEFAULT_CONFIG_PATH.as_posix()}'s root base_images/repository keys. Delete the leftover."
+        )
+    if (root / LEFTOVER_LOCK_PATH).exists():
+        raise RuntimeError(
+            f"{LEFTOVER_LOCK_PATH.as_posix()} exists; the lock lives at {LOCK_PATH.as_posix()} in the repo root. "
+            "Move the file (git mv)."
+        )
+
+    # Toolchain components in base_images derive by construction: {uv} from
+    # tool.uv.required-version, {python} from .python-version. Plain values stay
+    # plain — a literal in place of a template is the deliberate-skew escape hatch,
+    # visible in every diff.
+    pins: dict[str, str] = {}
+    used = sorted({key for reference in config.base_images.values() for key in TEMPLATE_KEY_PATTERN.findall(reference)})
+    for key in used:
+        if key == "uv":
+            pyproject = root / PYPROJECT_PATH
+            tool_document: dict[str, object] = (
+                tomllib.loads(pyproject.read_text(encoding="utf-8")) if pyproject.is_file() else {}
+            )
+            tool_table: object = tool_document.get("tool")
+            uv_table: object = tool_table.get("uv") if is_mapping(tool_table) else None
+            declared: object = uv_table.get("required-version") if is_mapping(uv_table) else None
+            if not isinstance(declared, str) or not declared:
+                raise RuntimeError(
+                    f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version is not declared; "
+                    "a {uv} template resolves from that exact pin"
+                )
+            pin_match = re.fullmatch(r"==(?P<version>[^,*\s]+)", declared.strip())
+            if pin_match is None:
+                raise RuntimeError(
+                    f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version {declared!r} is a range, "
+                    "not an exact pin; a {uv} template resolves only from an exact == pin like '==0.12.15'"
+                )
+            pins[key] = pin_match.group("version")
+        elif key == "python":
+            python_version = root / PYTHON_VERSION_PATH
+            if not python_version.is_file():
+                raise RuntimeError(
+                    f"{PYTHON_VERSION_PATH.as_posix()}: the file is absent; "
+                    "a {python} template resolves from its declared version"
+                )
+            # uv reads the first line as the default selection when several are listed.
+            version = next(
+                (line.strip() for line in python_version.read_text(encoding="utf-8").splitlines() if line.strip()),
+                "",
+            )
+            if not version:
+                raise RuntimeError(
+                    f"{PYTHON_VERSION_PATH.as_posix()}: the file is empty; "
+                    "a {python} template resolves from its declared version"
+                )
+            pins[key] = version
+        else:
+            raise RuntimeError(
+                f"base_images template key {{{key}}} is unknown; the toolchain pins are {{uv}}, {{python}}"
+            )
+    config.base_images = {
+        name: TEMPLATE_KEY_PATTERN.sub(lambda match: pins[match.group(1)], reference)
+        for name, reference in config.base_images.items()
+    }
+
+    # Every Dockerfile-bearing directory one level below a top-level directory is a
+    # service; the graph (context edges, variant axes, SHA args) derives from the
+    # Dockerfiles themselves. Parsing and variant resolution complete before any
+    # ServiceBuild is constructed — each record is built once, fully resolved.
+    parsed = _parse_dockerfiles(root, config.variants)
+
+    computable = {service_sha_env(name) for name in parsed}
+    for service in parsed.values():
+        unknown = [arg for arg in service.sha_args if arg not in computable]
+        if unknown:
+            raise RuntimeError(
+                f"workloads/{service.name}/{DOCKERFILE_NAME}: ARG {', '.join(unknown)} names no derived service; "
+                "the stamp receiver must match a service directory"
+            )
+
+    resolved: dict[str, tuple[str | None, list[str]]] = {}
+    service_builds: dict[str, ServiceBuild] = {}
+    for name, service in parsed.items():
+        axis, variants = _resolve_axis(name, (), parsed, resolved, config.variants)
+        service_builds[name] = ServiceBuild(
+            name=name,
+            dockerfile=service.dockerfile,
+            contexts=service.contexts,
+            axis=axis,
+            variants=variants,
+            sha_args=service.sha_args,
+            dev_stage=service.dev_stage,
+        )
+    if service_builds and config.repository is None:
+        listed = ", ".join(sorted(service_builds))
+        raise RuntimeError(
+            f"Dockerfile service directories exist ({listed}); repository is required — it derives every image tag"
+        )
+    config.service_builds = service_builds
+
+    declared_charts = config.declared_charts
+    if (config.base_images or declared_charts) and not (root / LOCK_PATH).is_file():
+        raise RuntimeError(
+            f"{LOCK_PATH.as_posix()}: base_images or k8s.charts are declared, so the committed image lock is "
+            "required beside them (the lock verb writes it)"
+        )
+    if config.gateway is not None:
+        # A cutover (env-line) lock skips the CADDY check here: its parse refusal fires
+        # in every consumer instead, and the lock verb must stay runnable to rewrite it.
+        entries = parse_committed_lock(root)
+        if entries is not None:
+            entries.require(
+                CADDY_IMAGE,
+                "routes are declared, so the edge rides",
+                hint="declare CADDY_IMAGE in base_images and run lock",
+            )
+    for chart in declared_charts:
+        values = root / config.score_dir / "k8s" / "values" / f"{chart}.yaml"
+        if not values.is_file():
+            raise RuntimeError(f"{values.as_posix()}: the chart's values file is required at the derived path")
+
     return config
 
 
@@ -106,7 +230,7 @@ def parse_dev_toggles(where: str, raw: str) -> dict[str, str]:
 
 
 class ServiceBuild(BaseModel):
-    # Derived by load_config from the Dockerfile tree (derive_services); never authored.
+    # Derived by load_config from the Dockerfile tree; never authored.
     model_config = ConfigDict(extra="forbid")
 
     name: str
@@ -291,7 +415,7 @@ class DockerDevkitConfig(BaseModel):
     score_k8s_version: str = "0.15.0"
     helm_version: str = "3.22.1"
 
-    # Derived by load_config from the Dockerfile tree (derive_services); never authored.
+    # Derived by load_config from the Dockerfile tree; never authored.
     service_builds: dict[str, ServiceBuild] = Field(default_factory=dict, exclude=True)
     # The repo root the config was loaded from; load-injected, never authored.
     root: Path | None = Field(default=None, exclude=True)
@@ -539,105 +663,6 @@ class DockerDevkitConfig(BaseModel):
             )
         return self
 
-    def finalize(self) -> None:
-        # Filesystem-gated laws: the leftover-manifest guard, the service derivation, and
-        # the pairing laws that need the derived service set.
-        assert self.root is not None
-        root = self.root
-        if (root / LEFTOVER_MANIFEST_PATH).exists():
-            raise RuntimeError(
-                f"{LEFTOVER_MANIFEST_PATH.as_posix()} exists; the manifest dissolved — its declarations live in "
-                f"{DEFAULT_CONFIG_PATH.as_posix()}'s root base_images/repository keys. Delete the leftover."
-            )
-        if (root / LEFTOVER_LOCK_PATH).exists():
-            raise RuntimeError(
-                f"{LEFTOVER_LOCK_PATH.as_posix()} exists; the lock lives at {LOCK_PATH.as_posix()} in the repo root. "
-                "Move the file (git mv)."
-            )
-
-        # Toolchain components in base_images derive by construction: {uv} from
-        # tool.uv.required-version, {python} from .python-version. Plain values stay
-        # plain — a literal in place of a template is the deliberate-skew escape hatch,
-        # visible in every diff.
-        pins: dict[str, str] = {}
-        used = sorted({key for reference in self.base_images.values() for key in TEMPLATE_KEY_PATTERN.findall(reference)})
-        for key in used:
-            if key == "uv":
-                pyproject = root / PYPROJECT_PATH
-                tool_document: dict[str, object] = (
-                    tomllib.loads(pyproject.read_text(encoding="utf-8")) if pyproject.is_file() else {}
-                )
-                tool_table: object = tool_document.get("tool")
-                uv_table: object = tool_table.get("uv") if is_mapping(tool_table) else None
-                declared: object = uv_table.get("required-version") if is_mapping(uv_table) else None
-                if not isinstance(declared, str) or not declared:
-                    raise RuntimeError(
-                        f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version is not declared; "
-                        "a {uv} template resolves from that exact pin"
-                    )
-                pin_match = re.fullmatch(r"==(?P<version>[^,*\s]+)", declared.strip())
-                if pin_match is None:
-                    raise RuntimeError(
-                        f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version {declared!r} is a range, "
-                        "not an exact pin; a {uv} template resolves only from an exact == pin like '==0.12.15'"
-                    )
-                pins[key] = pin_match.group("version")
-            elif key == "python":
-                python_version = root / PYTHON_VERSION_PATH
-                if not python_version.is_file():
-                    raise RuntimeError(
-                        f"{PYTHON_VERSION_PATH.as_posix()}: the file is absent; "
-                        "a {python} template resolves from its declared version"
-                    )
-                # uv reads the first line as the default selection when several are listed.
-                version = next(
-                    (line.strip() for line in python_version.read_text(encoding="utf-8").splitlines() if line.strip()),
-                    "",
-                )
-                if not version:
-                    raise RuntimeError(
-                        f"{PYTHON_VERSION_PATH.as_posix()}: the file is empty; "
-                        "a {python} template resolves from its declared version"
-                    )
-                pins[key] = version
-            else:
-                raise RuntimeError(
-                    f"base_images template key {{{key}}} is unknown; the toolchain pins are {{uv}}, {{python}}"
-                )
-        self.base_images = {
-            name: TEMPLATE_KEY_PATTERN.sub(lambda match: pins[match.group(1)], reference)
-            for name, reference in self.base_images.items()
-        }
-
-        service_builds = derive_services(root, self.variants)
-        if service_builds and self.repository is None:
-            listed = ", ".join(sorted(service_builds))
-            raise RuntimeError(
-                f"Dockerfile service directories exist ({listed}); repository is required — it derives every image tag"
-            )
-        self.service_builds = service_builds
-
-        declared_charts = self.declared_charts
-        if (self.base_images or declared_charts) and not (root / LOCK_PATH).is_file():
-            raise RuntimeError(
-                f"{LOCK_PATH.as_posix()}: base_images or k8s.charts are declared, so the committed image lock is "
-                "required beside them (the lock verb writes it)"
-            )
-        if self.gateway is not None:
-            # A cutover (env-line) lock skips the CADDY check here: its parse refusal fires
-            # in every consumer instead, and the lock verb must stay runnable to rewrite it.
-            entries = parse_committed_lock(root)
-            if entries is not None:
-                entries.require(
-                    CADDY_IMAGE,
-                    "routes are declared, so the edge rides",
-                    hint="declare CADDY_IMAGE in base_images and run lock",
-                )
-        for chart in declared_charts:
-            values = self.chart_values_path(chart)
-            if not values.is_file():
-                raise RuntimeError(f"{values.as_posix()}: the chart's values file is required at the derived path")
-
 
 def _coerce_port_strings(where: str, entry: dict[str, object], owning_name: str, *, bare_legal: bool) -> None:
     # A non-list ports value rides through untouched; field validation reports it.
@@ -686,39 +711,6 @@ def mirrored_ref(reference: str, prefix: str) -> str:
 
 def service_sha_env(name: str) -> str:
     return name.upper().replace("-", "_") + "_SHA"
-
-
-def derive_services(root: Path, axes: dict[str, list[str]] | None = None) -> dict[str, ServiceBuild]:
-    # Every Dockerfile-bearing directory one level below a top-level directory is a
-    # service; the graph (context edges, variant axes, SHA args) derives from the
-    # Dockerfiles themselves. Parsing and variant resolution complete before any
-    # ServiceBuild is constructed — each record is built once, fully resolved.
-    declared_axes = axes if axes is not None else {}
-    parsed = _parse_dockerfiles(root, declared_axes)
-
-    computable = {service_sha_env(name) for name in parsed}
-    for service in parsed.values():
-        unknown = [arg for arg in service.sha_args if arg not in computable]
-        if unknown:
-            raise RuntimeError(
-                f"workloads/{service.name}/{DOCKERFILE_NAME}: ARG {', '.join(unknown)} names no derived service; "
-                "the stamp receiver must match a service directory"
-            )
-
-    resolved: dict[str, tuple[str | None, list[str]]] = {}
-    builds: dict[str, ServiceBuild] = {}
-    for name, service in parsed.items():
-        axis, variants = _resolve_axis(name, (), parsed, resolved, declared_axes)
-        builds[name] = ServiceBuild(
-            name=name,
-            dockerfile=service.dockerfile,
-            contexts=service.contexts,
-            axis=axis,
-            variants=variants,
-            sha_args=service.sha_args,
-            dev_stage=service.dev_stage,
-        )
-    return builds
 
 
 def _parse_dockerfiles(root: Path, axes: dict[str, list[str]]) -> dict[str, ParsedDockerfile]:
