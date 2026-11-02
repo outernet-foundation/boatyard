@@ -4,7 +4,7 @@ import os
 import re
 import shlex
 from collections.abc import Callable, Generator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from functools import partial
 from hashlib import sha256
 from importlib.resources import as_file, files
@@ -162,9 +162,64 @@ def render_score(
     output.parent.mkdir(parents=True, exist_ok=True)
 
     with (
-        builtin_patch_templates() as builtin_templates,
-        compiled_provisioners(score_dir, rendering, workloads, root, images) as provisioners,
+        as_file(files("docker_devkit") / PATCH_TEMPLATES_DIR) as builtin_templates,
+        ExitStack() as stack,
     ):
+        # Select the provisioner files whose resource types the workloads reference,
+        # then compile into a per-run tempdir under score_dir.
+        referenced: set[str] = set()
+        for name in workloads:
+            document = load_yaml_file(score_dir / name)
+            resources = document.get("resources") if is_mapping(document) else None
+            if is_mapping(resources):
+                for resource in resources.values():
+                    resource_type = resource.get("type") if is_mapping(resource) else None
+                    if isinstance(resource_type, str):
+                        referenced.add(resource_type)
+
+        names: list[str] = []
+        rendering_dir = score_dir / rendering
+        if rendering_dir.is_dir():
+            for path in sorted(rendering_dir.glob("*.yaml")):
+                entries = load_yaml_file(path)
+                if not is_list(entries):
+                    continue
+                if any(is_mapping(entry) and entry.get("type") in referenced for entry in entries):
+                    names.append(f"{rendering}/{path.name}")
+
+        paths: list[Path] = []
+        declares_services = False
+        if names:
+            directory = Path(stack.enter_context(TemporaryDirectory(prefix="compiled-provisioners-", dir=score_dir)))
+            for name in names:
+                document = resolve_markers(
+                    yaml.safe_load((score_dir / name).read_text(encoding="utf-8")), root, images, name
+                )
+                if not is_list(document):
+                    continue
+                compiled_entries: list[Yaml] = []
+                for entry in document:
+                    validate(AuthoredProvisioner, entry, name)
+                    if not is_mapping(entry):
+                        continue
+                    if entry.get("services"):
+                        declares_services = True
+
+                    # Compile each entry in authored key order.
+                    compiled: dict[str, Yaml] = {}
+                    for key, value in entry.items():
+                        if key in STRING_FORM_FIELDS:
+                            if value is not None:
+                                compiled[key] = dump_compose(value)
+                        else:
+                            compiled[key] = value
+                    compiled_entries.append(compiled)
+                target = directory / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(dump_compose(compiled_entries), encoding="utf-8", newline="")
+                paths.append(target)
+
+        provisioners = CompiledProvisioners(paths=paths, declares_services=declares_services)
         if gate is not None:
             gate(provisioners)
 
@@ -203,75 +258,6 @@ def render_score(
 
         with rendered_workloads(config, workloads, rendering_vars, images, service_shas) as rendered:
             bash(f"{tool} generate {rendered} --output {output.as_posix()}", cwd=working_dir, env=tool_environment)
-
-
-@contextmanager
-def builtin_patch_templates() -> Generator[Path]:
-    with as_file(files("docker_devkit") / PATCH_TEMPLATES_DIR) as directory:
-        yield directory
-
-
-@contextmanager
-def compiled_provisioners(
-    score_dir: Path, rendering: str, workloads: list[str], root: Path, images: dict[str, str]
-) -> Generator[CompiledProvisioners]:
-    # Select the provisioner files whose resource types the workloads reference,
-    # then compile into a per-run tempdir under score_dir.
-    referenced: set[str] = set()
-    for name in workloads:
-        document = load_yaml_file(score_dir / name)
-        resources = document.get("resources") if is_mapping(document) else None
-        if is_mapping(resources):
-            for resource in resources.values():
-                resource_type = resource.get("type") if is_mapping(resource) else None
-                if isinstance(resource_type, str):
-                    referenced.add(resource_type)
-    names: list[str] = []
-    rendering_dir = score_dir / rendering
-    if rendering_dir.is_dir():
-        for path in sorted(rendering_dir.glob("*.yaml")):
-            entries = load_yaml_file(path)
-            if not is_list(entries):
-                continue
-            if any(is_mapping(entry) and entry.get("type") in referenced for entry in entries):
-                names.append(f"{rendering}/{path.name}")
-
-    if not names:
-        yield CompiledProvisioners(paths=[], declares_services=False)
-        return
-
-    with TemporaryDirectory(prefix="compiled-provisioners-", dir=score_dir) as temporary_directory:
-        directory = Path(temporary_directory)
-        paths: list[Path] = []
-        declares_services = False
-        for name in names:
-            document = resolve_markers(
-                yaml.safe_load((score_dir / name).read_text(encoding="utf-8")), root, images, name
-            )
-            if not is_list(document):
-                continue
-            compiled_entries: list[Yaml] = []
-            for entry in document:
-                validate(AuthoredProvisioner, entry, name)
-                if not is_mapping(entry):
-                    continue
-                if entry.get("services"):
-                    declares_services = True
-
-                # Compile each entry in authored key order.
-                compiled: dict[str, Yaml] = {}
-                for key, value in entry.items():
-                    if key in STRING_FORM_FIELDS:
-                        if value is not None:
-                            compiled[key] = dump_compose(value)
-                    else:
-                        compiled[key] = value
-                compiled_entries.append(compiled)
-            target = directory / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(dump_compose(compiled_entries), encoding="utf-8", newline="")
-            paths.append(target)
-        yield CompiledProvisioners(paths=paths, declares_services=declares_services)
 
 
 def resolve_markers(

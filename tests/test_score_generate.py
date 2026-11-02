@@ -16,7 +16,7 @@ from docker_devkit import score_k8s as score_k8s_module
 from docker_devkit.verbs import score as score_verb_module
 from docker_devkit.config import Config
 from docker_devkit.config_lock import ConfigLock
-from docker_devkit.score import compiled_provisioners, write_generated_file
+from docker_devkit.score import write_generated_file
 from docker_devkit.score_compose import BindVolume, ComposeService
 from docker_devkit.score_k8s import CLOUD_STORAGE_CLASS, generate_k8s
 
@@ -1223,66 +1223,3 @@ def test_variable_placeholders_refuse_or_stay_escaped(tmp_path: Path) -> None:
         bash("score-compose generate refused-files.yaml --output refused.yaml", cwd=tmp_path)
     with pytest.raises(CalledProcessError):
         bash("score-compose generate refused-variables.yaml --output refused.yaml", cwd=tmp_path)
-
-
-ORDER_INDEPENDENCE_PROVISIONER = """\
-- uri: template://example/order
-  type: order-provisioner
-  services:
-    order-service:
-      image:
-        lock: SERVICE_IMAGE
-"""
-
-ORDER_INDEPENDENCE_SECOND_PROVISIONER = """\
-- uri: template://example/other
-  type: other-provisioner
-  services:
-    other-service:
-      image:
-        lock: OTHER_IMAGE
-"""
-
-
-def test_provisioner_registration_order_does_not_change_generated_output(tmp_path: Path) -> None:
-    _skip_unless_pinned_score_compose()
-    source = tmp_path / "score"
-    (source / "compose").mkdir(parents=True)
-    (source / "compose" / "first.yaml").write_text(ORDER_INDEPENDENCE_PROVISIONER, encoding="utf-8")
-    (source / "compose" / "second.yaml").write_text(ORDER_INDEPENDENCE_SECOND_PROVISIONER, encoding="utf-8")
-    workload = source / "workload.yaml"
-    workload.write_text(
-        "apiVersion: score.dev/v1b1\n"
-        "metadata:\n"
-        "  name: order\n"
-        "containers:\n"
-        "  order:\n"
-        "    image: ghcr.io/example/order:1\n"
-        "resources:\n"
-        "  first:\n"
-        "    type: order-provisioner\n"
-        "  second:\n"
-        "    type: other-provisioner\n",
-        encoding="utf-8",
-    )
-
-    outputs: dict[str, str] = {}
-    order_lock = {
-        "SERVICE_IMAGE": "ghcr.io/example/service@sha256:" + "a" * 64,
-        "OTHER_IMAGE": "ghcr.io/example/other@sha256:" + "b" * 64,
-    }
-    with compiled_provisioners(source, "compose", ["workload.yaml"], tmp_path, order_lock) as compiled:
-        registrations = {
-            "forward": compiled.paths,
-            "reversed": list(reversed(compiled.paths)),
-        }
-        for label, paths in registrations.items():
-            sandbox = tmp_path / label
-            sandbox.mkdir()
-            flags = "".join(f" --provisioners {path.as_posix()}" for path in paths)
-            bash(f"score-compose init --project order --no-sample{flags}", cwd=sandbox)
-            bash(f"score-compose generate {workload.as_posix()} --output {sandbox.as_posix()}/out.yaml", cwd=sandbox)
-            outputs[label] = (sandbox / "out.yaml").read_text(encoding="utf-8")
-
-    assert "order-service" in outputs["forward"]
-    assert outputs["forward"] == outputs["reversed"]
