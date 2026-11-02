@@ -35,7 +35,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
   (`select`/`render` + kit); `bake.py` build pipeline; `score.py` score shared base; `score_compose.py`/`score_k8s.py` rendering pipelines; `verbs/score.py` the score verb (generation inline) + `ensure_tools`;
   `publish.py` publish preparation; `crane.py` pinned crane installer; `cli.py` the single console-script app composing the verb apps namelessly; `verbs/*` one module per command. Model modules run root → leaves: root record first
   (`RootModel` subscripts quote forward refs; the one inversion is a parent whose field default constructs the child), functions callers-before-callees; imports absolute; `config_lock`/`dockerfiles` ← `config` one-way. Also in `config.py` (the shared leaf): `Yaml`,
-  `is_mapping`/`is_list`, `double_dollars` (the one `$`-doubling home), `PLACEHOLDER`/`COMPOSE_HOLE`/`ENV_NAME_PATTERN`, `EDGE_SERVICE_NAME`, `chart_lock_key`, `load_yaml_file`. Lifecycle stays a separate package from codegen (disjoint dependency surfaces — bundling would force
+  `is_mapping`/`is_list`, `double_dollars` (the one `$`-doubling home), `PLACEHOLDER`/`COMPOSE_HOLE`/`ENV_NAME_PATTERN`, `EDGE_SERVICE_NAME`, `chart_lock_key`, `load_yaml_file`, `compose_bundle_output` (the one compose-output path join). Lifecycle stays a separate package from codegen (disjoint dependency surfaces — bundling would force
   stack-only consumers to install `sqlacodegen`, `psycopg`, `datamodel-code-generator`).
 
 ## Config schema
@@ -55,7 +55,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 - Load refusals (`Config.resolve`): Dockerfile services or local entries without `repository`; `base_images`/`k8s.charts` without the committed lock (pairing law); a declared chart without `stack/score/k8s/values/{chart}.yaml`; routes without `CADDY_IMAGE` in
   the lock.
 - `mirrored_ref(reference, prefix)` = the only prefix join — injects the prefix, rejects an already-prefixed reference (double-prefix guard).
-- Derivation shape law: `Config` carries authored data and validation; a member may hold real derivation logic (`declared_charts`), but a member that only delegates to another module's function is a
+- Derivation shape law: `Config` carries authored data and validation; a member may hold real derivation logic (`local_service_entries`, `declared_charts`), but a member that only delegates to another module's function is a
   pass-through — call the function at the consumer, `compute_service_shas` module-qualified (test seam); `root` defaults to the working directory, `resolve` injects the load root, excluded, never-authored;
   `parse_dev_toggles` = the one dev-toggles parser (ALL_CAPS, non-empty defaults, no duplicates).
 - `.env` carries `BUNDLES=`, `COMPOSE_PROFILES`, `PLATFORM=`, dev-toggle overrides, the consumer's interpolation variables.
