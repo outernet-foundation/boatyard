@@ -52,7 +52,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 - Load refusals: Dockerfile services or local entries without `repository`; `base_images`/`k8s.charts` without the committed lock (pairing law); a declared chart without `stack/score/k8s/values/{chart}.yaml`; routes without `CADDY_IMAGE` in
   the lock.
 - `mirrored_ref(reference, prefix)` = the only prefix join — injects the prefix, rejects an already-prefixed reference (double-prefix guard).
-- Derivation shape law: multi-consumer derivations ride `DockerDevkitConfig` (`compose_bundles`, `tool_requirements`, `image_lock`, `declared_charts`, `service_shas`); single-call-site derivations inline at their consumer;
+- Derivation shape law: multi-consumer derivations ride `DockerDevkitConfig` (`compose_bundles`, `image_lock`, `declared_charts`, `service_shas`); single-call-site derivations inline at their consumer;
   `score_dir_path()` is the only path member; `root` load-injected, excluded, never-authored; `compute_service_shas` stays a module-level late-bound global (test seam), never inlined into the member; `parse_dev_toggles` = the one
   dev-toggles parser (ALL_CAPS, non-empty defaults, no duplicates).
 - `.env` carries `BUNDLES=`, `COMPOSE_PROFILES`, `PLATFORM=`, dev-toggle overrides, the consumer's interpolation variables.
