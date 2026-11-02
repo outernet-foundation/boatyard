@@ -87,17 +87,15 @@ def _write_lock(
     }
     platforms = platform_entries or {"linux/amd64": ""}
     root.joinpath(*LOCK_PATH.parts).write_text(
-        yaml.safe_dump(
-            {
-                "images": {
-                    name: {
-                        "index": reference,
-                        "platforms": {platform: manifest or reference for platform, manifest in platforms.items()},
-                    }
-                    for name, reference in declared.items()
+        yaml.safe_dump({
+            "images": {
+                name: {
+                    "index": reference,
+                    "platforms": {platform: manifest or reference for platform, manifest in platforms.items()},
                 }
+                for name, reference in declared.items()
             }
-        ),
+        }),
         encoding="utf-8",
     )
 
@@ -1065,9 +1063,7 @@ class TestLockEnvSynthesis:
         [content] = recorder.env_contents
         assert content == f"ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
 
-    def test_two_consecutive_syntheses_are_byte_identical(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_two_consecutive_syntheses_are_byte_identical(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)
         (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
         _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST})
@@ -1079,9 +1075,7 @@ class TestLockEnvSynthesis:
         assert len(recorder.env_contents) == 2
         assert recorder.env_contents[0] == recorder.env_contents[1]
 
-    def test_a_multi_platform_repo_selects_the_named_platform(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_a_multi_platform_repo_selects_the_named_platform(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_config(
             tmp_path,
             {
@@ -1126,9 +1120,7 @@ class TestLockEnvSynthesis:
         assert "PLATFORM=" in message
         assert "linux/amd64" in message and "linux/arm64" in message
 
-    def test_an_undeclared_platform_selection_refuses(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_an_undeclared_platform_selection_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)
         (tmp_path / ".env").write_text("PLATFORM=linux/ppc64le\n", encoding="utf-8")
         _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX})
@@ -1173,7 +1165,9 @@ class TestLockEnvSynthesis:
         result = runner.invoke(up.app, [])
 
         assert result.exit_code != 0
-        kept = [Path(line.split(":", 1)[1].strip()) for line in result.output.splitlines() if "kept for inspection" in line]
+        kept = [
+            Path(line.split(":", 1)[1].strip()) for line in result.output.splitlines() if "kept for inspection" in line
+        ]
         assert len(kept) == 1
         assert kept[0].read_text(encoding="utf-8") == f"ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
 
@@ -1257,13 +1251,11 @@ class TestMirroredLockEnforcement:
         manifest = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + PLATFORM_DIGEST
         self._write_mirrored_tree(tmp_path, {"ALPINE_IMAGE": index})
         tmp_path.joinpath(*LOCK_PATH.parts).write_text(
-            yaml.safe_dump(
-                {
-                    "images": {
-                        "ALPINE_IMAGE": {"index": index, "platforms": {"linux/amd64": manifest}},
-                    }
+            yaml.safe_dump({
+                "images": {
+                    "ALPINE_IMAGE": {"index": index, "platforms": {"linux/amd64": manifest}},
                 }
-            ),
+            }),
             encoding="utf-8",
         )
         probe = SelectiveProbe(index)
@@ -1287,13 +1279,11 @@ class TestMirroredLockEnforcement:
         manifest = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + PLATFORM_DIGEST
         self._write_mirrored_tree(tmp_path, {"ALPINE_IMAGE": index})
         tmp_path.joinpath(*LOCK_PATH.parts).write_text(
-            yaml.safe_dump(
-                {
-                    "images": {
-                        "ALPINE_IMAGE": {"index": index, "platforms": {"linux/amd64": manifest}},
-                    }
+            yaml.safe_dump({
+                "images": {
+                    "ALPINE_IMAGE": {"index": index, "platforms": {"linux/amd64": manifest}},
                 }
-            ),
+            }),
             encoding="utf-8",
         )
         probed: list[str] = []

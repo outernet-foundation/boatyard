@@ -461,9 +461,7 @@ class TestSelectPlatformManifests:
         with pytest.raises(RuntimeError, match=f"entry X.*multiple upstream manifests.*{DIGEST_C}, {DIGEST_D}"):
             lock_module.resolve_remote_manifests("docker.io/library/alpine:3.20", ["linux/amd64"], "entry X")
 
-    def test_a_declared_platform_no_index_child_covers_refuses_naming_the_entry(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_a_declared_platform_no_index_child_covers_refuses_naming_the_entry(self, monkeypatch: pytest.MonkeyPatch):
         raw = json.dumps({"manifests": [_child(DIGEST_C, "linux", "amd64")]})
         monkeypatch.setattr(lock_module, "bash_output", RawInspectOutput(raw))
         monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
@@ -593,22 +591,20 @@ def test_build_no_longer_carries_the_lock_flags() -> None:
 
 
 def _selection_lock() -> lock_module.ImageLock:
-    return lock_module.ImageLock.model_validate(
-        {
-            "images": {
-                "LOKI_IMAGE": {
-                    "index": f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.5.0@{DIGEST_A}",
-                    "platforms": {
-                        "linux/amd64": f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.5.0@{DIGEST_B}",
-                        "linux/arm64": f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.5.0@{DIGEST_C}",
-                    },
-                }
-            },
-            "charts": {
-                "GRAFANA_CHART": f"{MIRROR_PREFIX}/ghcr.io/grafana/chart@{DIGEST_A}",
-            },
-        }
-    )
+    return lock_module.ImageLock.model_validate({
+        "images": {
+            "LOKI_IMAGE": {
+                "index": f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.5.0@{DIGEST_A}",
+                "platforms": {
+                    "linux/amd64": f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.5.0@{DIGEST_B}",
+                    "linux/arm64": f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.5.0@{DIGEST_C}",
+                },
+            }
+        },
+        "charts": {
+            "GRAFANA_CHART": f"{MIRROR_PREFIX}/ghcr.io/grafana/chart@{DIGEST_A}",
+        },
+    })
 
 
 def _selection_config(**sections: object) -> config_module.DockerDevkitConfig:
@@ -700,7 +696,9 @@ class TestPlatformSelectionLaw:
             lock_module.compose_env_entries(_selection_lock(), config, {"PLATFORM": "linux/arm64"})
 
     def test_a_platform_less_declaring_repo_answers_none(self) -> None:
-        charts_only = lock_module.ImageLock(charts={"GRAFANA_CHART": f"{MIRROR_PREFIX}/ghcr.io/grafana/chart@{DIGEST_A}"})
+        charts_only = lock_module.ImageLock(
+            charts={"GRAFANA_CHART": f"{MIRROR_PREFIX}/ghcr.io/grafana/chart@{DIGEST_A}"}
+        )
 
         entries = lock_module.compose_env_entries(charts_only, _selection_config(), {})
 

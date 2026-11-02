@@ -107,11 +107,7 @@ def run_build(
     destination = push if push else None
     if destination is not None:
         registry_host = destination.partition("/")[0]
-        if (
-            "://" in destination
-            or destination.endswith("/")
-            or ("." not in registry_host and ":" not in registry_host)
-        ):
+        if "://" in destination or destination.endswith("/") or ("." not in registry_host and ":" not in registry_host):
             raise typer.BadParameter(
                 f"--push destination {destination!r} is a registry address (localhost:5000, ghcr.io/org) "
                 "with no scheme and no trailing slash"
@@ -188,7 +184,11 @@ def run_build(
         # undeclared (the host's arch) or include it. An empty set refuses loudly: bake
         # with no target arguments builds every service, silently defeating the selection.
         defaults = {service.target_variants[0][0] for service in config.service_builds.values()}
-        targets = sorted(defaults & dev_targets if dev else defaults) if not config.platforms or host in config.platforms else []
+        targets = (
+            sorted(defaults & dev_targets if dev else defaults)
+            if not config.platforms or host in config.platforms
+            else []
+        )
         if not targets:
             raise RuntimeError(
                 f"No service targets this machine's arch ({host}); "
@@ -270,9 +270,12 @@ def run_build(
         # the rendered content attached — the failure stays inspectable after the run.
         try:
             bash(
-                " ".join(
-                    ["docker buildx bake", f"-f {bake_file}", f"--metadata-file {METADATA_PATH}", *command_arguments]
-                )
+                " ".join([
+                    "docker buildx bake",
+                    f"-f {bake_file}",
+                    f"--metadata-file {METADATA_PATH}",
+                    *command_arguments,
+                ])
             )
         except CalledProcessError as error:
             raise RuntimeError(

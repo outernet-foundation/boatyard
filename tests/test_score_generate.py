@@ -275,21 +275,17 @@ class TestMarkerSubstrateResolution:
     # platform manifest under compose (the artifact records the exact bytes one machine runs).
 
     def _multi_arch_lock(self) -> ImageLock:
-        return ImageLock.model_validate(
-            {
-                "images": {
-                    "LOKI_IMAGE": {
-                        "index": LOKI_INDEX,
-                        "platforms": {"linux/amd64": LOKI_MANIFEST, "linux/arm64": LOKI_INDEX},
-                    }
-                },
-                "charts": {"LOKI_CHART": MIRRORED_CHART},
-            }
-        )
+        return ImageLock.model_validate({
+            "images": {
+                "LOKI_IMAGE": {
+                    "index": LOKI_INDEX,
+                    "platforms": {"linux/amd64": LOKI_MANIFEST, "linux/arm64": LOKI_INDEX},
+                }
+            },
+            "charts": {"LOKI_CHART": MIRRORED_CHART},
+        })
 
-    def _compose_seam(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, platforms: list[str]
-    ) -> dict[str, str]:
+    def _compose_seam(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, platforms: list[str]) -> dict[str, str]:
         (tmp_path / "stack" / "score").mkdir(parents=True)
         (tmp_path / "stack" / "score" / "api.yaml").write_text("containers: {}\n", encoding="utf-8")
         (tmp_path / "docker-devkit.lock").write_text(

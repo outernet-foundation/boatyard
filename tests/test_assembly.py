@@ -68,16 +68,14 @@ def _assembly_document(
         encoding="utf-8",
     )
     tmp_path.joinpath(*LOCK_PATH.parts).write_text(
-        yaml.safe_dump(
-            {
-                "images": {
-                    "CADDY_IMAGE": {
-                        "index": CADDY_LOCK_ENTRY,
-                        "platforms": {"linux/amd64": CADDY_LOCK_ENTRY},
-                    }
+        yaml.safe_dump({
+            "images": {
+                "CADDY_IMAGE": {
+                    "index": CADDY_LOCK_ENTRY,
+                    "platforms": {"linux/amd64": CADDY_LOCK_ENTRY},
                 }
             }
-        ),
+        }),
         encoding="utf-8",
     )
     (tmp_path / ".env").write_text(

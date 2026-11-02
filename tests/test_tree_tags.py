@@ -60,7 +60,9 @@ class TestTreeTags:
         assert all(line.startswith("tree-") and " " not in line for line in lines)
         assert lines[0] != lines[1]
 
-    def test_the_tags_track_head(self, repo: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]) -> None:
+    def test_the_tags_track_head(
+        self, repo: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+    ) -> None:
         monkeypatch.chdir(repo)
         before = _tags(repo, capfd, "api", "worker")
 
@@ -82,9 +84,7 @@ class TestTreeTags:
 
         assert after == before
 
-    def test_unknown_names_refuse_listing_the_vocabulary(
-        self, repo: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_unknown_names_refuse_listing_the_vocabulary(self, repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(repo)
 
         with pytest.raises(typer.BadParameter, match=r"unknown service\(s\) \['ghost'\].*\['api', 'worker'\]"):

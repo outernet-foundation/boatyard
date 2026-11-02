@@ -40,7 +40,9 @@ def publish_compose(
     ] = None,
     plan: Annotated[
         bool,
-        typer.Option("--plan", help="Print the publish entries as a bare JSON array (empty when no section); no publish."),
+        typer.Option(
+            "--plan", help="Print the publish entries as a bare JSON array (empty when no section); no publish."
+        ),
     ] = False,
 ) -> None:
     root = Path.cwd()

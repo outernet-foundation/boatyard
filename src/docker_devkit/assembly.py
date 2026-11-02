@@ -277,7 +277,9 @@ class Assembly:
                     "--dev found no dev shape in the assembly: a service Dockerfile declaring a "
                     f"dev stage or a workload carrying {DEV_TOGGLES_ANNOTATION}"
                 )
-            self.compose_files.append(write_temp_compose_file(stack, {"services": overlay_services}, "devkit-dev-overlay-"))
+            self.compose_files.append(
+                write_temp_compose_file(stack, {"services": overlay_services}, "devkit-dev-overlay-")
+            )
 
         if self.routes or self.ports:
             # Validate every wired upstream and port owner against compose's own

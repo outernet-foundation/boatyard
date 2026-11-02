@@ -42,12 +42,10 @@ def docker_build_matrix() -> None:
                 entries_by_variant.setdefault((services[name].axis, cell), []).append(target)
 
     print(
-        json.dumps(
-            [
-                {"targets": " ".join(sorted(targets)), "variant": cell}
-                for (_axis, cell), targets in sorted(entries_by_variant.items(), key=lambda item: item[0][1])
-            ]
-        )
+        json.dumps([
+            {"targets": " ".join(sorted(targets)), "variant": cell}
+            for (_axis, cell), targets in sorted(entries_by_variant.items(), key=lambda item: item[0][1])
+        ])
     )
 
 

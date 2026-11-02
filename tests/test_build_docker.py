@@ -808,9 +808,7 @@ class TestRenderBakePlatforms:
 
         assert services["api"]["build"]["platforms"] == ["linux/amd64"]
 
-    def test_multi_arch_declaration_rides_through_in_push_mode(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_multi_arch_declaration_rides_through_in_push_mode(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         recorder = _prepare(
             monkeypatch,
             tmp_path,
@@ -823,9 +821,7 @@ class TestRenderBakePlatforms:
 
         assert services["api"]["build"]["platforms"] == ["linux/amd64", "linux/arm64"]
 
-    def test_single_declared_platform_rides_through_in_load_mode(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_single_declared_platform_rides_through_in_load_mode(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         recorder = _prepare(
             monkeypatch,
             tmp_path,

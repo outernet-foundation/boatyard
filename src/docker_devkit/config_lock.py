@@ -90,8 +90,7 @@ def parse_image_lock(path: Path) -> ImageLock:
         loaded = {}
     if not isinstance(loaded, dict):
         raise TypeError(
-            f"{source}: the lock is a YAML mapping of images:/charts: sections, "
-            f"not a bare {type(loaded).__name__}"
+            f"{source}: the lock is a YAML mapping of images:/charts: sections, not a bare {type(loaded).__name__}"
         )
     return ImageLock.model_validate(loaded, context={"path": source})
 
