@@ -16,7 +16,10 @@ from boatyard.compose import (
 )
 from boatyard.config import Config, require_compose_stack
 
+app = typer.Typer()
 
+
+@app.command()
 def down(
     volumes: Annotated[bool, typer.Option("--volumes", "-v", help="Remove named volumes.")] = False,
 ) -> None:

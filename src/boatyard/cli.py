@@ -1,23 +1,23 @@
 import typer
 
-from boatyard.verbs.build import build
-from boatyard.verbs.down import down
-from boatyard.verbs.lock import lock
-from boatyard.verbs.matrix import docker_build_matrix
-from boatyard.verbs.mirror import mirror
-from boatyard.verbs.publish import publish_compose
-from boatyard.verbs.score import generate_score
-from boatyard.verbs.tree_tags import tree_tags
-from boatyard.verbs.up import up
+from boatyard.verbs.build import app as build_app
+from boatyard.verbs.down import app as down_app
+from boatyard.verbs.lock import app as lock_app
+from boatyard.verbs.matrix import app as matrix_app
+from boatyard.verbs.mirror import app as mirror_app
+from boatyard.verbs.publish import app as publish_app
+from boatyard.verbs.score import app as score_app
+from boatyard.verbs.tree_tags import app as tree_tags_app
+from boatyard.verbs.up import app as up_app
 
 app = typer.Typer()
 
-app.command()(up)
-app.command()(down)
-app.command()(build)
-app.command()(lock)
-app.command()(tree_tags)
-app.command()(mirror)
-app.command()(publish_compose)
-app.command()(generate_score)
-app.command()(docker_build_matrix)
+app.add_typer(up_app)
+app.add_typer(down_app)
+app.add_typer(build_app)
+app.add_typer(lock_app)
+app.add_typer(tree_tags_app)
+app.add_typer(mirror_app)
+app.add_typer(publish_app)
+app.add_typer(score_app)
+app.add_typer(matrix_app)

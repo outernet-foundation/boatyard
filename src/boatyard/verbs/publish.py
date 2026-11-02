@@ -23,7 +23,10 @@ from boatyard.publish import (
     finalize_baked,
 )
 
+app = typer.Typer()
 
+
+@app.command()
 def publish_compose(
     bundle: Annotated[
         str | None,

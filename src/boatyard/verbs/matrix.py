@@ -3,10 +3,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import typer
 
 from boatyard.config import Config
 
+app = typer.Typer()
 
+
+@app.command()
 def docker_build_matrix() -> None:
     config = Config.load(Path.cwd())
     if config is None:

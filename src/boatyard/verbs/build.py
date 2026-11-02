@@ -8,7 +8,10 @@ import typer
 from boatyard.bake import run_build
 from boatyard.config import Config
 
+app = typer.Typer()
 
+
+@app.command()
 def build(
     push: Annotated[
         bool, typer.Option("--push", help="Push images and registry caches to the repository declared in the config.")
