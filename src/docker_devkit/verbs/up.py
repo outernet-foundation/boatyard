@@ -10,8 +10,16 @@ import typer
 from bashrun.bash import CalledProcessError, bash_handoff, bash_output
 
 from docker_devkit.bake import run_build
-from docker_devkit.compose import compose_command, merged_environment, render, require_env_file, select
-from docker_devkit.config import Config
+from docker_devkit.compose import (
+    BUNDLES_VARIABLE,
+    compose_command,
+    merged_environment,
+    render,
+    require_env_file,
+    select,
+    split_names,
+)
+from docker_devkit.config import Config, require_compose_stack
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
@@ -35,18 +43,22 @@ def up(
     root = Path.cwd()
     config = Config.load(root)
 
+    require_env_file(root)
+    environment = merged_environment(root)
+    if config is None or not config.services:
+        if split_names(environment.get(BUNDLES_VARIABLE, "")):
+            raise RuntimeError(f"{BUNDLES_VARIABLE}= is set but this repo declares no services")
+        config = require_compose_stack(config)
+
     # Refuse --build in a repo with no build declarations.
-    if config is not None and build and not (config.repository or config.base_images):
+    if build and not (config.repository or config.base_images):
         raise typer.BadParameter(
             "--build requires build declarations (repository or base_images) in docker-devkit.yaml"
         )
 
     # Select, render, and validate the invocation.
     with ExitStack() as stack:
-        require_env_file(root)
-        environment = merged_environment(root)
         selection = select(config, environment)
-        assert config is not None
         invocation = render(root, config, environment, selection, stack, dev=dev)
 
         # Probe every lock entry before bring-up.

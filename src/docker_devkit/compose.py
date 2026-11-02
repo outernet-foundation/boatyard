@@ -25,7 +25,6 @@ from docker_devkit.config import (
     ServiceGroup,
     is_mapping,
     parse_dev_toggles,
-    require_compose_stack,
 )
 from docker_devkit.config_lock import LOCK_PATH, parse_config_lock
 from docker_devkit.documents import WorkloadDocument
@@ -82,12 +81,8 @@ class LockEnvUnwind:
         return None
 
 
-def select(config: Config | None, environment: Mapping[str, str]) -> Selection:
-    names = _split_names(environment.get(BUNDLES_VARIABLE, ""))
-    if config is None or not config.services:
-        if names:
-            raise RuntimeError(f"{BUNDLES_VARIABLE}= is set but this repo declares no services")
-        config = require_compose_stack(config)
+def select(config: Config, environment: Mapping[str, str]) -> Selection:
+    names = split_names(environment.get(BUNDLES_VARIABLE, ""))
     assert config.root is not None
     root = config.root
 
@@ -119,7 +114,7 @@ def select(config: Config | None, environment: Mapping[str, str]) -> Selection:
 
     auth_option = choices.get(AUTH_GROUP_NAME)
 
-    profiles = _split_names(environment.get("COMPOSE_PROFILES", ""))
+    profiles = split_names(environment.get("COMPOSE_PROFILES", ""))
     forwarded = None
     if auth_option is not None:
         public_url = environment.get("PUBLIC_URL", "").strip()
@@ -404,5 +399,5 @@ def write_temp_compose_file(stack: ExitStack, document: Mapping[str, object], pr
     return path
 
 
-def _split_names(value: str) -> list[str]:
+def split_names(value: str) -> list[str]:
     return list(dict.fromkeys(part.strip() for part in value.split(",") if part.strip()))
