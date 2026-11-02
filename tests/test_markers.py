@@ -5,6 +5,7 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
+from docker_devkit.config import is_mapping
 from docker_devkit.score import contains_marker, resolve_includes, resolve_lock_refs
 
 RIVER = """// relay config
@@ -60,7 +61,7 @@ def test_yaml_include_inserts_the_parsed_structure(tmp_path: Path) -> None:
         "values.yaml",
     )
 
-    assert resolved["datasources"]["datasources.yaml"] == yaml.safe_load(DATASOURCES)
+    assert resolved == {"datasources": {"datasources.yaml": yaml.safe_load(DATASOURCES)}}
 
 
 def test_markers_resolve_inside_lists_and_nested_mappings(tmp_path: Path) -> None:
@@ -151,7 +152,7 @@ def test_lock_marker_resolves_inside_lists_and_nested_mappings() -> None:
 
     resolved = resolve_lock_refs(source, {"ALLOY_IMAGE": ALLOY}, "k8s.yaml")
 
-    assert resolved["manifests"][0]["containers"][0]["image"] == ALLOY
+    assert resolved == {"manifests": [{"containers": [{"image": ALLOY}]}]}
 
 
 def test_unknown_lock_entry_is_a_loud_error_naming_the_source() -> None:
@@ -175,18 +176,25 @@ def test_marker_with_extra_keys_is_plain_data_under_lock_resolution() -> None:
 def test_lock_image_marker_splits_chart_fields() -> None:
     resolved = resolve_lock_refs({"loki": {"image": {"lock-image": "LOKI_IMAGE"}}}, {"LOKI_IMAGE": LOKI}, "loki.yaml")
 
-    assert resolved["loki"]["image"] == {
-        "registry": "ghcr.io/outernet-foundation/mirror/docker.io/grafana",
-        "repository": "loki",
-        "tag": "3.5.0",
-        "digest": DIGEST,
+    assert resolved == {
+        "loki": {
+            "image": {
+                "registry": "ghcr.io/outernet-foundation/mirror/docker.io/grafana",
+                "repository": "loki",
+                "tag": "3.5.0",
+                "digest": DIGEST,
+            }
+        }
     }
 
 
 def test_lock_image_marker_splits_field_order_matches_chart_convention() -> None:
     resolved = resolve_lock_refs({"image": {"lock-image": "LOKI_IMAGE"}}, {"LOKI_IMAGE": LOKI}, "loki.yaml")
 
-    assert list(resolved["image"]) == ["registry", "repository", "tag", "digest"]
+    assert is_mapping(resolved)
+    image = resolved["image"]
+    assert is_mapping(image)
+    assert list(image) == ["registry", "repository", "tag", "digest"]
 
 
 def test_lock_image_marker_supports_the_grafana_sha_spelling() -> None:
@@ -194,8 +202,11 @@ def test_lock_image_marker_supports_the_grafana_sha_spelling() -> None:
         {"image": {"lock-image": {"key": "LOKI_IMAGE", "digest_field": "sha"}}}, {"LOKI_IMAGE": LOKI}, "grafana.yaml"
     )
 
-    assert resolved["image"]["sha"] == DIGEST.removeprefix("sha256:")
-    assert "digest" not in resolved["image"]
+    assert is_mapping(resolved)
+    image = resolved["image"]
+    assert is_mapping(image)
+    assert image["sha"] == DIGEST.removeprefix("sha256:")
+    assert "digest" not in image
 
 
 def test_lock_image_marker_rejects_unknown_digest_fields() -> None:
@@ -224,10 +235,12 @@ def test_lock_image_marker_splits_untagged_references_without_a_tag_field() -> N
 
     resolved = resolve_lock_refs({"image": {"lock-image": "LOKI_IMAGE"}}, {"LOKI_IMAGE": untagged}, "loki.yaml")
 
-    assert resolved["image"] == {
-        "registry": "ghcr.io/outernet-foundation/mirror/docker.io/grafana",
-        "repository": "loki",
-        "digest": DIGEST,
+    assert resolved == {
+        "image": {
+            "registry": "ghcr.io/outernet-foundation/mirror/docker.io/grafana",
+            "repository": "loki",
+            "digest": DIGEST,
+        }
     }
 
 

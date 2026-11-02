@@ -278,7 +278,13 @@ class TestMarkerSubstrateResolution:
         config.root = tmp_path
         captured: dict[str, dict[str, str]] = {}
 
-        def _capture(root, _config: Config, images: dict[str, str], service_shas, tool_environment) -> None:
+        def _capture(
+            root: Path,
+            _config: Config,
+            images: dict[str, str],
+            service_shas: dict[str, str],
+            tool_environment: dict[str, str] | None,
+        ) -> None:
             captured["images"] = images
 
         monkeypatch.setattr(score_generate_module, "generate_compose", _capture)
