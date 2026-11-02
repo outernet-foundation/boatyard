@@ -29,9 +29,7 @@ def down(
     require_env_file(root)
     config = require_compose_stack(load_config(root))
 
-    # Tear down by project name, covering every selection and profile. Both writes
-    # push their own unwind, so a refusing run strands nothing; the handoff execs,
-    # so a successful run never unwinds.
+    # Tear down by project name, covering every selection and profile.
     with ExitStack() as stack:
         lock_env_file = write_lock_env_file(root, config, merged_environment(root), stack)
         assembly_root = write_temp_compose_file(stack, {"name": config.project_name}, "devkit-assembly-")

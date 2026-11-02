@@ -22,8 +22,7 @@ class ComposeDocument(BaseModel):
 
     @model_validator(mode="after")
     def _reject_colliding_bind_basenames(self) -> Self:
-        # Config names are bind basenames, so two binds sharing one collide however each
-        # resolves; the model sees the raw sources, and their basenames never change.
+        # Refuse bind sources sharing one basename.
         seen: dict[str, str] = {}
         for service in (self.services or {}).values():
             for volume in service.volumes or []:
@@ -53,7 +52,7 @@ class BindVolume(BaseModel):
     @classmethod
     def _require_relative(cls, value: str) -> str:
         if Path(value).is_absolute():
-            raise ValueError(f"absolute bind source {value} cannot be inlined hermetically")
+            raise ValueError(f"bind source {value} must be relative")
         return value
 
 
@@ -62,7 +61,7 @@ class OtherVolume(BaseModel):
 
     type: str
 
-    # Reject malformed binds so they fail validation instead of passing through as non-binds.
+    # Reject malformed binds.
     @model_validator(mode="after")
     def _reject_bind(self) -> Self:
         if self.type == "bind":
@@ -77,7 +76,6 @@ class ComposeConfig(BaseModel):
 
 
 class WorkloadMetadata(BaseModel):
-    # Shape only: value laws (annotation spellings, name presence) stay at their consumers.
     model_config = ConfigDict(extra="allow")
 
     name: object = None
@@ -91,6 +89,4 @@ class WorkloadDocument(BaseModel):
 
     @property
     def dev_toggles(self) -> tuple[object | None, object]:
-        # The raw dev-toggles annotation value (None when absent) beside the service name;
-        # consumers own their refuse/skip policies.
         return self.metadata.annotations.get(DEV_TOGGLES_ANNOTATION), self.metadata.name

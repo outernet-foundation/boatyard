@@ -41,13 +41,11 @@ def up(
             "--build requires build declarations (repository or base_images) in docker-devkit.yaml"
         )
 
-    # Resolve, render, and validate in one construction; every refusal rides it.
-    # The handoff execs, so a successful run never unwinds the stack and the
-    # per-run files ride out in the OS temp dir.
+    # Resolve, render, and validate in one construction.
     with ExitStack() as stack:
         assembly = Assembly(root, config, stack, dev=dev)
 
-        # Fail closed over every lock entry before bring-up.
+        # Probe every lock entry before bring-up.
         _probe_lock_entries(assembly.config)
 
         # Build local images; --dev builds both shapes.
@@ -89,13 +87,7 @@ def _probe_lock_entries(config: DockerDevkitConfig) -> None:
         except CalledProcessError as error:
             stderr = (error.stderr or str(error)).strip()
             if re.search(r"\b404\b|not found|manifest unknown", stderr, re.IGNORECASE):
-                raise RuntimeError(
-                    f"Image {reference or value} (digest {digest or 'unknown'}) is not mirrored yet; "
-                    "the CI mirror job populates it when the declaring change runs"
-                )
+                raise RuntimeError(f"Image {reference or value} (digest {digest or 'unknown'}) is not mirrored")
             raise RuntimeError(
-                f"Image {reference or value} (digest {digest or 'unknown'}): the mirror probe "
-                "(docker buildx imagetools inspect) failed before it could determine whether the image "
-                "exists, so this is not evidence the image is missing; check registry credentials, network, "
-                f"and docker daemon availability. Probe error: {stderr}"
+                f"Image {reference or value} (digest {digest or 'unknown'}): the mirror probe failed: {stderr}"
             )

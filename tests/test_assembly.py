@@ -21,7 +21,6 @@ runner = CliRunner()
 
 
 class AssemblyCapture:
-    # Reads the materialized per-run root compose file out of the handoff command.
     def __init__(self) -> None:
         self.document: dict[str, Any] | None = None
 
@@ -116,7 +115,7 @@ class TestRenderCaddyfile:
 
         assert _caddyfile(document).startswith(":8443 {\n")
 
-    def test_the_catch_all_rides_as_a_bare_handle(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_the_catch_all_renders_as_a_bare_handle(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         document = _assembly_document(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
 
         assert "\thandle {\n\t\treverse_proxy livekit:8000\n\t}\n}" in _caddyfile(document)
@@ -148,7 +147,7 @@ class TestRenderCaddyfile:
 
         assert "header_up" not in _caddyfile(document).split("handle {", 1)[1]
 
-    def test_a_raw_route_rides_verbatim_under_its_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_a_raw_route_renders_verbatim_under_its_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         document = _assembly_document(
             tmp_path,
             monkeypatch,
@@ -210,7 +209,7 @@ class TestEdgeStanza:
             "ports": [{"target": "8443", "published": "${GATEWAY_PORT:?err}", "protocol": "tcp"}],
         }
 
-    def test_the_published_port_rides_a_literal_gateway(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_the_published_port_uses_a_literal_gateway(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         document = _assembly_document(
             tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], gateway="8080"
         )

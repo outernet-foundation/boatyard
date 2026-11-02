@@ -19,10 +19,7 @@ KEYCLOAK_REF = "oci://ghcr.io/org/keycloak@" + FAKE_DIGEST
 LIVEKIT_REF = "oci://ghcr.io/org/livekit@" + FAKE_DIGEST
 PINNED_COMPOSE_VERSION = "5.6.1"
 
-LOCKED_ERROR = (
-    f"Image {MIRROR_PREFIX}/docker.io/library/alpine:3.20 (digest {FAKE_DIGEST}) is not mirrored yet; "
-    "the CI mirror job populates it when the declaring change runs"
-)
+LOCKED_ERROR = f"Image {MIRROR_PREFIX}/docker.io/library/alpine:3.20 (digest {FAKE_DIGEST}) is not mirrored"
 
 DEV_TOGGLES = "outernet.internal/dev-toggles"
 OVERLAY_ARGUMENT_PATTERN = re.compile(r"-f (\S*devkit-dev-overlay-\S+\.yaml)")
@@ -34,8 +31,7 @@ runner = CliRunner()
 
 @pytest.fixture(scope="session")
 def pinned_compose(tmp_path_factory: pytest.TempPathFactory) -> str:
-    # Pin the exact compose binary this suite asserts include-merge behavior against,
-    # so a host's compose version cannot change what the pin verifies.
+    # Pin the exact compose binary the include-merge assertions run against.
     architecture = {"x86_64": "x86_64", "aarch64": "aarch64"}[platform.machine()]
     binary = tmp_path_factory.mktemp("compose-bin") / "docker-compose"
     release = (
@@ -57,7 +53,7 @@ def _write_config(root: Path, sections: dict[str, object] | None = None) -> None
 
 
 def _write_ref_tree(root: Path) -> None:
-    # The minimal services-declaring repo: one bare riding remote include, nothing else.
+    # Write the minimal services-declaring repo: one bare remote include.
     _write_config(
         root,
         {
@@ -79,9 +75,7 @@ def _write_lock(
     entries: dict[str, str] | None = None,
     platform_entries: dict[str, str] | None = None,
 ) -> None:
-    # The writer's shape: one platform-manifest reference per declared platform beside the
-    # index (a digest-pinned declaration records the same reference uniformly). Distinct
-    # platform_entries spell the multi-arch case where index and manifests diverge.
+    # Write one platform-manifest reference per declared platform beside the index.
     declared = entries or {
         "CADDY_IMAGE": MIRROR_PREFIX + "/docker.io/library/caddy:2.8.4-alpine@" + FAKE_DIGEST,
     }
@@ -170,7 +164,6 @@ class HandoffRecorder:
 
 
 class AssemblyRecorder(HandoffRecorder):
-    # Captures the materialized per-run root compose file alongside the handoff command.
     def __init__(self) -> None:
         super().__init__()
         self.documents: list[dict[str, Any]] = []
@@ -183,7 +176,6 @@ class AssemblyRecorder(HandoffRecorder):
 
 
 class OverlayRecorder(HandoffRecorder):
-    # Captures the materialized dev overlay file alongside the handoff command.
     def __init__(self) -> None:
         super().__init__()
         self.documents: list[dict[str, Any]] = []
@@ -196,7 +188,6 @@ class OverlayRecorder(HandoffRecorder):
 
 
 class LockEnvRecorder(HandoffRecorder):
-    # Captures the materialized per-run lock env file alongside the handoff command.
     def __init__(self) -> None:
         super().__init__()
         self.env_contents: list[str] = []
@@ -218,8 +209,6 @@ class ServicesOutput:
 
 
 class PresentProbeAndServices:
-    # The full up-path bash_output: the mirror probe finds every entry present, and the
-    # assembly validation resolves the given service set.
     def __init__(self, *names: str) -> None:
         self.names = list(names)
 
@@ -325,9 +314,7 @@ class TestProfileForwarding:
 
 
 def _write_consumer_tree(root: Path, *, bundles: str | None = "cuda,keycloak") -> Path:
-    # The canonical consumer: an auth group (keycloak ref), a placeframe group (local
-    # cuda/rocm options with riding routes), and a bare riding livekit ref with ports.
-    # bundles=None writes no BUNDLES line at all.
+    # Write the canonical consumer tree; bundles=None writes no BUNDLES line.
     _write_config(
         root,
         {
@@ -403,7 +390,7 @@ class TestSelectionLaw:
             LIVEKIT_REF,
         ]
 
-    def test_zero_selection_is_legal_when_riders_and_routes_carry_the_assembly(
+    def test_zero_selection_is_legal_when_bare_entries_and_routes_carry_the_assembly(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         _write_config(
@@ -469,7 +456,7 @@ class TestSelectionLaw:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, RuntimeError)
-        assert "selects nothing and no bare entry rides" in str(result.exception)
+        assert "selects nothing and no bare entry exists" in str(result.exception)
 
     def test_unknown_name_refuses_listing_the_vocabulary(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._invoke_up(tmp_path, monkeypatch, bundles="cuda,ghost")
@@ -482,7 +469,7 @@ class TestSelectionLaw:
         assert "ghost" in message
         assert "cuda" in message and "keycloak" in message and "livekit" in message
 
-    def test_a_riding_entry_name_is_not_selectable(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_a_bare_entry_name_is_not_selectable(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._invoke_up(tmp_path, monkeypatch, bundles="livekit")
 
         result = runner.invoke(up.app, [])
@@ -528,7 +515,7 @@ class TestSelectionLaw:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, RuntimeError)
-        assert "no compose stack" in str(result.exception)
+        assert "must exist and declare services" in str(result.exception)
 
     def test_up_in_a_services_less_repo_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_config(tmp_path)
@@ -540,7 +527,7 @@ class TestSelectionLaw:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, RuntimeError)
-        assert "no compose stack" in str(result.exception)
+        assert "must exist and declare services" in str(result.exception)
 
     def test_missing_local_output_refuses_naming_generate_score(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_consumer_tree(tmp_path)
@@ -792,7 +779,7 @@ class TestDownTeardown:
             commands.append(normalized)
         assert commands[0] == commands[1] == commands[2]
 
-    def test_down_volumes_flag_rides(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_down_forwards_the_volumes_flag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_consumer_tree(tmp_path)
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = HandoffRecorder()
@@ -813,7 +800,7 @@ class TestDownTeardown:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, RuntimeError)
-        assert "no compose stack" in str(result.exception)
+        assert "must exist and declare services" in str(result.exception)
 
     def test_down_in_a_services_less_repo_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_config(tmp_path)
@@ -825,7 +812,7 @@ class TestDownTeardown:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, RuntimeError)
-        assert "no compose stack" in str(result.exception)
+        assert "must exist and declare services" in str(result.exception)
 
 
 def _write_dev_tree(
@@ -917,8 +904,6 @@ class TestDevOverlay:
         assert document == {"services": {"api": {"environment": {"RELOAD": "${RELOAD:-true}"}}}}
 
     def test_overlay_targets_only_services_the_selection_defines(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        # api carries the dev shape, but the selection is the edge option alone; a dev
-        # overlay keying api would add a half-defined service, so only edge rides.
         _write_dev_tree(
             tmp_path,
             dockerfile=MULTI_STAGE_DOCKERFILE,
@@ -947,7 +932,7 @@ class TestDevOverlay:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, RuntimeError)
-        assert "no dev shape" in str(result.exception)
+        assert "requires a dev shape" in str(result.exception)
 
     def test_up_dev_builds_both_shapes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_dev_tree(tmp_path, dockerfile=MULTI_STAGE_DOCKERFILE)
@@ -1004,7 +989,7 @@ class TestLockRequirement:
             "docker compose -f ASSEMBLY --project-directory ROOT --env-file .env down --remove-orphans"
         ]
 
-    def test_present_lock_rides_the_second_env_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_present_lock_attaches_the_second_env_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._write_lock_free_tree(tmp_path)
         _write_lock(tmp_path, {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST})
         recorder = HandoffRecorder()
@@ -1034,10 +1019,6 @@ class TestLockRequirement:
 
 
 class TestLockEnvSynthesis:
-    # The compose edge selects platform manifests: up/down attach the selected entries as
-    # the second --env-file, and the selection itself is declaration-driven — a singleton
-    # self-selects, a multi-platform repo names PLATFORM= through the merged
-    # shell-over-.env view.
     ALPINE_INDEX = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST
     ALPINE_MANIFEST = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + PLATFORM_DIGEST
 
@@ -1151,7 +1132,7 @@ class TestLockEnvSynthesis:
         message = str(result.exception)
         assert "ALPINE_IMAGE" in message
         assert "linux/amd64" in message
-        assert "run lock" in message
+        assert "platform manifest" in message
 
     def test_a_failed_run_prints_and_keeps_the_env_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)
@@ -1205,8 +1186,8 @@ class TestMirroredLockEnforcement:
 
         assert result.exit_code != 0
         message = str(result.exception)
-        assert "not mirrored yet" not in message
-        assert "not evidence the image is missing" in message
+        assert "not mirrored" not in message
+        assert "the mirror probe failed" in message
         assert "authentication required" in message
         assert "alpine" in message
 
@@ -1245,8 +1226,6 @@ class TestMirroredLockEnforcement:
     def test_a_missing_platform_manifest_digest_fails_closed_naming_it(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        # The probe covers every recorded digest — index plus platform manifests — so an
-        # unmirrored manifest is the not-mirrored error even when the index is present.
         index = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST
         manifest = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + PLATFORM_DIGEST
         self._write_mirrored_tree(tmp_path, {"ALPINE_IMAGE": index})
@@ -1267,8 +1246,7 @@ class TestMirroredLockEnforcement:
 
         assert result.exit_code != 0
         assert str(result.exception) == (
-            f"Image {MIRROR_PREFIX}/docker.io/library/alpine:3.20 (digest {PLATFORM_DIGEST}) is not mirrored yet; "
-            "the CI mirror job populates it when the declaring change runs"
+            f"Image {MIRROR_PREFIX}/docker.io/library/alpine:3.20 (digest {PLATFORM_DIGEST}) is not mirrored"
         )
         assert probe.probed == [index, manifest]
 
@@ -1303,18 +1281,13 @@ class TestMirroredLockEnforcement:
 
         assert result.exit_code != 0
         message = str(result.exception)
-        assert "not mirrored yet" not in message
-        assert "not evidence the image is missing" in message
+        assert "not mirrored" not in message
+        assert "the mirror probe failed" in message
         assert PLATFORM_DIGEST in message
         assert probed == [index, manifest]
 
 
 class TestComposePortMergeOverIncludes:
-    # The single-root assembly relies on compose merging parent-file port stanzas into
-    # services its includes define. Compose 2.24 through 2.39 rejects that shape
-    # ("services.<name> conflicts with imported resource"), so the pin runs against a
-    # version-pinned standalone binary — the exact release, never whatever the host
-    # installed — to keep the behavior assertion deterministic.
     def test_parent_ports_add_to_and_reset_included_ports(self, tmp_path: Path, pinned_compose: str) -> None:
         child = tmp_path / "child.yaml"
         child.write_text(
