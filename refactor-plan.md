@@ -339,6 +339,18 @@ Commit: `Add the dev-toggles annotation member to WorkloadDocument`.
 
 # Phase 8 — inline wave + 2.9 (two commits)
 
+Operator amendment mid-phase: the failure-dance `try/except` blocks (the
+constructor's, `up`'s, `down`'s) are replaced by a caller-owned
+`contextlib.ExitStack` — per-run temp files push their unwind as they
+materialize; the lock-env file's unwind (`LockEnvUnwind`) prints-and-keeps
+under an exception and unlinks on a clean return; a handoff exec never
+unwinds. Raises never sit inside a try clause (TRY301/PLW0717 stay green
+without suppression and without the lint-blind helper-call wrappers that
+hid the raises before). Commit 1's subject becomes `Inline assembly and
+verb helpers onto an ExitStack lifetime`. The Phase 9 down.py write-order
+item is subsumed: both writes push their own unwind, so no order can
+strand a file.
+
 **Commit 1 — assembly + up + bake.**
 - up.py `_bring_up` (:49) becomes `up`'s body.
 - assembly.py: `_materialize_and_validate` (:161), `_render_root_document`
@@ -393,7 +405,8 @@ Validation timing and guards (1.6):
 - down.py writes a temp file before a step that can fail, outside its `try`
   (:33-34 vs :40) — `write_lock_env_file` can refuse and strand the name-only
   yaml in `/tmp`. Swap the two writes (the `Assembly` constructor already
-  orders this correctly: assembly.py:158 before :169).
+  orders this correctly: assembly.py:158 before :169). (Subsumed by the
+  Phase 8 ExitStack amendment.)
 - `bake.run_build` writes the lock before refusing bad input (write_lock at
   :102; refusals at :117, :125-131 fire after) — hoist target selection above
   `write_lock` so failing invocations leave the tree untouched.
