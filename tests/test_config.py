@@ -9,8 +9,6 @@ from pydantic import ValidationError
 
 from docker_devkit.config import (
     DEV_SENTINEL,
-    LEFTOVER_LOCK_PATH,
-    LEFTOVER_MANIFEST_PATH,
     DockerDevkitConfig,
     ServiceEntry,
     load_config,
@@ -1152,26 +1150,6 @@ class TestPlatforms:
         (tmp_path / "stack" / "score" / "k8s" / "values" / "loki.yaml").write_text("loki: {}\n", encoding="utf-8")
 
         assert load_config(tmp_path) is not None
-
-
-class TestLeftoverManifestGuard:
-    def test_leftover_manifest_refuses_loudly(self, tmp_path: Path) -> None:
-        write_config(tmp_path, {"requires": ">=0.1"})
-        manifest = tmp_path / LEFTOVER_MANIFEST_PATH
-        manifest.parent.mkdir(parents=True, exist_ok=True)
-        manifest.write_text("x-base-images:\n  ALPINE_IMAGE: alpine:3.21\n", encoding="utf-8")
-
-        with pytest.raises(RuntimeError, match="manifest dissolved"):
-            load_config(tmp_path)
-
-    def test_leftover_lock_at_the_dead_path_refuses_loudly(self, tmp_path: Path) -> None:
-        write_config(tmp_path, {"requires": ">=0.1"})
-        stale_lock = tmp_path / LEFTOVER_LOCK_PATH
-        stale_lock.parent.mkdir(parents=True, exist_ok=True)
-        stale_lock.write_text("UV_IMAGE=alpine:3.21\n", encoding="utf-8")
-
-        with pytest.raises(RuntimeError, match=r"the lock lives at docker-devkit\.lock"):
-            load_config(tmp_path)
 
 
 class TestLockPairing:

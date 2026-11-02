@@ -16,30 +16,6 @@ PLATFORM_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$")
 SHA256_DIGEST_REGEX = r"sha256:[a-f0-9]{64}"
 
 
-class ImageLockEntry(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    index: str
-    platforms: dict[str, str] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def _require_digest_pins(self, info: ValidationInfo) -> Self:
-        context: dict[str, object] = info.context or {}
-        source = context.get("path", "the image lock")
-        for site, reference in [("index", self.index), *self.platforms.items()]:
-            if not reference.rpartition("@")[2].startswith("sha256:"):
-                raise ValueError(f"{source}: entry field {site} is not digest-pinned ({reference!r})")
-        for platform in self.platforms:
-            if PLATFORM_PATTERN.fullmatch(platform) is None:
-                raise ValueError(f"{source}: platform key {platform!r} must be an os/arch pair like linux/arm64")
-        return self
-
-    @property
-    def recorded_digests(self) -> list[str]:
-        # The digest set the up/mirror presence probes walk: the index plus every platform manifest.
-        return [self.index, *self.platforms.values()]
-
-
 class ImageLock(BaseModel):
     # The structured lock beside the root config: registry-resolved facts, written by the
     # lock verb and build's incremental freeze, never hand-authored.
@@ -74,18 +50,28 @@ class ImageLock(BaseModel):
         raise RuntimeError(f"{subject}: {LOCK_PATH.as_posix()} lacks the {name} entry ({hint})")
 
 
-def parse_committed_lock(root: Path) -> ImageLock | None:
-    # The lenient cutover-lock read: an absent lock answers the empty lock, an unparseable
-    # one (the env-line format before the structured flip) answers None rather than
-    # refusing — the rewrite is the cutover migration mechanism, so the lock verb and the
-    # CADDY check stay runnable over a cutover lock.
-    path = root / LOCK_PATH
-    if not path.is_file():
-        return ImageLock()
-    try:
-        return parse_image_lock(path)
-    except (TypeError, ValueError):
-        return None
+class ImageLockEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    index: str
+    platforms: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _require_digest_pins(self, info: ValidationInfo) -> Self:
+        context: dict[str, object] = info.context or {}
+        source = context.get("path", "the image lock")
+        for site, reference in [("index", self.index), *self.platforms.items()]:
+            if not reference.rpartition("@")[2].startswith("sha256:"):
+                raise ValueError(f"{source}: entry field {site} is not digest-pinned ({reference!r})")
+        for platform in self.platforms:
+            if PLATFORM_PATTERN.fullmatch(platform) is None:
+                raise ValueError(f"{source}: platform key {platform!r} must be an os/arch pair like linux/arm64")
+        return self
+
+    @property
+    def recorded_digests(self) -> list[str]:
+        # The digest set the up/mirror presence probes walk: the index plus every platform manifest.
+        return [self.index, *self.platforms.values()]
 
 
 def parse_image_lock(path: Path) -> ImageLock:
@@ -105,8 +91,7 @@ def parse_image_lock(path: Path) -> ImageLock:
     if not isinstance(loaded, dict):
         raise TypeError(
             f"{source}: the lock is a YAML mapping of images:/charts: sections, "
-            f"not a bare {type(loaded).__name__} (the env-line format died with the structured flip; "
-            "the lock verb rewrites cutover locks)"
+            f"not a bare {type(loaded).__name__}"
         )
     return ImageLock.model_validate(loaded, context={"path": source})
 

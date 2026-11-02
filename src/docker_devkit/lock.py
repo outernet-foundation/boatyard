@@ -25,7 +25,6 @@ from docker_devkit.config_lock import (
     SHA256_DIGEST_REGEX,
     ImageLock,
     ImageLockEntry,
-    parse_committed_lock,
 )
 
 DIGEST_TAIL_PATTERN = re.compile(rf"@{SHA256_DIGEST_REGEX}$")
@@ -88,7 +87,7 @@ def relock(config: DockerDevkitConfig, *, upgrade: bool = False) -> ImageLock:
     # The computed lock owns exactly the declared names — orphans prune by construction.
     assert config.root is not None
     prefix = config.mirror_prefix
-    committed = _committed_lock(config.root)
+    committed = config.image_lock()
 
     images: dict[str, ImageLockEntry] = {}
     for name, reference in config.base_images.items():
@@ -275,17 +274,6 @@ def env_entries(lock: ImageLock, platform: str | None = None) -> dict[str, str]:
 def render_env_entries(entries: Mapping[str, str]) -> str:
     # The env-grammar render the per-run --env-file writer emits.
     return "".join(f"{name}={reference}\n" for name, reference in sorted(entries.items()))
-
-
-def _committed_lock(root: Path) -> ImageLock:
-    # The relock lanes read the committed lock leniently: an unparseable file (the env-line
-    # format before the structured flip) re-resolves wholesale rather than refusing — the
-    # rewrite is the cutover migration.
-    committed = parse_committed_lock(root)
-    if committed is None:
-        print(f"{LOCK_PATH.as_posix()}: not the structured YAML format; re-resolving every entry")
-        return ImageLock()
-    return committed
 
 
 def _declaration_frozen(entry: ImageLockEntry | None, base: str, platforms: list[str]) -> bool:

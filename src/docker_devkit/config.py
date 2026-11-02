@@ -18,7 +18,6 @@ from docker_devkit.config_lock import (
     PLATFORM_PATTERN,
     SHA256_DIGEST_REGEX,
     ImageLock,
-    parse_committed_lock,
     parse_image_lock,
 )
 
@@ -26,9 +25,6 @@ DEFAULT_CONFIG_PATH = Path("docker-devkit.yaml")
 DEV_SENTINEL = "0.0.0.dev0"
 
 DEFAULT_MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
-
-LEFTOVER_MANIFEST_PATH = Path("workloads/images.yml")
-LEFTOVER_LOCK_PATH = Path("workloads/images.lock")
 
 # The toolchain pin sources base_images templates resolve against.
 PYPROJECT_PATH = Path("pyproject.toml")
@@ -65,333 +61,6 @@ BARE_IDENTIFIER_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 BUILD_ARG_REFERENCE_PATTERN = re.compile(r"^\$\{[A-Za-z0-9_]+\}$")
 
 Target = Literal["both", "compose", "k8s"]
-
-
-def load_config(root: Path) -> DockerDevkitConfig | None:
-    # The one load pipeline: parse, the version self-check, then the filesystem-gated
-    # laws in one linear body — the leftover guards, toolchain template resolution, the
-    # Dockerfile service derivation, and the pairing laws over the derived set.
-    path = root / DEFAULT_CONFIG_PATH
-    if not path.exists():
-        return None
-    config = DockerDevkitConfig.model_validate(load_strict_yaml(path.read_text(encoding="utf-8")).data)
-    installed = importlib.metadata.version("docker-devkit")
-    if installed != DEV_SENTINEL and not SpecifierSet(config.requires).contains(installed, prereleases=True):
-        raise SystemExit(f"docker-devkit {installed} does not satisfy requires={config.requires!r}")
-    config.root = root
-
-    if (root / LEFTOVER_MANIFEST_PATH).exists():
-        raise RuntimeError(
-            f"{LEFTOVER_MANIFEST_PATH.as_posix()} exists; the manifest dissolved — its declarations live in "
-            f"{DEFAULT_CONFIG_PATH.as_posix()}'s root base_images/repository keys. Delete the leftover."
-        )
-    if (root / LEFTOVER_LOCK_PATH).exists():
-        raise RuntimeError(
-            f"{LEFTOVER_LOCK_PATH.as_posix()} exists; the lock lives at {LOCK_PATH.as_posix()} in the repo root. "
-            "Move the file (git mv)."
-        )
-
-    # Toolchain components in base_images derive by construction: {uv} from
-    # tool.uv.required-version, {python} from .python-version. Plain values stay
-    # plain — a literal in place of a template is the deliberate-skew escape hatch,
-    # visible in every diff.
-    pins: dict[str, str] = {}
-    used = sorted({key for reference in config.base_images.values() for key in TEMPLATE_KEY_PATTERN.findall(reference)})
-    for key in used:
-        if key == "uv":
-            pyproject = root / PYPROJECT_PATH
-            tool_document: dict[str, object] = (
-                tomllib.loads(pyproject.read_text(encoding="utf-8")) if pyproject.is_file() else {}
-            )
-            tool_table: object = tool_document.get("tool")
-            uv_table: object = tool_table.get("uv") if is_mapping(tool_table) else None
-            declared: object = uv_table.get("required-version") if is_mapping(uv_table) else None
-            if not isinstance(declared, str) or not declared:
-                raise RuntimeError(
-                    f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version is not declared; "
-                    "a {uv} template resolves from that exact pin"
-                )
-            pin_match = re.fullmatch(r"==(?P<version>[^,*\s]+)", declared.strip())
-            if pin_match is None:
-                raise RuntimeError(
-                    f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version {declared!r} is a range, "
-                    "not an exact pin; a {uv} template resolves only from an exact == pin like '==0.12.15'"
-                )
-            pins[key] = pin_match.group("version")
-        elif key == "python":
-            python_version = root / PYTHON_VERSION_PATH
-            if not python_version.is_file():
-                raise RuntimeError(
-                    f"{PYTHON_VERSION_PATH.as_posix()}: the file is absent; "
-                    "a {python} template resolves from its declared version"
-                )
-            # uv reads the first line as the default selection when several are listed.
-            version = next(
-                (line.strip() for line in python_version.read_text(encoding="utf-8").splitlines() if line.strip()),
-                "",
-            )
-            if not version:
-                raise RuntimeError(
-                    f"{PYTHON_VERSION_PATH.as_posix()}: the file is empty; "
-                    "a {python} template resolves from its declared version"
-                )
-            pins[key] = version
-        else:
-            raise RuntimeError(
-                f"base_images template key {{{key}}} is unknown; the toolchain pins are {{uv}}, {{python}}"
-            )
-    config.base_images = {
-        name: TEMPLATE_KEY_PATTERN.sub(lambda match: pins[match.group(1)], reference)
-        for name, reference in config.base_images.items()
-    }
-
-    # Every Dockerfile-bearing directory one level below a top-level directory is a
-    # service; the graph (context edges, variant axes, SHA args) derives from the
-    # Dockerfiles themselves. Parsing and variant resolution complete before any
-    # ServiceBuild is constructed — each record is built once, fully resolved.
-    parsed = _parse_dockerfiles(root, config.variants)
-
-    computable = {service_sha_env(name) for name in parsed}
-    for service in parsed.values():
-        unknown = [arg for arg in service.sha_args if arg not in computable]
-        if unknown:
-            raise RuntimeError(
-                f"workloads/{service.name}/{DOCKERFILE_NAME}: ARG {', '.join(unknown)} names no derived service; "
-                "the stamp receiver must match a service directory"
-            )
-
-    resolved: dict[str, tuple[str | None, list[str]]] = {}
-    service_builds: dict[str, ServiceBuild] = {}
-    for name, service in parsed.items():
-        axis, variants = _resolve_axis(name, (), parsed, resolved, config.variants)
-        service_builds[name] = ServiceBuild(
-            name=name,
-            dockerfile=service.dockerfile,
-            contexts=service.contexts,
-            axis=axis,
-            variants=variants,
-            sha_args=service.sha_args,
-            dev_stage=service.dev_stage,
-        )
-    if service_builds and config.repository is None:
-        listed = ", ".join(sorted(service_builds))
-        raise RuntimeError(
-            f"Dockerfile service directories exist ({listed}); repository is required — it derives every image tag"
-        )
-    config.service_builds = service_builds
-
-    declared_charts = config.declared_charts
-    if (config.base_images or declared_charts) and not (root / LOCK_PATH).is_file():
-        raise RuntimeError(
-            f"{LOCK_PATH.as_posix()}: base_images or k8s.charts are declared, so the committed image lock is "
-            "required beside them (the lock verb writes it)"
-        )
-    if config.gateway is not None:
-        # A cutover (env-line) lock skips the CADDY check here: its parse refusal fires
-        # in every consumer instead, and the lock verb must stay runnable to rewrite it.
-        entries = parse_committed_lock(root)
-        if entries is not None:
-            entries.require(
-                CADDY_IMAGE,
-                "routes are declared, so the edge rides",
-                hint="declare CADDY_IMAGE in base_images and run lock",
-            )
-    for chart in declared_charts:
-        values = root / config.score_dir / "k8s" / "values" / f"{chart}.yaml"
-        if not values.is_file():
-            raise RuntimeError(f"{values.as_posix()}: the chart's values file is required at the derived path")
-
-    return config
-
-
-def chart_lock_key(name: str) -> str:
-    return name.upper().replace("-", "_") + "_CHART"
-
-
-def parse_dev_toggles(where: str, raw: str) -> dict[str, str]:
-    # The dev-toggles spelling law (NAME=default pairs): the one parser generation's
-    # validator and up's dev overlay consume.
-    toggles: dict[str, str] = {}
-    for item in raw.split(","):
-        toggle_name, separator, default = item.strip().partition("=")
-        if not separator:
-            raise ValueError(
-                f"{where}: {DEV_TOGGLES_ANNOTATION} entry {item.strip()!r} misses its default; "
-                "the ruled spelling is NAME=default pairs"
-            )
-        if ENV_NAME_PATTERN.fullmatch(toggle_name) is None:
-            raise ValueError(f"{where}: {DEV_TOGGLES_ANNOTATION} name {toggle_name!r} must be ALL_CAPS")
-        if not default:
-            raise ValueError(f"{where}: {DEV_TOGGLES_ANNOTATION} default for {toggle_name} is empty")
-        if toggle_name in toggles:
-            raise ValueError(f"{where}: {DEV_TOGGLES_ANNOTATION} names {toggle_name} twice")
-        toggles[toggle_name] = default
-    return toggles
-
-
-class ServiceBuild(BaseModel):
-    # Derived by load_config from the Dockerfile tree; never authored.
-    model_config = ConfigDict(extra="forbid")
-
-    name: str
-    dockerfile: str
-    contexts: list[str] = Field(default_factory=list)
-    axis: str | None = None
-    variants: list[str] = Field(default_factory=list)
-    sha_args: list[str] = Field(default_factory=list)
-    dev_stage: bool = False
-
-    @model_validator(mode="after")
-    def _validate(self) -> Self:
-        if (self.axis is None) != (not self.variants):
-            raise ValueError("axis and variants declare together; an axis-bearing service carries its declared values")
-        return self
-
-    @property
-    def target_variants(self) -> list[tuple[str, str | None]]:
-        variants: list[str | None] = list(self.variants) or [None]
-        return [(f"{self.name}-{variant}" if variant is not None else self.name, variant) for variant in variants]
-
-
-class ParsedDockerfile(NamedTuple):
-    # The pre-resolution parse of one service Dockerfile; the variant-axis graph
-    # resolves over these records before any ServiceBuild is constructed.
-    name: str
-    dockerfile: str
-    contexts: list[str]
-    sha_args: list[str]
-    dev_stage: bool
-    axis_arg: str | None
-
-
-class RouteConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    path: str
-    upstream: str
-    strip_prefix: bool = False
-    raw: str | None = None
-
-    @model_validator(mode="after")
-    def _validate(self) -> Self:
-        if re.fullmatch(r"(?:/\*|/(?:[^/\s*]+(?:/[^/\s*]+)*)?(?:/\*)?)", self.path) is None:
-            raise ValueError(f"route path {self.path!r} must be a /-rooted segment chain, optionally wildcarded as …/*")
-        if re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*:[0-9]+", self.upstream) is None:
-            raise ValueError(f"route upstream {self.upstream!r} must be a service name and a literal port (grafana:3000)")
-        if self.strip_prefix and not self.path.endswith("/*"):
-            raise ValueError(f"route {self.path}: strip_prefix strips a wildcard prefix; the path must end in /*")
-        return self
-
-
-class PortDeclaration(BaseModel):
-    # A port is either the mapping form or the string form published/target[/protocol],
-    # which names the entry's or option's namesake service as its owner (the
-    # _coerce_services pre-pass injects the service before validation).
-    model_config = ConfigDict(extra="forbid")
-
-    service: str
-    published: str
-    target: str
-    protocol: Literal["tcp", "udp"] = "tcp"
-    host_ip: str | None = None
-
-    @model_validator(mode="after")
-    def _validate(self) -> Self:
-        for field_name in ("published", "target"):
-            value = getattr(self, field_name)
-            if PORT_PATTERN.fullmatch(value) is None and ENV_HOLE_PATTERN.fullmatch(value) is None:
-                raise ValueError(
-                    f"ports {field_name} {value!r} must be a literal port number or a ${{…}} env hole "
-                    "(published and target may both be holes)"
-                )
-        return self
-
-
-class ServiceEntry(BaseModel):
-    # An option (inside a group's options:) or a bare riding entry. The source is either a
-    # remote include (ref:) or a producer-local workload list (workloads:/vars:); routes and
-    # ports attach to either shape.
-    model_config = ConfigDict(extra="forbid")
-
-    ref: str | None = None
-    workloads: list[str] = Field(default_factory=list)
-    vars: dict[str, str] = Field(default_factory=dict)
-    routes: list[RouteConfig] = Field(default_factory=list)
-    ports: list[PortDeclaration] = Field(default_factory=list)
-
-    @property
-    def remote(self) -> bool:
-        return self.ref is not None
-
-    @model_validator(mode="after")
-    def _validate(self) -> Self:
-        if self.ref is not None and re.fullmatch(rf"oci://\S+@{SHA256_DIGEST_REGEX}", self.ref) is None:
-            raise ValueError(f"ref {self.ref!r} must be a digest-pinned OCI include (oci://…@sha256:…)")
-        if self.ref is not None and self.workloads:
-            raise ValueError("an entry is either ref: or workloads: — exactly one source, never both")
-        if self.ref is None and not self.workloads:
-            raise ValueError(
-                "an entry is either ref: or workloads: — exactly one source, never neither (a group spells options:)"
-            )
-        if self.ref is not None and self.vars:
-            raise ValueError("vars fill local workload renderings; a ref carries its producer's vars")
-        for name in self.workloads:
-            if not name:
-                raise ValueError("workload names must be non-empty")
-        return self
-
-
-class ServiceGroup(BaseModel):
-    # A selectable entry: mutually exclusive options picked through BUNDLES=, with
-    # group-level routes and ports riding whichever option is selected.
-    model_config = ConfigDict(extra="forbid")
-
-    options: dict[str, ServiceEntry]
-    routes: list[RouteConfig] = Field(default_factory=list)
-    ports: list[PortDeclaration] = Field(default_factory=list)
-
-
-class K8sConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    workloads: list[str] = Field(default_factory=list)
-    vars: dict[str, str] = Field(default_factory=dict)
-    charts: dict[str, str] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def _validate(self) -> Self:
-        for name, reference in self.charts.items():
-            if not name:
-                raise ValueError("chart names must be non-empty")
-            if not reference.startswith(CHART_REFERENCE_PREFIX):
-                raise ValueError(
-                    f"charts.{name}: {reference!r} must be an upstream-native OCI reference "
-                    f"({CHART_REFERENCE_PREFIX}host/path:tag or {CHART_REFERENCE_PREFIX}host/path@digest)"
-                )
-            remainder = reference.removeprefix(CHART_REFERENCE_PREFIX)
-            match = DECLARED_REFERENCE_PATTERN.fullmatch(remainder)
-            if match is None or not (match.group("tag") or match.group("digest")):
-                raise ValueError(
-                    f"charts.{name}: {reference!r} must carry a tag or a digest; a bare path or a ${{…}} hole refuses"
-                )
-        if not (self.workloads or self.charts):
-            raise ValueError("the k8s section declares neither workloads nor charts; remove it")
-        return self
-
-
-class ComposeBundle(NamedTuple):
-    name: str
-    output: Path
-    workloads: list[str]
-    vars: dict[str, str]
-
-
-class ToolRequirement(NamedTuple):
-    binary: str
-    version: str
-    release: str
-    archive: str
-    extract: str
 
 
 class DockerDevkitConfig(BaseModel):
@@ -667,41 +336,316 @@ class DockerDevkitConfig(BaseModel):
         return self
 
 
-def _coerce_port_strings(where: str, entry: dict[str, object], owning_name: str, *, bare_legal: bool) -> None:
-    # A non-list ports value rides through untouched; field validation reports it.
-    ports: object = entry.get("ports") or []
-    if not is_list(ports):
-        return
-    coerced: list[object] = []
-    for item in ports:
-        if is_mapping(item):
-            coerced.append(item)
-            continue
-        if not isinstance(item, str):
-            raise TypeError(f"{where}.ports: each entry is a published/target[/protocol] string or a mapping")
-        if not bare_legal:
+class ServiceGroup(BaseModel):
+    # A selectable entry: mutually exclusive options picked through BUNDLES=, with
+    # group-level routes and ports riding whichever option is selected.
+    model_config = ConfigDict(extra="forbid")
+
+    options: dict[str, ServiceEntry]
+    routes: list[RouteConfig] = Field(default_factory=list)
+    ports: list[PortDeclaration] = Field(default_factory=list)
+
+
+class ServiceEntry(BaseModel):
+    # An option (inside a group's options:) or a bare riding entry. The source is either a
+    # remote include (ref:) or a producer-local workload list (workloads:/vars:); routes and
+    # ports attach to either shape.
+    model_config = ConfigDict(extra="forbid")
+
+    ref: str | None = None
+    workloads: list[str] = Field(default_factory=list)
+    vars: dict[str, str] = Field(default_factory=dict)
+    routes: list[RouteConfig] = Field(default_factory=list)
+    ports: list[PortDeclaration] = Field(default_factory=list)
+
+    @property
+    def remote(self) -> bool:
+        return self.ref is not None
+
+    @model_validator(mode="after")
+    def _validate(self) -> Self:
+        if self.ref is not None and re.fullmatch(rf"oci://\S+@{SHA256_DIGEST_REGEX}", self.ref) is None:
+            raise ValueError(f"ref {self.ref!r} must be a digest-pinned OCI include (oci://…@sha256:…)")
+        if self.ref is not None and self.workloads:
+            raise ValueError("an entry is either ref: or workloads: — exactly one source, never both")
+        if self.ref is None and not self.workloads:
             raise ValueError(
-                f"{where}.ports: a group has no namesake service — spell the mapping form (service, published, target)"
+                "an entry is either ref: or workloads: — exactly one source, never neither (a group spells options:)"
             )
-        parts = item.split("/")
-        if len(parts) == 2:
-            published, target, protocol = parts[0], parts[1], "tcp"
-        elif len(parts) == 3:
-            published, target, protocol = parts
+        if self.ref is not None and self.vars:
+            raise ValueError("vars fill local workload renderings; a ref carries its producer's vars")
+        for name in self.workloads:
+            if not name:
+                raise ValueError("workload names must be non-empty")
+        return self
+
+
+class RouteConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    upstream: str
+    strip_prefix: bool = False
+    raw: str | None = None
+
+    @model_validator(mode="after")
+    def _validate(self) -> Self:
+        if re.fullmatch(r"(?:/\*|/(?:[^/\s*]+(?:/[^/\s*]+)*)?(?:/\*)?)", self.path) is None:
+            raise ValueError(f"route path {self.path!r} must be a /-rooted segment chain, optionally wildcarded as …/*")
+        if re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*:[0-9]+", self.upstream) is None:
+            raise ValueError(f"route upstream {self.upstream!r} must be a service name and a literal port (grafana:3000)")
+        if self.strip_prefix and not self.path.endswith("/*"):
+            raise ValueError(f"route {self.path}: strip_prefix strips a wildcard prefix; the path must end in /*")
+        return self
+
+
+class PortDeclaration(BaseModel):
+    # A port is either the mapping form or the string form published/target[/protocol],
+    # which names the entry's or option's namesake service as its owner (the
+    # _coerce_services pre-pass injects the service before validation).
+    model_config = ConfigDict(extra="forbid")
+
+    service: str
+    published: str
+    target: str
+    protocol: Literal["tcp", "udp"] = "tcp"
+    host_ip: str | None = None
+
+    @model_validator(mode="after")
+    def _validate(self) -> Self:
+        for field_name in ("published", "target"):
+            value = getattr(self, field_name)
+            if PORT_PATTERN.fullmatch(value) is None and ENV_HOLE_PATTERN.fullmatch(value) is None:
+                raise ValueError(
+                    f"ports {field_name} {value!r} must be a literal port number or a ${{…}} env hole "
+                    "(published and target may both be holes)"
+                )
+        return self
+
+
+class K8sConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workloads: list[str] = Field(default_factory=list)
+    vars: dict[str, str] = Field(default_factory=dict)
+    charts: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate(self) -> Self:
+        for name, reference in self.charts.items():
+            if not name:
+                raise ValueError("chart names must be non-empty")
+            if not reference.startswith(CHART_REFERENCE_PREFIX):
+                raise ValueError(
+                    f"charts.{name}: {reference!r} must be an upstream-native OCI reference "
+                    f"({CHART_REFERENCE_PREFIX}host/path:tag or {CHART_REFERENCE_PREFIX}host/path@digest)"
+                )
+            remainder = reference.removeprefix(CHART_REFERENCE_PREFIX)
+            match = DECLARED_REFERENCE_PATTERN.fullmatch(remainder)
+            if match is None or not (match.group("tag") or match.group("digest")):
+                raise ValueError(
+                    f"charts.{name}: {reference!r} must carry a tag or a digest; a bare path or a ${{…}} hole refuses"
+                )
+        if not (self.workloads or self.charts):
+            raise ValueError("the k8s section declares neither workloads nor charts; remove it")
+        return self
+
+
+class ServiceBuild(BaseModel):
+    # Derived by load_config from the Dockerfile tree; never authored.
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    dockerfile: str
+    contexts: list[str] = Field(default_factory=list)
+    axis: str | None = None
+    variants: list[str] = Field(default_factory=list)
+    sha_args: list[str] = Field(default_factory=list)
+    dev_stage: bool = False
+
+    @model_validator(mode="after")
+    def _validate(self) -> Self:
+        if (self.axis is None) != (not self.variants):
+            raise ValueError("axis and variants declare together; an axis-bearing service carries its declared values")
+        return self
+
+    @property
+    def target_variants(self) -> list[tuple[str, str | None]]:
+        variants: list[str | None] = list(self.variants) or [None]
+        return [(f"{self.name}-{variant}" if variant is not None else self.name, variant) for variant in variants]
+
+
+class ComposeBundle(NamedTuple):
+    name: str
+    output: Path
+    workloads: list[str]
+    vars: dict[str, str]
+
+
+class ToolRequirement(NamedTuple):
+    binary: str
+    version: str
+    release: str
+    archive: str
+    extract: str
+
+
+class ParsedDockerfile(NamedTuple):
+    # The pre-resolution parse of one service Dockerfile; the variant-axis graph
+    # resolves over these records before any ServiceBuild is constructed.
+    name: str
+    dockerfile: str
+    contexts: list[str]
+    sha_args: list[str]
+    dev_stage: bool
+    axis_arg: str | None
+
+
+def load_config(root: Path) -> DockerDevkitConfig | None:
+    # The one load pipeline: parse, the version self-check, then the filesystem-gated
+    # laws in one linear body — toolchain template resolution, the Dockerfile service
+    # derivation, and the pairing laws over the derived set.
+    path = root / DEFAULT_CONFIG_PATH
+    if not path.exists():
+        return None
+    config = DockerDevkitConfig.model_validate(load_strict_yaml(path.read_text(encoding="utf-8")).data)
+    installed = importlib.metadata.version("docker-devkit")
+    if installed != DEV_SENTINEL and not SpecifierSet(config.requires).contains(installed, prereleases=True):
+        raise SystemExit(f"docker-devkit {installed} does not satisfy requires={config.requires!r}")
+    config.root = root
+
+    # Toolchain components in base_images derive by construction: {uv} from
+    # tool.uv.required-version, {python} from .python-version. Plain values stay
+    # plain — a literal in place of a template is the deliberate-skew escape hatch,
+    # visible in every diff.
+    pins: dict[str, str] = {}
+    used = sorted({key for reference in config.base_images.values() for key in TEMPLATE_KEY_PATTERN.findall(reference)})
+    for key in used:
+        if key == "uv":
+            pyproject = root / PYPROJECT_PATH
+            tool_document: dict[str, object] = (
+                tomllib.loads(pyproject.read_text(encoding="utf-8")) if pyproject.is_file() else {}
+            )
+            tool_table: object = tool_document.get("tool")
+            uv_table: object = tool_table.get("uv") if is_mapping(tool_table) else None
+            declared: object = uv_table.get("required-version") if is_mapping(uv_table) else None
+            if not isinstance(declared, str) or not declared:
+                raise RuntimeError(
+                    f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version is not declared; "
+                    "a {uv} template resolves from that exact pin"
+                )
+            pin_match = re.fullmatch(r"==(?P<version>[^,*\s]+)", declared.strip())
+            if pin_match is None:
+                raise RuntimeError(
+                    f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version {declared!r} is a range, "
+                    "not an exact pin; a {uv} template resolves only from an exact == pin like '==0.12.15'"
+                )
+            pins[key] = pin_match.group("version")
+        elif key == "python":
+            python_version = root / PYTHON_VERSION_PATH
+            if not python_version.is_file():
+                raise RuntimeError(
+                    f"{PYTHON_VERSION_PATH.as_posix()}: the file is absent; "
+                    "a {python} template resolves from its declared version"
+                )
+            # uv reads the first line as the default selection when several are listed.
+            version = next(
+                (line.strip() for line in python_version.read_text(encoding="utf-8").splitlines() if line.strip()),
+                "",
+            )
+            if not version:
+                raise RuntimeError(
+                    f"{PYTHON_VERSION_PATH.as_posix()}: the file is empty; "
+                    "a {python} template resolves from its declared version"
+                )
+            pins[key] = version
         else:
-            raise ValueError(f"{where}.ports entry {item!r} is not a published/target[/protocol] string")
-        coerced.append({"service": owning_name, "published": published, "target": target, "protocol": protocol})
-    entry["ports"] = coerced
+            raise RuntimeError(
+                f"base_images template key {{{key}}} is unknown; the toolchain pins are {{uv}}, {{python}}"
+            )
+    config.base_images = {
+        name: TEMPLATE_KEY_PATTERN.sub(lambda match: pins[match.group(1)], reference)
+        for name, reference in config.base_images.items()
+    }
+
+    # Every Dockerfile-bearing directory one level below a top-level directory is a
+    # service; the graph (context edges, variant axes, SHA args) derives from the
+    # Dockerfiles themselves. Parsing and variant resolution complete before any
+    # ServiceBuild is constructed — each record is built once, fully resolved.
+    parsed = _parse_dockerfiles(root, config.variants)
+
+    computable = {service_sha_env(name) for name in parsed}
+    for service in parsed.values():
+        unknown = [arg for arg in service.sha_args if arg not in computable]
+        if unknown:
+            raise RuntimeError(
+                f"workloads/{service.name}/{DOCKERFILE_NAME}: ARG {', '.join(unknown)} names no derived service; "
+                "the stamp receiver must match a service directory"
+            )
+
+    resolved: dict[str, tuple[str | None, list[str]]] = {}
+    service_builds: dict[str, ServiceBuild] = {}
+    for name, service in parsed.items():
+        axis, variants = _resolve_axis(name, (), parsed, resolved, config.variants)
+        service_builds[name] = ServiceBuild(
+            name=name,
+            dockerfile=service.dockerfile,
+            contexts=service.contexts,
+            axis=axis,
+            variants=variants,
+            sha_args=service.sha_args,
+            dev_stage=service.dev_stage,
+        )
+    if service_builds and config.repository is None:
+        listed = ", ".join(sorted(service_builds))
+        raise RuntimeError(
+            f"Dockerfile service directories exist ({listed}); repository is required — it derives every image tag"
+        )
+    config.service_builds = service_builds
+
+    declared_charts = config.declared_charts
+    if (config.base_images or declared_charts) and not (root / LOCK_PATH).is_file():
+        raise RuntimeError(
+            f"{LOCK_PATH.as_posix()}: base_images or k8s.charts are declared, so the committed image lock is "
+            "required beside them (the lock verb writes it)"
+        )
+    if config.gateway is not None:
+        config.image_lock().require(
+            CADDY_IMAGE,
+            "routes are declared, so the edge rides",
+            hint="declare CADDY_IMAGE in base_images and run lock",
+        )
+    for chart in declared_charts:
+        values = root / config.score_dir / "k8s" / "values" / f"{chart}.yaml"
+        if not values.is_file():
+            raise RuntimeError(f"{values.as_posix()}: the chart's values file is required at the derived path")
+
+    return config
 
 
-def is_mapping(value: object) -> TypeIs[dict[str, object]]:
-    # The shared yaml-shape predicates: markers, secrets, and the config pre-passes narrow
-    # through these.
-    return isinstance(value, dict)
+def chart_lock_key(name: str) -> str:
+    return name.upper().replace("-", "_") + "_CHART"
 
 
-def is_list(value: object) -> TypeIs[list[object]]:
-    return isinstance(value, list)
+def parse_dev_toggles(where: str, raw: str) -> dict[str, str]:
+    # The dev-toggles spelling law (NAME=default pairs): the one parser generation's
+    # validator and up's dev overlay consume.
+    toggles: dict[str, str] = {}
+    for item in raw.split(","):
+        toggle_name, separator, default = item.strip().partition("=")
+        if not separator:
+            raise ValueError(
+                f"{where}: {DEV_TOGGLES_ANNOTATION} entry {item.strip()!r} misses its default; "
+                "the ruled spelling is NAME=default pairs"
+            )
+        if ENV_NAME_PATTERN.fullmatch(toggle_name) is None:
+            raise ValueError(f"{where}: {DEV_TOGGLES_ANNOTATION} name {toggle_name!r} must be ALL_CAPS")
+        if not default:
+            raise ValueError(f"{where}: {DEV_TOGGLES_ANNOTATION} default for {toggle_name} is empty")
+        if toggle_name in toggles:
+            raise ValueError(f"{where}: {DEV_TOGGLES_ANNOTATION} names {toggle_name} twice")
+        toggles[toggle_name] = default
+    return toggles
 
 
 def mirrored_ref(reference: str, prefix: str) -> str:
@@ -712,8 +656,14 @@ def mirrored_ref(reference: str, prefix: str) -> str:
     return f"{prefix}/{reference}"
 
 
-def service_sha_env(name: str) -> str:
-    return name.upper().replace("-", "_") + "_SHA"
+def is_mapping(value: object) -> TypeIs[dict[str, object]]:
+    # The shared yaml-shape predicates: markers, secrets, and the config pre-passes narrow
+    # through these.
+    return isinstance(value, dict)
+
+
+def is_list(value: object) -> TypeIs[list[object]]:
+    return isinstance(value, list)
 
 
 def _parse_dockerfiles(root: Path, axes: dict[str, list[str]]) -> dict[str, ParsedDockerfile]:
@@ -797,6 +747,10 @@ def _require_single_top(tops: set[str], subject: str) -> None:
         raise RuntimeError(f"{subject} span multiple top-level directories: {sorted(tops)}")
 
 
+def service_sha_env(name: str) -> str:
+    return name.upper().replace("-", "_") + "_SHA"
+
+
 def _resolve_axis(
     name: str,
     seen: tuple[str, ...],
@@ -828,6 +782,33 @@ def _resolve_axis(
         axis = parsed[name].axis_arg
         resolved[name] = (axis, list(axes[axis])) if axis is not None else (None, [])
     return resolved[name]
+
+
+def _coerce_port_strings(where: str, entry: dict[str, object], owning_name: str, *, bare_legal: bool) -> None:
+    # A non-list ports value rides through untouched; field validation reports it.
+    ports: object = entry.get("ports") or []
+    if not is_list(ports):
+        return
+    coerced: list[object] = []
+    for item in ports:
+        if is_mapping(item):
+            coerced.append(item)
+            continue
+        if not isinstance(item, str):
+            raise TypeError(f"{where}.ports: each entry is a published/target[/protocol] string or a mapping")
+        if not bare_legal:
+            raise ValueError(
+                f"{where}.ports: a group has no namesake service — spell the mapping form (service, published, target)"
+            )
+        parts = item.split("/")
+        if len(parts) == 2:
+            published, target, protocol = parts[0], parts[1], "tcp"
+        elif len(parts) == 3:
+            published, target, protocol = parts
+        else:
+            raise ValueError(f"{where}.ports entry {item!r} is not a published/target[/protocol] string")
+        coerced.append({"service": owning_name, "published": published, "target": target, "protocol": protocol})
+    entry["ports"] = coerced
 
 
 def compute_service_shas(repo_root: Path, service_builds: dict[str, ServiceBuild]) -> dict[str, str]:

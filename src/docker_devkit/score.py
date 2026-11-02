@@ -72,7 +72,6 @@ PROBE_ADAPTER_ANNOTATION = "outernet.internal/probe-adapter"
 PROBE_ADAPTERS = ("python-urllib", "bash-http")
 RESTART_ANNOTATION = "outernet.internal/restart"
 COMPOSE_RESTART_POLICIES = ("no", "always", "on-failure", "unless-stopped")
-PUBLISH_ANNOTATION = "outernet.internal/publish"
 CONSUMER_INTERPOLATED_ANNOTATION = "outernet.internal/consumer-interpolated"
 
 # The storage classes are org-global infra facts, one k8s consumer; score-k8s defines the
@@ -335,11 +334,6 @@ def generate_compose(config: DockerDevkitConfig, images: dict[str, str]) -> None
                     raise SystemExit(
                         f"{name}: {RESTART_ANNOTATION} is {restart!r}; the compose restart policies are "
                         f"{list(COMPOSE_RESTART_POLICIES)}"
-                    )
-                if annotations.get(PUBLISH_ANNOTATION) is not None:
-                    raise SystemExit(
-                        f"{name}: {PUBLISH_ANNOTATION} died — host publishes are consumer config now, "
-                        "declared as ports under docker-devkit.yaml's services key"
                     )
                 consumer_interpolated = annotations.get(CONSUMER_INTERPOLATED_ANNOTATION)
                 if consumer_interpolated is not None:

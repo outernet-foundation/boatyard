@@ -993,18 +993,6 @@ class TestLockRequirement:
         _write_ref_tree(tmp_path)
         (tmp_path / ".env").write_text("PUBLIC_URL=https://example.dev\n", encoding="utf-8")
 
-    def test_leftover_manifest_refuses_at_load(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        self._write_lock_free_tree(tmp_path)
-        (tmp_path / "workloads").mkdir()
-        (tmp_path / "workloads" / "images.yml").write_text("services: {}\n", encoding="utf-8")
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(down.app, [])
-
-        assert result.exit_code != 0
-        assert isinstance(result.exception, RuntimeError)
-        assert "manifest dissolved" in str(result.exception)
-
     def test_lock_free_repo_assembles_without_the_lock_env_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._write_lock_free_tree(tmp_path)
         recorder = HandoffRecorder()

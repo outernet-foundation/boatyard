@@ -908,23 +908,6 @@ def test_restart_annotation_with_an_enum_value_passes(tmp_path: Path, monkeypatc
     assert templates == [["probe-adapter-healthchecks.tpl", "restart.tpl"]]
 
 
-def test_publish_annotation_refuses_naming_its_death(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config = _bundle_config()
-
-    with pytest.raises(SystemExit, match=r"api\.yaml.*outernet\.internal/publish.*died"):
-        _compose_init_templates(
-            monkeypatch,
-            tmp_path,
-            config,
-            {},
-            {
-                "stack/score/api.yaml": (
-                    'metadata:\n  annotations:\n    outernet.internal/publish: "8000/8000"\ncontainers: {}\n'
-                ),
-            },
-        )
-
-
 def _toggles_workload(annotation: object) -> str:
     return (
         f"metadata:\n  name: api\n  annotations:\n    outernet.internal/dev-toggles: {annotation!r}\ncontainers: {{}}\n"

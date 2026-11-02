@@ -540,69 +540,6 @@ class TestChartRecording:
         assert _read_lock(tmp_path) == {"charts": {"LOKI_CHART": f"{MIRROR_PREFIX}/{LOKI_UPSTREAM}:7.3.1@{DIGEST_A}"}}
 
 
-class TestCutover:
-    def test_check_over_an_env_format_lock_fails_with_the_full_format_diff(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        (tmp_path / LOCK_PATH).write_text(
-            f"UV_IMAGE={MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{DIGEST_A}\n", encoding="utf-8"
-        )
-        result = _invoke(monkeypatch, tmp_path, ["--check"], base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
-
-        assert result.exit_code == 1, result.output
-        assert "re-resolving every entry" in result.output
-        assert "+images:" in result.output
-        assert "+    platforms:" in result.output
-        assert "image lock is stale" in result.output
-        assert (tmp_path / LOCK_PATH).read_text(encoding="utf-8").startswith("UV_IMAGE=")
-
-    def test_write_over_an_env_format_lock_re_resolves_and_rewrites(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        (tmp_path / LOCK_PATH).write_text(
-            f"UV_IMAGE={MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{DIGEST_A}\n", encoding="utf-8"
-        )
-        result = _invoke(monkeypatch, tmp_path, [], base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
-
-        assert result.exit_code == 0, result.output
-        assert "re-resolving every entry" in result.output
-        assert _read_lock(tmp_path) == {
-            "images": {
-                "UV_IMAGE": _structured_entry(
-                    f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15",
-                    index_digest=DIGEST_A,
-                    platforms={"linux/amd64": DIGEST_B},
-                )
-            }
-        }
-
-    def test_a_phase_two_structured_lock_without_platforms_re_resolves(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        # Entries written before the platform-resolving writer carry no platforms map;
-        # the freeze key covers the platform set, so the cutover re-resolves them.
-        (tmp_path / LOCK_PATH).write_text(
-            yaml.safe_dump({
-                "images": {"UV_IMAGE": {"index": f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{DIGEST_A}"}}
-            }),
-            encoding="utf-8",
-        )
-
-        recorder = ManifestRecorder()
-        monkeypatch.setattr(lock_module, "resolve_remote_manifests", recorder.resolve)
-        monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
-        monkeypatch.chdir(tmp_path)
-        _write_repo(tmp_path, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
-
-        result = runner.invoke(lock.app, [])
-
-        assert result.exit_code == 0, result.output
-        assert recorder.inspected == ["ghcr.io/astral-sh/uv:0.12.15"]
-        assert _read_lock(tmp_path)["images"]["UV_IMAGE"]["platforms"] == {
-            "linux/amd64": f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{DIGEST_B}"
-        }
-
-
 class TestLockCheck:
     def _prepare(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setattr(config_module, "compute_service_shas", _no_service_shas)
