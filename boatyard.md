@@ -71,7 +71,7 @@ Sandbox cannot push or publish; hand branch/SHA to the operator for everything b
 
 ## Phase 1 — devkit code change
 
-Branch `boatyard` from a clean tree. One commit per numbered step; AGENTS.md updates ride
+Execute on the current branch — no new branch. One commit per numbered step; AGENTS.md updates ride
 their own prose commits, never mixed with code (see "Commit discipline").
 
 ### 1.1 Rename the package skeleton
