@@ -11,7 +11,7 @@ from typing import Literal, NamedTuple, Self, TypeIs
 import pathspec
 from bashrun.bash import bash, bash_output
 from packaging.specifiers import SpecifierSet
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from strictyaml import load as load_strict_yaml
 
 from docker_devkit.config_lock import (
@@ -117,32 +117,6 @@ class DockerDevkitConfig(BaseModel):
             )
             if not entry.remote
         ]
-
-    @field_validator("services", mode="before")
-    @classmethod
-    def _coerce_services(cls, services: object) -> object:
-        # Coerce string-form ports to the mapping form, naming the owner by context.
-        if not is_mapping(services):
-            return services
-        for name, raw_entry in services.items():
-            if not is_mapping(raw_entry):
-                continue
-            if "options" in raw_entry:
-                raw_options: object = raw_entry["options"] or {}
-                if not is_mapping(raw_options):
-                    continue
-                if not raw_options:
-                    raise ValueError(f"services.{name}: options must be a non-empty map")
-                for option_name, raw_option in raw_options.items():
-                    if not is_mapping(raw_option):
-                        continue
-                    _coerce_port_strings(
-                        f"services.{name}.options.{option_name}", raw_option, option_name, bare_legal=True
-                    )
-                _coerce_port_strings(f"services.{name}", raw_entry, name, bare_legal=False)
-            else:
-                _coerce_port_strings(f"services.{name}", raw_entry, name, bare_legal=True)
-        return services
 
     @model_validator(mode="after")
     def _validate(self) -> Self:
@@ -651,30 +625,6 @@ def _resolve_axis(
         axis = parsed[name].axis_arg
         resolved[name] = (axis, list(axes[axis])) if axis is not None else (None, [])
     return resolved[name]
-
-
-def _coerce_port_strings(where: str, entry: dict[str, object], owning_name: str, *, bare_legal: bool) -> None:
-    ports: object = entry.get("ports") or []
-    if not is_list(ports):
-        return
-    coerced: list[object] = []
-    for item in ports:
-        if is_mapping(item):
-            coerced.append(item)
-            continue
-        if not isinstance(item, str):
-            raise TypeError(f"{where}.ports: each entry must be a published/target[/protocol] string or a mapping")
-        if not bare_legal:
-            raise ValueError(f"{where}.ports: a group uses the mapping form (service, published, target)")
-        parts = item.split("/")
-        if len(parts) == 2:
-            published, target, protocol = parts[0], parts[1], "tcp"
-        elif len(parts) == 3:
-            published, target, protocol = parts
-        else:
-            raise ValueError(f"{where}.ports entry {item!r} must be a published/target[/protocol] string")
-        coerced.append({"service": owning_name, "published": published, "target": target, "protocol": protocol})
-    entry["ports"] = coerced
 
 
 def compute_service_shas(repo_root: Path, service_builds: dict[str, ServiceBuild]) -> dict[str, str]:

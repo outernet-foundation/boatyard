@@ -343,7 +343,14 @@ def _write_consumer_tree(root: Path, *, bundles: str | None = "cuda,keycloak") -
                 },
                 "livekit": {
                     "ref": LIVEKIT_REF,
-                    "ports": ["${LIVEKIT_SIGNALING_PORT:?err}/${LIVEKIT_SIGNALING_PORT:?err}/tcp"],
+                    "ports": [
+                        {
+                            "service": "livekit",
+                            "published": "${LIVEKIT_SIGNALING_PORT:?err}",
+                            "target": "${LIVEKIT_SIGNALING_PORT:?err}",
+                            "protocol": "tcp",
+                        }
+                    ],
                 },
             },
         },
@@ -403,7 +410,7 @@ class TestSelectionLaw:
                     "livekit": {
                         "ref": LIVEKIT_REF,
                         "routes": [{"path": "/*", "upstream": "livekit:8000"}],
-                        "ports": ["6178/6178"],
+                        "ports": [{"service": "livekit", "published": "6178", "target": "6178"}],
                     }
                 },
             },

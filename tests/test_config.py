@@ -544,7 +544,14 @@ class TestServices:
                     "livekit": {
                         "ref": "oci://ghcr.io/org/repo/livekit@" + DIGEST,
                         "routes": [{"path": "/livekit-token/*", "upstream": "livekit-token:8000"}],
-                        "ports": ["${LIVEKIT_SIGNALING_PORT:?err}/${LIVEKIT_SIGNALING_PORT:?err}/tcp"],
+                        "ports": [
+                            {
+                                "service": "livekit",
+                                "published": "${LIVEKIT_SIGNALING_PORT:?err}",
+                                "target": "${LIVEKIT_SIGNALING_PORT:?err}",
+                                "protocol": "tcp",
+                            }
+                        ],
                     },
                 },
             },
@@ -966,7 +973,7 @@ class TestPorts:
             "services": services,
         }
 
-    def test_string_form_names_the_entry_service_with_tcp_default(self, tmp_path: Path) -> None:
+    def test_the_mapping_form_defaults_protocol_to_tcp(self, tmp_path: Path) -> None:
         write_edge_lock(tmp_path)
         write_config(
             tmp_path,
@@ -974,7 +981,10 @@ class TestPorts:
                 "livekit": {
                     "ref": "oci://ghcr.io/org/repo/x@" + DIGEST,
                     "routes": [{"path": "/*", "upstream": "livekit:8000"}],
-                    "ports": ["${PORT:?err}/6178", "6179/6179/udp"],
+                    "ports": [
+                        {"service": "livekit", "published": "${PORT:?err}", "target": "6178"},
+                        {"service": "livekit", "published": "6179", "target": "6179", "protocol": "udp"},
+                    ],
                 }
             }),
         )
@@ -989,35 +999,27 @@ class TestPorts:
             ("livekit", "6179", "6179", "udp"),
         ]
 
-    def test_option_level_string_form_names_the_option(self, tmp_path: Path) -> None:
-        write_edge_lock(tmp_path)
+    def test_a_string_port_refuses(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,
             self._ports_config({
-                "tunnel": {
-                    "options": {
-                        "ngrok": {
-                            "workloads": ["tunnel-ngrok.yaml"],
-                            "ports": ["4040/4040"],
-                        }
-                    }
-                },
                 "livekit": {
                     "ref": "oci://ghcr.io/org/repo/x@" + DIGEST,
                     "routes": [{"path": "/*", "upstream": "livekit:8000"}],
-                },
+                    "ports": ["6179/6179/udp"],
+                }
             }),
         )
+        write_lock(tmp_path)
 
-        config = load_config(tmp_path)
+        with pytest.raises(ValidationError, match="Input should be a valid dictionary or instance of PortDeclaration"):
+            load_config(tmp_path)
 
-        assert config is not None
-
-    def test_a_group_level_string_port_refuses(self, tmp_path: Path) -> None:
+    def test_an_empty_group_options_map_refuses(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,
             self._ports_config({
-                "tunnel": {"options": {"ngrok": {"workloads": ["tunnel-ngrok.yaml"]}}, "ports": ["4040/4040"]},
+                "tunnel": {"options": None, "ports": [{"service": "ngrok", "published": "4040", "target": "4040"}]},
                 "livekit": {
                     "ref": "oci://ghcr.io/org/repo/x@" + DIGEST,
                     "routes": [{"path": "/*", "upstream": "livekit:8000"}],
@@ -1026,7 +1028,7 @@ class TestPorts:
         )
         write_lock(tmp_path)
 
-        with pytest.raises(ValidationError, match="mapping form"):
+        with pytest.raises(ValidationError):
             load_config(tmp_path)
 
     def test_the_mapping_form_spells_the_owning_service_and_host_ip(self, tmp_path: Path) -> None:
@@ -1063,27 +1065,12 @@ class TestPorts:
                 "livekit": {
                     "ref": "oci://ghcr.io/org/repo/x@" + DIGEST,
                     "routes": [{"path": "/*", "upstream": "livekit:8000"}],
-                    "ports": ["eight/eight"],
+                    "ports": [{"service": "livekit", "published": "eight", "target": "5678"}],
                 }
             }),
         )
 
         with pytest.raises(ValidationError, match="literal port number or a"):
-            load_config(tmp_path)
-
-    def test_a_malformed_string_form_refuses(self, tmp_path: Path) -> None:
-        write_config(
-            tmp_path,
-            self._ports_config({
-                "livekit": {
-                    "ref": "oci://ghcr.io/org/repo/x@" + DIGEST,
-                    "routes": [{"path": "/*", "upstream": "livekit:8000"}],
-                    "ports": ["1/2/3/4"],
-                }
-            }),
-        )
-
-        with pytest.raises(ValidationError, match="published/target"):
             load_config(tmp_path)
 
 
