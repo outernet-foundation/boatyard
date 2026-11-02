@@ -16,16 +16,20 @@ from docker_devkit.config import (
     DEV_TOGGLES_ANNOTATION,
     K8sConfig,
     WorkloadDocument,
+    Yaml,
     Config,
     chart_lock_key,
+    is_list,
+    is_mapping,
     validate,
 )
 from docker_devkit.config_lock import ConfigLock
 from docker_devkit.lock import env_entries
 from docker_devkit.score import (
-    contains_marker,
+    MARKERS,
     dump_compose,
     load_yaml_file,
+    marker_entry,
     render_score,
     resolve_markers,
     split_documents,
@@ -130,3 +134,16 @@ def generate_k8s(
     write_generated_file(output_path, "".join(f"---\n{block}" for *_, block in decorated))
 
     shutil.rmtree(state_dir, ignore_errors=True)
+
+
+def contains_marker(node: Yaml) -> bool:
+    if marker_entry(node, MARKERS) is not None:
+        return True
+
+    if is_mapping(node):
+        return any(contains_marker(value) for value in node.values())
+
+    if is_list(node):
+        return any(contains_marker(item) for item in node)
+
+    return False

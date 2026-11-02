@@ -274,19 +274,6 @@ def compiled_provisioners(
         yield CompiledProvisioners(paths=paths, declares_services=declares_services)
 
 
-def contains_marker(node: Yaml) -> bool:
-    if _marker_entry(node, MARKERS) is not None:
-        return True
-
-    if is_mapping(node):
-        return any(contains_marker(value) for value in node.values())
-
-    if is_list(node):
-        return any(contains_marker(item) for item in node)
-
-    return False
-
-
 def resolve_markers(
     node: Yaml, root: Path, images: dict[str, str], source: str, ancestors: tuple[Path, ...] = ()
 ) -> Yaml:
@@ -296,7 +283,7 @@ def resolve_markers(
     if not is_mapping(node):
         return node
 
-    entry = _marker_entry(node, MARKERS)
+    entry = marker_entry(node, MARKERS)
     if entry is None:
         image = node.get(IMAGE_FIELD)
         if isinstance(image, str) and IMAGE_HOLE_PATTERN.search(image) is None:
@@ -369,7 +356,7 @@ def resolve_markers(
     return fields
 
 
-def _marker_entry(node: Yaml, markers: tuple[str, ...]) -> tuple[str, Yaml] | None:
+def marker_entry(node: Yaml, markers: tuple[str, ...]) -> tuple[str, Yaml] | None:
     if is_mapping(node) and len(node) == 1:
         key, value = next(iter(node.items()))
         if key in markers:
