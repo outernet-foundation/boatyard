@@ -88,7 +88,7 @@ def test_unknown_keys_are_rejected() -> None:
 
 
 def test_string_form_state_is_a_loud_error() -> None:
-    with pytest.raises(ValidationError, match=r"string form.*author it as a mapping"):
+    with pytest.raises(ValidationError, match=r"string form.*a mapping is required"):
         AuthoredProvisioner.model_validate({
             "uri": "template://example/x",
             "type": "example-x",
@@ -106,7 +106,7 @@ def test_string_form_services_is_a_loud_error() -> None:
 
 
 def test_string_form_manifests_names_the_list_shape() -> None:
-    with pytest.raises(ValidationError, match="author it as a list"):
+    with pytest.raises(ValidationError, match="a list is required"):
         AuthoredProvisioner.model_validate({
             "uri": "template://example/x",
             "type": "example-x",

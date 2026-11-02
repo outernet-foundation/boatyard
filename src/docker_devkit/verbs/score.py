@@ -31,17 +31,13 @@ def generate_score(
     ] = False,
 ) -> None:
     if check and local:
-        raise RuntimeError(
-            "--check verifies the committed artifacts; it cannot run against the gitignored --local output"
-        )
+        raise RuntimeError("--check and --local are mutually exclusive")
     root = Path.cwd()
     config = load_config(root)
     bundles = config.compose_bundles() if config is not None else []
     if config is None or (not bundles and config.k8s is None):
         if not check:
-            raise RuntimeError(
-                "docker-devkit.yaml declares no local service entries and no k8s section; nothing to generate"
-            )
+            raise RuntimeError("docker-devkit.yaml declares no local service entries and no k8s section")
         print("no local service entries and no k8s section; nothing to check")
         return
     k8s_rendering = config.k8s is not None
@@ -49,12 +45,10 @@ def generate_score(
     if not k8s_rendering and target == "k8s":
         raise typer.BadParameter("--target k8s: this config declares no k8s section (compose-only)")
     if not k8s_rendering and local:
-        raise typer.BadParameter("--local writes the k8s artifact; this config declares no k8s section")
+        raise typer.BadParameter("--local requires a k8s section; this config declares none")
 
     if check:
-        # Fetch the pinned tools rather than trusting whatever PATH holds, so the gate always
-        # regenerates with the exact versions the consumer pinned. Release binaries rather
-        # than go install, since score-spec tags are not valid Go module versions.
+        # Fetch the pinned tools into a per-run temp bin.
         with TemporaryDirectory(prefix="score-tools-") as temporary_directory:
             bin_dir = Path(temporary_directory) / "bin"
             bin_dir.mkdir()
@@ -73,12 +67,8 @@ def generate_score(
                 )
         return
 
-    # Refuse to run without the exact pinned tools, since output differs between releases.
     missing = [item for item in config.tool_requirements(target) if shutil.which(item.binary) is None]
     if missing:
         lines = [f"  {item.binary} {item.version}: {item.release}" for item in missing]
-        raise RuntimeError(
-            "generate-score needs these on PATH, at these exact versions (output differs between releases):\n"
-            + "\n".join(lines)
-        )
+        raise RuntimeError("generate-score requires these on PATH at these exact versions:\n" + "\n".join(lines))
     generate_artifacts(config, target, local)

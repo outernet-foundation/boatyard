@@ -5,7 +5,7 @@ from docker_devkit.score import SecretKey, SecretsDeclaration
 
 
 def test_secret_key_rejects_empty_descriptions() -> None:
-    with pytest.raises(ValidationError, match="one-line description"):
+    with pytest.raises(ValidationError, match="description must be non-empty"):
         SecretKey.model_validate({"description": "   "})
 
 
@@ -25,5 +25,5 @@ def test_validate_consumed_passes_on_subsets() -> None:
 
 def test_validate_consumed_names_rendering_and_undeclared_keys() -> None:
     declaration = SecretsDeclaration.model_validate({"S3_ACCESS_KEY": {"description": "x"}})
-    with pytest.raises(RuntimeError, match=r"compose rendering consumes keys missing.*GRAFANA_PORT, LOKI_PORT"):
+    with pytest.raises(RuntimeError, match=r"compose rendering consumes undeclared keys.*GRAFANA_PORT, LOKI_PORT"):
         declaration.validate_consumed({"GRAFANA_PORT", "LOKI_PORT"}, "compose", "secrets.yaml")

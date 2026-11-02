@@ -271,9 +271,6 @@ def test_values_lock_markers_resolve_after_includes(tmp_path: Path, monkeypatch:
 
 
 class TestMarkerSubstrateResolution:
-    # Markers resolve by substrate: the index under k8s (kubelet resolves per node), the
-    # platform manifest under compose (the artifact records the exact bytes one machine runs).
-
     def _multi_arch_lock(self) -> ImageLock:
         return ImageLock.model_validate({
             "images": {
@@ -582,10 +579,6 @@ SELF_GATING_FALLBACK = "{{- if not $matched }}\n[]\n{{- end }}"
 
 
 def test_self_gating_templates_fall_back_to_an_empty_patches_document() -> None:
-    # score-compose and score-k8s refuse a document-less template output (comment-only or
-    # empty renders fail at unmarshal), so a template that can emit zero ops must end with
-    # the empty-list fallback and set the matched flag where it emits ops. The gate-pin
-    # template emits unconditionally and is exempt.
     directory = files("docker_devkit") / "patch_templates"
 
     for name in SHIPPED_TEMPLATES - {"wait-for-resources-image.tpl"}:
@@ -603,11 +596,6 @@ def test_the_healthcheck_template_ships_both_probe_adapter_spells() -> None:
 
 
 def test_the_bash_http_spell_escapes_its_dollar_for_compose_interpolation() -> None:
-    # The healthcheck test string is app-owned data the consumer's include-time
-    # interpolation scans: an un-doubled $status renders as an empty compose
-    # variable and the case statement dies as a syntax error (keycloak verified
-    # unhealthy on a live daemon exactly this way), so the spell must carry the
-    # compose-escaped $$status.
     text = (files("docker_devkit") / "patch_templates" / "probe-adapter-healthchecks.tpl").read_text(encoding="utf-8")
 
     assert "$$status" in text
@@ -615,11 +603,6 @@ def test_the_bash_http_spell_escapes_its_dollar_for_compose_interpolation() -> N
 
 
 def test_the_bash_http_spell_uses_the_slash_port_spelling() -> None:
-    # bash intercepts /dev/tcp/host/port — slash only. A colon-separated port
-    # (127.0.0.1:9000) is not a net redirection at all: bash falls through to
-    # opening the literal file and the healthcheck dies with ENOENT (verified
-    # against the live keycloak container — the colon form failed while the
-    # slash form connected on the same socket).
     text = (files("docker_devkit") / "patch_templates" / "probe-adapter-healthchecks.tpl").read_text(encoding="utf-8")
 
     assert "/dev/tcp/127.0.0.1/{{ .port }}" in text
@@ -660,7 +643,7 @@ def _compose_init_templates(
     sources: dict[str, str],
     generated: str = "services: {}\n",
 ) -> list[list[str]]:
-    # One template-name list per bundle rendering, in declaration order.
+    # Return one template-name list per bundle rendering, in declaration order.
     for relative, text in sources.items():
         source = tmp_path / relative
         source.parent.mkdir(parents=True, exist_ok=True)
@@ -765,8 +748,6 @@ def test_provisioners_register_by_resource_type_closure(tmp_path: Path, monkeypa
 
     init = next(command for command in recorder.commands if command.startswith("score-compose init"))
     provisioners = [token for token in init.split() if token.endswith(".yaml")]
-    # Both referenced files compile (deterministic filename order); the orphan — a type
-    # nothing references — silently no-ships.
     assert [Path(token).name for token in provisioners] == ["config.yaml", "state.yaml"]
 
 
@@ -1026,9 +1007,6 @@ INTERPOLATED_GENERATED_COMPOSE = (
 
 
 class MaterializingComposeRecorder(ComposeBashRecorder):
-    # score-compose materialises files: content into its state dir at generate; the
-    # recorder recreates that so the inliner can read it (the per-bundle state-dir
-    # reset deletes anything pre-created).
     def __init__(self, generated: str, materialized: Path, text: str) -> None:
         super().__init__(generated)
         self.materialized = materialized
@@ -1118,8 +1096,6 @@ def test_k8s_builtin_templates_register_on_every_init(tmp_path: Path, monkeypatc
     ]
 
 
-# The A0 spike verdict, pinned against the real binary: the suite runs without the
-# score tools, so these tests skip wherever score-compose is absent or off-pin.
 A0_ESCAPED_WORKLOAD = """\
 apiVersion: score.dev/v1b1
 metadata:
@@ -1260,11 +1236,6 @@ ORDER_INDEPENDENCE_SECOND_PROVISIONER = """\
 
 
 def test_provisioner_registration_order_does_not_change_generated_output(tmp_path: Path) -> None:
-    # Provisioner registration derives by closure in deterministic filename order; the
-    # committed artifacts were generated under the old config-declared order. This pins
-    # that score-compose's output is order-independent, wherever the pinned binary exists.
-    # The fixtures ride the real compile path (authored mappings -> string form) and the
-    # workload references both types, so both provisioners actually instantiate.
     _skip_unless_pinned_score_compose()
     source = tmp_path / "score"
     source.mkdir()

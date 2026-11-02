@@ -42,21 +42,17 @@ from docker_devkit.documents import BindVolume, ComposeDocument, WorkloadDocumen
 from docker_devkit.assembly import merged_environment
 from docker_devkit.lock import compose_env_entries, env_entries
 
-# Match only ALL-CAPS placeholders so Score's lowercase dotted references never collide.
+# Match only ${ALL_CAPS} placeholders.
 PLACEHOLDER = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
 
-# Treat sources under this prefix as relative to score-compose's state directory.
 STATE_PREFIX = ".score-compose/"
 
-# score-compose names services {workload}-{container}; when the halves match, the name is doubled.
+# Match doubled {workload}-{container} service names.
 DOUBLED_SERVICE_NAME = re.compile(r"^(.+)-\1$")
 
-# Count a brace hole as consumed when an odd number of dollars precedes it, since even runs
-# are $$-escaped literals.
+# Match a brace hole with its preceding dollar run.
 COMPOSE_HOLE = re.compile(r"(\$+)\{([A-Z][A-Z0-9_]*)(?::[^{}]*)?\}")
 
-# Built-in patch templates ship as package data under this directory and register onto the
-# devkit's own score init invocations; consumer repos never author or declare one.
 PATCH_TEMPLATES_DIR = "patch_templates"
 GATE_PIN_TEMPLATE = "wait-for-resources-image.tpl"
 GATE_SERVICE = "wait-for-resources"
@@ -66,16 +62,12 @@ GPU_POD_TEMPLATE = "gpu-pod.tpl"
 SCALE_TO_ZERO_TEMPLATE = "scale-to-zero.tpl"
 GPU_COMPOSE_TEMPLATES = {"cuda": "gpu-cuda.tpl", "rocm": "gpu-rocm.tpl"}
 
-# The deployment-surface annotations the built-in templates read; their refusal laws live
-# in devkit code because templates are data and cannot refuse.
 PROBE_ADAPTER_ANNOTATION = "outernet.internal/probe-adapter"
 PROBE_ADAPTERS = ("python-urllib", "bash-http")
 RESTART_ANNOTATION = "outernet.internal/restart"
 COMPOSE_RESTART_POLICIES = ("no", "always", "on-failure", "unless-stopped")
 CONSUMER_INTERPOLATED_ANNOTATION = "outernet.internal/consumer-interpolated"
 
-# The storage classes are org-global infra facts, one k8s consumer; score-k8s defines the
-# variable name the workload files interpolate.
 STORAGE_CLASS_VAR = "SCORE_STORAGE_CLASS"
 CLOUD_STORAGE_CLASS = "hcloud-volumes"
 LOCAL_STORAGE_CLASS = "local-path"
@@ -83,14 +75,8 @@ LOCAL_STORAGE_CLASS = "local-path"
 SECRETS_FILE = Path("stack/secrets.yaml")
 SECRETS_OUTPUT = Path("stack/generated/secrets.txt")
 
-# Compile these fields from authored mappings into the YAML strings score's Go templates
-# consume; authored manifests stay a real list.
 STRING_FORM_FIELDS = ("state", "outputs", "volumes", "services", "manifests")
 
-# Authoring markers are single-key mappings so authored sources stay plain-YAML-parseable.
-# Include markers insert a repo-root-relative file's bytes or parsed structure; lock markers
-# substitute image-lock entries. Include resolution runs before lock resolution, and text
-# content is never scanned for markers.
 TEXT_MARKER = "include"
 YAML_MARKER = "include-yaml"
 LOCK_MARKER = "lock"
@@ -136,7 +122,7 @@ class SecretsDeclaration(RootModel[dict[str, "SecretKey"]]):
         context: dict[str, object] = info.context or {}
         source = context.get("source", "the secrets declaration")
         if not is_mapping(value) or not value:
-            raise ValueError(f"{source}: the secrets declaration is a non-empty KEY: description mapping")
+            raise ValueError(f"{source}: must be a non-empty KEY: description mapping")
         return {name: ({"description": spec} if isinstance(spec, str) else spec) for name, spec in value.items()}
 
     @model_validator(mode="after")
@@ -145,15 +131,14 @@ class SecretsDeclaration(RootModel[dict[str, "SecretKey"]]):
         source = context.get("source", "the secrets declaration")
         for name in self.root:
             if not ENV_NAME_PATTERN.match(name):
-                raise ValueError(f"{source}: {name!r} is not an ALL_CAPS key")
+                raise ValueError(f"{source}: {name!r} must be an ALL_CAPS key")
         return self
 
     def validate_consumed(self, consumed: set[str], rendering: str, source: str) -> None:
         undeclared = sorted(consumed - self.root.keys())
         if undeclared:
             raise RuntimeError(
-                f"{source}: the {rendering} rendering consumes keys missing from the secrets declaration: "
-                + ", ".join(undeclared)
+                f"{source}: the {rendering} rendering consumes undeclared keys: " + ", ".join(undeclared)
             )
 
 
@@ -167,7 +152,7 @@ class SecretKey(BaseModel):
     @classmethod
     def _require_description(cls, value: str) -> str:
         if not value.strip():
-            raise ValueError("every declared key needs a one-line description")
+            raise ValueError("description must be non-empty")
         return value
 
 
@@ -207,14 +192,11 @@ class AuthoredProvisioner(BaseModel):
         context: dict[str, object] = info.context or {}
         raise ValueError(
             f"{context.get('name', 'the provisioner file')}: "
-            f"{info.field_name} is already in score's compiled string form; author it as a {shape}"
+            f"{info.field_name} is in score's compiled string form; a {shape} is required"
         )
 
 
 class CompiledProvisioners(NamedTuple):
-    # declares_services is the phantom-service condition: score-compose synthesizes its
-    # wait-for-resources gate exactly when provisioner-added services exist, and the
-    # devkit's built-in gate-pin template registers on it.
     paths: list[Path]
     declares_services: bool
 
@@ -224,7 +206,7 @@ class ComposeDumper(yaml.SafeDumper):
 
 
 def _represent_multiline(dumper: yaml.SafeDumper, value: str) -> yaml.ScalarNode:
-    # Force literal block style for multiline strings, building the node directly to satisfy strict typing.
+    # Force literal block style for multiline strings.
     return yaml.ScalarNode("tag:yaml.org,2002:str", value, style="|" if "\n" in value else None)
 
 
@@ -232,22 +214,17 @@ ComposeDumper.add_representer(str, _represent_multiline)
 
 
 def generate_artifacts(config: DockerDevkitConfig, target: Target, local: bool) -> list[Path]:
-    # Resolve image tags from the committed tree, exactly as up and build do; the artifacts
-    # embed tree tags, so the build keys are required.
+    # Require the build keys, export the tree tags, and load the lock.
     if not (config.repository or config.base_images):
-        raise RuntimeError(
-            "the build keys (repository or base_images) are required in docker-devkit.yaml — "
-            "score artifacts embed the tree tags they derive"
-        )
+        raise RuntimeError("repository or base_images is required in docker-devkit.yaml")
     assert config.root is not None
     root = config.root
     os.environ.update(config.service_shas())
     if config.k8s is not None:
         os.environ[STORAGE_CLASS_VAR] = LOCAL_STORAGE_CLASS if local else CLOUD_STORAGE_CLASS
-    # The lock beside the manifest is the single digest source for authored lock markers.
     lock_path = root / LOCK_PATH
     if not lock_path.is_file():
-        raise RuntimeError(f"{lock_path.as_posix()}: the image lock is required for generation (lock writes it)")
+        raise RuntimeError(f"{lock_path.as_posix()}: the image lock is required")
     lock = parse_image_lock(lock_path)
     if not lock.images and not lock.charts:
         raise RuntimeError(f"{lock_path.as_posix()}: the image lock carries no entries")
@@ -256,8 +233,6 @@ def generate_artifacts(config: DockerDevkitConfig, target: Target, local: bool) 
     outputs: list[Path] = []
 
     if target in ("both", "compose"):
-        # Compose markers resolve to the platform manifests of the selected platform —
-        # the committed artifact records the exact bytes one machine runs.
         generate_compose(config, compose_env_entries(lock, config, merged_environment(root)))
         outputs.extend(bundle.output for bundle in config.compose_bundles())
 
@@ -266,9 +241,7 @@ def generate_artifacts(config: DockerDevkitConfig, target: Target, local: bool) 
         outputs.append(k8s_output)
 
     if (root / SECRETS_FILE).is_file():
-        # The secrets contract: validate each rendering this run generated against the
-        # declaration, and derive the mint list from the declaration alone. The cluster
-        # Secret name derives from the compose project name.
+        # Validate the consumed keys and write the mint list.
         declaration_path = root / SECRETS_FILE
         k8s_secret = f"{config.project_name}-secrets"
 
@@ -308,9 +281,7 @@ def generate_compose(config: DockerDevkitConfig, images: dict[str, str]) -> None
     root = config.root
     bundles = config.compose_bundles()
     if not bundles:
-        raise RuntimeError(
-            "the compose target requires local service entries (workloads:) under docker-devkit.yaml's services key"
-        )
+        raise RuntimeError("the compose target requires local service entries (workloads:)")
     score_dir = config.score_dir_path()
     score_state = score_dir / STATE_PREFIX
 
@@ -323,7 +294,7 @@ def generate_compose(config: DockerDevkitConfig, images: dict[str, str]) -> None
                 workload = WorkloadDocument.model_validate(document)
                 annotations = workload.metadata.annotations
                 containers: dict[str, Any] = document.get("containers") or {}
-                # The deployment-surface refusal laws the shipped templates cannot carry.
+                # Validate the deployment-surface annotations.
                 adapter = annotations.get(PROBE_ADAPTER_ANNOTATION)
                 if adapter is not None and adapter not in PROBE_ADAPTERS:
                     raise SystemExit(
@@ -349,30 +320,22 @@ def generate_compose(config: DockerDevkitConfig, images: dict[str, str]) -> None
                     for entry in consumer_interpolated.split(","):
                         if entry != entry.strip() or not entry:
                             raise SystemExit(
-                                f"{name}: {CONSUMER_INTERPOLATED_ANNOTATION} entry {entry!r} is empty or whitespace-padded"
+                                f"{name}: {CONSUMER_INTERPOLATED_ANNOTATION} entry {entry!r} must be non-empty "
+                                "and unpadded"
                             )
                         if entry not in declared_files:
                             raise SystemExit(
-                                f"{name}: {CONSUMER_INTERPOLATED_ANNOTATION} names {entry!r}, "
-                                "which no container's files: declares"
+                                f"{name}: {CONSUMER_INTERPOLATED_ANNOTATION} entry {entry!r} names no declared "
+                                "files: path"
                             )
                         interpolated_targets.add(entry)
                 if adapter is None:
-                    # score-compose drops httpGet probes, so compose healthchecks exist only
-                    # through the adapter's conversion — a probe without one is the silent-
-                    # drop failure mode.
                     for container in containers.values():
                         for probe in ("readinessProbe", "livenessProbe"):
                             probe_block: dict[str, Any] = container.get(probe) or {}
                             if probe_block.get("httpGet") is not None:
-                                raise SystemExit(
-                                    f"{name}: a {probe} httpGet exists but {PROBE_ADAPTER_ANNOTATION} is not "
-                                    "declared; score-compose drops httpGet probes, so the compose healthcheck "
-                                    "needs the adapter"
-                                )
-                # The dev-overlay spelling laws, refused at generation: the annotation is
-                # consumed at `up --dev`, and the declaring change is where malformed
-                # spelling should fail.
+                                raise SystemExit(f"{name}: a {probe} httpGet requires {PROBE_ADAPTER_ANNOTATION}")
+                # Validate the dev-toggles annotation.
                 toggle_raw, service_name = workload.dev_toggles
                 if toggle_raw is not None:
                     if not isinstance(toggle_raw, str) or not toggle_raw.strip():
@@ -380,7 +343,7 @@ def generate_compose(config: DockerDevkitConfig, images: dict[str, str]) -> None
                             f"{name}: {DEV_TOGGLES_ANNOTATION} must be a comma-separated NAME=default string"
                         )
                     if not isinstance(service_name, str) or not service_name:
-                        raise SystemExit(f"{name}: metadata.name is required to key the dev overlay service")
+                        raise SystemExit(f"{name}: metadata.name is required")
                     parse_dev_toggles(name, toggle_raw)
                     if service_name in toggle_services:
                         raise SystemExit(
@@ -389,18 +352,11 @@ def generate_compose(config: DockerDevkitConfig, images: dict[str, str]) -> None
                         )
                     toggle_services[service_name] = name
             provisioner_names = closure_provisioners(score_dir, "compose", bundle.workloads)
-            # The state dir is re-created per bundle so one bundle's provisioners and patch
-            # templates never leak into another's output.
             with compiled_provisioners(score_dir, provisioner_names, root, images) as provisioners:
-                # The wait-for-resources gate exists exactly when provisioner-added services do,
-                # and the built-in gate-pin template rewrites its image through the lock — so a
-                # gate-forming run without the lock entry refuses here instead of shipping a
-                # bare `alpine` in the artifact (templates are data and cannot refuse).
                 if provisioners.declares_services and "ALPINE_IMAGE" not in images:
                     raise RuntimeError(
-                        f"bundle {bundle.name!r}: its provisioners declare services, so score-compose "
-                        f"synthesizes a wait-for-resources gate; {LOCK_PATH.as_posix()} lacks the "
-                        "ALPINE_IMAGE entry the gate pin needs (lock writes it)"
+                        f"bundle {bundle.name!r}: its provisioners declare services; "
+                        f"{LOCK_PATH.as_posix()} must carry the ALPINE_IMAGE entry"
                     )
                 templates = [
                     builtin_templates / HEALTHCHECK_TEMPLATE,
@@ -427,9 +383,7 @@ def generate_compose(config: DockerDevkitConfig, images: dict[str, str]) -> None
                         cwd=score_dir,
                     )
 
-                # Collapse doubled {workload}-{container} service names (api-api -> api) so bundle
-                # artifacts carry the fleet-wide vocabulary; references never use the doubled form,
-                # and a collapse onto an existing service name is a loud collision.
+                # Collapse doubled {workload}-{container} service names.
                 document = yaml.safe_load(output.read_text(encoding="utf-8"))
                 services: dict[str, Any] = document.get("services") or {}
                 collapsed: dict[str, Any] = {}
@@ -441,9 +395,7 @@ def generate_compose(config: DockerDevkitConfig, images: dict[str, str]) -> None
                     collapsed[target] = service
                 document["services"] = collapsed
 
-                # score-compose synthesizes the gate under one fixed name per rendering, and
-                # compose includes merge same-name services silently — so each entry's
-                # artifact names its own gate and the depends_on references follow.
+                # Rename the gate per entry and follow the depends_on references.
                 gate = f"{GATE_SERVICE}-{bundle.name}"
                 if GATE_SERVICE in collapsed:
                     if gate in collapsed:
@@ -458,14 +410,12 @@ def generate_compose(config: DockerDevkitConfig, images: dict[str, str]) -> None
                                 gate if dependency == GATE_SERVICE else dependency for dependency in depends_on
                             ]
 
-                # compose merges same-name services across includes silently, and the emitted
-                # edge service owns the reserved name — a rendering squatting on it refuses here.
                 if EDGE_SERVICE_NAME in collapsed:
                     raise SystemExit(
                         f"bundle {bundle.name!r} rendering defines the reserved service {EDGE_SERVICE_NAME!r}"
                     )
 
-                # Inline every bind as configs.content with $ doubled, leaving zero host-filesystem references.
+                # Inline every bind as configs.content with $ doubled.
                 parsed = ComposeDocument.model_validate(document)
                 contents: dict[str, dict[str, str]] = {}
                 for name, service in (parsed.services or {}).items():
@@ -478,10 +428,6 @@ def generate_compose(config: DockerDevkitConfig, images: dict[str, str]) -> None
                         path = score_dir / bind.source if bind.source.startswith(STATE_PREFIX) else root / bind.source
                         text = path.read_text(encoding="utf-8")
                         if bind.target not in interpolated_targets:
-                            # App-owned text doubles $ so compose interpolation leaves it alone; a
-                            # file named by the consumer-interpolation annotation rides verbatim,
-                            # its single-$ holes becoming the include consumer's interpolation
-                            # surface.
                             text = text.replace("$", "$$")
                         contents[path.name] = {"content": text}
                         references.append({"source": path.name, "target": bind.target})
@@ -497,21 +443,17 @@ def generate_compose(config: DockerDevkitConfig, images: dict[str, str]) -> None
                     document["configs"] = {**(document.get("configs") or {}), **contents}
                 write_generated_file(output, dump_compose(document))
 
-    # The compose state dir is per-run temp; deleting it keeps the next run provisioning from scratch.
     shutil.rmtree(score_state, ignore_errors=True)
 
 
 @contextmanager
 def _builtin_patch_templates() -> Generator[Path]:
-    # importlib.resources is the only resolver that finds the assets in wheel, sdist, and
-    # editable installs alike.
     with as_file(files("docker_devkit") / PATCH_TEMPLATES_DIR) as directory:
         yield directory
 
 
 def closure_provisioners(score_dir: Path, rendering: str, workloads: list[str]) -> list[str]:
-    # A rendering registers exactly the provisioner files whose types its workloads
-    # reference; orphan files (a type nothing references) silently no-ship.
+    # Select the provisioner files whose resource types the workloads reference.
     referenced: set[str] = set()
     for name in workloads:
         document: Any = _load_yaml_file(score_dir / name)
@@ -538,8 +480,7 @@ def closure_provisioners(score_dir: Path, rendering: str, workloads: list[str]) 
 def compiled_provisioners(
     source_dir: Path, names: list[str], root: Path, images: dict[str, str]
 ) -> Generator[CompiledProvisioners]:
-    # Compile into a per-run tempdir under source_dir: the string form never touches the
-    # committed tree, and --provisioners paths stay repo-relative.
+    # Compile into a per-run tempdir under source_dir.
     if not names:
         yield CompiledProvisioners(paths=[], declares_services=False)
         return
@@ -555,9 +496,7 @@ def compiled_provisioners(
                 name,
             )
             if not is_list(document) or not document:
-                raise RuntimeError(
-                    f"{name}: an authored provisioner file is a non-empty YAML list of provisioner entries"
-                )
+                raise RuntimeError(f"{name}: an authored provisioner file must be a non-empty YAML list")
             compiled_entries: list[dict[str, object]] = []
             for entry in document:
                 AuthoredProvisioner.model_validate(entry, context={"name": name})
@@ -565,7 +504,7 @@ def compiled_provisioners(
                 if entry.get("services"):
                     declares_services = True
 
-                # Compile from the raw authored dicts so authored key order controls dump order.
+                # Compile each entry in authored key order.
                 compiled: dict[str, object] = {}
                 for key, value in entry.items():
                     if key in STRING_FORM_FIELDS:
@@ -582,8 +521,7 @@ def compiled_provisioners(
 
 
 def generate_k8s(config: DockerDevkitConfig, k8s: K8sConfig, output_path: Path, lock: ImageLock) -> None:
-    # Run score-k8s in the output's directory; it writes its .score-k8s state under its cwd.
-    # The output arrives root-absolute (the joined k8s output path).
+    # Run score-k8s in the output's directory, where it writes its .score-k8s state.
     assert config.root is not None
     root = config.root
     images = env_entries(lock)
@@ -599,8 +537,7 @@ def generate_k8s(config: DockerDevkitConfig, k8s: K8sConfig, output_path: Path, 
         k8s_annotations = WorkloadDocument.model_validate(k8s_document).metadata.annotations
         if DEV_TOGGLES_ANNOTATION in k8s_annotations:
             raise SystemExit(
-                f"{name}: {DEV_TOGGLES_ANNOTATION} is compose dev-overlay vocabulary; this workload "
-                "renders k8s-only, so the annotation can never apply"
+                f"{name}: {DEV_TOGGLES_ANNOTATION} is compose dev-overlay vocabulary; this workload renders k8s-only"
             )
 
     with (
@@ -622,9 +559,7 @@ def generate_k8s(config: DockerDevkitConfig, k8s: K8sConfig, output_path: Path, 
         with _rendered_workloads(config, k8s.workloads, k8s.vars, images) as workloads:
             bash(f"score-k8s generate {workloads} --output {output_path.as_posix()}", cwd=output_path.parent)
 
-    # Render charts through helm template into the same sorted documents; the lock is the
-    # digest source, so helm renders the org-mirrored digest consumers pull — helm is a
-    # renderer, never a deployer.
+    # Render the charts through helm template.
     if k8s.charts:
         chart_blocks: list[str] = []
         with TemporaryDirectory(prefix="resolved-values-") as values_directory:
@@ -654,7 +589,7 @@ def generate_k8s(config: DockerDevkitConfig, k8s: K8sConfig, output_path: Path, 
             output_path.read_text(encoding="utf-8") + "".join(f"---\n{block}" for block in chart_blocks),
         )
 
-    # Sort documents by kind, namespace, and name, since score-k8s emits in randomised map order.
+    # Sort documents by kind, namespace, and name.
     documents = _split_documents(output_path.read_text(encoding="utf-8"))
     decorated: list[tuple[str, str, str, int, str]] = []
     for index, block in enumerate(documents):
@@ -663,14 +598,14 @@ def generate_k8s(config: DockerDevkitConfig, k8s: K8sConfig, output_path: Path, 
     decorated.sort()
     write_generated_file(output_path, "".join(f"---\n{block}" for *_, block in decorated))
 
-    # Reduce recorded workload paths to bare filenames so the state file reproduces.
+    # Reduce recorded workload paths to bare filenames.
     state_path = state_dir / "state.yaml"
     state_text = state_path.read_text(encoding="utf-8")
     for name in k8s.workloads:
         state_text = re.sub(rf"(?m)^(\s*file:\s*).*/{re.escape(name)}$", rf"\g<1>{name}", state_text)
     write_generated_file(state_path, state_text)
 
-    # Rewrite each random instance_suffix to a name-derived hash so output reproduces from fresh state.
+    # Rewrite each random instance_suffix to a name-derived hash.
     state = ScoreState.model_validate(yaml.safe_load(state_text) or {})
     manifest_text = output_path.read_text(encoding="utf-8")
     for name, entry in state.workloads.items():
@@ -754,7 +689,6 @@ def resolve_lock_refs(node: Any, images: dict[str, str], source: str) -> Any:
         if image_spec.key not in images:
             raise RuntimeError(f"{source}: lock entry {image_spec.key!r} does not exist in the image lock")
         reference = images[image_spec.key]
-        # Every lock entry is digest-pinned at load (ImageLock), so the split always yields a digest.
         path_part, _, digest = reference.rpartition("@")
 
         fields: dict[str, str] = {}
@@ -766,7 +700,7 @@ def resolve_lock_refs(node: Any, images: dict[str, str], source: str) -> Any:
             fields["registry"], fields["repository"] = _split_path(path_part, reference, source)
 
         if image_spec.digest_field == "sha":
-            # Spell the digest bare; the grafana chart template re-adds the sha256: prefix.
+            # Spell the digest bare.
             fields["sha"] = digest.removeprefix("sha256:")
         else:
             fields["digest"] = digest
@@ -775,10 +709,7 @@ def resolve_lock_refs(node: Any, images: dict[str, str], source: str) -> Any:
     if is_mapping(node):
         image = node.get(IMAGE_FIELD)
         if isinstance(image, str) and IMAGE_HOLE_PATTERN.search(image) is None:
-            raise RuntimeError(
-                f"{source}: image {image!r} is a hand-written image reference; "
-                "write the field as image: {lock: NAME} to consume the lock"
-            )
+            raise RuntimeError(f"{source}: image {image!r} must consume the lock (lock: NAME / lock-image: NAME)")
         return {key: resolve_lock_refs(value, images, source) for key, value in node.items()}
 
     if is_list(node):
@@ -826,7 +757,7 @@ def _init_state(
     *,
     working_dir: Path,
 ) -> None:
-    # Init idempotently with POSIX relative paths, so no machine path or separator reaches a state file.
+    # Init idempotently with POSIX-relative paths.
     flags = "".join(
         f" --provisioners {shlex.quote(Path(os.path.relpath(provisioner, working_dir)).as_posix())}"
         for provisioner in provisioners
@@ -845,13 +776,7 @@ def _rendered_workloads(
     rendering_vars: dict[str, str],
     images: dict[str, str],
 ) -> Generator[str]:
-    # Expand ${ALL_CAPS} placeholders into tempdir copies, since Score documents cannot read the
-    # environment. Holes fill from the rendering's vars map first (bundle vars for compose,
-    # k8s.vars for k8s), then the environment (the tree-tag SHAs); ${VAR:?err}/${VAR:-}
-    # runtime holes never match the bare-placeholder pattern, so they ride through to compose
-    # interpolation untouched. Lock markers resolve first and structurally — a workload's
-    # image field is metadata score never substitutes outputs into, so a third-party image
-    # rides as {lock: NAME} and lands digest-pinned in both renderings.
+    # Expand ${ALL_CAPS} placeholders into tempdir copies.
     with TemporaryDirectory() as temporary_directory:
         directory = Path(temporary_directory)
 
@@ -870,8 +795,7 @@ def _placeholder_value(rendering_vars: dict[str, str], workload_name: str, match
     value = rendering_vars.get(variable) or os.environ.get(variable)
     if not value:
         raise SystemExit(
-            f"{workload_name}: ${{{variable}}} is set in neither the rendering's vars map nor the "
-            "environment (service SHAs derive from the build keys)"
+            f"{workload_name}: ${{{variable}}} is set in neither the rendering's vars map nor the environment"
         )
     return value
 
@@ -888,11 +812,11 @@ def dump_compose(value: object) -> str:
 
 
 def write_generated_file(path: Path, text: str) -> None:
-    # Write with newline="" so a Windows run does not rewrite line endings as CRLF.
+    # Write with newline="" to prevent CRLF rewrites.
     with path.open("w", encoding="utf-8", newline="") as handle:
         handle.write(text)
 
-    # Normalise to 0644, since score-k8s writes its state file executable.
+    # Normalise the mode to 0644.
     path.chmod(0o644)
 
 
