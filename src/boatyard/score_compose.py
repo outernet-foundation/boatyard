@@ -23,7 +23,6 @@ from boatyard.config import (
     Yaml,
     double_dollars,
     is_mapping,
-    load_yaml_file,
     Config,
 )
 from boatyard.config_lock import LOCK_PATH, ConfigLock
@@ -119,7 +118,9 @@ class ComposeConfig(BaseModel):
     content: str | None = None
 
 
-def generate_compose(config: Config, lock: ConfigLock, service_shas: dict[str, str]) -> list[Path]:
+def generate_compose(
+    config: Config, lock: ConfigLock, service_shas: dict[str, str], secrets: SecretsDeclaration
+) -> list[Path]:
     # Refuse the compose target without local service entries.
     bundles = config.compose_bundles()
     if not bundles:
@@ -231,15 +232,12 @@ def generate_compose(config: Config, lock: ConfigLock, service_shas: dict[str, s
     shutil.rmtree(score_state, ignore_errors=True)
 
     # Validate the consumed secrets against the declaration.
-    secrets_path = root / SECRETS_FILE
-    if secrets_path.is_file():
-        declaration = SecretsDeclaration.model_validate(load_yaml_file(secrets_path))
-        consumed: set[str] = set()
-        for bundle in bundles:
-            for match in COMPOSE_HOLE.finditer(bundle.output.read_text(encoding="utf-8")):
-                if len(match.group(1)) % 2 == 1:
-                    consumed.add(match.group(2))
-        declaration.validate_consumed(consumed, "compose", SECRETS_FILE.as_posix())
+    consumed: set[str] = set()
+    for bundle in bundles:
+        for match in COMPOSE_HOLE.finditer(bundle.output.read_text(encoding="utf-8")):
+            if len(match.group(1)) % 2 == 1:
+                consumed.add(match.group(2))
+    secrets.validate_consumed(consumed, "compose", SECRETS_FILE.as_posix())
 
     return [bundle.output for bundle in bundles]
 

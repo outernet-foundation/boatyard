@@ -57,8 +57,10 @@ class SecretsDeclaration(RootModel[dict[str, "SecretKey"]]):
     @model_validator(mode="before")
     @classmethod
     def _coerce_string_specs(cls, value: Yaml) -> Yaml:
-        if not is_mapping(value) or not value:
-            raise ValueError("must be a non-empty KEY: description mapping")
+        if value is None:
+            value = {}
+        if not is_mapping(value):
+            raise ValueError("must be a KEY: description mapping")
         return {name: ({"description": spec} if isinstance(spec, str) else spec) for name, spec in value.items()}
 
     @model_validator(mode="after")

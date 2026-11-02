@@ -27,3 +27,19 @@ def test_validate_consumed_names_rendering_and_undeclared_keys() -> None:
     declaration = SecretsDeclaration.model_validate({"S3_ACCESS_KEY": {"description": "x"}})
     with pytest.raises(ValueError, match=r"compose rendering consumes undeclared keys.*GRAFANA_PORT, LOKI_PORT"):
         declaration.validate_consumed({"GRAFANA_PORT", "LOKI_PORT"}, "compose", "secrets.yaml")
+
+
+def test_an_empty_file_parses_as_the_empty_declaration() -> None:
+    empties: tuple[object, ...] = (None, {})
+    for empty in empties:
+        declaration = SecretsDeclaration.model_validate(empty)
+
+        assert declaration.root == {}
+        declaration.validate_consumed(set(), "k8s", "secrets.yaml")
+        with pytest.raises(ValueError, match="undeclared keys: S3_ACCESS_KEY"):
+            declaration.validate_consumed({"S3_ACCESS_KEY"}, "k8s", "secrets.yaml")
+
+
+def test_a_non_mapping_declaration_refuses() -> None:
+    with pytest.raises(ValidationError, match="must be a KEY: description mapping"):
+        SecretsDeclaration.model_validate(["PUBLIC_URL"])

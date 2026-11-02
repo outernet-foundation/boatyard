@@ -16,7 +16,7 @@ from boatyard import score_k8s as score_k8s_module
 from boatyard.verbs import score as score_verb_module
 from boatyard.config import Config
 from boatyard.config_lock import ConfigLock
-from boatyard.score import write_generated_file
+from boatyard.score import SecretsDeclaration, write_generated_file
 from boatyard.score_compose import BindVolume, ComposeService
 from boatyard.score_k8s import generate_k8s
 
@@ -29,6 +29,14 @@ def _root_config(**sections: object) -> Config:
     if "services" in payload and "gateway" not in payload:
         payload["gateway"] = "8080"
     return Config.model_validate(payload)
+
+
+def _empty_secrets() -> SecretsDeclaration:
+    return SecretsDeclaration.model_validate({})
+
+
+def _alpine_secrets() -> SecretsDeclaration:
+    return SecretsDeclaration.model_validate({"ALPINE_IMAGE": "the wait-for-resources gate image"})
 
 
 def test_tool_pin_defaults_live_on_the_root_model() -> None:
@@ -149,7 +157,7 @@ def _generate_with_chart(
         "images": {name: {"index": ref} for name, ref in images.items() if not name.endswith("_CHART")},
         "charts": {name: ref for name, ref in images.items() if name.endswith("_CHART")},
     })
-    generate_k8s(config, lock, {}, local=False)
+    generate_k8s(config, lock, {}, local=False, secrets=_empty_secrets())
     return helm
 
 
@@ -282,6 +290,7 @@ class TestMarkerSubstrateResolution:
             "      - api.yaml\n",
             encoding="utf-8",
         )
+        (tmp_path / "stack" / "secrets.yaml").write_text("", encoding="utf-8")
         recorder = WorkloadContentsRecorder()
 
         def _skip_tools(requirements: list[score_verb_module.ToolRequirement]) -> None:
@@ -326,7 +335,7 @@ class TestMarkerSubstrateResolution:
         lock = self._multi_arch_lock()
         assert config.k8s is not None
 
-        generate_k8s(config, lock, {}, local=False)
+        generate_k8s(config, lock, {}, local=False, secrets=_empty_secrets())
 
         resolved = yaml.safe_load(helm.values_contents[0])
         assert resolved["image"] == LOKI_INDEX
@@ -358,7 +367,9 @@ GENERATED_COMPOSE = (
 )
 
 
-def _generate_compose(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, generated: str) -> Path:
+def _generate_compose(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, generated: str, secrets: SecretsDeclaration
+) -> Path:
     (tmp_path / "stack" / "score").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "api.yaml").write_text("metadata:\n  name: api\ncontainers: {}\n", encoding="utf-8")
     (tmp_path / "workloads" / "api").mkdir(parents=True)
@@ -372,14 +383,14 @@ def _generate_compose(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, generated
     )
     config.root = tmp_path
 
-    score_compose_module.generate_compose(config, ConfigLock.model_validate({}), {})
+    score_compose_module.generate_compose(config, ConfigLock.model_validate({}), {}, secrets=secrets)
     return tmp_path / "stack" / "generated" / "compose" / "compose.core.yaml"
 
 
 def test_generate_compose_collapses_doubled_names_and_inlines_binds(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    output = _generate_compose(monkeypatch, tmp_path, GENERATED_COMPOSE)
+    output = _generate_compose(monkeypatch, tmp_path, GENERATED_COMPOSE, _empty_secrets())
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
     assert list(document["services"]) == ["api", "pf-postgres"]
@@ -397,6 +408,7 @@ def test_generate_compose_collapses_doubled_names_with_no_binds(
         monkeypatch,
         tmp_path,
         "services:\n  gateway-gateway:\n    image: ghcr.io/org/gateway:1\n",
+        _empty_secrets(),
     )
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
@@ -409,7 +421,7 @@ def test_generate_compose_refuses_a_rename_collision(tmp_path: Path, monkeypatch
     colliding = GENERATED_COMPOSE + "  api:\n    image: ghcr.io/org/api:2\n"
 
     with pytest.raises(ValueError, match="collides"):
-        _generate_compose(monkeypatch, tmp_path, colliding)
+        _generate_compose(monkeypatch, tmp_path, colliding, _empty_secrets())
 
 
 def test_generate_compose_leaves_undoubled_names_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -417,6 +429,7 @@ def test_generate_compose_leaves_undoubled_names_alone(tmp_path: Path, monkeypat
         monkeypatch,
         tmp_path,
         "services:\n  tunnel-rathole-rathole-client:\n    image: ghcr.io/org/rathole-client:1\n",
+        _empty_secrets(),
     )
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
@@ -441,7 +454,7 @@ GATED_COMPOSE = (
 def test_generate_compose_renames_the_gate_and_its_references_per_entry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    output = _generate_compose(monkeypatch, tmp_path, GATED_COMPOSE)
+    output = _generate_compose(monkeypatch, tmp_path, GATED_COMPOSE, _alpine_secrets())
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
     assert list(document["services"]) == ["api", "pf-postgres", "wait-for-resources-core"]
@@ -468,7 +481,7 @@ def test_generate_compose_gate_names_differ_per_entry(tmp_path: Path, monkeypatc
     )
     config.root = tmp_path
 
-    score_compose_module.generate_compose(config, ConfigLock.model_validate({}), {})
+    score_compose_module.generate_compose(config, ConfigLock.model_validate({}), {}, secrets=_alpine_secrets())
 
     core = yaml.safe_load((tmp_path / "stack/generated/compose/compose.core.yaml").read_text(encoding="utf-8"))
     edge = yaml.safe_load((tmp_path / "stack/generated/compose/compose.edge.yaml").read_text(encoding="utf-8"))
@@ -480,7 +493,7 @@ def test_generate_compose_refuses_a_gate_rename_collision(tmp_path: Path, monkey
     colliding = GATED_COMPOSE + "  wait-for-resources-core:\n    image: ghcr.io/org/api:2\n"
 
     with pytest.raises(ValueError, match="collides"):
-        _generate_compose(monkeypatch, tmp_path, colliding)
+        _generate_compose(monkeypatch, tmp_path, colliding, _alpine_secrets())
 
 
 class WorkloadContentsRecorder:
@@ -521,6 +534,7 @@ def test_workload_image_holes_resolve_from_the_lock_into_the_rendered_copy(
         config,
         _lock_for_images({"API_IMAGE": "ghcr.io/org/api@sha256:" + "a" * 64}),
         {},
+        secrets=_empty_secrets(),
     )
 
     assert (
@@ -545,7 +559,7 @@ def test_workload_image_hole_with_no_lock_entry_refuses(tmp_path: Path, monkeypa
     config.root = tmp_path
 
     with pytest.raises(ValueError, match=r"api\.yaml.*API_IMAGE.*image lock"):
-        score_compose_module.generate_compose(config, ConfigLock.model_validate({}), {})
+        score_compose_module.generate_compose(config, ConfigLock.model_validate({}), {}, secrets=_empty_secrets())
 
 
 SHIPPED_TEMPLATES = {
@@ -652,7 +666,7 @@ def _compose_init_templates(
     config.root = tmp_path
     if images:
         config.platforms = ["linux/amd64"]
-    score_compose_module.generate_compose(config, _lock_for_images(images), {})
+    score_compose_module.generate_compose(config, _lock_for_images(images), {}, secrets=_empty_secrets())
     inits = [command for command in recorder.commands if command.startswith("score-compose init")]
     return [[Path(token).name for token in command.split() if token.endswith(".tpl")] for command in inits]
 
@@ -723,7 +737,7 @@ def test_provisioners_register_by_resource_type_closure(tmp_path: Path, monkeypa
     recorder = ComposeBashRecorder("services: {}\n")
     monkeypatch.setattr(score_module, "bash", recorder.run)
 
-    score_compose_module.generate_compose(config, _lock_for_images(GATE_LOCK), {})
+    score_compose_module.generate_compose(config, _lock_for_images(GATE_LOCK), {}, secrets=_empty_secrets())
 
     init = next(command for command in recorder.commands if command.startswith("score-compose init"))
     provisioners = [token for token in init.split() if token.endswith(".yaml")]
@@ -937,7 +951,7 @@ def test_dev_toggles_on_a_k8s_only_workload_refuses(tmp_path: Path) -> None:
     assert config.k8s is not None
     config.root = tmp_path
     with pytest.raises(ValueError, match="renders k8s-only"):
-        generate_k8s(config, ConfigLock.model_validate({}), {}, local=False)
+        generate_k8s(config, ConfigLock.model_validate({}), {}, local=False, secrets=_empty_secrets())
 
 
 def test_consumer_interpolated_names_must_match_declared_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1016,7 +1030,12 @@ def test_consumer_interpolated_binds_ride_undoubled(tmp_path: Path, monkeypatch:
     )
     config.root = tmp_path
 
-    score_compose_module.generate_compose(config, ConfigLock.model_validate({}), {})
+    score_compose_module.generate_compose(
+        config,
+        ConfigLock.model_validate({}),
+        {},
+        secrets=SecretsDeclaration.model_validate({"TUNNEL_CONTROL_ENDPOINT": "tunnel"}),
+    )
 
     output = tmp_path / "stack" / "generated" / "compose" / "compose.rathole-client.yaml"
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
@@ -1067,7 +1086,7 @@ def test_k8s_builtin_templates_register_on_every_init(tmp_path: Path, monkeypatc
     config.root = tmp_path
 
     assert config.k8s is not None
-    generate_k8s(config, ConfigLock.model_validate({}), {}, local=False)
+    generate_k8s(config, ConfigLock.model_validate({}), {}, local=False, secrets=_empty_secrets())
 
     init = next(command for command in recorder.commands if command.startswith("score-k8s init"))
     assert [Path(token).name for token in init.split() if token.endswith(".tpl")] == [
@@ -1087,7 +1106,7 @@ def test_k8s_instance_suffixes_are_preseeded_deterministically(tmp_path: Path, m
     config.root = tmp_path
 
     assert config.k8s is not None
-    generate_k8s(config, ConfigLock.model_validate({}), {}, local=False)
+    generate_k8s(config, ConfigLock.model_validate({}), {}, local=False, secrets=_empty_secrets())
 
     seeded = yaml.safe_load(recorder.state_at_generate[output.name])
     assert seeded["workloads"]["api"]["instance_suffix"] == "-" + sha256(b"api").hexdigest()[:10]
@@ -1211,3 +1230,64 @@ def test_variable_placeholders_refuse_or_stay_escaped(tmp_path: Path) -> None:
         bash("score-compose generate refused-files.yaml --output refused.yaml", cwd=tmp_path)
     with pytest.raises(CalledProcessError):
         bash("score-compose generate refused-variables.yaml --output refused.yaml", cwd=tmp_path)
+
+
+def _verb_repo(tmp_path: Path) -> None:
+    (tmp_path / "stack" / "score").mkdir(parents=True)
+    (tmp_path / "stack" / "score" / "api.yaml").write_text(
+        "metadata:\n  name: api\ncontainers:\n  api:\n    image: ${LOKI_IMAGE}\n", encoding="utf-8"
+    )
+    (tmp_path / "boatyard.lock.yml").write_text(
+        yaml.safe_dump({
+            "images": {
+                "LOKI_IMAGE": {
+                    "index": LOKI_INDEX,
+                    "platforms": {"linux/amd64": LOKI_MANIFEST},
+                }
+            }
+        }),
+        encoding="utf-8",
+    )
+    (tmp_path / "boatyard.yml").write_text(
+        "requires: '>=0'\n"
+        "repository: ghcr.io/org/repo\n"
+        "project_name: example\n"
+        "platforms:\n"
+        "  - linux/amd64\n"
+        "services:\n"
+        "  core:\n"
+        "    workloads:\n"
+        "      - api.yaml\n",
+        encoding="utf-8",
+    )
+
+
+def test_generate_score_refuses_a_missing_secrets_declaration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _verb_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match="secrets declaration is required"):
+        score_verb_module.generate_score()
+
+
+def test_generate_score_writes_the_mint_list_from_the_declaration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _verb_repo(tmp_path)
+    (tmp_path / "stack" / "secrets.yaml").write_text(
+        "PUBLIC_URL: the public address\nS3_ACCESS_KEY:\n  description: s3 credentials\n  mint: true\n",
+        encoding="utf-8",
+    )
+    recorder = WorkloadContentsRecorder()
+
+    def _skip_tools(requirements: list[score_verb_module.ToolRequirement]) -> None:
+        return None
+
+    monkeypatch.setattr(score_module, "bash", recorder.run)
+    monkeypatch.setattr(score_verb_module, "ensure_tools", _skip_tools)
+    monkeypatch.chdir(tmp_path)
+
+    score_verb_module.generate_score()
+
+    mint = (tmp_path / "stack" / "generated" / "secrets.txt").read_text(encoding="utf-8")
+    assert mint == "# Generated by generate-score from the secrets declaration\nS3_ACCESS_KEY\n"

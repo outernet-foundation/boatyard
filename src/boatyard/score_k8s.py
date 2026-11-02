@@ -20,7 +20,6 @@ from boatyard.config import (
     chart_lock_key,
     is_list,
     is_mapping,
-    load_yaml_file,
 )
 from boatyard.config_lock import ConfigLock
 from boatyard.lock import env_entries
@@ -59,7 +58,9 @@ class ManifestDocument(BaseModel):
     metadata: ManifestMetadata = Field(default_factory=ManifestMetadata)
 
 
-def generate_k8s(config: Config, lock: ConfigLock, service_shas: dict[str, str], local: bool) -> Path:
+def generate_k8s(
+    config: Config, lock: ConfigLock, service_shas: dict[str, str], local: bool, secrets: SecretsDeclaration
+) -> Path:
     k8s = config.k8s
     if k8s is None:
         raise ValueError("the k8s target requires a k8s section")
@@ -133,13 +134,10 @@ def generate_k8s(config: Config, lock: ConfigLock, service_shas: dict[str, str],
     shutil.rmtree(state_dir, ignore_errors=True)
 
     # Validate the consumed secrets against the declaration.
-    secrets_path = root / SECRETS_FILE
-    if secrets_path.is_file():
-        declaration = SecretsDeclaration.model_validate(load_yaml_file(secrets_path))
-        consumed: set[str] = set()
-        for block in split_documents(output_path.read_text(encoding="utf-8")):
-            collect_secret_keys(yaml.safe_load(block), f"{config.project_name}-secrets", consumed)
-        declaration.validate_consumed(consumed, "k8s", SECRETS_FILE.as_posix())
+    consumed: set[str] = set()
+    for block in split_documents(output_path.read_text(encoding="utf-8")):
+        collect_secret_keys(yaml.safe_load(block), f"{config.project_name}-secrets", consumed)
+    secrets.validate_consumed(consumed, "k8s", SECRETS_FILE.as_posix())
 
     return output_path
 
