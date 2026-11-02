@@ -8,7 +8,7 @@ from typer.testing import CliRunner
 
 from docker_devkit import config as config_module
 from docker_devkit import lock as lock_module
-from docker_devkit.config import LOCK_PATH
+from docker_devkit.config_lock import LOCK_PATH
 from docker_devkit.lock import UpstreamManifests
 from docker_devkit.verbs import build, lock
 

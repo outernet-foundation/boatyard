@@ -11,12 +11,11 @@ from docker_devkit.config import (
     DEV_SENTINEL,
     LEFTOVER_LOCK_PATH,
     LEFTOVER_MANIFEST_PATH,
-    LOCK_PATH,
     DockerDevkitConfig,
     ServiceEntry,
     load_config,
-    parse_image_lock,
 )
+from docker_devkit.config_lock import LOCK_PATH, parse_image_lock
 
 DIGEST = "sha256:" + "a" * 64
 

@@ -7,7 +7,8 @@ from typer.testing import CliRunner, Result
 
 from docker_devkit import crane
 from docker_devkit.verbs import mirror
-from docker_devkit.config import LOCK_PATH, mirrored_ref
+from docker_devkit.config import mirrored_ref
+from docker_devkit.config_lock import LOCK_PATH
 
 MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
 FAKE_DIGEST = "sha256:" + "a" * 64

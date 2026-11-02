@@ -12,7 +12,8 @@ from docker_devkit import config as config_module
 from docker_devkit import crane
 from docker_devkit import publish as publish_compose
 from docker_devkit.verbs import publish as publish_verb
-from docker_devkit.config import LOCK_PATH, load_config
+from docker_devkit.config import load_config
+from docker_devkit.config_lock import LOCK_PATH
 
 REPOSITORY = "ghcr.io/outernet-foundation/lbe-toolkit"
 FAKE_SHA = "a" * 40

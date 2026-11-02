@@ -15,14 +15,20 @@ from packaging.specifiers import SpecifierSet
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 from strictyaml import load as load_strict_yaml
 
+from docker_devkit.config_lock import (
+    LOCK_PATH,
+    PLATFORM_PATTERN,
+    SHA256_DIGEST_REGEX,
+    ImageLock,
+    parse_committed_lock,
+    parse_image_lock,
+)
+
 DEFAULT_CONFIG_PATH = Path("docker-devkit.yaml")
 DEV_SENTINEL = "0.0.0.dev0"
 
 DEFAULT_MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
 
-# The lock pairs with the root config at the repo root: build keys declared
-# (base_images or charts) => the committed lock is required.
-LOCK_PATH = Path("docker-devkit.lock")
 LEFTOVER_MANIFEST_PATH = Path("workloads/images.yml")
 LEFTOVER_LOCK_PATH = Path("workloads/images.lock")
 
@@ -31,9 +37,6 @@ PYPROJECT_PATH = Path("pyproject.toml")
 PYTHON_VERSION_PATH = Path(".python-version")
 
 ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
-PLATFORM_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$")
-
-SHA256_DIGEST_REGEX = r"sha256:[a-f0-9]{64}"
 
 # path:tag or path@digest — upstream-native, never a bare path or a ${…} hole.
 DECLARED_REFERENCE_PATTERN = re.compile(
@@ -284,73 +287,6 @@ class K8sConfig(BaseModel):
         if not (self.workloads or self.charts):
             raise ValueError("the k8s section declares neither workloads nor charts; remove it")
         return self
-
-
-class ImageLockEntry(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    index: str
-    platforms: dict[str, str] = Field(default_factory=dict)
-
-    @field_validator("index", "platforms")
-    @classmethod
-    def _require_digest_pins(cls, value: str | dict[str, str], info: ValidationInfo) -> str | dict[str, str]:
-        context: dict[str, object] = info.context or {}
-        source = context.get("path", "the image lock")
-        pins = value.items() if isinstance(value, dict) else [(info.field_name, value)]
-        for site, reference in pins:
-            if not reference.rpartition("@")[2].startswith("sha256:"):
-                raise ValueError(f"{source}: entry field {site} is not digest-pinned ({reference!r})")
-        if isinstance(value, dict):
-            for platform in value:
-                if PLATFORM_PATTERN.fullmatch(platform) is None:
-                    raise ValueError(f"{source}: platform key {platform!r} must be an os/arch pair like linux/arm64")
-        return value
-
-    @property
-    def recorded_digests(self) -> list[str]:
-        # The digest set the up/mirror presence probes walk: the index plus every platform manifest.
-        return [self.index, *self.platforms.values()]
-
-
-class ImageLock(BaseModel):
-    # The structured lock beside the root config: registry-resolved facts, written by the
-    # lock verb and build's incremental freeze, never hand-authored.
-    model_config = ConfigDict(extra="forbid")
-
-    images: dict[str, ImageLockEntry] = Field(default_factory=dict)
-    charts: dict[str, str] = Field(default_factory=dict)
-
-    @field_validator("charts")
-    @classmethod
-    def _require_digest_pinned_charts(cls, charts: dict[str, str], info: ValidationInfo) -> dict[str, str]:
-        context: dict[str, object] = info.context or {}
-        for name, reference in charts.items():
-            if not reference.rpartition("@")[2].startswith("sha256:"):
-                raise ValueError(
-                    f"{context.get('path', 'the image lock')}: chart {name} is not digest-pinned ({reference!r})"
-                )
-        return charts
-
-    @model_validator(mode="after")
-    def _require_one_flat_vocabulary(self, info: ValidationInfo) -> Self:
-        context: dict[str, object] = info.context or {}
-        shared = sorted(self.images.keys() & self.charts.keys())
-        if shared:
-            raise ValueError(
-                f"{context.get('path', 'the image lock')}: names {shared} appear under both images and charts; "
-                "the env projection carries one flat vocabulary"
-            )
-        return self
-
-    def require(self, name: str, subject: str, hint: str = "the lock verb writes it") -> str:
-        # The one "lock lacks NAME" refusal every lock consumer raises; the image entry
-        # answers by its index reference, the chart entry flat.
-        if name in self.images:
-            return self.images[name].index
-        if name in self.charts:
-            return self.charts[name]
-        raise RuntimeError(f"{subject}: {LOCK_PATH.as_posix()} lacks the {name} entry ({hint})")
 
 
 class ComposeBundle(NamedTuple):
@@ -917,59 +853,6 @@ def is_mapping(value: object) -> TypeIs[dict[str, object]]:
 
 def is_list(value: object) -> TypeIs[list[object]]:
     return isinstance(value, list)
-
-
-def _reject_duplicate_keys(node: yaml.Node, source: str) -> None:
-    # The stock loader silently keeps the last of duplicate mapping keys; the lock
-    # refuses them, with the offending line from the node mark.
-    if isinstance(node, yaml.MappingNode):
-        seen: set[object] = set()
-        for key_node, value_node in node.value:
-            key = key_node.value if isinstance(key_node, yaml.ScalarNode) else repr(key_node.value)
-            if key in seen:
-                raise ValueError(f"{source}: line {key_node.start_mark.line + 1}: duplicate key {key!r}")
-            seen.add(key)
-            _reject_duplicate_keys(value_node, source)
-    elif isinstance(node, yaml.SequenceNode):
-        for item in node.value:
-            _reject_duplicate_keys(item, source)
-
-
-def parse_committed_lock(root: Path) -> ImageLock | None:
-    # The lenient cutover-lock read: an absent lock answers the empty lock, an unparseable
-    # one (the env-line format before the structured flip) answers None rather than
-    # refusing — the rewrite is the cutover migration mechanism, so the lock verb and the
-    # CADDY check stay runnable over a cutover lock.
-    path = root / LOCK_PATH
-    if not path.is_file():
-        return ImageLock()
-    try:
-        return parse_image_lock(path)
-    except (TypeError, ValueError):
-        return None
-
-
-def parse_image_lock(path: Path) -> ImageLock:
-    text = path.read_text(encoding="utf-8")
-    source = path.as_posix()
-    try:
-        document_node = yaml.SafeLoader(text).get_single_node()
-    except yaml.YAMLError as error:
-        mark = getattr(error, "problem_mark", None)
-        location = f"{source}:{mark.line + 1}" if mark is not None else source
-        raise ValueError(f"{location}: {error}") from error
-    if document_node is not None:
-        _reject_duplicate_keys(document_node, source)
-    loaded: object = yaml.safe_load(text)
-    if loaded is None:
-        loaded = {}
-    if not isinstance(loaded, dict):
-        raise TypeError(
-            f"{source}: the lock is a YAML mapping of images:/charts: sections, "
-            f"not a bare {type(loaded).__name__} (the env-line format died with the structured flip; "
-            "the lock verb rewrites cutover locks)"
-        )
-    return ImageLock.model_validate(loaded, context={"path": source})
 
 
 def mirrored_ref(reference: str, prefix: str) -> str:

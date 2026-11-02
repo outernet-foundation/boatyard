@@ -19,15 +19,14 @@ from docker_devkit.config import (
     DEV_TOGGLES_ANNOTATION,
     DockerDevkitConfig,
     EDGE_SERVICE_NAME,
-    LOCK_PATH,
     PortDeclaration,
     RouteConfig,
     ServiceEntry,
     ServiceGroup,
     is_mapping,
     parse_dev_toggles,
-    parse_image_lock,
 )
+from docker_devkit.config_lock import LOCK_PATH, parse_image_lock
 from docker_devkit.documents import WorkloadDocument
 from docker_devkit.lock import compose_env_entries, render_env_entries
 

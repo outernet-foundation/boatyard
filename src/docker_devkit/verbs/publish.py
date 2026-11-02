@@ -10,7 +10,8 @@ from typing import Annotated
 import typer
 from bashrun.bash import bash, bash_output
 
-from docker_devkit.config import LOCK_PATH, load_config, parse_image_lock
+from docker_devkit.config import load_config
+from docker_devkit.config_lock import LOCK_PATH, parse_image_lock
 from docker_devkit.crane import install_crane
 from docker_devkit.lock import env_entries
 from docker_devkit.publish import (

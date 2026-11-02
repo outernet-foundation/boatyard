@@ -14,15 +14,17 @@ from bashrun.bash import bash_output
 from docker_devkit.config import (
     CHART_REFERENCE_PREFIX,
     DockerDevkitConfig,
-    LOCK_PATH,
-    SHA256_DIGEST_REGEX,
-    ImageLock,
-    ImageLockEntry,
     chart_lock_key,
     is_list,
     is_mapping,
     load_config,
     mirrored_ref,
+)
+from docker_devkit.config_lock import (
+    LOCK_PATH,
+    SHA256_DIGEST_REGEX,
+    ImageLock,
+    ImageLockEntry,
     parse_committed_lock,
 )
 

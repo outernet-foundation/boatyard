@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 
 from docker_devkit import assembly
 from docker_devkit.verbs import down, up
-from docker_devkit.config import LOCK_PATH
+from docker_devkit.config_lock import LOCK_PATH
 
 MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
 FAKE_DIGEST = "sha256:" + "a" * 64

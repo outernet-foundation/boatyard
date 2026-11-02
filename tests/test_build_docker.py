@@ -11,9 +11,10 @@ from typer.testing import CliRunner
 
 from docker_devkit import bake as bake_module
 from docker_devkit import config as config_module
-from docker_devkit.config import LOCK_PATH, DockerDevkitConfig
+from docker_devkit.config import DockerDevkitConfig
 from docker_devkit.lock import UpstreamManifests
 from docker_devkit.config import ServiceBuild
+from docker_devkit.config_lock import LOCK_PATH
 from docker_devkit.verbs import build
 
 DIGEST_A = "sha256:" + "a" * 64

@@ -29,17 +29,15 @@ from docker_devkit.config import (
     DEV_TOGGLES_ANNOTATION,
     EDGE_SERVICE_NAME,
     ENV_NAME_PATTERN,
-    ImageLock,
     K8sConfig,
     Target,
     is_list,
     is_mapping,
     parse_dev_toggles,
-    LOCK_PATH,
     DockerDevkitConfig,
     chart_lock_key,
-    parse_image_lock,
 )
+from docker_devkit.config_lock import LOCK_PATH, ImageLock, parse_image_lock
 from docker_devkit.documents import BindVolume, ComposeDocument, WorkloadDocument
 from docker_devkit.assembly import merged_environment
 from docker_devkit.lock import compose_env_entries, env_entries
