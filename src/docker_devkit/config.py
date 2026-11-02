@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.metadata
 import re
 import tomllib
+from itertools import chain
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import Literal, NamedTuple, Self, TypeIs
@@ -101,32 +102,21 @@ class DockerDevkitConfig(BaseModel):
         return self.root / self.score_dir
 
     def compose_bundles(self) -> list[ComposeBundle]:
-        # Collect the local bundles in declaration order.
+        # Local bundles (group options and bare entries) in declaration order.
         assert self.root is not None
-        bundles: list[ComposeBundle] = []
-        for name, entry in self.services.items():
-            if isinstance(entry, ServiceGroup):
-                for option_name, option in entry.options.items():
-                    if option.remote:
-                        continue
-                    bundles.append(
-                        ComposeBundle(
-                            option_name,
-                            self.root / "stack/generated/compose" / f"compose.{option_name}.yaml",
-                            list(option.workloads),
-                            dict(option.vars),
-                        )
-                    )
-            elif not entry.remote:
-                bundles.append(
-                    ComposeBundle(
-                        name,
-                        self.root / "stack/generated/compose" / f"compose.{name}.yaml",
-                        list(entry.workloads),
-                        dict(entry.vars),
-                    )
-                )
-        return bundles
+        return [
+            ComposeBundle(
+                name,
+                self.root / "stack/generated/compose" / f"compose.{name}.yaml",
+                list(entry.workloads),
+                dict(entry.vars),
+            )
+            for name, entry in chain.from_iterable(
+                entry.options.items() if isinstance(entry, ServiceGroup) else ((name, entry),)
+                for name, entry in self.services.items()
+            )
+            if not entry.remote
+        ]
 
     def tool_requirements(self, target: Target) -> list[ToolRequirement]:
         score_tools: list[tuple[str, str]] = []
