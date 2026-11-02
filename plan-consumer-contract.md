@@ -180,7 +180,7 @@ shared micro-package, no dotenv dependency (its interpolation and `export`
 semantics diverge from compose). Lock reading after Part 0 is plain YAML and
 needs nothing. Post-dissolution inventory: placeframe's `api_auth.py` and
 `sweep_postprocess.py`; the devkit's own `parse_env_file` stays internal to
-`assembly.py`.
+`compose.py`.
 
 ### D9 — Consumer catch-up: one wave
 
@@ -248,7 +248,7 @@ A service declaring an ARG named in `variants:` builds one target per
 declared value, the first declared value the default cell (the ARG is the
 receiver convention, the `ARG {SERVICE}_SHA` shape); `derive_services` takes
 the declared axes from `load_config` as a parameter — the one-way law holds,
-service_builds still imports nothing from config. Selection rides
+dockerfiles still imports nothing from config. Selection rides
 `--targets`: a variant-bearing target is addressable by cell (`api/cuda`),
 a bare name selects the default cell, an unknown cell refuses listing the
 declared values. `--gpu`, `--gpu-only`, `Gpu`, `GpuFamily`, `GPU_TYPES`,
@@ -328,7 +328,7 @@ Two ADRs and two implementation plans, each self-contained:
 3. `plan-artifact-identity.md` is the Parts 2–4 decision record; this ADR's
    Absorption section holds the Part 0/1 amendments.
 4. Both plans carry refactor-true module anchors (`bake.py`,
-   `assembly.py`/`verbs/`, `config.py`, `service_builds.py`; `host.py` is
+   `compose.py`/`verbs/`, `config.py`, `dockerfiles.py`; `host.py` is
    dissolved).
 
 Archaeology starting point (verified at capture): all five consumers pin
