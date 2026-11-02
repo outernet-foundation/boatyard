@@ -22,7 +22,6 @@ from boatyard.config import (
     Yaml,
     compose_bundle_output,
     double_dollars,
-    is_mapping,
     Config,
 )
 from boatyard.config_lock import LOCK_PATH, ConfigLock
@@ -164,13 +163,8 @@ def generate_compose(
             service_shas=service_shas,
         )
 
-        # Pin the synthesized gate's bare alpine image to the ALPINE_IMAGE lock hole.
-        raw = yaml.safe_load(output.read_text(encoding="utf-8"))
-        raw_services = raw.get("services") if is_mapping(raw) else None
-        gate_service = raw_services.get(GATE_SERVICE) if is_mapping(raw_services) else None
-        if is_mapping(gate_service):
-            gate_service["image"] = "${ALPINE_IMAGE:?err}"
         # Parse the rendered output into the typed compose document.
+        raw = yaml.safe_load(output.read_text(encoding="utf-8"))
         document = ComposeDocument.model_validate(raw)
         services = document.services or {}
 
@@ -183,12 +177,17 @@ def generate_compose(
                 raise ValueError(f"service rename {service_name} -> {target} collides with an existing service")
             collapsed[target] = service
 
-        # Rename the gate per entry and follow the depends_on references.
+        # score synthesizes wait-for-resources, an alpine gate the bundle's services
+        # depend on so nothing starts before the stack's dependencies are ready. All
+        # bundle outputs merge into one compose project, so pin its bare image to the
+        # ALPINE_IMAGE lock hole, rename it per entry, and follow depends_on.
         gate = f"{GATE_SERVICE}-{name}"
         if GATE_SERVICE in collapsed:
             if gate in collapsed:
                 raise ValueError(f"gate rename {GATE_SERVICE} -> {gate} collides with an existing service")
-            collapsed[gate] = collapsed.pop(GATE_SERVICE)
+            gate_service = collapsed.pop(GATE_SERVICE)
+            gate_service.image = "${ALPINE_IMAGE:?err}"
+            collapsed[gate] = gate_service
             for service in collapsed.values():
                 depends_on = service.depends_on
                 if isinstance(depends_on, dict) and GATE_SERVICE in depends_on:
