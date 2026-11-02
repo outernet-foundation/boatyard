@@ -161,7 +161,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 
 ## Secrets
 
-- The contract activates by `stack/secrets.yaml` presence — `KEY: description` or `KEY: {description, mint: true}` (string specs coerce; keys ALL_CAPS); each rendering's consumed keys validate as a subset (pair-variance is legitimate);
+- `stack/secrets.yaml` is required (missing refuses at generate-score; an empty file = the empty declaration, no keys consumable) — `KEY: description` or `KEY: {description, mint: true}` (string specs coerce; keys ALL_CAPS); each rendering's consumed keys validate as a subset (pair-variance is legitimate);
   the cluster Secret derives `{project_name}-secrets`; k8s consumption = `secretKeyRef` naming it (wholesale `envFrom`/`extraEnvFrom` `secretRef`s impose no per-key constraint); compose consumption = `${ALL_CAPS}` brace holes with odd `$`-parity (`$$`-escaped
   `configs.content` doesn't count); the mint list artifact (`stack/generated/secrets.txt`) generates from the declaration alone.
 

@@ -162,6 +162,9 @@ code → lockfiles → prose:
    compose is the file's authoritative reader, so its rules are the spec; no
    dotenv dependency, no shared micro-package, filename hardcoded as the
    scripts already spell it).
+8. `stack/secrets.yaml` is required from 0.6.0 — consumers lacking it add the
+   file (an empty file is legal: the empty declaration, no keys consumable)
+   and commit the mint artifact `stack/generated/secrets.txt` it generates.
 
 Per-repo:
 
