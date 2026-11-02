@@ -8,12 +8,12 @@ import yaml
 from pydantic import ValidationError
 from typer.testing import CliRunner
 
-from docker_devkit import dockerfiles as dockerfiles_module
-from docker_devkit import crane
-from docker_devkit import publish as publish_compose
-from docker_devkit.verbs import publish as publish_verb
-from docker_devkit.config import Config
-from docker_devkit.config_lock import LOCK_PATH
+from boatyard import dockerfiles as dockerfiles_module
+from boatyard import crane
+from boatyard import publish as publish_compose
+from boatyard.verbs import publish as publish_verb
+from boatyard.config import Config
+from boatyard.config_lock import LOCK_PATH
 
 REPOSITORY = "ghcr.io/outernet-foundation/lbe-toolkit"
 FAKE_SHA = "a" * 40

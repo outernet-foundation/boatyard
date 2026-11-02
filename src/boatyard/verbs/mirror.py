@@ -5,14 +5,14 @@ from pathlib import Path
 import typer
 from bashrun.bash import bash, bash_check
 
-from docker_devkit.config import (
+from boatyard.config import (
     Config,
     chart_lock_key,
     mirrored_ref,
 )
-from docker_devkit.config_lock import read_config_lock
-from docker_devkit.crane import install_crane
-from docker_devkit.verbs.entry import entry
+from boatyard.config_lock import read_config_lock
+from boatyard.crane import install_crane
+from boatyard.verbs.entry import entry
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 

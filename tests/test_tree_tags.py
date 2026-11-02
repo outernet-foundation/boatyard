@@ -6,7 +6,7 @@ import typer
 import yaml
 from typer.testing import CliRunner
 
-from docker_devkit.verbs.tree_tags import app, tree_tags
+from boatyard.verbs.tree_tags import app, tree_tags
 
 runner = CliRunner()
 

@@ -9,16 +9,16 @@ import yaml
 from bashrun.bash import CalledProcessError, bash, bash_output
 from pydantic import ValidationError
 
-from docker_devkit import config as config_module
-from docker_devkit import score as score_module
-from docker_devkit import score_compose as score_compose_module
-from docker_devkit import score_k8s as score_k8s_module
-from docker_devkit.verbs import score as score_verb_module
-from docker_devkit.config import Config
-from docker_devkit.config_lock import ConfigLock
-from docker_devkit.score import write_generated_file
-from docker_devkit.score_compose import BindVolume, ComposeService
-from docker_devkit.score_k8s import CLOUD_STORAGE_CLASS, generate_k8s
+from boatyard import config as config_module
+from boatyard import score as score_module
+from boatyard import score_compose as score_compose_module
+from boatyard import score_k8s as score_k8s_module
+from boatyard.verbs import score as score_verb_module
+from boatyard.config import Config
+from boatyard.config_lock import ConfigLock
+from boatyard.score import write_generated_file
+from boatyard.score_compose import BindVolume, ComposeService
+from boatyard.score_k8s import CLOUD_STORAGE_CLASS, generate_k8s
 
 DIGEST = "sha256:" + "a" * 64
 
@@ -553,7 +553,7 @@ SHIPPED_TEMPLATES = {
 
 
 def test_shipped_patch_templates_resolve() -> None:
-    directory = files("docker_devkit") / "patch_templates"
+    directory = files("boatyard") / "patch_templates"
 
     assert {item.name for item in directory.iterdir()} == SHIPPED_TEMPLATES
     for name in SHIPPED_TEMPLATES:
@@ -564,7 +564,7 @@ SELF_GATING_FALLBACK = "{{- if not $matched }}\n[]\n{{- end }}"
 
 
 def test_self_gating_templates_fall_back_to_an_empty_patches_document() -> None:
-    directory = files("docker_devkit") / "patch_templates"
+    directory = files("boatyard") / "patch_templates"
 
     for name in SHIPPED_TEMPLATES:
         text = (directory / name).read_text(encoding="utf-8")
@@ -573,7 +573,7 @@ def test_self_gating_templates_fall_back_to_an_empty_patches_document() -> None:
 
 
 def test_the_healthcheck_template_ships_both_probe_adapter_spells() -> None:
-    text = (files("docker_devkit") / "patch_templates" / "probe-adapter-healthchecks.tpl").read_text(encoding="utf-8")
+    text = (files("boatyard") / "patch_templates" / "probe-adapter-healthchecks.tpl").read_text(encoding="utf-8")
 
     assert config_module.PROBE_ADAPTERS == ("python-urllib", "bash-http")
     assert "urllib.request.urlopen" in text
@@ -581,14 +581,14 @@ def test_the_healthcheck_template_ships_both_probe_adapter_spells() -> None:
 
 
 def test_the_bash_http_spell_escapes_its_dollar_for_compose_interpolation() -> None:
-    text = (files("docker_devkit") / "patch_templates" / "probe-adapter-healthchecks.tpl").read_text(encoding="utf-8")
+    text = (files("boatyard") / "patch_templates" / "probe-adapter-healthchecks.tpl").read_text(encoding="utf-8")
 
     assert "$$status" in text
     assert "$status" not in text.replace("$$status", "")
 
 
 def test_the_bash_http_spell_uses_the_slash_port_spelling() -> None:
-    text = (files("docker_devkit") / "patch_templates" / "probe-adapter-healthchecks.tpl").read_text(encoding="utf-8")
+    text = (files("boatyard") / "patch_templates" / "probe-adapter-healthchecks.tpl").read_text(encoding="utf-8")
 
     assert "/dev/tcp/127.0.0.1/{{ .port }}" in text
     assert "/dev/tcp/127.0.0.1:{{ .port }}" not in text

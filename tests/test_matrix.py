@@ -5,7 +5,7 @@ from typing import Any
 import yaml
 from typer.testing import CliRunner
 
-from docker_devkit.verbs.matrix import app
+from boatyard.verbs.matrix import app
 
 runner = CliRunner()
 

@@ -13,7 +13,7 @@ from typing import NamedTuple, Self
 import yaml
 from bashrun.bash import bash_output
 
-from docker_devkit.config import (
+from boatyard.config import (
     AUTH_GROUP_NAME,
     CADDY_IMAGE,
     Config,
@@ -30,8 +30,8 @@ from docker_devkit.config import (
     parse_dev_toggles,
     validate,
 )
-from docker_devkit.config_lock import LOCK_PATH, parse_config_lock
-from docker_devkit.lock import compose_env_entries, render_env_entries
+from boatyard.config_lock import LOCK_PATH, parse_config_lock
+from boatyard.lock import compose_env_entries, render_env_entries
 
 ENV_FILE = Path(".env")
 BUNDLES_VARIABLE = "BUNDLES"

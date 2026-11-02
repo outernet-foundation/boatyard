@@ -5,9 +5,9 @@ from typing import Any
 import pytest
 import yaml
 
-from docker_devkit import dockerfiles
-from docker_devkit.config import Config
-from docker_devkit.dockerfiles import ServiceBuild, compute_service_shas
+from boatyard import dockerfiles
+from boatyard.config import Config
+from boatyard.dockerfiles import ServiceBuild, compute_service_shas
 
 
 def write_dockerfile(tmp_path: Path, service: str, text: str, top: str = "workloads") -> None:

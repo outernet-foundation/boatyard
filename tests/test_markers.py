@@ -5,9 +5,9 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from docker_devkit.config import is_mapping
-from docker_devkit.score import resolve_markers
-from docker_devkit.score_k8s import contains_marker
+from boatyard.config import is_mapping
+from boatyard.score import resolve_markers
+from boatyard.score_k8s import contains_marker
 
 RIVER = """// relay config
 loki.write "default" {

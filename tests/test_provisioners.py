@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from docker_devkit.score import AuthoredProvisioner
+from boatyard.score import AuthoredProvisioner
 
 
 def test_uri_and_type_are_required() -> None:

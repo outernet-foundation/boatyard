@@ -7,12 +7,12 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from docker_devkit.config import (
+from boatyard.config import (
     DEV_SENTINEL,
     Config,
     ServiceEntry,
 )
-from docker_devkit.config_lock import LOCK_PATH, parse_config_lock
+from boatyard.config_lock import LOCK_PATH, parse_config_lock
 
 DIGEST = "sha256:" + "a" * 64
 

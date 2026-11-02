@@ -6,9 +6,9 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
-from docker_devkit import compose
-from docker_devkit.verbs import up
-from docker_devkit.config_lock import LOCK_PATH
+from boatyard import compose
+from boatyard.verbs import up
+from boatyard.config_lock import LOCK_PATH
 
 FAKE_DIGEST = "sha256:" + "a" * 64
 LIVEKIT_REF = "oci://ghcr.io/org/livekit@" + FAKE_DIGEST

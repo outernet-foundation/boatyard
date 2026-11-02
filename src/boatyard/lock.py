@@ -12,7 +12,7 @@ import yaml
 from bashrun.bash import bash_output
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from docker_devkit.config import (
+from boatyard.config import (
     CHART_REFERENCE_PREFIX,
     Config,
     Yaml,
@@ -21,7 +21,7 @@ from docker_devkit.config import (
     is_mapping,
     mirrored_ref,
 )
-from docker_devkit.config_lock import (
+from boatyard.config_lock import (
     LOCK_PATH,
     read_config_lock,
     SHA256_DIGEST_REGEX,

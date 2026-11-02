@@ -8,9 +8,9 @@ import yaml
 from bashrun.bash import CalledProcessError, bash, bash_output
 from typer.testing import CliRunner
 
-from docker_devkit import compose
-from docker_devkit.verbs import down, up
-from docker_devkit.config_lock import LOCK_PATH
+from boatyard import compose
+from boatyard.verbs import down, up
+from boatyard.config_lock import LOCK_PATH
 
 MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
 FAKE_DIGEST = "sha256:" + "a" * 64

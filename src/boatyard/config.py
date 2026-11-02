@@ -22,13 +22,13 @@ from pydantic import (
 )
 from strictyaml import load as load_strict_yaml
 
-from docker_devkit.config_lock import (
+from boatyard.config_lock import (
     LOCK_PATH,
     PLATFORM_PATTERN,
     SHA256_DIGEST_REGEX,
     read_config_lock,
 )
-from docker_devkit.dockerfiles import (
+from boatyard.dockerfiles import (
     DOCKERFILE_NAME,
     ServiceBuild,
     derive_services,
@@ -145,7 +145,7 @@ class Config(BaseModel):
 
     def resolve(self, root: Path) -> Self:
         # Self-check the installed version.
-        installed = importlib.metadata.version("docker-devkit")
+        installed = importlib.metadata.version("boatyard")
         if installed != DEV_SENTINEL and not SpecifierSet(self.requires).contains(installed, prereleases=True):
             raise ValueError(f"docker-devkit {installed} does not satisfy requires={self.requires!r}")
         self.root = root

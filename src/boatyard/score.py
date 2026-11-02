@@ -23,7 +23,7 @@ from pydantic import (
     model_validator,
 )
 
-from docker_devkit.config import (
+from boatyard.config import (
     ENV_NAME_PATTERN,
     PLACEHOLDER,
     Yaml,
@@ -162,7 +162,7 @@ def render_score(
     output.parent.mkdir(parents=True, exist_ok=True)
 
     with (
-        as_file(files("docker_devkit") / PATCH_TEMPLATES_DIR) as builtin_templates,
+        as_file(files("boatyard") / PATCH_TEMPLATES_DIR) as builtin_templates,
         ExitStack() as stack,
     ):
         # Collect the resource types the workloads reference.

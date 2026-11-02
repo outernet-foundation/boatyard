@@ -5,10 +5,10 @@ from typing import Annotated
 
 import typer
 
-from docker_devkit import dockerfiles
-from docker_devkit.config import Config
-from docker_devkit.dockerfiles import service_sha_env
-from docker_devkit.verbs.entry import entry
+from boatyard import dockerfiles
+from boatyard.config import Config
+from boatyard.dockerfiles import service_sha_env
+from boatyard.verbs.entry import entry
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 

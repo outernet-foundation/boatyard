@@ -5,8 +5,8 @@ from pathlib import Path
 
 import typer
 
-from docker_devkit.config import Config
-from docker_devkit.verbs.entry import entry
+from boatyard.config import Config
+from boatyard.verbs.entry import entry
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 

@@ -14,7 +14,7 @@ from pydantic import (
     model_validator,
 )
 
-from docker_devkit.config import (
+from boatyard.config import (
     CONSUMER_INTERPOLATED_ANNOTATION,
     ComposeWorkloadDocument,
     EDGE_SERVICE_NAME,
@@ -24,8 +24,8 @@ from docker_devkit.config import (
     validate,
     Config,
 )
-from docker_devkit.config_lock import LOCK_PATH
-from docker_devkit.score import (
+from boatyard.config_lock import LOCK_PATH
+from boatyard.score import (
     CompiledProvisioners,
     dump_compose,
     load_yaml_file,

@@ -9,11 +9,11 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
-from docker_devkit import bake as bake_module
-from docker_devkit import dockerfiles as dockerfiles_module
-from docker_devkit.lock import UpstreamManifests
-from docker_devkit.config_lock import LOCK_PATH
-from docker_devkit.verbs import build
+from boatyard import bake as bake_module
+from boatyard import dockerfiles as dockerfiles_module
+from boatyard.lock import UpstreamManifests
+from boatyard.config_lock import LOCK_PATH
+from boatyard.verbs import build
 
 DIGEST_A = "sha256:" + "a" * 64
 MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
@@ -565,7 +565,7 @@ class TestBakeSeesLockValues:
         monkeypatch.setattr(bake_module, "bash", probe.run)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
-        monkeypatch.setattr("docker_devkit.lock.resolve_remote_manifests", _fixed_manifests)
+        monkeypatch.setattr("boatyard.lock.resolve_remote_manifests", _fixed_manifests)
         monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles=LOCK_DOCKERFILES, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
@@ -582,7 +582,7 @@ def _rendered_services(rendered: str) -> dict[str, Any]:
 
 class TestRenderBakeDeterminism:
     def test_identical_configs_render_byte_identical_files(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr("docker_devkit.lock.resolve_remote_manifests", _fixed_manifests)
+        monkeypatch.setattr("boatyard.lock.resolve_remote_manifests", _fixed_manifests)
         first = _prepare(
             monkeypatch,
             tmp_path,
@@ -635,7 +635,7 @@ class TestRenderBakeTagDerivation:
 
 class TestRenderBakeArgs:
     def test_every_base_image_key_is_injected_on_every_service(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr("docker_devkit.lock.resolve_remote_manifests", _fixed_manifests)
+        monkeypatch.setattr("boatyard.lock.resolve_remote_manifests", _fixed_manifests)
         recorder = _prepare(
             monkeypatch,
             tmp_path,
@@ -838,7 +838,7 @@ class TestRenderBakePlatforms:
 
 
 def test_render_bake_carries_only_bake_read_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("docker_devkit.lock.resolve_remote_manifests", _fixed_manifests)
+    monkeypatch.setattr("boatyard.lock.resolve_remote_manifests", _fixed_manifests)
     recorder = _prepare(
         monkeypatch,
         tmp_path,

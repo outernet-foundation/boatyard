@@ -12,7 +12,7 @@ from pydantic import (
     Field,
 )
 
-from docker_devkit.config import (
+from boatyard.config import (
     DEV_TOGGLES_ANNOTATION,
     K8sConfig,
     WorkloadDocument,
@@ -23,9 +23,9 @@ from docker_devkit.config import (
     is_mapping,
     validate,
 )
-from docker_devkit.config_lock import ConfigLock
-from docker_devkit.lock import env_entries
-from docker_devkit.score import (
+from boatyard.config_lock import ConfigLock
+from boatyard.lock import env_entries
+from boatyard.score import (
     MARKERS,
     dump_compose,
     load_yaml_file,

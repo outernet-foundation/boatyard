@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from docker_devkit.bake import MIN_KEEP_STORAGE_GB, check_gc_limits
+from boatyard.bake import MIN_KEEP_STORAGE_GB, check_gc_limits
 
 
 def _daemon_json(root: Path, body: str) -> Path:

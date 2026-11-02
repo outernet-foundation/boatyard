@@ -10,12 +10,12 @@ import typer
 import yaml
 from bashrun.bash import bash, bash_output
 
-from docker_devkit import dockerfiles
-from docker_devkit.compose import merged_environment
-from docker_devkit.config import COMPOSE_HOLE, Config, Target, validate
-from docker_devkit.config_lock import LOCK_PATH, parse_config_lock
-from docker_devkit.lock import compose_env_entries
-from docker_devkit.score import (
+from boatyard import dockerfiles
+from boatyard.compose import merged_environment
+from boatyard.config import COMPOSE_HOLE, Config, Target, validate
+from boatyard.config_lock import LOCK_PATH, parse_config_lock
+from boatyard.lock import compose_env_entries
+from boatyard.score import (
     SECRETS_FILE,
     SECRETS_OUTPUT,
     SecretsDeclaration,
@@ -24,9 +24,9 @@ from docker_devkit.score import (
     split_documents,
     write_generated_file,
 )
-from docker_devkit.score_compose import generate_compose
-from docker_devkit.score_k8s import CLOUD_STORAGE_CLASS, LOCAL_STORAGE_CLASS, generate_k8s
-from docker_devkit.verbs.entry import entry
+from boatyard.score_compose import generate_compose
+from boatyard.score_k8s import CLOUD_STORAGE_CLASS, LOCAL_STORAGE_CLASS, generate_k8s
+from boatyard.verbs.entry import entry
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 

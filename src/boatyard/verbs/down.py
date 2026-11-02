@@ -7,15 +7,15 @@ from typing import Annotated
 import typer
 from bashrun.bash import bash_handoff
 
-from docker_devkit.compose import (
+from boatyard.compose import (
     compose_command,
     merged_environment,
     require_env_file,
     write_lock_env_file,
     write_temp_compose_file,
 )
-from docker_devkit.config import Config, require_compose_stack
-from docker_devkit.verbs.entry import entry
+from boatyard.config import Config, require_compose_stack
+from boatyard.verbs.entry import entry
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 

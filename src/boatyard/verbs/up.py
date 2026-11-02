@@ -9,8 +9,8 @@ from typing import Annotated
 import typer
 from bashrun.bash import CalledProcessError, bash_handoff, bash_output
 
-from docker_devkit.bake import run_build
-from docker_devkit.compose import (
+from boatyard.bake import run_build
+from boatyard.compose import (
     BUNDLES_VARIABLE,
     compose_command,
     merged_environment,
@@ -19,9 +19,9 @@ from docker_devkit.compose import (
     select,
     split_names,
 )
-from docker_devkit.config import Config, require_compose_stack
-from docker_devkit.config_lock import read_config_lock
-from docker_devkit.verbs.entry import entry
+from boatyard.config import Config, require_compose_stack
+from boatyard.config_lock import read_config_lock
+from boatyard.verbs.entry import entry
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 

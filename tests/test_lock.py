@@ -6,12 +6,12 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
-from docker_devkit import config as config_module
-from docker_devkit import dockerfiles as dockerfiles_module
-from docker_devkit import lock as lock_module
-from docker_devkit.config_lock import LOCK_PATH
-from docker_devkit.lock import UpstreamManifests
-from docker_devkit.verbs import build, lock
+from boatyard import config as config_module
+from boatyard import dockerfiles as dockerfiles_module
+from boatyard import lock as lock_module
+from boatyard.config_lock import LOCK_PATH
+from boatyard.lock import UpstreamManifests
+from boatyard.verbs import build, lock
 
 DIGEST_A = "sha256:" + "a" * 64
 DIGEST_B = "sha256:" + "b" * 64
