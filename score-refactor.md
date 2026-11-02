@@ -113,16 +113,19 @@ D3 pre-seeding would keep it that way).
 
 ### D3 — k8s instance-suffix determinism
 
-Status: OPEN.
-
-Verified: score-k8s has no CLI flag for deterministic suffixes; the suffix
-lives in `state.yaml` (`WorkloadExtras.InstanceSuffix`). Options:
-(a) pre-seed state.yaml with deterministic suffixes between `init` and
-`generate` — determinism by construction, the rewrite tail dies; couples
-to score-k8s's state format (pinned tool version makes it testable);
-(b) keep post-rewrite but parse-mutate-dump typed; (c) status quo string
-surgery. Lean: (a), (b) as fallback if the pinned version ignores
-pre-seeded extras.
+Ruling: (a) — pre-seed. Between `init` and `generate`, write a state.yaml
+recording each workload with its deterministic `InstanceSuffix` (`-` +
+first 10 hex of sha256(name)); names come out deterministic by
+construction and the entire correction tail dies (substring replace, state
+reads, `ScoreState`/`WorkloadState`, the dead path-reduction pass). The
+coupling to score-k8s's state format is accepted because the tool version
+is pinned per config; the implementing session opens with a spike (init →
+hand-seed state.yaml → generate → inspect names) and falls back to (b)
+— parse-mutate-dump over string scalars of the manifest tree — only if the
+pinned version ignores pre-seeded extras. (b) outright was rejected: it
+retains the state read and suffix machinery and adds a heuristic walker
+over fields the devkit does not own; (c) status-quo text replace is the
+audited smell.
 
 ### D4 — Error-channel law
 
