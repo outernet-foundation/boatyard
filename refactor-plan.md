@@ -25,7 +25,7 @@ Tick a phase only after its final commit and a green verification trio;
 - [x] Phase 6 — dedup: record members + lock/assembly/verbs
 - [x] Phase 7 — dedup: score/publish/config + 2.5 + 2.7
 - [x] Phase 8 — inline wave + 2.9
-- [ ] Phase 9 — dead code + validation timing
+- [x] Phase 9 — dead code + validation timing
 - [ ] Phase 10 — ordering, naming, micro
 
 The import graph after all folds is verified cycle-free: `service_builds.py`,
