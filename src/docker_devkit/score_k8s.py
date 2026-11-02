@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-import shlex
 import shutil
 from hashlib import sha256
 from pathlib import Path
@@ -31,6 +29,7 @@ from docker_devkit.score import (
     compiled_provisioners,
     contains_marker,
     dump_compose,
+    init_score_tool,
     load_yaml_file,
     rendered_workloads,
     resolve_markers,
@@ -91,18 +90,13 @@ def generate_k8s(
         builtin_patch_templates() as builtin_templates,
         compiled_provisioners(score_dir, "k8s", k8s.workloads, root, images) as provisioners,
     ):
-        flags = "".join(
-            f" --provisioners {shlex.quote(Path(os.path.relpath(provisioner, output_path.parent)).as_posix())}"
-            for provisioner in provisioners.paths
-        )
-        flags += "".join(
-            f" --patch-templates {shlex.quote(Path(os.path.relpath(template, output_path.parent)).as_posix())}"
-            for template in [builtin_templates / GPU_POD_TEMPLATE, builtin_templates / SCALE_TO_ZERO_TEMPLATE]
-        )
-        bash(
-            f"score-k8s init --no-sample{flags}",
-            cwd=output_path.parent,
-            env=tool_environment,
+        init_score_tool(
+            "score-k8s",
+            output_path.parent,
+            None,
+            provisioners.paths,
+            [builtin_templates / GPU_POD_TEMPLATE, builtin_templates / SCALE_TO_ZERO_TEMPLATE],
+            tool_environment,
         )
 
         _seed_instance_suffixes(state_dir / "state.yaml", score_dir, k8s.workloads)

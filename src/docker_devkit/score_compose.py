@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import os
 import re
-import shlex
 import shutil
 from pathlib import Path
 from typing import Literal, Self
@@ -33,6 +31,7 @@ from docker_devkit.score import (
     builtin_patch_templates,
     compiled_provisioners,
     dump_compose,
+    init_score_tool,
     load_yaml_file,
     rendered_workloads,
     write_generated_file,
@@ -171,18 +170,13 @@ def generate_compose(
                     )
                 templates = _compose_templates(builtin_templates, bundle, provisioners.declares_services)
                 shutil.rmtree(score_state, ignore_errors=True)
-                flags = "".join(
-                    f" --provisioners {shlex.quote(Path(os.path.relpath(provisioner, score_dir)).as_posix())}"
-                    for provisioner in provisioners.paths
-                )
-                flags += "".join(
-                    f" --patch-templates {shlex.quote(Path(os.path.relpath(template, score_dir)).as_posix())}"
-                    for template in templates
-                )
-                bash(
-                    f"score-compose init --project {config.project_name} --no-sample{flags}",
-                    cwd=score_dir,
-                    env=tool_environment,
+                init_score_tool(
+                    "score-compose",
+                    score_dir,
+                    config.project_name,
+                    provisioners.paths,
+                    templates,
+                    tool_environment,
                 )
 
                 output = bundle.output

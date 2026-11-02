@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import re
+import shlex
 from collections.abc import Generator
 from contextlib import contextmanager
 from functools import partial
@@ -10,6 +12,7 @@ from tempfile import TemporaryDirectory
 from typing import NamedTuple, Self
 
 import yaml
+from bashrun.bash import bash
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -203,6 +206,25 @@ def compiled_provisioners(
             target.write_text(dump_compose(compiled_entries), encoding="utf-8", newline="")
             paths.append(target)
         yield CompiledProvisioners(paths=paths, declares_services=declares_services)
+
+
+def init_score_tool(
+    tool: str,
+    cwd: Path,
+    project_name: str | None,
+    provisioners: list[Path],
+    templates: list[Path],
+    tool_environment: dict[str, str] | None,
+) -> None:
+    flags = "".join(
+        f" --provisioners {shlex.quote(Path(os.path.relpath(provisioner, cwd)).as_posix())}"
+        for provisioner in provisioners
+    )
+    flags += "".join(
+        f" --patch-templates {shlex.quote(Path(os.path.relpath(template, cwd)).as_posix())}" for template in templates
+    )
+    project = f" --project {project_name}" if project_name is not None else ""
+    bash(f"{tool} init{project} --no-sample{flags}", cwd=cwd, env=tool_environment)
 
 
 def contains_marker(node: Yaml) -> bool:
