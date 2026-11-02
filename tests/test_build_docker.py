@@ -9,11 +9,12 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
+from boatyard.cli import app
+from boatyard.verbs import build
 from boatyard import bake as bake_module
 from boatyard import dockerfiles as dockerfiles_module
 from boatyard.lock import UpstreamManifests
 from boatyard.config_lock import LOCK_PATH
-from boatyard.verbs import build
 
 DIGEST_A = "sha256:" + "a" * 64
 MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
@@ -165,7 +166,7 @@ def _prepare(
         variants=variants,
     )
 
-    result = runner.invoke(build.app, arguments)
+    result = runner.invoke(app, ["build", *arguments])
 
     assert result.exit_code == 0, result.output
     return recorder
@@ -204,7 +205,7 @@ class TestDefaultTargets:
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL}, platforms=["linux/arm64"])
 
-        result = runner.invoke(build.app, [])
+        result = runner.invoke(app, ["build"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
@@ -243,7 +244,7 @@ class TestDefaultTargets:
     def test_missing_config_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(build.app, [])
+        result = runner.invoke(app, ["build"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, RuntimeError)
@@ -303,7 +304,7 @@ class TestCellSelection:
             variants=TORCH_AXIS,
         )
 
-        result = runner.invoke(build.app, arguments)
+        result = runner.invoke(app, ["build", *arguments])
 
         assert result.exit_code != 0
         return result
@@ -320,7 +321,7 @@ class TestBuildKeysGuard:
             repository="ghcr.io/example/infra-rathole",
         )
 
-        result = runner.invoke(build.app, [])
+        result = runner.invoke(app, ["build"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
@@ -381,7 +382,7 @@ class TestDevBuilds:
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": DEV_STAGE})
 
-        result = runner.invoke(build.app, ["--dev", "--push"])
+        result = runner.invoke(app, ["build", "--dev", "--push"])
 
         assert result.exit_code != 0
         assert "local-only" in result.output
@@ -391,7 +392,7 @@ class TestDevBuilds:
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": DEV_STAGE})
 
-        result = runner.invoke(build.app, ["--dev", "--push", LOCAL_REGISTRY])
+        result = runner.invoke(app, ["build", "--dev", "--push", LOCAL_REGISTRY])
 
         assert result.exit_code != 0
         assert "local-only" in result.output
@@ -403,7 +404,7 @@ class TestDevBuilds:
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": EXTERNAL, "liar": LYING_DEV_STAGE})
 
-        result = runner.invoke(build.app, ["--dev"])
+        result = runner.invoke(app, ["build", "--dev"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
@@ -414,7 +415,7 @@ class TestDevBuilds:
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": EXTERNAL, "auth": DEV_STAGE})
 
-        result = runner.invoke(build.app, ["--dev", "--targets", "api"])
+        result = runner.invoke(app, ["build", "--dev", "--targets", "api"])
 
         assert result.exit_code != 0
         assert "no dev stage" in result.output
@@ -432,7 +433,7 @@ class TestBakeFailure:
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": EXTERNAL})
 
-        result = runner.invoke(build.app, [])
+        result = runner.invoke(app, ["build"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
@@ -496,7 +497,7 @@ class TestPushDestination:
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL})
 
-        result = runner.invoke(build.app, ["--push", "--targets", "zed-capture"])
+        result = runner.invoke(app, ["build", "--push", "--targets", "zed-capture"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
@@ -509,7 +510,7 @@ class TestPushDestination:
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL})
 
-        result = runner.invoke(build.app, ["--targets", "zed-capture"])
+        result = runner.invoke(app, ["build", "--targets", "zed-capture"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
@@ -532,7 +533,7 @@ class TestPushDestination:
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL})
 
-        result = runner.invoke(build.app, arguments)
+        result = runner.invoke(app, ["build", *arguments])
 
         assert result.exit_code != 0
         assert "no scheme" in " ".join(result.output.split())
@@ -542,7 +543,7 @@ class TestGoneFlags:
     def test_the_gpu_flag_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(build.app, ["--gpu", "cuda"])
+        result = runner.invoke(app, ["build", "--gpu", "cuda"])
 
         assert result.exit_code != 0
         assert "No such option" in result.output
@@ -550,7 +551,7 @@ class TestGoneFlags:
     def test_the_gpu_only_flag_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(build.app, ["--gpu-only"])
+        result = runner.invoke(app, ["build", "--gpu-only"])
 
         assert result.exit_code != 0
         assert "No such option" in result.output
@@ -570,7 +571,7 @@ class TestBakeSeesLockValues:
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles=LOCK_DOCKERFILES, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
 
-        result = runner.invoke(build.app, [])
+        result = runner.invoke(app, ["build"])
 
         assert result.exit_code == 0, result.output
         assert probe.uv_image == f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{DIGEST_A}"
@@ -894,7 +895,7 @@ class TestOptionalPushFlag:
 
         monkeypatch.setattr(build, "run_build", _record)
 
-        result = runner.invoke(build.app, arguments)
+        result = runner.invoke(app, ["build", *arguments])
 
         assert result.exit_code == 0, result.output
         return values["push"]

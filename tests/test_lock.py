@@ -6,12 +6,12 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
+from boatyard.cli import app
 from boatyard import config as config_module
 from boatyard import dockerfiles as dockerfiles_module
 from boatyard import lock as lock_module
 from boatyard.config_lock import LOCK_PATH
 from boatyard.lock import UpstreamManifests
-from boatyard.verbs import build, lock
 
 DIGEST_A = "sha256:" + "a" * 64
 DIGEST_B = "sha256:" + "b" * 64
@@ -138,14 +138,14 @@ def _invoke(
     monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
     monkeypatch.chdir(tmp_path)
     _write_repo(tmp_path, base_images=base_images, charts=charts, platforms=platforms)
-    return runner.invoke(lock.app, arguments)
+    return runner.invoke(app, ["lock", *arguments])
 
 
 class TestSelfSkip:
     def test_skips_without_a_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(lock.app, [])
+        result = runner.invoke(app, ["lock"])
 
         assert result.exit_code == 0, result.output
         assert "no lock declarations to relock" in result.output
@@ -156,7 +156,7 @@ class TestSelfSkip:
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path)
 
-        result = runner.invoke(lock.app, [])
+        result = runner.invoke(app, ["lock"])
 
         assert result.exit_code == 0, result.output
         assert "nothing to relock" in result.output
@@ -167,7 +167,7 @@ class TestSelfSkip:
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path)
 
-        result = runner.invoke(lock.app, ["--check"])
+        result = runner.invoke(app, ["lock", "--check"])
 
         assert result.exit_code == 0, result.output
         assert "nothing to relock" in result.output
@@ -205,7 +205,7 @@ class TestImageRecording:
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, base_images=LOCK_BASE_IMAGES)
 
-        result = runner.invoke(lock.app, [])
+        result = runner.invoke(app, ["lock"])
 
         assert result.exit_code == 0, result.output
         assert recorder.inspected == [
@@ -265,7 +265,7 @@ class TestImageRecording:
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
 
-        result = runner.invoke(lock.app, [])
+        result = runner.invoke(app, ["lock"])
 
         assert result.exit_code == 0, result.output
         assert recorder.inspected == []
@@ -296,7 +296,7 @@ class TestImageRecording:
             platforms=["linux/amd64", "linux/arm64"],
         )
 
-        result = runner.invoke(lock.app, [])
+        result = runner.invoke(app, ["lock"])
 
         assert result.exit_code == 0, result.output
         assert recorder.inspected == ["ghcr.io/astral-sh/uv:0.12.15"]
@@ -330,7 +330,7 @@ class TestImageRecording:
 
         recorder = ManifestRecorder()
         monkeypatch.setattr(lock_module, "resolve_remote_manifests", recorder.resolve)
-        result = runner.invoke(lock.app, ["--upgrade"])
+        result = runner.invoke(app, ["lock", "--upgrade"])
 
         assert result.exit_code == 0, result.output
         assert recorder.inspected == [
@@ -549,10 +549,10 @@ class TestLockCheck:
 
     def test_fresh_lock_passes_and_writes_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._prepare(monkeypatch, tmp_path)
-        assert runner.invoke(lock.app, []).exit_code == 0
+        assert runner.invoke(app, ["lock"]).exit_code == 0
         before = (tmp_path / LOCK_PATH).read_text(encoding="utf-8")
 
-        result = runner.invoke(lock.app, ["--check"])
+        result = runner.invoke(app, ["lock", "--check"])
 
         assert result.exit_code == 0, result.output
         assert (tmp_path / LOCK_PATH).read_text(encoding="utf-8") == before
@@ -572,7 +572,7 @@ class TestLockCheck:
             encoding="utf-8",
         )
 
-        result = runner.invoke(lock.app, ["--check"])
+        result = runner.invoke(app, ["lock", "--check"])
 
         assert result.exit_code == 1, result.output
         assert "image lock is stale" in str(result.exception)
@@ -581,13 +581,13 @@ class TestLockCheck:
 
 
 def test_build_no_longer_carries_the_lock_flags() -> None:
-    result = runner.invoke(build.app, ["--lock-only"])
+    result = runner.invoke(app, ["build", "--lock-only"])
     assert result.exit_code == 2
 
-    result = runner.invoke(build.app, ["--check"])
+    result = runner.invoke(app, ["build", "--check"])
     assert result.exit_code == 2
 
-    result = runner.invoke(build.app, ["--upgrade"])
+    result = runner.invoke(app, ["build", "--upgrade"])
     assert result.exit_code == 2
 
 

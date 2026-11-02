@@ -6,6 +6,7 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
+from boatyard.cli import app
 from boatyard import compose
 from boatyard.verbs import up
 from boatyard.config_lock import LOCK_PATH
@@ -101,7 +102,7 @@ def _assembly_document(
     capture = AssemblyCapture()
     monkeypatch.setattr(up, "bash_handoff", capture.run)
 
-    result = runner.invoke(up.app, [])
+    result = runner.invoke(app, ["up"])
 
     assert result.exit_code == 0, result.output
     assert capture.document is not None
@@ -229,7 +230,7 @@ class TestEdgeStanza:
     def test_routes_without_a_gateway_refuse_at_assembly(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _write_edge_tree(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], gateway=None)
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)

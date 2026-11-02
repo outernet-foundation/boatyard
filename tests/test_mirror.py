@@ -4,6 +4,7 @@ import pytest
 import yaml
 from typer.testing import CliRunner, Result
 
+from boatyard.cli import app
 from boatyard import crane
 from boatyard.verbs import mirror
 from boatyard.config import mirrored_ref
@@ -90,7 +91,7 @@ class TestMirrorVerb:
         monkeypatch.setattr(crane, "bash", recorder.run)
         monkeypatch.setattr(mirror, "bash_check", recorder.check)
         monkeypatch.chdir(tmp_path)
-        return runner.invoke(mirror.app, [])
+        return runner.invoke(app, ["mirror"])
 
     def test_probes_every_recorded_digest_index_and_platforms(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._write_tree(tmp_path)
@@ -238,7 +239,7 @@ class TestMirrorVerb:
         values.parent.mkdir(parents=True)
         values.write_text("loki: {}\n", encoding="utf-8")
 
-        result = runner.invoke(mirror.app, [])
+        result = runner.invoke(app, ["mirror"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
@@ -247,7 +248,7 @@ class TestMirrorVerb:
     def test_errors_without_a_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(mirror.app, [])
+        result = runner.invoke(app, ["mirror"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, RuntimeError)
@@ -256,7 +257,7 @@ class TestMirrorVerb:
         _write_config(tmp_path, {"requires": ">=0.1"})
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(mirror.app, [])
+        result = runner.invoke(app, ["mirror"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, RuntimeError)
@@ -267,7 +268,7 @@ class TestMirrorVerb:
         (tmp_path / "workloads").mkdir()
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(mirror.app, [])
+        result = runner.invoke(app, ["mirror"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)

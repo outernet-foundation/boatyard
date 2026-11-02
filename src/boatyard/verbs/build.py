@@ -7,12 +7,8 @@ import typer
 
 from boatyard.bake import run_build
 from boatyard.config import Config
-from boatyard.optional_value_option import DestinationCommand
-
-app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
 
-@app.command(cls=DestinationCommand)
 def build(
     push: Annotated[
         str | None,

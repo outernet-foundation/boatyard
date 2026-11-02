@@ -5,7 +5,7 @@ from typing import Any
 import yaml
 from typer.testing import CliRunner
 
-from boatyard.verbs.matrix import app
+from boatyard.cli import app
 
 runner = CliRunner()
 
@@ -35,7 +35,7 @@ def _invoke_matrix(
 ) -> Any:
     _write_repo(tmp_path, dockerfiles, config=config)
     monkeypatch.chdir(tmp_path)
-    return runner.invoke(app, [])
+    return runner.invoke(app, ["docker-build-matrix"])
 
 
 def test_bases_group_with_their_dependents_per_variant(monkeypatch: Any, tmp_path: Path) -> None:
@@ -118,7 +118,7 @@ def test_repo_uniform_platforms_leave_the_legs_unchanged(monkeypatch: Any, tmp_p
     )
     monkeypatch.chdir(tmp_path)
 
-    result = runner.invoke(app, [])
+    result = runner.invoke(app, ["docker-build-matrix"])
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout) == [{"targets": "api zed-capture", "variant": "common"}]
@@ -127,7 +127,7 @@ def test_repo_uniform_platforms_leave_the_legs_unchanged(monkeypatch: Any, tmp_p
 def test_repo_without_config_emits_empty(monkeypatch: Any, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
 
-    result = runner.invoke(app, [])
+    result = runner.invoke(app, ["docker-build-matrix"])
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout) == []
@@ -137,7 +137,7 @@ def test_config_without_services_emits_empty(monkeypatch: Any, tmp_path: Path) -
     _write_repo(tmp_path, {}, config={"requires": ">=0.1"})
     monkeypatch.chdir(tmp_path)
 
-    result = runner.invoke(app, [])
+    result = runner.invoke(app, ["docker-build-matrix"])
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout) == []

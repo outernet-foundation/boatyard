@@ -22,10 +22,7 @@ from boatyard.compose import (
 from boatyard.config import Config, require_compose_stack
 from boatyard.config_lock import read_config_lock
 
-app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
-
-@app.command()
 def up(
     attached: Annotated[bool, typer.Option("--attached", "-a", help="Run in foreground (not detached)")] = False,
     quiet_pull: Annotated[

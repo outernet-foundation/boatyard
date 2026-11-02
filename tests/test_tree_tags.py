@@ -6,7 +6,8 @@ import typer
 import yaml
 from typer.testing import CliRunner
 
-from boatyard.verbs.tree_tags import app, tree_tags
+from boatyard.cli import app
+from boatyard.verbs.tree_tags import tree_tags
 
 runner = CliRunner()
 
@@ -99,7 +100,7 @@ class TestTreeTags:
     def test_a_repo_without_config_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(app, ["api"])
+        result = runner.invoke(app, ["tree-tags", "api"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, RuntimeError)

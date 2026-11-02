@@ -27,8 +27,6 @@ from boatyard.score import (
 from boatyard.score_compose import generate_compose
 from boatyard.score_k8s import CLOUD_STORAGE_CLASS, LOCAL_STORAGE_CLASS, generate_k8s
 
-app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
-
 
 class ToolRequirement(NamedTuple):
     binary: str
@@ -38,7 +36,6 @@ class ToolRequirement(NamedTuple):
     extract: str
 
 
-@app.command()
 def generate_score(
     target: Annotated[Target, typer.Option(help="Which Score artifact to generate.")] = "both",
     local: Annotated[

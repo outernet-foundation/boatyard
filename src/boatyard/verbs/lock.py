@@ -6,10 +6,7 @@ import typer
 
 from boatyard.lock import run_lock
 
-app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
-
-@app.command()
 def lock(
     upgrade: Annotated[
         bool,

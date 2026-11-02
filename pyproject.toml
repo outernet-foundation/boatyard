@@ -28,15 +28,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project.scripts]
-up = "boatyard.verbs.up:app"
-down = "boatyard.verbs.down:app"
-build = "boatyard.verbs.build:app"
-lock = "boatyard.verbs.lock:app"
-tree-tags = "boatyard.verbs.tree_tags:app"
-mirror = "boatyard.verbs.mirror:app"
-publish-compose = "boatyard.verbs.publish:app"
-generate-score = "boatyard.verbs.score:app"
-docker-build-matrix = "boatyard.verbs.matrix:app"
+boatyard = "boatyard.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/boatyard"]

@@ -8,6 +8,7 @@ import yaml
 from pydantic import ValidationError
 from typer.testing import CliRunner
 
+from boatyard.cli import app
 from boatyard import dockerfiles as dockerfiles_module
 from boatyard import crane
 from boatyard import publish as publish_compose
@@ -254,7 +255,7 @@ class TestPublishComposeVerb:
         self._write_tree(tmp_path)
         recorder = self._invoke(monkeypatch, tmp_path)
 
-        result = runner.invoke(publish_verb.app, [])
+        result = runner.invoke(app, ["publish-compose"])
 
         assert result.exit_code == 0, result.output
         assert recorder.commands[0].startswith("docker login ghcr.io -u publisher")
@@ -279,7 +280,7 @@ class TestPublishComposeVerb:
         summary_path = tmp_path / "job-summary.md"
         monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
 
-        result = runner.invoke(publish_verb.app, [])
+        result = runner.invoke(app, ["publish-compose"])
 
         assert result.exit_code == 0, result.output
         summary = summary_path.read_text(encoding="utf-8")
@@ -294,7 +295,7 @@ class TestPublishComposeVerb:
         monkeypatch.setenv("REGISTRY_USERNAME", "publisher")
         monkeypatch.setenv("REGISTRY_TOKEN", "secret")
 
-        result = runner.invoke(publish_verb.app, [])
+        result = runner.invoke(app, ["publish-compose"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, RuntimeError)
@@ -305,7 +306,7 @@ class TestPublishComposeVerb:
         monkeypatch.delenv("REGISTRY_USERNAME", raising=False)
         monkeypatch.delenv("REGISTRY_TOKEN", raising=False)
 
-        result = runner.invoke(publish_verb.app, [])
+        result = runner.invoke(app, ["publish-compose"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, SystemExit)
@@ -330,7 +331,7 @@ class TestBundleMode:
         monkeypatch.delenv("REGISTRY_USERNAME", raising=False)
         monkeypatch.delenv("REGISTRY_TOKEN", raising=False)
 
-        result = runner.invoke(publish_verb.app, ["--plan"])
+        result = runner.invoke(app, ["publish-compose", "--plan"])
 
         assert result.exit_code == 0, result.output
         assert json.loads(result.output) == [
@@ -345,7 +346,7 @@ class TestBundleMode:
         self._write_tree(tmp_path)
         recorder = _invoke_publishing(monkeypatch, tmp_path)
 
-        result = runner.invoke(publish_verb.app, ["--bundle", "core-cuda"])
+        result = runner.invoke(app, ["publish-compose", "--bundle", "core-cuda"])
 
         assert result.exit_code == 0, result.output
         publish_commands = [command for command in recorder.commands if command.startswith("docker compose")]
@@ -362,7 +363,7 @@ class TestBundleMode:
         self._write_tree(tmp_path)
         recorder = _invoke_publishing(monkeypatch, tmp_path)
 
-        result = runner.invoke(publish_verb.app, [])
+        result = runner.invoke(app, ["publish-compose"])
 
         assert result.exit_code == 0, result.output
         publish_commands = [command for command in recorder.commands if command.startswith("docker compose")]
@@ -389,7 +390,7 @@ class TestBundleMode:
         self._write_tree(tmp_path)
         _invoke_publishing(monkeypatch, tmp_path)
 
-        result = runner.invoke(publish_verb.app, ["--bundle", "core-fabric"])
+        result = runner.invoke(app, ["publish-compose", "--bundle", "core-fabric"])
 
         assert result.exit_code != 0
 
@@ -401,7 +402,7 @@ class TestPlan:
         monkeypatch.delenv("REGISTRY_USERNAME", raising=False)
         monkeypatch.delenv("REGISTRY_TOKEN", raising=False)
 
-        result = runner.invoke(publish_verb.app, ["--plan"])
+        result = runner.invoke(app, ["publish-compose", "--plan"])
 
         assert result.exit_code == 0, result.output
         assert json.loads(result.output) == []
@@ -411,7 +412,7 @@ class TestPlan:
         monkeypatch.delenv("REGISTRY_USERNAME", raising=False)
         monkeypatch.delenv("REGISTRY_TOKEN", raising=False)
 
-        result = runner.invoke(publish_verb.app, ["--plan"])
+        result = runner.invoke(app, ["publish-compose", "--plan"])
 
         assert result.exit_code == 0, result.output
         assert json.loads(result.output) == []

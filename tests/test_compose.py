@@ -8,6 +8,7 @@ import yaml
 from bashrun.bash import CalledProcessError, bash, bash_output
 from typer.testing import CliRunner
 
+from boatyard.cli import app
 from boatyard import compose
 from boatyard.verbs import down, up
 from boatyard.config_lock import LOCK_PATH
@@ -235,7 +236,7 @@ class TestProfileForwarding:
         (tmp_path / ".env").write_text("COMPOSE_PROFILES=tunnel-ngrok\n", encoding="utf-8")
         recorder = self._invoke_up(monkeypatch, tmp_path)
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
         assert [_normalize(command, tmp_path) for command in recorder.commands] == [
@@ -250,7 +251,7 @@ class TestProfileForwarding:
         (tmp_path / ".env").write_text('COMPOSE_PROFILES=" keycloak , , tunnel-ngrok ,keycloak"\n', encoding="utf-8")
         recorder = self._invoke_up(monkeypatch, tmp_path)
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
         assert [_normalize(command, tmp_path) for command in recorder.commands] == [
@@ -269,7 +270,7 @@ class TestProfileForwarding:
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
         assert [_normalize(command, tmp_path) for command in recorder.commands] == [
@@ -284,7 +285,7 @@ class TestProfileForwarding:
         (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
         recorder = self._invoke_up(monkeypatch, tmp_path)
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
         assert [_normalize(command, tmp_path) for command in recorder.commands] == [
@@ -296,7 +297,7 @@ class TestProfileForwarding:
         (tmp_path / ".env").write_text("COMPOSE_PROFILES=keycloak,ghost\n", encoding="utf-8")
         self._invoke_up(monkeypatch, tmp_path)
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
@@ -307,7 +308,7 @@ class TestProfileForwarding:
         (tmp_path / ".env").write_text("PUBLIC_URL=https://example.dev\n", encoding="utf-8")
         recorder = self._invoke_up(monkeypatch, tmp_path)
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
         assert [_normalize(command, tmp_path) for command in recorder.commands] == [
@@ -389,7 +390,7 @@ class TestSelectionLaw:
     def test_options_of_different_groups_select_together(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         recorder = self._invoke_up(tmp_path, monkeypatch)
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
         [document] = recorder.documents
@@ -427,7 +428,7 @@ class TestSelectionLaw:
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
         [document] = recorder.documents
@@ -461,7 +462,7 @@ class TestSelectionLaw:
         monkeypatch.setattr(up, "bash_output", ServicesOutput("api", "edge").run)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
@@ -470,7 +471,7 @@ class TestSelectionLaw:
     def test_unknown_name_refuses_listing_the_vocabulary(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._invoke_up(tmp_path, monkeypatch, bundles="cuda,ghost")
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
@@ -481,7 +482,7 @@ class TestSelectionLaw:
     def test_a_bare_entry_name_is_not_selectable(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._invoke_up(tmp_path, monkeypatch, bundles="livekit")
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
@@ -490,7 +491,7 @@ class TestSelectionLaw:
     def test_two_options_of_one_group_refuse(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._invoke_up(tmp_path, monkeypatch, bundles="cuda,rocm")
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
@@ -500,7 +501,7 @@ class TestSelectionLaw:
         self._invoke_up(tmp_path, monkeypatch)
         monkeypatch.setenv("BUNDLES", "rocm,keycloak")
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
 
@@ -509,7 +510,7 @@ class TestSelectionLaw:
         monkeypatch.delenv("BUNDLES", raising=False)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, RuntimeError)
@@ -520,7 +521,7 @@ class TestSelectionLaw:
         monkeypatch.delenv("BUNDLES", raising=False)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
@@ -532,7 +533,7 @@ class TestSelectionLaw:
         monkeypatch.delenv("BUNDLES", raising=False)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
@@ -544,7 +545,7 @@ class TestSelectionLaw:
         monkeypatch.delenv("BUNDLES", raising=False)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
@@ -564,7 +565,7 @@ class TestUpMaterialization:
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
         [document] = recorder.documents
@@ -606,7 +607,7 @@ class TestUpMaterialization:
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
         [document] = recorder.documents
@@ -621,7 +622,7 @@ class TestUpMaterialization:
         monkeypatch.delenv("BUNDLES", raising=False)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
@@ -636,7 +637,7 @@ class TestUpMaterialization:
         monkeypatch.delenv("BUNDLES", raising=False)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
@@ -650,7 +651,7 @@ class TestUpValidation:
         monkeypatch.setattr(up, "bash_handoff", _silent_handoff)
         monkeypatch.setattr(compose, "bash_output", ServicesOutput(*services.split()).run)
         monkeypatch.chdir(tmp_path)
-        return runner.invoke(up.app, [])
+        return runner.invoke(app, ["up"])
 
     def test_a_route_upstream_absent_from_the_assembly_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         result = self._invoke_up(tmp_path, monkeypatch, "api edge livekit keycloak")
@@ -705,7 +706,7 @@ class TestServiceExclusion:
         monkeypatch.delenv("BUNDLES", raising=False)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
@@ -741,7 +742,7 @@ class TestServiceExclusion:
         monkeypatch.setattr(down, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(down.app, [])
+        result = runner.invoke(app, ["down"])
 
         assert result.exit_code == 0, result.output
         assert recorder.documents == [{"name": "demo"}]
@@ -755,7 +756,7 @@ class TestDownTeardown:
         monkeypatch.setattr(down, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(down.app, [])
+        result = runner.invoke(app, ["down"])
 
         assert result.exit_code == 0, result.output
         assert len(recorder.commands) == 1
@@ -781,7 +782,7 @@ class TestDownTeardown:
             monkeypatch.setattr(down, "bash_handoff", recorder.run)
             monkeypatch.chdir(tree)
 
-            result = runner.invoke(down.app, [])
+            result = runner.invoke(app, ["down"])
 
             assert result.exit_code == 0, result.output
             normalized = _normalize(recorder.commands[0], tree)
@@ -795,7 +796,7 @@ class TestDownTeardown:
         monkeypatch.setattr(down, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(down.app, ["--volumes"])
+        result = runner.invoke(app, ["down", "--volumes"])
 
         assert result.exit_code == 0, result.output
         assert recorder.commands[0].endswith("down --remove-orphans -v")
@@ -805,7 +806,7 @@ class TestDownTeardown:
         monkeypatch.delenv("BUNDLES", raising=False)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(down.app, [])
+        result = runner.invoke(app, ["down"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
@@ -817,7 +818,7 @@ class TestDownTeardown:
         monkeypatch.delenv("BUNDLES", raising=False)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(down.app, [])
+        result = runner.invoke(app, ["down"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
@@ -875,7 +876,7 @@ class TestDevOverlay:
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(up.app, ["--dev"])
+        result = runner.invoke(app, ["up", "--dev"])
 
         assert result.exit_code == 0, result.output
         [document] = recorder.documents
@@ -906,7 +907,7 @@ class TestDevOverlay:
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(up.app, ["--dev"])
+        result = runner.invoke(app, ["up", "--dev"])
 
         assert result.exit_code == 0, result.output
         [document] = recorder.documents
@@ -926,7 +927,7 @@ class TestDevOverlay:
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(up.app, ["--dev"])
+        result = runner.invoke(app, ["up", "--dev"])
 
         assert result.exit_code == 0, result.output
         [document] = recorder.documents
@@ -937,7 +938,7 @@ class TestDevOverlay:
         monkeypatch.delenv("BUNDLES", raising=False)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(up.app, ["--dev"])
+        result = runner.invoke(app, ["up", "--dev"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
@@ -955,7 +956,7 @@ class TestDevOverlay:
         monkeypatch.setattr(up, "bash_handoff", _silent_handoff)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(up.app, ["--build", "--dev"])
+        result = runner.invoke(app, ["up", "--build", "--dev"])
 
         assert result.exit_code == 0, result.output
         assert [set(build) for build in builds] == [{"config"}, {"config", "dev"}]
@@ -972,7 +973,7 @@ class TestDevOverlay:
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(up.app, ["--dev"])
+        result = runner.invoke(app, ["up", "--dev"])
 
         assert result.exit_code == 0, result.output
         overlay_match = OVERLAY_ARGUMENT_PATTERN.search(recorder.commands[0])
@@ -991,7 +992,7 @@ class TestLockRequirement:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(down, "bash_handoff", recorder.run)
 
-        result = runner.invoke(down.app, [])
+        result = runner.invoke(app, ["down"])
 
         assert result.exit_code == 0, result.output
         assert [_normalize(command, tmp_path) for command in recorder.commands] == [
@@ -1005,7 +1006,7 @@ class TestLockRequirement:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(down, "bash_handoff", recorder.run)
 
-        result = runner.invoke(down.app, [])
+        result = runner.invoke(app, ["down"])
 
         assert result.exit_code == 0, result.output
         assert [_normalize(command, tmp_path) for command in recorder.commands] == [
@@ -1019,7 +1020,7 @@ class TestLockRequirement:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
         assert [_normalize(command, tmp_path) for command in recorder.commands] == [
@@ -1037,7 +1038,7 @@ class TestLockEnvSynthesis:
         monkeypatch.setattr(up, "bash_output", _probe_present)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
-        return runner.invoke(up.app, [])
+        return runner.invoke(app, ["up"])
 
     def test_the_attached_env_file_carries_the_platform_manifest_not_the_index(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1152,7 +1153,7 @@ class TestLockEnvSynthesis:
         monkeypatch.setattr(up, "bash_output", _probe_absent)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         kept = [
@@ -1176,7 +1177,7 @@ class TestMirroredLockEnforcement:
         monkeypatch.setattr(up, "bash_output", _probe_absent)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         assert str(result.exception) == LOCKED_ERROR
@@ -1191,7 +1192,7 @@ class TestMirroredLockEnforcement:
         monkeypatch.setattr(up, "bash_output", _probe_unauthorized)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         message = str(result.exception)
@@ -1210,7 +1211,7 @@ class TestMirroredLockEnforcement:
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
         assert [_normalize(command, tmp_path) for command in recorder.commands] == [
@@ -1226,7 +1227,7 @@ class TestMirroredLockEnforcement:
         monkeypatch.setattr(up, "bash_output", probe.run)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         assert "alpine" in str(result.exception)
@@ -1251,7 +1252,7 @@ class TestMirroredLockEnforcement:
         monkeypatch.setattr(up, "bash_output", probe.run)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         assert str(result.exception) == (
@@ -1286,7 +1287,7 @@ class TestMirroredLockEnforcement:
         monkeypatch.setattr(up, "bash_output", _probe_then_fail)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(up.app, [])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         message = str(result.exception)

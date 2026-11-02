@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import typer
 from bashrun.bash import bash, bash_check
 
 from boatyard.config import (
@@ -13,10 +12,7 @@ from boatyard.config import (
 from boatyard.config_lock import read_config_lock
 from boatyard.crane import install_crane
 
-app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
-
-@app.command()
 def mirror() -> None:
     root = Path.cwd()
     config = Config.load(root)

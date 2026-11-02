@@ -9,10 +9,7 @@ from boatyard import dockerfiles
 from boatyard.config import Config
 from boatyard.dockerfiles import service_sha_env
 
-app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
-
-@app.command()
 def tree_tags(
     services: Annotated[
         list[str] | None,
