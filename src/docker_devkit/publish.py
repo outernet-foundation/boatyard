@@ -36,8 +36,7 @@ def bake_sources(baked_directory: Path, source_name: str, substitutions: dict[st
 
 def finalize_baked(baked_path: Path, repository: str) -> None:
     print("Inline configs content")
-    # The published artifact is YAML-only: file-sourced configs dangle in the include consumer's
-    # materialization cache, so they ride as inline content.
+    # Inline file-sourced configs as content entries.
     own_image_pattern = re.compile(rf"{re.escape(repository)}/[a-z0-9][a-z0-9-]*:[^\s\"'@$]+")
     document = yaml.safe_load(baked_path.read_text(encoding="utf-8"))
     parsed = ComposeDocument.model_validate(document)
@@ -45,13 +44,10 @@ def finalize_baked(baked_path: Path, repository: str) -> None:
         inlined: dict[str, dict[str, Any]] = {}
         for config_name, compose_config in parsed.configs.items():
             if compose_config.file is None:
-                # Authored content rides through verbatim: single-$ holes are the consumer's
-                # include-time interpolation surface ($ doubling is the file-sourced path only).
                 inlined[config_name] = document["configs"][config_name]
                 continue
             entry = compose_config.model_dump(exclude_defaults=True)
             entry.pop("file", None)
-            # Literal $ doubles so consumer interpolation leaves env expansion to the container
             entry["content"] = Path(compose_config.file).read_text(encoding="utf-8").replace("$", "$$")
             inlined[config_name] = entry
         document["configs"] = inlined
@@ -60,7 +56,7 @@ def finalize_baked(baked_path: Path, repository: str) -> None:
             encoding="utf-8",
         )
 
-    # Refs under the bundle repository are this repo's own built images; publish them digest-pinned.
+    # Pin image refs under the repository to digests.
     digests: dict[str, str] = {}
     baked_path.write_text(
         own_image_pattern.sub(partial(_pinned_reference, digests), baked_path.read_text(encoding="utf-8")),

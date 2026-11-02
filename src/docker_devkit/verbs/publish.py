@@ -52,10 +52,7 @@ def publish_compose(
         if plan:
             print(json.dumps([]))
             return
-        raise RuntimeError(
-            "publishing happens iff local service entries are declared in docker-devkit.yaml; "
-            "one artifact per workload-bearing entry or option, named under root repository"
-        )
+        raise RuntimeError("publishing requires local entries (workloads:) in docker-devkit.yaml")
 
     if plan:
         entries = [{"bundle": entry.name} for entry in bundles]
@@ -92,10 +89,7 @@ def publish_compose(
             baked_directory = Path(baked_directory_string)
             baked_path = bake_sources(baked_directory, entry.output.as_posix(), substitutions)
 
-            # Publish validates ${VAR} holes against the environment but embeds the file
-            # uninterpolated (verified against a live registry — no env value enters the
-            # artifact), so stubs exist only to satisfy that validation; they must be
-            # non-empty because compose's ${VAR:?err} rejects unset OR empty.
+            # Set non-empty stubs for unresolved vars.
             unresolved = {
                 match.group(1) for match in VAR_PATTERN.finditer(baked_path.read_text(encoding="utf-8"))
             } - substitutions.keys()
@@ -104,9 +98,7 @@ def publish_compose(
 
             finalize_baked(baked_path, config.repository)
 
-            # One publish per entry: compose stamps wall-clock created per invocation, so a
-            # second publish of identical files yields a different digest — the branch tag
-            # aliases the published manifest instead of re-publishing it.
+            # Publish once under the sha tag and alias the branch tag.
             sha_reference = f"{config.repository}/{entry.name}:{sha}"
             print(f"Publish {sha_reference}")
             bash(f"docker compose -f {shlex.quote(str(baked_path))} publish {shlex.quote(sha_reference)} --yes")
