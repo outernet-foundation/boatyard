@@ -142,7 +142,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
   exclusive.
 - Post-passes on compose output are typed transformations on `ComposeDocument`, dumped exactly once — pydantic's declared-fields-first order is the artifacts' deterministic key order: service-name collapse
   (`{workload}-{container}` → workload, collision loud); per-entry gate rename `wait-for-resources` → `wait-for-resources-{entry}` with `depends_on` following (collision loud); the edge-reserved check; bind inlining — every `type: bind` volume becomes a top-level `configs.content` entry, zero host-filesystem references in committed artifacts (the `$`-doubling law's single exception: `outernet.internal/consumer-interpolated` files).
-- The image lock is required and non-empty; a gate-forming run additionally requires `ALPINE_IMAGE`.
+- The image lock is required and non-empty; the compose target requires the `ALPINE_IMAGE` entry.
 - `$`-doubling law, stated once: a literal `$` doubles whenever file text rides inside a compose document (edge Caddyfile, publish's file-sourced configs, score's bind inlining); text outside a compose document (k8s-side inclusion, k8s
   manifests) never doubles.
 - `docker-build-matrix` cell schema (`targets`, `variant`) = a named contract with the binding — renaming a key breaks its fanout YAML; one partition per closure × variant cell.
@@ -151,8 +151,8 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 
 - Authored provisioner files carry `state`/`outputs`/`volumes`/`services` as real YAML mappings + `manifests` as a real list — score's string form is generated, never authored; a field already in string form = a loud validation error;
   `extra="forbid"`.
-- Compilation resolves include markers, then lock markers, both before validation; the compiled form lives in a per-run tempdir under `score_dir`, never the committed tree; `--provisioners` paths stay POSIX-relative; `declares_services` =
-  the phantom-service condition the gate keys on; authored key order controls dump order at every level; comments are dropped; registration derives by resource-type closure in sorted-filename order;
+- Compilation resolves include markers, then lock markers, both before validation; the compiled form lives in a per-run tempdir under `score_dir`, never the committed tree; `--provisioners` paths stay POSIX-relative;
+  authored key order controls dump order at every level; comments are dropped; registration derives by resource-type closure in sorted-filename order;
   orphan provisioner files silently no-ship.
 - Marker grammar: a single-key mapping (authored sources stay plain-YAML-parseable); `include:` inserts bytes verbatim, `include-yaml:` inserts parsed structure; neither transforms content (`${VAR}` holes pass through; `$`-handling is
   per-consumer); paths anchor at the repo root — absolute paths, `..` escapes, missing files, cycles = loud errors; text content is never scanned for markers; `lock: NAME`/`lock-image: NAME` substitute the full reference /

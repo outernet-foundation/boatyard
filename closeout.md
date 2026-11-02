@@ -148,7 +148,9 @@ code → lockfiles → prose:
    merge=ours`.
 4. Relock completes `platforms` where the config refusal forces it (every
    `base_images`-declaring consumer): placeframe amd64; Make-it-Sing,
-   infra-rathole, lbe-toolkit theirs. placeframe declares its variant axis
+   infra-rathole, lbe-toolkit theirs. The same relock adds `ALPINE_IMAGE`
+   to `base_images` where missing — the compose target requires the lock
+   entry from 0.6.0. placeframe declares its variant axis
    (`variants: {TORCH_DEVICE: [cuda, rocm]}`, cuda the default cell) in the
    same relock.
 5. Every consumer's toolkit `uses:` SHAs bump to the Work-2 commit — one SHA
