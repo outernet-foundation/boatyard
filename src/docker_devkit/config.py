@@ -316,10 +316,6 @@ class DockerDevkitConfig(BaseModel):
         assert self.root is not None
         return self.root / self.score_dir
 
-    def k8s_output_path(self, local: bool) -> Path:
-        assert self.root is not None
-        return self.root / (self.k8s_local_output if local else self.k8s_output)
-
     def bundle_output(self, name: str) -> Path:
         assert self.root is not None
         return self.root / "stack/generated/compose" / f"compose.{name}.yaml"

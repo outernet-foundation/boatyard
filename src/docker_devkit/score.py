@@ -252,7 +252,7 @@ def generate_artifacts(config: DockerDevkitConfig, target: Target, local: bool) 
     lock = parse_image_lock(lock_path)
     if not lock.images and not lock.charts:
         raise RuntimeError(f"{lock_path.as_posix()}: the image lock carries no entries")
-    k8s_output = config.k8s_output_path(local)
+    k8s_output = root / (config.k8s_local_output if local else config.k8s_output)
 
     outputs: list[Path] = []
 
@@ -589,7 +589,7 @@ def compiled_provisioners(
 
 def generate_k8s(config: DockerDevkitConfig, k8s: K8sConfig, output_path: Path, lock: ImageLock) -> None:
     # Run score-k8s in the output's directory; it writes its .score-k8s state under its cwd.
-    # The output arrives root-absolute (config.k8s_output_path).
+    # The output arrives root-absolute (the joined k8s output path).
     assert config.root is not None
     root = config.root
     images = env_entries(lock)
