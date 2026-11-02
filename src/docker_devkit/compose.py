@@ -224,7 +224,6 @@ def render(
     compose_files: list[Path] = []
 
     # Render the per-run root compose file.
-    assert config.project_name is not None
     services: dict[str, Yaml] = {}
     if selection.routes:
         if config.gateway is None:

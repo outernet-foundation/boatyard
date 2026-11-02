@@ -176,9 +176,9 @@ def run_build(
     for service in config.service_builds.values():
         for target, variant in service.target_variants:
             args: dict[str, str] = {key: f"${{{key}:-}}" for key in config.base_images}
-            if variant is not None:
-                assert service.axis is not None
-                args[service.axis] = variant
+            axis = service.axis
+            if variant is not None and axis is not None:
+                args[axis] = variant
             args.update({sha: f"${{{sha}:?err}}" for sha in service.sha_args})
             build: dict[str, BakeValue] = {"dockerfile": service.dockerfile}
             if dev:

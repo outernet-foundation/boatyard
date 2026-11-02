@@ -68,8 +68,10 @@ def publish_compose(
     token = os.environ.get("REGISTRY_TOKEN", "")
     if not username or not token:
         raise SystemExit("REGISTRY_USERNAME and REGISTRY_TOKEN must be set for registry login")
-    assert config.repository is not None
-    registry_host = config.repository.partition("/")[0]
+    repository = config.repository
+    if repository is None:
+        raise RuntimeError("local entries (workloads:) are declared; repository is required")
+    registry_host = repository.partition("/")[0]
     print(f"Login to {registry_host}")
     bash(f"docker login {shlex.quote(registry_host)} -u {shlex.quote(username)} --password-stdin", stdin_text=token)
     install_crane()
@@ -97,13 +99,13 @@ def publish_compose(
             for name in unresolved:
                 os.environ.setdefault(name, STUB_VALUE)
 
-            finalize_baked(baked_path, config.repository)
+            finalize_baked(baked_path, repository)
 
             # Publish once under the sha tag and alias the branch tag.
-            sha_reference = f"{config.repository}/{entry.name}:{sha}"
+            sha_reference = f"{repository}/{entry.name}:{sha}"
             print(f"Publish {sha_reference}")
             bash(f"docker compose -f {shlex.quote(str(baked_path))} publish {shlex.quote(sha_reference)} --yes")
-            branch_reference = f"{config.repository}/{entry.name}:{branch_tag}"
+            branch_reference = f"{repository}/{entry.name}:{branch_tag}"
             print(f"Tag {branch_reference}")
             bash(f"crane tag {shlex.quote(sha_reference)} {shlex.quote(branch_tag)}")
             digest = bash_output(f"crane digest {shlex.quote(sha_reference)}").strip()
