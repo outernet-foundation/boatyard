@@ -615,7 +615,9 @@ def _selection_config(**sections: object) -> config_module.DockerDevkitConfig:
 
 class TestEntrySelection:
     def test_the_projection_refuses_a_platform_an_entry_never_recorded(self) -> None:
-        with pytest.raises(RuntimeError, match=r"LOKI_IMAGE records no linux/ppc64le platform manifest.*run lock"):
+        with pytest.raises(
+            RuntimeError, match=r"LOKI_IMAGE records no linux/ppc64le platform manifest.*recorded platforms"
+        ):
             lock_module.env_entries(_selection_lock(), "linux/ppc64le")
 
     def test_the_projection_carries_no_entry_for_unknown_names(self) -> None:
@@ -686,13 +688,18 @@ class TestPlatformSelectionLaw:
     def test_a_multi_platform_repo_without_a_selection_refuses_listing_declared(self) -> None:
         config = _selection_config(platforms=["linux/amd64", "linux/arm64"])
 
-        with pytest.raises(RuntimeError, match=r"declares the platforms \['linux/amd64', 'linux/arm64'\].*PLATFORM="):
+        with pytest.raises(
+            RuntimeError, match=r"platforms \['linux/amd64', 'linux/arm64'\] are declared.*PLATFORM= must be named"
+        ):
             lock_module.compose_env_entries(_selection_lock(), config, {})
 
     def test_an_undeclared_selection_refuses_listing_declared(self) -> None:
         config = _selection_config(platforms=["linux/amd64"])
 
-        with pytest.raises(RuntimeError, match=r"matches none of this repo's declared platforms \['linux/amd64'\]"):
+        with pytest.raises(
+            RuntimeError,
+            match=r"PLATFORM='linux/arm64' must be one of the declared platforms \['linux/amd64'\]",
+        ):
             lock_module.compose_env_entries(_selection_lock(), config, {"PLATFORM": "linux/arm64"})
 
     def test_a_platform_less_declaring_repo_answers_none(self) -> None:

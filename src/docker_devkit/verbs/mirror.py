@@ -40,8 +40,6 @@ def mirror() -> None:
     copied = 0
     already_present = 0
     for reference, recorded in mirror_targets:
-        # Presence is probed by every recorded digest — the index plus the platform
-        # manifests — so a partially mirrored reference still triggers the copy.
         probes = sorted(set(recorded))
         if probes and all(bash_check(f"crane digest {probe}") for probe in probes):
             for probe in probes:

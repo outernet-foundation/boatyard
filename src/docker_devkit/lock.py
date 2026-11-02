@@ -30,8 +30,6 @@ from docker_devkit.config_lock import (
 DIGEST_TAIL_PATTERN = re.compile(rf"@{SHA256_DIGEST_REGEX}$")
 DIGEST_PATTERN = re.compile(r"^Digest:\s+(sha256:[a-f0-9]+)", re.MULTILINE)
 
-# The compose-edge platform selector, read from the merged shell-over-.env view (the
-# COMPOSE_PROFILES precedence); never host introspection.
 PLATFORM_VARIABLE = "PLATFORM"
 
 
@@ -68,7 +66,7 @@ def run_lock(*, upgrade: bool = False, check: bool = False) -> None:
                 )
             )
         )
-        raise SystemExit("image lock is stale. Run 'lock' and commit the result.")
+        raise SystemExit("image lock is stale")
 
 
 def write_lock(config: DockerDevkitConfig, *, upgrade: bool = False) -> ImageLock:
@@ -79,12 +77,6 @@ def write_lock(config: DockerDevkitConfig, *, upgrade: bool = False) -> ImageLoc
 
 
 def relock(config: DockerDevkitConfig, *, upgrade: bool = False) -> ImageLock:
-    # One structured entry per declaration: the mirror-prefixed reference carrying the
-    # index digest plus one platform-manifest digest per declared platform, resolved
-    # against upstream — crane copies are byte-identical, so the digests hold under both
-    # names. The declared tag rides both reference forms, so a tag bump breaks the prefix
-    # match and re-resolves while an unchanged declaration copies its frozen entry forward.
-    # The computed lock owns exactly the declared names — orphans prune by construction.
     assert config.root is not None
     prefix = config.mirror_prefix
     committed = config.image_lock()
@@ -93,8 +85,6 @@ def relock(config: DockerDevkitConfig, *, upgrade: bool = False) -> ImageLock:
     for name, reference in config.base_images.items():
         base = mirrored_ref(reference, prefix)
         if DIGEST_TAIL_PATTERN.search(reference):
-            # A digest declaration names its exact bytes; it passes through prefixed-but-
-            # unresolved and records uniformly as the index and every platform entry.
             images[name] = ImageLockEntry(index=base, platforms=dict.fromkeys(config.platforms, base))
         elif not upgrade and _declaration_frozen(committed.images.get(name), base, config.platforms):
             images[name] = committed.images[name]
@@ -122,7 +112,7 @@ def relock(config: DockerDevkitConfig, *, upgrade: bool = False) -> ImageLock:
 
 
 def render_lock(lock: ImageLock) -> str:
-    # Deterministic render: sorted names, sorted platform keys, byte-stable across machines.
+    # Render names and platform keys in sorted order.
     document: dict[str, object] = {}
     if lock.images:
         document["images"] = {
@@ -140,17 +130,13 @@ def render_lock(lock: ImageLock) -> str:
 
 
 def resolve_remote_manifests(reference: str, platforms: list[str], subject: str) -> UpstreamManifests:
-    # The complete resolution against the upstream reference: the index digest plus one
-    # concrete manifest digest per declared platform. Selection reads the declared
-    # platforms only — the writing machine's arch never participates.
     print(f"Resolving digests for: {reference}")
     raw = bash_output(f"docker buildx imagetools inspect --raw {shlex.quote(reference)}")
     document: object = json.loads(raw)
     index_digest = resolve_remote_digest(reference)
     children = document.get("manifests") if is_mapping(document) else None
     if not is_list(children):
-        # A reference that answers a manifest rather than an index has one concrete
-        # byte-stream; it records uniformly as the index and every platform entry.
+        # Record a manifest answer as the index and every platform entry.
         return UpstreamManifests(index_digest, dict.fromkeys(platforms, index_digest))
     selected: dict[str, str] = {}
     for platform in platforms:
@@ -188,13 +174,11 @@ def resolve_remote_digest(reference: str) -> str:
     output = bash_output(f"docker buildx imagetools inspect {shlex.quote(reference)}")
     match = DIGEST_PATTERN.search(output)
     if match is None:
-        raise RuntimeError(f"Could not parse digest for image reference: {reference}")
+        raise RuntimeError(f"imagetools output for {reference} must carry a Digest line")
     return match.group(1)
 
 
 def _concrete_platform(child: object) -> tuple[str, str] | None:
-    # The (os, architecture) pair of an index child; None for entries carrying no
-    # concrete platform — unknown/unknown descriptors and platform-less entries never match.
     if not is_mapping(child):
         return None
     platform = child.get("platform")
@@ -211,26 +195,19 @@ def _concrete_platform(child: object) -> tuple[str, str] | None:
 
 def _child_digest(child: object, subject: str) -> str:
     if not is_mapping(child):
-        raise RuntimeError(f"{subject}: upstream index child {child!r} is not a manifest descriptor")
+        raise RuntimeError(f"{subject}: upstream index child {child!r} must be a manifest descriptor")
     digest = child.get("digest")
     if not isinstance(digest, str) or not digest.startswith("sha256:"):
-        raise RuntimeError(f"{subject}: upstream index child carries no digest ({child!r})")
+        raise RuntimeError(f"{subject}: upstream index child must carry a digest ({child!r})")
     return digest
 
 
 def compose_env_entries(lock: ImageLock, config: DockerDevkitConfig, environment: Mapping[str, str]) -> dict[str, str]:
-    # The compose-edge projection: the platform manifests of the selected platform. The
-    # selection law: a declared singleton selects itself, a multi-platform repo names
-    # PLATFORM= in .env (shell env overriding; a missing, empty, or undeclared value
-    # refuses loudly listing the declared platforms), and None answers only a repo
-    # declaring no platforms — never host introspection. A lock recording images against
-    # a config declaring no platforms is a desync the construction rules out — the
-    # refusal names the rewrite.
     selected = environment.get(PLATFORM_VARIABLE, "").strip()
     if selected:
         if selected not in config.platforms:
             raise RuntimeError(
-                f"{PLATFORM_VARIABLE}={selected!r} matches none of this repo's declared platforms {config.platforms}"
+                f"{PLATFORM_VARIABLE}={selected!r} must be one of the declared platforms {config.platforms}"
             )
         platform: str | None = selected
     elif not config.platforms:
@@ -238,24 +215,15 @@ def compose_env_entries(lock: ImageLock, config: DockerDevkitConfig, environment
     elif len(config.platforms) == 1:
         platform = config.platforms[0]
     else:
-        raise RuntimeError(
-            f"this repo declares the platforms {config.platforms}; name {PLATFORM_VARIABLE}= in .env "
-            "to select the compose edge's platform"
-        )
+        raise RuntimeError(f"platforms {config.platforms} are declared; {PLATFORM_VARIABLE}= must be named in .env")
     if platform is None and lock.images:
         raise RuntimeError(
-            f"{LOCK_PATH.as_posix()}: records image entries but docker-devkit.yaml declares no platforms; "
-            "the compose edge selects platform manifests — run lock to rewrite the lock against the declarations"
+            f"{LOCK_PATH.as_posix()}: records image entries but docker-devkit.yaml declares no platforms"
         )
     return env_entries(lock, platform)
 
 
 def env_entries(lock: ImageLock, platform: str | None = None) -> dict[str, str]:
-    # The env projection of the lock through the one selector: the flat NAME=reference
-    # vocabulary compose and bake consume — images answer by the selected form (platform
-    # manifest when a platform is given, the index otherwise), charts flat. None names
-    # the index (the build edge, where buildx resolves a multi-arch index per target
-    # platform); a platform an entry does not record refuses loudly naming the rewrite.
     images: dict[str, str] = {}
     for name, entry in lock.images.items():
         if platform is None:
@@ -265,20 +233,17 @@ def env_entries(lock: ImageLock, platform: str | None = None) -> dict[str, str]:
         if recorded is None:
             raise RuntimeError(
                 f"{LOCK_PATH.as_posix()}: image entry {name} records no {platform} platform manifest; "
-                f"recorded platforms: {sorted(entry.platforms) or 'none'} — run lock to re-resolve"
+                f"recorded platforms: {sorted(entry.platforms) or 'none'}"
             )
         images[name] = recorded
     return {**images, **lock.charts}
 
 
 def render_env_entries(entries: Mapping[str, str]) -> str:
-    # The env-grammar render the per-run --env-file writer emits.
     return "".join(f"{name}={reference}\n" for name, reference in sorted(entries.items()))
 
 
 def _declaration_frozen(entry: ImageLockEntry | None, base: str, platforms: list[str]) -> bool:
-    # The freeze key is the whole declaration the entry resolves under — the prefixed
-    # reference and the declared platform set. Either changing re-resolves the entry.
     if entry is None:
         return False
     return entry.index.startswith(base + "@") and sorted(entry.platforms) == sorted(platforms)
