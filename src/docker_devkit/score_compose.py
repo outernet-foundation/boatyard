@@ -22,6 +22,7 @@ from docker_devkit.config import (
     WorkloadDocument,
     Yaml,
     double_dollars,
+    is_mapping,
     validate,
     ComposeBundle,
     Config,
@@ -42,7 +43,6 @@ STATE_PREFIX = ".score-compose/"
 # Match doubled {workload}-{container} service names.
 DOUBLED_SERVICE_NAME = re.compile(r"^(.+)-\1$")
 
-GATE_PIN_TEMPLATE = "wait-for-resources-image.tpl"
 GATE_SERVICE = "wait-for-resources"
 HEALTHCHECK_TEMPLATE = "probe-adapter-healthchecks.tpl"
 RESTART_TEMPLATE = "restart.tpl"
@@ -168,7 +168,7 @@ def generate_compose(
                         f"bundle {bundle.name!r}: its provisioners declare services; "
                         f"{LOCK_PATH.as_posix()} must carry the ALPINE_IMAGE entry"
                     )
-                templates = _compose_templates(builtin_templates, bundle, provisioners.declares_services)
+                templates = _compose_templates(builtin_templates, bundle)
                 shutil.rmtree(score_state, ignore_errors=True)
                 init_score_tool(
                     "score-compose",
@@ -188,10 +188,14 @@ def generate_compose(
                         env=tool_environment,
                     )
 
+                raw = yaml.safe_load(output.read_text(encoding="utf-8"))
+                # Score-compose synthesizes the gate with a bare alpine image; pin it to the ALPINE_IMAGE lock hole.
+                raw_services = raw.get("services") if is_mapping(raw) else None
+                gate_service = raw_services.get(GATE_SERVICE) if is_mapping(raw_services) else None
+                if is_mapping(gate_service):
+                    gate_service["image"] = "${ALPINE_IMAGE:?err}"
                 # Post-passes run as typed transformations; the model dumps exactly once.
-                document = validate(
-                    ComposeDocument, yaml.safe_load(output.read_text(encoding="utf-8")), output.as_posix()
-                )
+                document = validate(ComposeDocument, raw, output.as_posix())
                 services = document.services or {}
 
                 # Collapse doubled {workload}-{container} service names.
@@ -252,10 +256,8 @@ def generate_compose(
     shutil.rmtree(score_state, ignore_errors=True)
 
 
-def _compose_templates(builtin_templates: Path, bundle: ComposeBundle, declares_services: bool) -> list[Path]:
+def _compose_templates(builtin_templates: Path, bundle: ComposeBundle) -> list[Path]:
     names = [HEALTHCHECK_TEMPLATE, RESTART_TEMPLATE]
-    if declares_services:
-        names.append(GATE_PIN_TEMPLATE)
     gpu_template = GPU_COMPOSE_TEMPLATES.get(bundle.vars.get("GPU_VARIANT", ""))
     if gpu_template is not None:
         names.append(gpu_template)

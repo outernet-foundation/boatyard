@@ -447,6 +447,7 @@ def test_generate_compose_renames_the_gate_and_its_references_per_entry(
     assert list(document["services"]) == ["api", "pf-postgres", "wait-for-resources-core"]
     assert document["services"]["api"]["depends_on"] == {"wait-for-resources-core": {"condition": "service_started"}}
     assert document["services"]["pf-postgres"]["depends_on"] == ["wait-for-resources-core"]
+    assert document["services"]["wait-for-resources-core"]["image"] == "${ALPINE_IMAGE:?err}"
 
 
 def test_generate_compose_gate_names_differ_per_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -546,7 +547,6 @@ def test_workload_image_hole_with_no_lock_entry_refuses(tmp_path: Path, monkeypa
 
 
 SHIPPED_TEMPLATES = {
-    "wait-for-resources-image.tpl",
     "probe-adapter-healthchecks.tpl",
     "restart.tpl",
     "gpu-cuda.tpl",
@@ -570,7 +570,7 @@ SELF_GATING_FALLBACK = "{{- if not $matched }}\n[]\n{{- end }}"
 def test_self_gating_templates_fall_back_to_an_empty_patches_document() -> None:
     directory = files("docker_devkit") / "patch_templates"
 
-    for name in SHIPPED_TEMPLATES - {"wait-for-resources-image.tpl"}:
+    for name in SHIPPED_TEMPLATES:
         text = (directory / name).read_text(encoding="utf-8")
         assert SELF_GATING_FALLBACK in text
         assert "{{- $matched = true }}" in text
@@ -659,25 +659,6 @@ resources:
     type: example-state
 containers: {}
 """
-
-
-def test_gate_pin_registers_when_provisioners_declare_services(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config = _bundle_config()
-
-    templates = _compose_init_templates(
-        monkeypatch,
-        tmp_path,
-        config,
-        GATE_LOCK,
-        {
-            "stack/score/api.yaml": WORKLOAD_REFERENCING_CONFIG,
-            "stack/score/compose/config.yaml": PROVISIONER_WITH_SERVICES,
-        },
-    )
-
-    assert templates == [
-        ["probe-adapter-healthchecks.tpl", "restart.tpl", "wait-for-resources-image.tpl"],
-    ]
 
 
 def test_gate_pin_stays_unregistered_without_provisioner_services(
