@@ -30,7 +30,8 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 
 ## Modules
 
-`config.py` schema + load + sha machinery; `dockerfiles.py` Dockerfile declarations (`ServiceBuild`, `derive_services`); `config_lock.py` lock schema + parsers; `lock.py` lock engine + projections; `assembly.py` resolve/render/validate; `bake.py` build pipeline; `score.py` score generation;
+`config.py` schema + load + sha machinery; `dockerfiles.py` Dockerfile declarations (`ServiceBuild`, `derive_services`); `config_lock.py` lock schema + parsers; `lock.py` lock engine + projections; `compose.py` compose invocation
+  (`select`/`render` + kit); `bake.py` build pipeline; `score.py` score generation;
   `publish.py` publish preparation; `documents.py` shared typed lenses; `crane.py` pinned crane installer; `optional_value_option.py` typer `--push` seam (`# noqa-wrapper:` boundary); `verbs/*` one module per command. Model modules run root → leaves: root record first
   (`RootModel` subscripts quote forward refs; the one inversion is a parent whose field default constructs the child), functions callers-before-callees; imports absolute; `config_lock`/`dockerfiles` ← `config` one-way. Also in `config.py`: `is_mapping`/`is_list`,
   `EDGE_SERVICE_NAME`, `chart_lock_key`, `service_sha_env`; shell-outs via bashrun. Lifecycle stays a separate package from codegen (disjoint dependency surfaces — bundling would force stack-only consumers to install `sqlacodegen`, `psycopg`, `datamodel-code-generator`).
@@ -73,8 +74,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 - `relock` computes per `base_images` entry the mirror-prefixed reference resolved into the index digest + one platform-manifest digest per declared platform (`crane copy` byte-identity holds the digests under both names); `@digest`
   declarations pass through prefixed-unresolved, record uniformly; declaration-incremental freeze: unchanged declaration copies its frozen entry forward (same-tag re-pushes never diff a green branch), tag bump or platform-set change
   re-resolves, `--upgrade` re-resolves everything; charts freeze by the same prefix match.
-- `resolve_remote_manifests` = a pure function of the declarations — the writing machine's arch never participates; exact `os`/`architecture` match; `unknown/unknown` + attestation entries skipped; multiple matches refuse; a missing
-  platform refuses listing the index's platforms.
+- `resolve_remote_manifests` = a pure function of the declarations — the writing machine's arch never participates; exact `os`/`architecture` match; `unknown/unknown` + attestation entries skipped; multiple matches refuse; a missing platform refuses listing the index's platforms.
 - Projection selection law: `env_entries` with no platform answers index references (build edge), with a platform its concrete manifests (compose edge); `compose_env_entries` owns platform selection — a declared singleton self-selects, a
   multi-platform repo names `PLATFORM=` through the merged shell-over-`.env` view (missing/empty/undeclared refuses listing the declared platforms), never host introspection; read projections stay in `lock.py`.
 - `run_lock` self-skips where no config or no declarations exist (print, exit 0 — the CI freshness step runs it unconditionally in any repo); `--check` asserts instead of writes (in-memory relock, unified diff, exit 1, nothing touches the
@@ -95,18 +95,18 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 ## Compose assembly and BUNDLES=
 
 - Selection law: `BUNDLES=` names options only (a bare entry's name refuses as unselectable); ≤ one option per group; zero options legal exactly when riders or routes carry the assembly (omitting the auth pick = the anonymous edge); an
-  options-only repo with an empty selection refuses; unknown names refuse listing the vocabulary; the `Assembly` constructor owns the law. `COMPOSE_PROFILES`: shell-env-over-`.env`, comma-split, deduped, forwarded as explicit `--profile`
-  flags; unknown profiles refuse before probe and build.
+  options-only repo with an empty selection refuses; unknown names refuse listing the vocabulary; `select()` owns the law. `COMPOSE_PROFILES`: shell-env-over-`.env`, comma-split, deduped, forwarded as explicit `--profile`
+  flags; unknown profiles refuse before probe and build. Membership law: everything about the docker compose invocation — selection, rendering, invocation spelling, staged inputs — lives in `compose.py`; nothing else lands there.
 - The materialized root carries the project `name:`, the `include:` list (remote refs verbatim, local outputs by absolute path, in `services:` declaration order), the emitted edge (iff any route rides), parent-file port stanzas; compose
   merges parent ports into included services and honors `!reset` — the merge needs compose ≥ 2.40 (2.24–2.39 answer `conflicts with imported resource`; a test pins this).
-- Validation teeth, in the `Assembly` constructor: with routes or ports, `docker compose config --services` must list every route upstream + every port's owning service; selected profiles must appear in `config --profiles`; a selected
+- Validation teeth, in `render()`: with routes or ports, `docker compose config --services` must list every route upstream + every port's owning service; selected profiles must appear in `config --profiles`; a selected
   bundle output that does not exist refuses naming generate-score; two selected local outputs sharing a service name refuse.
 - Edge stanza: `image: ${CADDY_IMAGE:?err}` (the lock hole), the Caddyfile configs entry, `gateway:` as published port, `FORWARDED_PROTO`/`FORWARDED_PORT` derived from `PUBLIC_URL` under a selected auth option (refusing when absent); the
   edge does no token validation — re-protection is a bundle-shipped oauth2-proxy sidecar treaty; the service name `edge` is reserved.
 - Caddyfile: one site on internal `:8443`; `handle` blocks mutually exclusive (caddy sorts longest-path-first, declaration order cannot shadow); `handle_path` for `strip_prefix`; `header_up X-Forwarded-*` only on the auth route; `raw:`
   content rides verbatim (escape hatch, review flag); the whole file rides inline as `configs.content` with every `$` doubled.
 - Per-run files: lifetimes ride the caller-owned `ExitStack`, never an exception handler; the handoff execs — a successful run never unwinds, the files ride out in the OS temp dir; on failure the compose files unlink, the lock env file
-  prints and keeps; `merged_environment` is authored in `assembly.py` (assembly state, not a config derivation; a missing `.env` reads as empty so score generation runs on fresh checkouts); the lock env file materializes the
+  prints and keeps; `merged_environment` is authored in `compose.py` (assembly state, not a config derivation; a missing `.env` reads as empty so score generation runs on fresh checkouts); the lock env file materializes the
   selected-platform entries as a per-run second `--env-file`; `compose_command` = the one docker compose invocation spelling; `down` never reads the selection, never resolves an include — a name-only root + `--remove-orphans` removes
   every container the project ever created; a config-less or `services:`-less repo refuses loudly on both verbs.
 - Dev overlay under `--dev`: an assembly-defined service with a genuine dev stage gets `image: {repository}/{service}:dev` + the repo-root → `/app:ro` bind; dev-toggles pairs become `${NAME:-default}` environment holes (`.env` overrides
