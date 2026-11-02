@@ -8,7 +8,7 @@ import yaml
 from bashrun.bash import CalledProcessError, bash, bash_output
 from typer.testing import CliRunner
 
-from docker_devkit import assembly
+from docker_devkit import compose
 from docker_devkit.verbs import down, up
 from docker_devkit.config_lock import LOCK_PATH
 
@@ -225,7 +225,7 @@ class TestProfileForwarding:
     def _invoke_up(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> HandoffRecorder:
         _write_ref_tree(tmp_path)
         recorder = HandoffRecorder()
-        monkeypatch.setattr(assembly, "bash_output", _defined_profiles)
+        monkeypatch.setattr(compose, "bash_output", _defined_profiles)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
         return recorder
@@ -265,7 +265,7 @@ class TestProfileForwarding:
         (tmp_path / ".env").write_text("COMPOSE_PROFILES=tunnel-ngrok\n", encoding="utf-8")
         monkeypatch.setenv("COMPOSE_PROFILES", "tunnel-rathole")
         recorder = HandoffRecorder()
-        monkeypatch.setattr(assembly, "bash_output", _rathole_profiles)
+        monkeypatch.setattr(compose, "bash_output", _rathole_profiles)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
@@ -380,7 +380,7 @@ class TestSelectionLaw:
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
         handler = PresentProbeAndServices(*services.split()).run
-        monkeypatch.setattr(assembly, "bash_output", handler)
+        monkeypatch.setattr(compose, "bash_output", handler)
         monkeypatch.setattr(up, "bash_output", handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -422,7 +422,7 @@ class TestSelectionLaw:
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
         handler = PresentProbeAndServices("livekit", "edge").run
-        monkeypatch.setattr(assembly, "bash_output", handler)
+        monkeypatch.setattr(compose, "bash_output", handler)
         monkeypatch.setattr(up, "bash_output", handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -559,7 +559,7 @@ class TestUpMaterialization:
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
         handler = PresentProbeAndServices("api", "grafana", "edge", "livekit", "keycloak").run
-        monkeypatch.setattr(assembly, "bash_output", handler)
+        monkeypatch.setattr(compose, "bash_output", handler)
         monkeypatch.setattr(up, "bash_output", handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -601,7 +601,7 @@ class TestUpMaterialization:
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
         handler = PresentProbeAndServices("api", "grafana", "edge", "livekit").run
-        monkeypatch.setattr(assembly, "bash_output", handler)
+        monkeypatch.setattr(compose, "bash_output", handler)
         monkeypatch.setattr(up, "bash_output", handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -648,7 +648,7 @@ class TestUpValidation:
         _write_consumer_tree(tmp_path)
         monkeypatch.delenv("BUNDLES", raising=False)
         monkeypatch.setattr(up, "bash_handoff", _silent_handoff)
-        monkeypatch.setattr(assembly, "bash_output", ServicesOutput(*services.split()).run)
+        monkeypatch.setattr(compose, "bash_output", ServicesOutput(*services.split()).run)
         monkeypatch.chdir(tmp_path)
         return runner.invoke(up.app, [])
 

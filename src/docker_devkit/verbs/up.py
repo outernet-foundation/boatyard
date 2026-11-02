@@ -9,8 +9,8 @@ from typing import Annotated
 import typer
 from bashrun.bash import CalledProcessError, bash_handoff, bash_output
 
-from docker_devkit.assembly import Assembly, compose_command
 from docker_devkit.bake import run_build
+from docker_devkit.compose import compose_command, merged_environment, render, require_env_file, select
 from docker_devkit.config import DockerDevkitConfig, load_config
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
@@ -41,26 +41,30 @@ def up(
             "--build requires build declarations (repository or base_images) in docker-devkit.yaml"
         )
 
-    # Resolve, render, and validate in one construction.
+    # Select, render, and validate the invocation.
     with ExitStack() as stack:
-        assembly = Assembly(root, config, stack, dev=dev)
+        require_env_file(root)
+        environment = merged_environment(root)
+        selection = select(config, environment)
+        assert config is not None
+        invocation = render(root, config, environment, selection, stack, dev=dev)
 
         # Probe every lock entry before bring-up.
-        _probe_lock_entries(assembly.config)
+        _probe_lock_entries(config)
 
         # Build local images; --dev builds both shapes.
         if build:
-            run_build(root=assembly.root, config=assembly.config)
+            run_build(root=root, config=config)
             if dev:
-                run_build(root=assembly.root, config=assembly.config, dev=True)
+                run_build(root=root, config=config, dev=True)
 
         # Hand off to docker compose up.
         up_command = compose_command(
-            assembly.root,
-            assembly.compose_files,
-            *(argument for profile in assembly.profiles for argument in ("--profile", profile)),
+            root,
+            invocation.compose_files,
+            *(argument for profile in invocation.profiles for argument in ("--profile", profile)),
             "up",
-            lock_env_file=assembly.lock_env_file,
+            lock_env_file=invocation.lock_env_file,
         )
         if not build:
             up_command += " --pull missing"

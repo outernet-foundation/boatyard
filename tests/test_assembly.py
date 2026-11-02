@@ -6,7 +6,7 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
-from docker_devkit import assembly
+from docker_devkit import compose
 from docker_devkit.verbs import up
 from docker_devkit.config_lock import LOCK_PATH
 
@@ -84,7 +84,7 @@ def _write_edge_tree(
     monkeypatch.delenv("PUBLIC_URL", raising=False)
     monkeypatch.delenv("GATEWAY_PORT", raising=False)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(assembly, "bash_output", _probe_present_and_services)
+    monkeypatch.setattr(compose, "bash_output", _probe_present_and_services)
     monkeypatch.setattr(up, "bash_output", _probe_present_and_services)
 
 
@@ -244,9 +244,9 @@ class TestMergedEnvironment:
             "# comment\n\nBUNDLES=core-cuda,gateway-open\nGATEWAY_PORT='8443'\nRELOAD=\"true\"\nnot-an-assignment\n",
             encoding="utf-8",
         )
-        monkeypatch.setattr(assembly, "environ", {})
+        monkeypatch.setattr(compose, "environ", {})
 
-        assert assembly.merged_environment(tmp_path) == {
+        assert compose.merged_environment(tmp_path) == {
             "BUNDLES": "core-cuda,gateway-open",
             "GATEWAY_PORT": "8443",
             "RELOAD": "true",

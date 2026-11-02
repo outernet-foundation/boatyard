@@ -7,7 +7,7 @@ from typing import Annotated
 import typer
 from bashrun.bash import bash_handoff
 
-from docker_devkit.assembly import (
+from docker_devkit.compose import (
     compose_command,
     merged_environment,
     require_env_file,

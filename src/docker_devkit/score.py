@@ -39,7 +39,7 @@ from docker_devkit.config import (
 )
 from docker_devkit.config_lock import LOCK_PATH, ImageLock, parse_image_lock
 from docker_devkit.documents import BindVolume, ComposeDocument, WorkloadDocument
-from docker_devkit.assembly import merged_environment
+from docker_devkit.compose import merged_environment
 from docker_devkit.lock import compose_env_entries, env_entries
 
 # Match only ${ALL_CAPS} placeholders.
