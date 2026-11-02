@@ -14,7 +14,8 @@ import yaml
 from bashrun.bash import bash, bash_check, bash_output
 from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, model_validator
 
-from docker_devkit.config import DockerDevkitConfig, ServiceBuild, load_config, service_sha_env
+from docker_devkit.config import DockerDevkitConfig, load_config, service_sha_env
+from docker_devkit.dockerfiles import ServiceBuild
 from docker_devkit.lock import env_entries, write_lock
 
 

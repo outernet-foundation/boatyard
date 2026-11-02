@@ -6,7 +6,8 @@ import pytest
 import yaml
 
 from docker_devkit import config
-from docker_devkit.config import ServiceBuild, compute_service_shas, load_config
+from docker_devkit.config import compute_service_shas, load_config
+from docker_devkit.dockerfiles import ServiceBuild
 
 
 def write_dockerfile(tmp_path: Path, service: str, text: str, top: str = "workloads") -> None:
