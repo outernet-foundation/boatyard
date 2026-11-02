@@ -34,7 +34,7 @@ from docker_devkit.config import (
     is_list,
     is_mapping,
     parse_dev_toggles,
-    DockerDevkitConfig,
+    Config,
     chart_lock_key,
 )
 from docker_devkit.config_lock import LOCK_PATH, ImageLock, parse_image_lock
@@ -213,7 +213,7 @@ def _represent_multiline(dumper: yaml.SafeDumper, value: str) -> yaml.ScalarNode
 ComposeDumper.add_representer(str, _represent_multiline)
 
 
-def generate_artifacts(config: DockerDevkitConfig, target: Target, local: bool) -> list[Path]:
+def generate_artifacts(config: Config, target: Target, local: bool) -> list[Path]:
     # Require the build keys, export the tree tags, and load the lock.
     if not (config.repository or config.base_images):
         raise RuntimeError("repository or base_images is required in docker-devkit.yaml")
@@ -276,7 +276,7 @@ def generate_artifacts(config: DockerDevkitConfig, target: Target, local: bool) 
     return outputs
 
 
-def generate_compose(config: DockerDevkitConfig, images: dict[str, str]) -> None:
+def generate_compose(config: Config, images: dict[str, str]) -> None:
     assert config.root is not None
     root = config.root
     bundles = config.compose_bundles()
@@ -520,7 +520,7 @@ def compiled_provisioners(
         yield CompiledProvisioners(paths=paths, declares_services=declares_services)
 
 
-def generate_k8s(config: DockerDevkitConfig, k8s: K8sConfig, output_path: Path, lock: ImageLock) -> None:
+def generate_k8s(config: Config, k8s: K8sConfig, output_path: Path, lock: ImageLock) -> None:
     # Run score-k8s in the output's directory, where it writes its .score-k8s state.
     assert config.root is not None
     root = config.root
@@ -771,7 +771,7 @@ def _init_state(
 
 @contextmanager
 def _rendered_workloads(
-    config: DockerDevkitConfig,
+    config: Config,
     workloads: list[str],
     rendering_vars: dict[str, str],
     images: dict[str, str],

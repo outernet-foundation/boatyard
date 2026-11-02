@@ -14,7 +14,7 @@ import yaml
 from bashrun.bash import bash, bash_check, bash_output
 from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, model_validator
 
-from docker_devkit.config import DockerDevkitConfig
+from docker_devkit.config import Config
 from docker_devkit.dockerfiles import ServiceBuild, service_sha_env
 from docker_devkit.lock import env_entries, write_lock
 
@@ -86,14 +86,14 @@ class _DaemonConfig(BaseModel):
 def run_build(
     *,
     root: Path | None = None,
-    config: DockerDevkitConfig | None = None,
+    config: Config | None = None,
     push: str | None = None,
     targets_opt: list[str] | None = None,
     no_cache: bool = False,
     dev: bool = False,
 ) -> None:
     root = root if root is not None else Path.cwd()
-    config = config if config is not None else DockerDevkitConfig.load(root)
+    config = config if config is not None else Config.load(root)
     if config is None:
         raise RuntimeError("No docker-devkit.yaml at the repo root")
 

@@ -10,7 +10,7 @@ from typing import Annotated
 import typer
 from bashrun.bash import bash, bash_output
 
-from docker_devkit.config import DockerDevkitConfig
+from docker_devkit.config import Config
 from docker_devkit.config_lock import LOCK_PATH, parse_image_lock
 from docker_devkit.crane import install_crane
 from docker_devkit.lock import env_entries
@@ -46,7 +46,7 @@ def publish_compose(
     ] = False,
 ) -> None:
     root = Path.cwd()
-    config = DockerDevkitConfig.load(root)
+    config = Config.load(root)
     bundles = config.compose_bundles() if config is not None else []
     if config is None or not bundles:
         if plan:

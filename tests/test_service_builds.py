@@ -6,7 +6,7 @@ import pytest
 import yaml
 
 from docker_devkit import dockerfiles
-from docker_devkit.config import DockerDevkitConfig
+from docker_devkit.config import Config
 from docker_devkit.dockerfiles import ServiceBuild, compute_service_shas
 
 
@@ -21,7 +21,7 @@ def _derive(tmp_path: Path, axes: dict[str, list[str]] | None = None) -> dict[st
     if axes is not None:
         payload["variants"] = axes
     (tmp_path / "docker-devkit.yaml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-    loaded = DockerDevkitConfig.load(tmp_path)
+    loaded = Config.load(tmp_path)
     assert loaded is not None
     return loaded.service_builds
 

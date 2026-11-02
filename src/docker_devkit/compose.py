@@ -17,7 +17,7 @@ from docker_devkit.config import (
     AUTH_GROUP_NAME,
     CADDY_IMAGE,
     DEV_TOGGLES_ANNOTATION,
-    DockerDevkitConfig,
+    Config,
     EDGE_SERVICE_NAME,
     PortDeclaration,
     RouteConfig,
@@ -82,7 +82,7 @@ class LockEnvUnwind:
         return None
 
 
-def select(config: DockerDevkitConfig | None, environment: Mapping[str, str]) -> Selection:
+def select(config: Config | None, environment: Mapping[str, str]) -> Selection:
     names = _split_names(environment.get(BUNDLES_VARIABLE, ""))
     if config is None or not config.services:
         if names:
@@ -220,7 +220,7 @@ def select(config: DockerDevkitConfig | None, environment: Mapping[str, str]) ->
 
 def render(
     root: Path,
-    config: DockerDevkitConfig,
+    config: Config,
     environment: Mapping[str, str],
     selection: Selection,
     stack: ExitStack,
@@ -377,9 +377,7 @@ def compose_command(root: Path, compose_files: list[Path], *arguments: str, lock
     return " ".join([prefix, *quoted_arguments])
 
 
-def write_lock_env_file(
-    root: Path, config: DockerDevkitConfig, environment: Mapping[str, str], stack: ExitStack
-) -> Path | None:
+def write_lock_env_file(root: Path, config: Config, environment: Mapping[str, str], stack: ExitStack) -> Path | None:
     lock_path = root / LOCK_PATH
     if not lock_path.is_file():
         return None

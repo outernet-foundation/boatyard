@@ -13,7 +13,7 @@ from bashrun.bash import bash_output
 
 from docker_devkit.config import (
     CHART_REFERENCE_PREFIX,
-    DockerDevkitConfig,
+    Config,
     chart_lock_key,
     is_list,
     is_mapping,
@@ -38,7 +38,7 @@ class UpstreamManifests(NamedTuple):
 
 
 def run_lock(*, upgrade: bool = False, check: bool = False) -> None:
-    config = DockerDevkitConfig.load(Path.cwd())
+    config = Config.load(Path.cwd())
     if config is None:
         print("no docker-devkit.yaml; no lock declarations to relock")
         return
@@ -68,14 +68,14 @@ def run_lock(*, upgrade: bool = False, check: bool = False) -> None:
         raise SystemExit("image lock is stale")
 
 
-def write_lock(config: DockerDevkitConfig, *, upgrade: bool = False) -> ImageLock:
+def write_lock(config: Config, *, upgrade: bool = False) -> ImageLock:
     lock = relock(config, upgrade=upgrade)
     assert config.root is not None
     (config.root / LOCK_PATH).write_text(render_lock(lock), encoding="utf-8")
     return lock
 
 
-def relock(config: DockerDevkitConfig, *, upgrade: bool = False) -> ImageLock:
+def relock(config: Config, *, upgrade: bool = False) -> ImageLock:
     assert config.root is not None
     prefix = config.mirror_prefix
     committed = config.image_lock()
@@ -201,7 +201,7 @@ def _child_digest(child: object, subject: str) -> str:
     return digest
 
 
-def compose_env_entries(lock: ImageLock, config: DockerDevkitConfig, environment: Mapping[str, str]) -> dict[str, str]:
+def compose_env_entries(lock: ImageLock, config: Config, environment: Mapping[str, str]) -> dict[str, str]:
     selected = environment.get(PLATFORM_VARIABLE, "").strip()
     if selected:
         if selected not in config.platforms:

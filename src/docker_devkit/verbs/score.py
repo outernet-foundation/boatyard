@@ -9,7 +9,7 @@ from typing import Annotated, NamedTuple
 import typer
 from bashrun.bash import bash, bash_output
 
-from docker_devkit.config import DockerDevkitConfig, Target
+from docker_devkit.config import Config, Target
 from docker_devkit.score import generate_artifacts
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
@@ -41,7 +41,7 @@ def generate_score(
     if check and local:
         raise RuntimeError("--check and --local are mutually exclusive")
     root = Path.cwd()
-    config = DockerDevkitConfig.load(root)
+    config = Config.load(root)
     bundles = config.compose_bundles() if config is not None else []
     if config is None or (not bundles and config.k8s is None):
         if not check:

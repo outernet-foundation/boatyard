@@ -9,7 +9,7 @@ from bashrun.bash import CalledProcessError, bash, bash_output
 from pydantic import ValidationError
 
 from docker_devkit import score as score_generate_module
-from docker_devkit.config import DockerDevkitConfig
+from docker_devkit.config import Config
 from docker_devkit.config_lock import ImageLock
 from docker_devkit.documents import BindVolume, ComposeService
 from docker_devkit.score import (
@@ -21,12 +21,12 @@ from docker_devkit.score import compiled_provisioners
 DIGEST = "sha256:" + "a" * 64
 
 
-def _root_config(**sections: object) -> DockerDevkitConfig:
+def _root_config(**sections: object) -> Config:
     payload: dict[str, object] = {"requires": ">=0.1"}
     payload.update(sections)
     if "services" in payload and "gateway" not in payload:
         payload["gateway"] = "8080"
-    return DockerDevkitConfig.model_validate(payload)
+    return Config.model_validate(payload)
 
 
 def test_tool_pin_defaults_live_on_the_root_model() -> None:
@@ -118,7 +118,7 @@ class HelmRecorder:
         return HELM_RENDERED
 
 
-def _charts_config() -> DockerDevkitConfig:
+def _charts_config() -> Config:
     return _root_config(k8s={"charts": {"loki": CHART_REF}})
 
 
@@ -129,7 +129,7 @@ def _write_values(tmp_path: Path, text: str) -> None:
 
 
 def _generate_with_chart(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, config: DockerDevkitConfig, images: dict[str, str]
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, config: Config, images: dict[str, str]
 ) -> HelmRecorder:
     output = Path("stack/generated/k8s/manifests.yaml")
     k8s = K8sBashRecorder(tmp_path / output, tmp_path / "stack/generated/k8s/.score-k8s/state.yaml")
@@ -270,7 +270,7 @@ class TestMarkerSubstrateResolution:
         config.root = tmp_path
         captured: dict[str, dict[str, str]] = {}
 
-        def _capture(_config: DockerDevkitConfig, images: dict[str, str]) -> None:
+        def _capture(_config: Config, images: dict[str, str]) -> None:
             captured["images"] = images
 
         monkeypatch.setattr(score_generate_module, "generate_compose", _capture)
@@ -592,7 +592,7 @@ PROVISIONER_WITHOUT_SERVICES = """
 GATE_LOCK = {"ALPINE_IMAGE": "ghcr.io/outernet-foundation/mirror/docker.io/library/alpine:3.21.0@" + DIGEST}
 
 
-def _bundle_config(**bundle: object) -> DockerDevkitConfig:
+def _bundle_config(**bundle: object) -> Config:
     return _root_config(
         repository="ghcr.io/org/repo",
         project_name="example",
@@ -603,7 +603,7 @@ def _bundle_config(**bundle: object) -> DockerDevkitConfig:
 def _compose_init_templates(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    config: DockerDevkitConfig,
+    config: Config,
     images: dict[str, str],
     sources: dict[str, str],
     generated: str = "services: {}\n",
@@ -1126,7 +1126,7 @@ containers:
 def _skip_unless_pinned_score_compose() -> None:
     if shutil.which("score-compose") is None:
         pytest.skip("score-compose is not on PATH; the A0 pin needs the pinned binary")
-    pinned = DockerDevkitConfig.model_fields["score_compose_version"].default
+    pinned = Config.model_fields["score_compose_version"].default
     if f"score-compose {pinned} (" not in bash_output("score-compose version"):
         pytest.skip(f"score-compose on PATH is not the pinned {pinned}")
 

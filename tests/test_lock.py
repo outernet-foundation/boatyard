@@ -608,10 +608,10 @@ def _selection_lock() -> lock_module.ImageLock:
     })
 
 
-def _selection_config(**sections: object) -> config_module.DockerDevkitConfig:
+def _selection_config(**sections: object) -> config_module.Config:
     payload: dict[str, object] = {"requires": ">=0"}
     payload.update(sections)
-    return config_module.DockerDevkitConfig.model_validate(payload)
+    return config_module.Config.model_validate(payload)
 
 
 class TestEntrySelection:

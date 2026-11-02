@@ -11,7 +11,7 @@ from bashrun.bash import CalledProcessError, bash_handoff, bash_output
 
 from docker_devkit.bake import run_build
 from docker_devkit.compose import compose_command, merged_environment, render, require_env_file, select
-from docker_devkit.config import DockerDevkitConfig
+from docker_devkit.config import Config
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
@@ -33,7 +33,7 @@ def up(
     ] = False,
 ) -> None:
     root = Path.cwd()
-    config = DockerDevkitConfig.load(root)
+    config = Config.load(root)
 
     # Refuse --build in a repo with no build declarations.
     if config is not None and build and not (config.repository or config.base_images):
@@ -76,7 +76,7 @@ def up(
         bash_handoff(up_command)
 
 
-def _probe_lock_entries(config: DockerDevkitConfig) -> None:
+def _probe_lock_entries(config: Config) -> None:
     lock = config.image_lock()
     references = sorted(
         set(

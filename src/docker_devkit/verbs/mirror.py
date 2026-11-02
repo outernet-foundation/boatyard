@@ -6,7 +6,7 @@ import typer
 from bashrun.bash import bash, bash_check
 
 from docker_devkit.config import (
-    DockerDevkitConfig,
+    Config,
     chart_lock_key,
     mirrored_ref,
 )
@@ -18,7 +18,7 @@ app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 @app.command()
 def mirror() -> None:
     root = Path.cwd()
-    config = DockerDevkitConfig.load(root)
+    config = Config.load(root)
     if config is None:
         raise RuntimeError("a docker-devkit.yaml with base_images (or k8s.charts) is required to mirror")
     prefix = config.mirror_prefix

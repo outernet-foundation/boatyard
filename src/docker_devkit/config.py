@@ -75,7 +75,7 @@ DEV_TOGGLES_ANNOTATION = "outernet.internal/dev-toggles"
 Target = Literal["both", "compose", "k8s"]
 
 
-class DockerDevkitConfig(BaseModel):
+class Config(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     requires: str
@@ -100,7 +100,7 @@ class DockerDevkitConfig(BaseModel):
     root: Path | None = Field(default=None, exclude=True)
 
     @classmethod
-    def load(cls, root: Path) -> DockerDevkitConfig | None:
+    def load(cls, root: Path) -> Config | None:
         path = root / DEFAULT_CONFIG_PATH
         if not path.exists():
             return None
@@ -481,7 +481,7 @@ class ComposeBundle(NamedTuple):
     vars: dict[str, str]
 
 
-def require_compose_stack(config: DockerDevkitConfig | None) -> DockerDevkitConfig:
+def require_compose_stack(config: Config | None) -> Config:
     if config is None or not config.services:
         raise RuntimeError("docker-devkit.yaml must exist and declare services")
     return config

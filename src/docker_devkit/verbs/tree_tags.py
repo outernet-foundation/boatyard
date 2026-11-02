@@ -5,7 +5,7 @@ from typing import Annotated
 
 import typer
 
-from docker_devkit.config import DockerDevkitConfig
+from docker_devkit.config import Config
 from docker_devkit.dockerfiles import service_sha_env
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
@@ -19,7 +19,7 @@ def tree_tags(
     ] = None,
 ) -> None:
     root = Path.cwd()
-    config = DockerDevkitConfig.load(root)
+    config = Config.load(root)
     if config is None:
         raise RuntimeError("no docker-devkit.yaml at the repo root")
     vocabulary = sorted(config.service_builds)

@@ -12,7 +12,7 @@ from docker_devkit import dockerfiles as dockerfiles_module
 from docker_devkit import crane
 from docker_devkit import publish as publish_compose
 from docker_devkit.verbs import publish as publish_verb
-from docker_devkit.config import DockerDevkitConfig
+from docker_devkit.config import Config
 from docker_devkit.config_lock import LOCK_PATH
 
 REPOSITORY = "ghcr.io/outernet-foundation/lbe-toolkit"
@@ -106,7 +106,7 @@ class TestPublishGating:
         _write_config(tmp_path, {"publish-compose": {"repository": REPOSITORY}})
 
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            DockerDevkitConfig.load(tmp_path)
+            Config.load(tmp_path)
 
     def test_bundles_without_repository_refuse_at_load(self, tmp_path: Path):
         _write_config(
@@ -115,7 +115,7 @@ class TestPublishGating:
         )
 
         with pytest.raises(ValidationError, match="repository is required"):
-            DockerDevkitConfig.load(tmp_path)
+            Config.load(tmp_path)
 
 
 class TestBakeSources:

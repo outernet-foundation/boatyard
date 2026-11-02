@@ -14,7 +14,7 @@ from docker_devkit.compose import (
     write_lock_env_file,
     write_temp_compose_file,
 )
-from docker_devkit.config import DockerDevkitConfig, require_compose_stack
+from docker_devkit.config import Config, require_compose_stack
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
@@ -26,7 +26,7 @@ def down(
     root = Path.cwd()
 
     require_env_file(root)
-    config = require_compose_stack(DockerDevkitConfig.load(root))
+    config = require_compose_stack(Config.load(root))
 
     # Tear down by project name, covering every selection and profile.
     with ExitStack() as stack:
