@@ -129,14 +129,21 @@ audited smell.
 
 ### D4 — Error-channel law
 
-Status: OPEN.
-
-`SystemExit` vs `RuntimeError` is unmotivated noise. Candidate law: a
-typed refusal exception raised by the library, caught at the verb boundary
-→ one-line message + exit 1. Open sub-questions: does every library
-refusal convert (config.py's pydantic ValueErrors too — repo-wide), and do
-message texts stay byte-identical? Lean: typed exception everywhere,
-message texts unchanged.
+Ruling: bare `ValueError` everywhere. Every authored-input failure is
+ValueError-family — the stdlib semantics of "a pure function says nope,
+not what I take" (and `pydantic.ValidationError` already subclasses it).
+All explicit `SystemExit`/`RuntimeError` raise sites in library code
+become `raise ValueError(...)` with byte-identical message texts; the
+`validate()` wrapper (#8) converts `ValidationError` and `yaml.YAMLError`
+at read boundaries into source-prefixed `ValueError` so malformed YAML
+gets the same clean channel; the verb boundary catches `ValueError` →
+one-line stderr + exit 1. `typer.BadParameter` keeps the CLI-flag layer
+(`--target k8s` with no k8s section). Bug-class exceptions keep
+tracebacks; the boundary cannot distinguish a stray bug-raised
+`ValueError` from an input one — accepted tradeoff. Tests retarget their
+`pytest.raises` spellings mechanically; AGENTS.md refusal lines re-anchor
+in the same commits. A named `ValueError` subclass was considered and
+declined.
 
 ### D5 — Strictness at the lens edge
 
