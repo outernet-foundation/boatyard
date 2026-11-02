@@ -229,29 +229,22 @@ def compose_env_entries(lock: ImageLock, config: DockerDevkitConfig, environment
 def env_entries(lock: ImageLock, platform: str | None = None) -> dict[str, str]:
     # The env projection of the lock through the one selector: the flat NAME=reference
     # vocabulary compose and bake consume — images answer by the selected form (platform
-    # manifest when a platform is given, the index otherwise), charts flat.
-    return {**{name: entry_for(lock, name, platform) for name in lock.images}, **lock.charts}
-
-
-def entry_for(lock: ImageLock, name: str, platform: str | None = None) -> str:
-    # The one selector over the structured lock: None names the index (the build edge,
-    # where buildx resolves a multi-arch index per target platform), a platform names its
-    # concrete platform manifest (the compose edge). Charts are arch-neutral and answer
-    # flat under both forms.
-    if name in lock.images:
-        entry = lock.images[name]
+    # manifest when a platform is given, the index otherwise), charts flat. None names
+    # the index (the build edge, where buildx resolves a multi-arch index per target
+    # platform); a platform an entry does not record refuses loudly naming the rewrite.
+    images: dict[str, str] = {}
+    for name, entry in lock.images.items():
         if platform is None:
-            return entry.index
+            images[name] = entry.index
+            continue
         recorded = entry.platforms.get(platform)
         if recorded is None:
             raise RuntimeError(
                 f"{LOCK_PATH.as_posix()}: image entry {name} records no {platform} platform manifest; "
                 f"recorded platforms: {sorted(entry.platforms) or 'none'} — run lock to re-resolve"
             )
-        return recorded
-    if name in lock.charts:
-        return lock.charts[name]
-    raise RuntimeError(f"{LOCK_PATH.as_posix()}: lacks the {name} entry (the lock verb writes it)")
+        images[name] = recorded
+    return {**images, **lock.charts}
 
 
 def render_env_entries(entries: Mapping[str, str]) -> str:

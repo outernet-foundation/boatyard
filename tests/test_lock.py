@@ -681,30 +681,12 @@ def _selection_config(**sections: object) -> config_module.DockerDevkitConfig:
 
 
 class TestEntrySelection:
-    def test_entry_for_answers_the_index_without_a_platform(self) -> None:
-        selected = lock_module.entry_for(_selection_lock(), "LOKI_IMAGE")
-
-        assert selected.endswith(f"loki:3.5.0@{DIGEST_A}")
-
-    def test_entry_for_answers_the_platform_manifest_for_a_named_platform(self) -> None:
-        selected = lock_module.entry_for(_selection_lock(), "LOKI_IMAGE", "linux/arm64")
-
-        assert selected.endswith(f"loki:3.5.0@{DIGEST_C}")
-
-    def test_entry_for_answers_charts_flat_under_both_forms(self) -> None:
-        lock = _selection_lock()
-
-        assert lock_module.entry_for(lock, "GRAFANA_CHART") == lock_module.entry_for(
-            lock, "GRAFANA_CHART", "linux/amd64"
-        )
-
-    def test_entry_for_refuses_a_platform_the_entry_never_recorded(self) -> None:
+    def test_the_projection_refuses_a_platform_an_entry_never_recorded(self) -> None:
         with pytest.raises(RuntimeError, match=r"LOKI_IMAGE records no linux/ppc64le platform manifest.*run lock"):
-            lock_module.entry_for(_selection_lock(), "LOKI_IMAGE", "linux/ppc64le")
+            lock_module.env_entries(_selection_lock(), "linux/ppc64le")
 
-    def test_entry_for_refuses_unknown_names(self) -> None:
-        with pytest.raises(RuntimeError, match="lacks the GHOST_IMAGE entry"):
-            lock_module.entry_for(_selection_lock(), "GHOST_IMAGE")
+    def test_the_projection_carries_no_entry_for_unknown_names(self) -> None:
+        assert "GHOST_IMAGE" not in lock_module.env_entries(_selection_lock())
 
 
 class TestEnvProjection:

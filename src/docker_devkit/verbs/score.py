@@ -10,7 +10,7 @@ import typer
 from bashrun.bash import bash, bash_output
 
 from docker_devkit.config import Target, load_config
-from docker_devkit.score import SECRETS_FILE, SECRETS_OUTPUT, ensure_score_tools, generate_artifacts
+from docker_devkit.score import SECRETS_FILE, SECRETS_OUTPUT, generate_artifacts
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
@@ -53,11 +53,16 @@ def generate_score(
 
     if check:
         # Fetch the pinned tools rather than trusting whatever PATH holds, so the gate always
-        # regenerates with the exact versions the consumer pinned.
+        # regenerates with the exact versions the consumer pinned. Release binaries rather
+        # than go install, since score-spec tags are not valid Go module versions.
         with TemporaryDirectory(prefix="score-tools-") as temporary_directory:
             bin_dir = Path(temporary_directory) / "bin"
             bin_dir.mkdir()
-            ensure_score_tools(config, bin_dir, target)
+            for requirement in config.tool_requirements(target):
+                archive = Path(requirement.archive).name
+                bash(f"curl -fsSLO {requirement.archive}")
+                bash(f"tar -xzf {archive} -C {bin_dir} {requirement.extract}")
+                Path(archive).unlink()
             os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
             generate_artifacts(config, target, False)
             outputs = [bundle.output for bundle in bundles]

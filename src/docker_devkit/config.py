@@ -519,14 +519,6 @@ class DockerDevkitConfig(BaseModel):
             for route in entry_routes
         ]
 
-    def _any_local_entries(self) -> bool:
-        return any(
-            not option.remote
-            for entry in self.services.values()
-            if isinstance(entry, ServiceGroup)
-            for option in entry.options.values()
-        ) or any(not entry.remote for entry in self.services.values() if not isinstance(entry, ServiceGroup))
-
     @field_validator("requires")
     @classmethod
     def _validate_requires(cls, value: str) -> str:
@@ -693,7 +685,15 @@ class DockerDevkitConfig(BaseModel):
         if self.services:
             if not self.project_name:
                 raise ValueError("services are declared; project_name is required (the compose project name)")
-            if self._any_local_entries() and not self.repository:
+            any_local = False
+            for entry in self.services.values():
+                if isinstance(entry, ServiceGroup):
+                    for option in entry.options.values():
+                        if not option.remote:
+                            any_local = True
+                elif not entry.remote:
+                    any_local = True
+            if any_local and not self.repository:
                 raise ValueError(
                     "local entries (workloads:) are declared; repository is required — published artifacts "
                     "derive their names from it"
@@ -727,7 +727,59 @@ class DockerDevkitConfig(BaseModel):
                 "Move the file (git mv)."
             )
 
-        self.base_images = _resolve_base_image_templates(root, self.base_images)
+        # Toolchain components in base_images derive by construction: {uv} from
+        # tool.uv.required-version, {python} from .python-version. Plain values stay
+        # plain — a literal in place of a template is the deliberate-skew escape hatch,
+        # visible in every diff.
+        pins: dict[str, str] = {}
+        used = sorted({key for reference in self.base_images.values() for key in TEMPLATE_KEY_PATTERN.findall(reference)})
+        for key in used:
+            if key == "uv":
+                pyproject = root / PYPROJECT_PATH
+                tool_document: dict[str, object] = (
+                    tomllib.loads(pyproject.read_text(encoding="utf-8")) if pyproject.is_file() else {}
+                )
+                tool_table: object = tool_document.get("tool")
+                uv_table: object = tool_table.get("uv") if is_mapping(tool_table) else None
+                declared: object = uv_table.get("required-version") if is_mapping(uv_table) else None
+                if not isinstance(declared, str) or not declared:
+                    raise RuntimeError(
+                        f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version is not declared; "
+                        "a {uv} template resolves from that exact pin"
+                    )
+                pin_match = UV_EXACT_PIN_PATTERN.fullmatch(declared.strip())
+                if pin_match is None:
+                    raise RuntimeError(
+                        f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version {declared!r} is a range, "
+                        "not an exact pin; a {uv} template resolves only from an exact == pin like '==0.12.15'"
+                    )
+                pins[key] = pin_match.group("version")
+            elif key == "python":
+                python_version = root / PYTHON_VERSION_PATH
+                if not python_version.is_file():
+                    raise RuntimeError(
+                        f"{PYTHON_VERSION_PATH.as_posix()}: the file is absent; "
+                        "a {python} template resolves from its declared version"
+                    )
+                # uv reads the first line as the default selection when several are listed.
+                version = next(
+                    (line.strip() for line in python_version.read_text(encoding="utf-8").splitlines() if line.strip()),
+                    "",
+                )
+                if not version:
+                    raise RuntimeError(
+                        f"{PYTHON_VERSION_PATH.as_posix()}: the file is empty; "
+                        "a {python} template resolves from its declared version"
+                    )
+                pins[key] = version
+            else:
+                raise RuntimeError(
+                    f"base_images template key {{{key}}} is unknown; the toolchain pins are {{uv}}, {{python}}"
+                )
+        self.base_images = {
+            name: TEMPLATE_KEY_PATTERN.sub(lambda match: pins[match.group(1)], reference)
+            for name, reference in self.base_images.items()
+        }
 
         service_builds = derive_services(root, self.variants)
         if service_builds and self.repository is None:
@@ -794,65 +846,6 @@ def is_mapping(value: object) -> TypeIs[dict[str, object]]:
 
 def is_list(value: object) -> TypeIs[list[object]]:
     return isinstance(value, list)
-
-
-def _resolve_base_image_templates(root: Path, base_images: dict[str, str]) -> dict[str, str]:
-    # Toolchain components in base_images derive by construction: {uv} from
-    # tool.uv.required-version, {python} from .python-version. Plain values stay plain —
-    # a literal in place of a template is the deliberate-skew escape hatch, visible in
-    # every diff.
-    pins: dict[str, str] = {}
-    used = sorted({key for reference in base_images.values() for key in TEMPLATE_KEY_PATTERN.findall(reference)})
-    for key in used:
-        if key == "uv":
-            pins[key] = _uv_version_pin(root)
-        elif key == "python":
-            pins[key] = _python_version_pin(root)
-        else:
-            raise RuntimeError(
-                f"base_images template key {{{key}}} is unknown; the toolchain pins are {{uv}}, {{python}}"
-            )
-    return {
-        name: TEMPLATE_KEY_PATTERN.sub(lambda match: pins[match.group(1)], reference)
-        for name, reference in base_images.items()
-    }
-
-
-def _uv_version_pin(root: Path) -> str:
-    path = root / PYPROJECT_PATH
-    document: dict[str, object] = tomllib.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
-    tool_table: object = document.get("tool")
-    uv_table: object = tool_table.get("uv") if is_mapping(tool_table) else None
-    declared: object = uv_table.get("required-version") if is_mapping(uv_table) else None
-    if not isinstance(declared, str) or not declared:
-        raise RuntimeError(
-            f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version is not declared; "
-            "a {uv} template resolves from that exact pin"
-        )
-    match = UV_EXACT_PIN_PATTERN.fullmatch(declared.strip())
-    if match is None:
-        raise RuntimeError(
-            f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version {declared!r} is a range, not an exact pin; "
-            "a {uv} template resolves only from an exact == pin like '==0.12.15'"
-        )
-    return match.group("version")
-
-
-def _python_version_pin(root: Path) -> str:
-    path = root / PYTHON_VERSION_PATH
-    if not path.is_file():
-        raise RuntimeError(
-            f"{PYTHON_VERSION_PATH.as_posix()}: the file is absent; "
-            "a {python} template resolves from its declared version"
-        )
-    # uv reads the first line as the default selection when several are listed.
-    version = next((line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()), "")
-    if not version:
-        raise RuntimeError(
-            f"{PYTHON_VERSION_PATH.as_posix()}: the file is empty; "
-            "a {python} template resolves from its declared version"
-        )
-    return version
 
 
 class ImageLockEntry(BaseModel):
