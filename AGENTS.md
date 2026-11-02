@@ -139,9 +139,9 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 - The pinned tools must be on `PATH` at the exact pinned versions — generation refuses loudly listing them; the verb owns the pinned-tool fetch into a per-run temp bin prepended to `PATH`.
 - `--check` = the CI staleness gate: self-skips (exit 0) where nothing generates; otherwise regenerates in-process, and any `git status` change over the written outputs exits 1 printing the diff; `--check` + `--local` are mutually
   exclusive.
-- Post-passes on compose output: service-name collapse (`{workload}-{container}` → workload, collision loud); per-entry gate rename `wait-for-resources` → `wait-for-resources-{entry}` with `depends_on` following (collision loud —
-  compose merges same-name services across includes silently); the edge-reserved check; bind inlining — every `type: bind` volume becomes a top-level `configs.content` entry, zero host-filesystem references in committed artifacts (the
-  `$`-doubling law's single exception: `outernet.internal/consumer-interpolated` files).
+- Post-passes on compose output are typed transformations on `ComposeDocument`, dumped exactly once — pydantic's declared-fields-first order is the artifacts' deterministic key order: service-name collapse
+  (`{workload}-{container}` → workload, collision loud); per-entry gate rename `wait-for-resources` → `wait-for-resources-{entry}` with `depends_on` following (collision loud — compose merges same-name services
+  across includes silently); the edge-reserved check; bind inlining — every `type: bind` volume becomes a top-level `configs.content` entry, zero host-filesystem references in committed artifacts (the `$`-doubling law's single exception: `outernet.internal/consumer-interpolated` files).
 - The image lock is required and non-empty; a gate-forming run additionally requires `ALPINE_IMAGE`.
 - `$`-doubling law, stated once: a literal `$` doubles whenever file text rides inside a compose document (edge Caddyfile, publish's file-sourced configs, score's bind inlining); text outside a compose document (k8s-side inclusion, k8s
   manifests) never doubles.
