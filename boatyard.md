@@ -36,8 +36,11 @@ The four refactors riding the rename:
    `optional_value_option.py`, a private-API seam into typer's vendored click — delete the
    whole module. Replacement: `--push` (bool, push to the config's `repository`) and
    `--push-to <addr>` (push to that registry), mutually exclusive, public typer API only.
-4. **Single app.** One `typer.Typer()` in a new `src/boatyard/cli.py`; each verb module
-   exports a plain function (no per-module `app` object, no decorators); `[project.scripts]`
+4. **Single entry, typer's one-file-per-command shape.** Each verb module owns a local
+   bare `app = typer.Typer()` with `@app.command()` on its function; `src/boatyard/cli.py`
+   composes them namelessly — `app.add_typer(<verb>_app)` keeps every verb a flat
+   top-level command (a named `add_typer` would nest a group; importing the central app
+   into verbs is a cycle and appears nowhere in typer's docs); `[project.scripts]`
    collapses to `boatyard = "boatyard.cli:app"` (the `:app` typer law).
 
 Clean break: no backward-compat shims for the old bare-command console scripts. Naming
@@ -105,17 +108,16 @@ their own prose commits, never mixed with code (see "Commit discipline").
 ### 1.3 Single app + flag defaults
 
 - New `src/boatyard/cli.py`: bare `app = typer.Typer()` (no kwargs — completion on, locals
-  on), importing each verb function from `boatyard.verbs.*` and registering
-  `app.command()(up)` etc. Typer's default name-mangling keeps command names:
-  `publish_compose` → `publish-compose`, `tree_tags` → `tree-tags`,
-  `docker_build_matrix` → `docker-build-matrix`.
-- Each verb module: delete its `app = typer.Typer(add_completion=False,
-  pretty_exceptions_show_locals=False)` line and its `@app.command()` decorator; the module
-  exports the plain function (Annotated signatures unchanged).
-- Tests currently import the per-verb apps (e.g. `from docker_devkit.verbs.tree_tags import
-  app, tree_tags`; `from docker_devkit.verbs import down, up`). Retarget every
-  `runner.invoke(<verb>.app, args)` to `runner.invoke(app, ["<verb>", *args])` against
-  `boatyard.cli`'s single app.
+   on), importing each verb module's local app and composing namelessly:
+   `app.add_typer(up_app)` etc. Nameless composition keeps every verb a flat top-level
+   command; typer's default name-mangling keeps command names: `publish_compose` →
+   `publish-compose`, `tree_tags` → `tree-tags`, `docker_build_matrix` →
+   `docker-build-matrix`.
+- Each verb module: its `app = typer.Typer(add_completion=False,
+   pretty_exceptions_show_locals=False)` becomes bare `typer.Typer()`; `@app.command()`
+   stays on the function (Annotated signatures unchanged).
+- Tests import the single app from `boatyard.cli` and invoke
+   `runner.invoke(app, ["<verb>", *args])`.
 
 ### 1.4 `--push` split
 
