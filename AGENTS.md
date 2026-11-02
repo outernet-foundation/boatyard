@@ -33,8 +33,9 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 `config.py` schema + load; `dockerfiles.py` Dockerfile declarations + sha machinery (`ServiceBuild`, `derive_services`); `config_lock.py` lock schema + parsers; `lock.py` lock engine + projections; `compose.py` compose invocation
   (`select`/`render` + kit); `bake.py` build pipeline; `score.py` score generation;
   `publish.py` publish preparation; `crane.py` pinned crane installer; `optional_value_option.py` typer `--push` seam (`# noqa-wrapper:` boundary); `verbs/*` one module per command. Model modules run root → leaves: root record first
-  (`RootModel` subscripts quote forward refs; the one inversion is a parent whose field default constructs the child), functions callers-before-callees; imports absolute; `config_lock`/`dockerfiles` ← `config` one-way. Also in `config.py`: `is_mapping`/`is_list`,
-  `EDGE_SERVICE_NAME`, `chart_lock_key`. Lifecycle stays a separate package from codegen (disjoint dependency surfaces — bundling would force stack-only consumers to install `sqlacodegen`, `psycopg`, `datamodel-code-generator`).
+  (`RootModel` subscripts quote forward refs; the one inversion is a parent whose field default constructs the child), functions callers-before-callees; imports absolute; `config_lock`/`dockerfiles` ← `config` one-way. Also in `config.py` (the shared leaf): `Yaml`,
+  `is_mapping`/`is_list`, `double_dollars` (the one `$`-doubling home), `PLACEHOLDER`/`COMPOSE_HOLE`/`ENV_NAME_PATTERN`, `EDGE_SERVICE_NAME`, `chart_lock_key`. Lifecycle stays a separate package from codegen (disjoint dependency surfaces — bundling would force
+  stack-only consumers to install `sqlacodegen`, `psycopg`, `datamodel-code-generator`).
 
 ## Config schema
 
@@ -192,8 +193,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 This file's only reader is a coding agent. It is an operations manual, not an architecture description — the code is the source of truth for mechanism, and this file carries only what an agent would otherwise get wrong.
 
 - Budget: 200 lines and 26KB, both hard — an addition crossing either cap cuts something else here in the same change; admit a line only if removing it would cause an agent to make a mistake it otherwise wouldn't.
-- One law, one home. Search this file before adding a statement; if the law already exists, update it in place — never state it a second time.
-- The module map carries one line per module and no laws. Laws live in sections named for the concern.
+- One law, one home: search this file before adding a statement; if the law already exists, update it in place — never state it a second time. The module map carries one line per module and no laws; laws live in sections named for the concern.
 - Identifiers, flags, file paths, and refusal phrasings stay exact — they are what agents grep.
 - A code change that invalidates a line here is a doc change in the same commit.
 - A fact verifiable only against another repo or a CI workflow is written as a pointer to that owner, never restated as a fact here.
