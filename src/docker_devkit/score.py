@@ -176,10 +176,8 @@ def compiled_provisioners(
         paths: list[Path] = []
         declares_services = False
         for name in names:
-            document = resolve_lock_refs(
-                resolve_includes(yaml.safe_load((score_dir / name).read_text(encoding="utf-8")), root, name),
-                images,
-                name,
+            document = resolve_markers(
+                yaml.safe_load((score_dir / name).read_text(encoding="utf-8")), root, images, name
             )
             if not is_list(document):
                 continue
@@ -220,12 +218,32 @@ def contains_marker(node: Yaml) -> bool:
     return False
 
 
-def resolve_includes(node: Yaml, root: Path, source: str, ancestors: tuple[Path, ...] = ()) -> Yaml:
-    entry = _marker_entry(node, INCLUDE_MARKERS)
+def resolve_markers(
+    node: Yaml, root: Path, images: dict[str, str], source: str, ancestors: tuple[Path, ...] = ()
+) -> Yaml:
+    entry = _marker_entry(node, MARKERS)
     if entry is not None:
-        key, value = entry
+        marker, value = entry
+        return _resolve_marker(marker, value, root, images, source, ancestors)
+
+    if is_mapping(node):
+        image = node.get(IMAGE_FIELD)
+        if isinstance(image, str) and IMAGE_HOLE_PATTERN.search(image) is None:
+            raise ValueError(f"{source}: image {image!r} must consume the lock (lock: NAME / lock-image: NAME)")
+        return {key: resolve_markers(value, root, images, source, ancestors) for key, value in node.items()}
+
+    if is_list(node):
+        return [resolve_markers(item, root, images, source, ancestors) for item in node]
+
+    return node
+
+
+def _resolve_marker(
+    marker: str, value: Yaml, root: Path, images: dict[str, str], source: str, ancestors: tuple[Path, ...]
+) -> Yaml:
+    if marker in INCLUDE_MARKERS:
         if not isinstance(value, str):
-            raise ValueError(f"{source}: {key} takes a repo-root-relative path string, not {type(value).__name__}")
+            raise ValueError(f"{source}: {marker} takes a repo-root-relative path string, not {type(value).__name__}")
         relative = Path(value)
         if relative.is_absolute() or ".." in relative.parts:
             raise ValueError(f"{source}: include path {value!r} must anchor at the repo root")
@@ -235,7 +253,7 @@ def resolve_includes(node: Yaml, root: Path, source: str, ancestors: tuple[Path,
         if not path.is_file():
             raise ValueError(f"{source}: include {value!r} does not exist at the repo root")
         text = path.read_text(encoding="utf-8")
-        if key == TEXT_MARKER:
+        if marker == TEXT_MARKER:
             return text
         try:
             parsed = yaml.safe_load(text)
@@ -243,73 +261,49 @@ def resolve_includes(node: Yaml, root: Path, source: str, ancestors: tuple[Path,
             raise ValueError(f"{source}: include {value!r} is not valid YAML: {error}") from error
         if parsed is None:
             raise ValueError(f"{source}: include {value!r} is empty")
-        return resolve_includes(parsed, root, source, (*ancestors, path))
+        return resolve_markers(parsed, root, images, source, (*ancestors, path))
 
-    if is_mapping(node):
-        return {key: resolve_includes(value, root, source, ancestors) for key, value in node.items()}
+    if marker == LOCK_MARKER:
+        if not isinstance(value, str):
+            raise ValueError(f"{source}: lock takes a lock-entry name string, not {type(value).__name__}")
+        if value not in images:
+            raise ValueError(f"{source}: lock entry {value!r} does not exist in the image lock")
+        return images[value]
 
-    if is_list(node):
-        return [resolve_includes(item, root, source, ancestors) for item in node]
+    if isinstance(value, str):
+        image_spec = LockImageSpec(key=value)
+    elif is_mapping(value):
+        image_spec = LockImageSpec.model_validate(value)
+    else:
+        raise ValueError(
+            f"{source}: lock-image takes a lock-entry name or a key/digest_field mapping, not {type(value).__name__}"
+        )
+    if image_spec.key not in images:
+        raise ValueError(f"{source}: lock entry {image_spec.key!r} does not exist in the image lock")
+    reference = images[image_spec.key]
+    path_part, _, digest = reference.rpartition("@")
 
-    return node
+    tagged = path_part.rpartition(":")
+    if tagged[1] and "/" not in tagged[2]:
+        registry_part, tag = tagged[0], tagged[2]
+    else:
+        registry_part, tag = path_part, None
 
+    fields: dict[str, Yaml] = {}
+    registry, separator, repository = registry_part.rpartition("/")
+    if not separator or not registry or not repository:
+        raise ValueError(f"{source}: lock reference {reference!r} has no registry/repository split")
+    fields["registry"] = registry
+    fields["repository"] = repository
+    if tag is not None:
+        fields["tag"] = tag
 
-def resolve_lock_refs(node: Yaml, images: dict[str, str], source: str) -> Yaml:
-    entry = _marker_entry(node, LOCK_MARKERS)
-    if entry is not None:
-        marker, value = entry
-        if marker == LOCK_MARKER:
-            if not isinstance(value, str):
-                raise ValueError(f"{source}: lock takes a lock-entry name string, not {type(value).__name__}")
-            if value not in images:
-                raise ValueError(f"{source}: lock entry {value!r} does not exist in the image lock")
-            return images[value]
-
-        if isinstance(value, str):
-            image_spec = LockImageSpec(key=value)
-        elif is_mapping(value):
-            image_spec = LockImageSpec.model_validate(value)
-        else:
-            raise ValueError(
-                f"{source}: lock-image takes a lock-entry name or a key/digest_field mapping, not {type(value).__name__}"
-            )
-        if image_spec.key not in images:
-            raise ValueError(f"{source}: lock entry {image_spec.key!r} does not exist in the image lock")
-        reference = images[image_spec.key]
-        path_part, _, digest = reference.rpartition("@")
-
-        tagged = path_part.rpartition(":")
-        if tagged[1] and "/" not in tagged[2]:
-            registry_part, tag = tagged[0], tagged[2]
-        else:
-            registry_part, tag = path_part, None
-
-        fields: dict[str, Yaml] = {}
-        registry, separator, repository = registry_part.rpartition("/")
-        if not separator or not registry or not repository:
-            raise ValueError(f"{source}: lock reference {reference!r} has no registry/repository split")
-        fields["registry"] = registry
-        fields["repository"] = repository
-        if tag is not None:
-            fields["tag"] = tag
-
-        if image_spec.digest_field == "sha":
-            # Spell the digest bare.
-            fields["sha"] = digest.removeprefix("sha256:")
-        else:
-            fields["digest"] = digest
-        return fields
-
-    if is_mapping(node):
-        image = node.get(IMAGE_FIELD)
-        if isinstance(image, str) and IMAGE_HOLE_PATTERN.search(image) is None:
-            raise ValueError(f"{source}: image {image!r} must consume the lock (lock: NAME / lock-image: NAME)")
-        return {key: resolve_lock_refs(value, images, source) for key, value in node.items()}
-
-    if is_list(node):
-        return [resolve_lock_refs(item, images, source) for item in node]
-
-    return node
+    if image_spec.digest_field == "sha":
+        # Spell the digest bare.
+        fields["sha"] = digest.removeprefix("sha256:")
+    else:
+        fields["digest"] = digest
+    return fields
 
 
 def _marker_entry(node: Yaml, markers: tuple[str, ...]) -> tuple[str, Yaml] | None:

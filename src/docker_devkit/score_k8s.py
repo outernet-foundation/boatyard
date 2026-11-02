@@ -33,8 +33,7 @@ from docker_devkit.score import (
     dump_compose,
     load_yaml_file,
     rendered_workloads,
-    resolve_includes,
-    resolve_lock_refs,
+    resolve_markers,
     split_documents,
     write_generated_file,
 )
@@ -130,9 +129,7 @@ def generate_k8s(
                 if not contains_marker(document):
                     values_arguments.append(path.as_posix())
                 else:
-                    resolved = resolve_lock_refs(
-                        resolve_includes(document, root, path.as_posix()), images, path.as_posix()
-                    )
+                    resolved = resolve_markers(document, root, images, path.as_posix())
                     target = values_dir / path.relative_to(root)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     write_generated_file(target, dump_compose(resolved))
