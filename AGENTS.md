@@ -95,8 +95,8 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 ## Compose assembly and BUNDLES=
 
 - Selection law: `BUNDLES=` names options only (a bare entry's name refuses as unselectable); ≤ one option per group; zero options legal exactly when riders or routes carry the assembly (omitting the auth pick = the anonymous edge); an
-  options-only repo with an empty selection refuses; unknown names refuse listing the vocabulary; `select()` owns the law. `COMPOSE_PROFILES`: shell-env-over-`.env`, comma-split, deduped, forwarded as explicit `--profile`
-  flags; unknown profiles refuse before probe and build. Membership law: everything about the docker compose invocation — selection, rendering, invocation spelling, staged inputs — lives in `compose.py`; nothing else lands there.
+  options-only repo with an empty selection refuses; unknown names refuse listing the vocabulary; the `up` verb owns the entry gate — no config or no `services:` refuses, a set `BUNDLES=` refuses first; `select()` owns the selection laws. `COMPOSE_PROFILES`: shell-env-over-`.env`, comma-split,
+  deduped, forwarded as explicit `--profile` flags; unknown profiles refuse before probe and build. Membership law: everything about the docker compose invocation — selection, rendering, invocation spelling, staged inputs — lives in `compose.py`; nothing else lands there.
 - The materialized root carries the project `name:`, the `include:` list (remote refs verbatim, local outputs by absolute path, in `services:` declaration order), the emitted edge (iff any route rides), parent-file port stanzas; compose
   merges parent ports into included services and honors `!reset` — the merge needs compose ≥ 2.40 (2.24–2.39 answer `conflicts with imported resource`; a test pins this).
 - Validation teeth, in `render()`: with routes or ports, `docker compose config --services` must list every route upstream + every port's owning service; selected profiles must appear in `config --profiles`; a selected
