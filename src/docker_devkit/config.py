@@ -440,17 +440,10 @@ class DockerDevkitConfig(BaseModel):
         assert self.root is not None
         return self.root / self.score_dir
 
-    def bundle_output(self, name: str) -> Path:
-        assert self.root is not None
-        return self.root / "stack/generated/compose" / f"compose.{name}.yaml"
-
-    def chart_values_path(self, chart: str) -> Path:
-        assert self.root is not None
-        return self.root / self.score_dir / "k8s" / "values" / f"{chart}.yaml"
-
     def compose_bundles(self) -> list[ComposeBundle]:
         # The local renderables: every workload-bearing option and bare entry, in declaration
         # order. Remote refs never render here; consumers include them by digest.
+        assert self.root is not None
         bundles: list[ComposeBundle] = []
         for name, entry in self.services.items():
             if isinstance(entry, ServiceGroup):
@@ -459,11 +452,21 @@ class DockerDevkitConfig(BaseModel):
                         continue
                     bundles.append(
                         ComposeBundle(
-                            option_name, self.bundle_output(option_name), list(option.workloads), dict(option.vars)
+                            option_name,
+                            self.root / "stack/generated/compose" / f"compose.{option_name}.yaml",
+                            list(option.workloads),
+                            dict(option.vars),
                         )
                     )
             elif not entry.remote:
-                bundles.append(ComposeBundle(name, self.bundle_output(name), list(entry.workloads), dict(entry.vars)))
+                bundles.append(
+                    ComposeBundle(
+                        name,
+                        self.root / "stack/generated/compose" / f"compose.{name}.yaml",
+                        list(entry.workloads),
+                        dict(entry.vars),
+                    )
+                )
         return bundles
 
     def tool_requirements(self, target: Target) -> list[ToolRequirement]:

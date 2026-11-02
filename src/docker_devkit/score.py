@@ -640,7 +640,7 @@ def generate_k8s(config: DockerDevkitConfig, k8s: K8sConfig, output_path: Path, 
                 entry = lock.require(key, f"chart {chart_name!r}")
                 # Pass a marker-free values file through untouched; resolve markers into a tempdir copy.
                 values_arguments: list[str] = []
-                path = config.chart_values_path(chart_name)
+                path = root / config.score_dir / "k8s" / "values" / f"{chart_name}.yaml"
                 document = yaml.safe_load(path.read_text(encoding="utf-8"))
                 if not contains_marker(document):
                     values_arguments.append(path.as_posix())

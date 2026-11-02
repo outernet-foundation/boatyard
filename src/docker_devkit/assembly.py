@@ -137,7 +137,7 @@ class Assembly:
             if entry.ref is not None:
                 self.includes.append(entry.ref)
                 continue
-            output = config.bundle_output(name)
+            output = root / "stack/generated/compose" / f"compose.{name}.yaml"
             if not output.is_file():
                 raise RuntimeError(
                     f"selected entry {name!r} has no bundle output {output.as_posix()}; generate-score writes it"
