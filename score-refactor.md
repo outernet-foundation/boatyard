@@ -1,9 +1,8 @@
 # score.py refactor (decision session)
-
-The 2026-11-02 audit session found score.py carrying five unrelated concerns
-in one 828-line module. This file records the audit, the obviously-correct
-change set, and the decision points D1–D7. This session locks the decisions;
-the next session implements this file and does not redecide.
+The 2026-11-02 audit session found score.py carrying five unrelated
+concerns in one 828-line module. This file records the audit, the
+obviously-correct change set, and the locked decisions D1–D7. The next
+session implements this file and does not redecide.
 
 ## Standing constraints
 
@@ -40,9 +39,12 @@ the next session implements this file and does not redecide.
 - The `$`-doubling configs-inliner is implemented three times
   (compose.py edge Caddyfile, publish.py file-sourced configs, score.py
   bind inlining); only the score copy has basename-collision teeth.
-- documents.py is a halfway lens: `WorkloadDocument` exposes one property,
-  so every nontrivial consumer drops to raw `Any` dicts; the
-  `consumer-interpolated` target-path invariant lives in the reader's head.
+- The workload/compose lenses were a halfway lens (documents.py, since
+  dissolved by parallel work: `WorkloadDocument` → config.py, compose
+  lenses → score.py): `WorkloadDocument` exposes one property, so every
+  nontrivial consumer drops to raw `Any` dicts; the
+  `consumer-interpolated` target-path invariant lives in the reader's
+  head.
 - Refusal taxonomy chaos: `SystemExit` vs `RuntimeError` with no law, mixed
   within one bundle loop.
 - Two YAML dump spellings (`dump_compose` width 1M vs `yaml.safe_dump`
@@ -54,19 +56,29 @@ the next session implements this file and does not redecide.
 
 ## The obviously-correct set
 
-1. Split score.py along the tested seams: `provisioners.py` (markers +
-   compiler + `AuthoredProvisioner`/`LockImageSpec`), `secrets.py`, a YAML
-   layer module (D7 names it), score.py keeps both rendering pipelines.
+1. No new modules (D7): score.py stays one file — markers, provisioner
+   compiler, secrets, compose lenses, both rendering pipelines, the
+   template registry, and the D3 seeding all remain in it. config.py
+   gains only the two cycle-forced primitives (below).
 2. Delete the dead state.yaml writes and the path-reduction pass (D3 may
    delete the read too).
-3. One YAML layer: a recursive `type Yaml` alias replaces `Any`/`object` in
-   every tree walker; one dump spelling; `is_mapping`/`is_list` generalize
-   to `TypeIs[dict[str, Yaml]]`/`TypeIs[list[Yaml]]`.
-4. Grow the lenses: `WorkloadDocument` gains typed `containers` (files,
-   probes, annotations); the five annotation checks become validators on
-   the model; the 60-line ladder in `generate_compose` collapses to
-   template registration.
-5. One shared `$`-doubling configs-inliner, one home, three call sites.
+3. The `Yaml` alias lives in config.py beside `is_mapping`/`is_list`
+   (score.py imports config; the alias cannot live score-side), and the
+   predicates generalize in place to `TypeIs[dict[str, Yaml]]`/
+   `TypeIs[list[Yaml]]`; every tree walker's `Any`/`object` becomes
+   `Yaml`; one dump spelling.
+4. Grow the lenses at their homes: config.py's `WorkloadDocument` gains
+   typed containers (files, probes, annotations) with the D5 strict types
+   and the D6 all-reader validators; the annotation vocabulary constants
+   move from score.py to config.py beside the model; score.py's compose
+   lenses grow into the D2 round-trip model; the ladder in
+   `generate_compose` collapses to template registration.
+5. `double_dollars` in config.py is the one home of the `$`-doubling law
+   (the compose Caddyfile, publish's file-sourced configs, and score's
+   bind inlining all call it); the surrounding configs-entry assembly
+   stays per-consumer — the three input shapes differ (authored lines,
+   `file:` conversion, bind-volume references) and a shared inliner
+   would parameterize everything and fit nothing.
 6. Kill the env side channel: thread service shas and
    `STORAGE_CLASS_VAR` explicitly; `bash(..., env=…)` carries the PATH
    prepend.
@@ -74,7 +86,7 @@ the next session implements this file and does not redecide.
    `ENV_NAME_PATTERN` in config.py.
 8. `model_validate(..., context={"source": …})` plumbing dies: a small
    `validate(model, value, source)` wrapper catches `ValidationError` and
-   prefixes the source.
+   raises source-prefixed `ValueError` (D4's channel).
 9. `root` explicit on pipeline signatures; the asserts die.
 10. Smalls: curl tarballs into the per-run temp bin; target/k8s fan-out
     decided in one place; lock.py's crane manifests become typed OCI
@@ -170,11 +182,21 @@ function and invents a lens-valid vs surface-valid split.
 
 ### D7 — Module homes
 
-Status: OPEN.
-
-`provisioners.py` + `secrets.py` are obvious. Open: annotations as their
-own module vs validators on `documents.WorkloadDocument` with the template
-registry in score.py; the YAML layer as `yamlio.py` vs growing
-`documents.py`; whether score.py splits per pipeline. Lean: validators on
-WorkloadDocument, registry in score.py, `yamlio.py`, pipelines stay
-together.
+Ruling: zero new modules — score.py stays one file. Everything
+score-flavored remains in it: the marker grammar and resolvers, the
+provisioner compiler, secrets, the compose lenses (the D2 round-trip
+model grows here), both rendering pipelines, the patch-template
+registry, and the D3 seeding; internal order follows the repo's existing
+laws (classes at top root → leaves, callers-before-callees). config.py —
+already the package's shared leaf (`is_mapping`/`is_list`,
+`ENV_NAME_PATTERN`, `chart_lock_key`, `EDGE_SERVICE_NAME`) — gains
+exactly the two primitives the import graph forces out of score.py (it
+is a cycle for compose.py or config.py to import score.py): the `Yaml`
+alias (needed by config's own predicates) and `double_dollars` (needed
+by compose's Caddyfile edge stanza). A concern-per-module split
+(provisioners.py/secrets.py/markers.py/yamlio.py) was considered and
+declined: the test seams import score.py fine, AGENTS.md sections
+describe laws rather than files, and the repo's own recent direction is
+consolidation by ownership (documents.py was dissolved, not multiplied).
+Recorded trigger: if score.py remains massive after the work lands, the
+split discussion reopens.
