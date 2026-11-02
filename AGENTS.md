@@ -131,8 +131,9 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 ## Score generation
 
 - Deterministic generation from `stack/score/` into `stack/generated/`; one compose rendering per local option + bare entry (output `stack/generated/compose/compose.{name}.yaml`; the compose state dir is re-created per entry); k8s = one
-  monolithic rendering over `k8s.workloads` + `k8s.vars`, untouched by `BUNDLES=`; `--local` writes the gitignored local output with the local storage class; charts render through `helm template` against the lock's `{NAME}_CHART` entry (a
-  chart without its lock entry refuses naming the lock verb; helm is a renderer, never a deployer); both tool state dirs are per-run temp — output reproduces from a fresh clone.
+  monolithic rendering over `k8s.workloads` + `k8s.vars`, untouched by `BUNDLES=`, with instance names deterministic by construction — state.yaml is pre-seeded between init and generate with `InstanceSuffix` = `-` + first 10 hex of
+  sha256(metadata.name) per workload (the state-format coupling is bounded by the pinned tool version); `--local` writes the gitignored local output with the local storage class; charts render through `helm template` against the
+  lock's `{NAME}_CHART` entry (a chart without its lock entry refuses naming the lock verb; helm is a renderer, never a deployer); both tool state dirs are per-run temp — output reproduces from a fresh clone.
 - Substrate law: compose renderings consume the lock's platform manifests (the artifact records the exact bytes one machine runs); k8s renderings consume the index form (kubelet resolves per node).
 - The pinned tools must be on `PATH` at the exact pinned versions — generation refuses loudly listing them; the verb owns the pinned-tool fetch into a per-run temp bin prepended to `PATH`.
 - `--check` = the CI staleness gate: self-skips (exit 0) where nothing generates; otherwise regenerates in-process, and any `git status` change over the written outputs exits 1 printing the diff; `--check` + `--local` are mutually
@@ -190,8 +191,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 
 This file's only reader is a coding agent. It is an operations manual, not an architecture description — the code is the source of truth for mechanism, and this file carries only what an agent would otherwise get wrong.
 
-- Budget: 200 lines and 26KB, both hard. An addition that would cross either cap requires cutting something else here in the same change.
-- Admit a line only if removing it would cause an agent to make a mistake it otherwise wouldn't. Mechanism narration, history, and rationale that prevents no specific mistake are out of scope.
+- Budget: 200 lines and 26KB, both hard — an addition crossing either cap cuts something else here in the same change; admit a line only if removing it would cause an agent to make a mistake it otherwise wouldn't.
 - One law, one home. Search this file before adding a statement; if the law already exists, update it in place — never state it a second time.
 - The module map carries one line per module and no laws. Laws live in sections named for the concern.
 - Identifiers, flags, file paths, and refusal phrasings stay exact — they are what agents grep.
