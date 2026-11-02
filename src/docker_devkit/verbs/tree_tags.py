@@ -24,12 +24,12 @@ def tree_tags(
     config = load_config(root)
     if config is None:
         raise RuntimeError("no docker-devkit.yaml at the repo root; tree-tags answers for the repo's derived services")
-    shas = config.service_shas()
     vocabulary = sorted(config.service_builds)
     if not services:
         raise typer.BadParameter(f"name at least one service; this repo derives {vocabulary or 'no services'}")
     unknown = [name for name in services if name not in config.service_builds]
     if unknown:
         raise typer.BadParameter(f"unknown service(s) {unknown}; this repo derives {vocabulary}")
+    shas = config.service_shas()
     for name in services:
         print(shas[service_sha_env(name)])

@@ -67,8 +67,7 @@ def publish_compose(
     token = os.environ.get("REGISTRY_TOKEN", "")
     if not username or not token:
         raise SystemExit("REGISTRY_USERNAME and REGISTRY_TOKEN must be set for registry login")
-    if config.repository is None:
-        raise RuntimeError("bundles are declared; root repository names the artifact registry (ghcr.io/org/repo)")
+    assert config.repository is not None
     registry_host = config.repository.partition("/")[0]
     print(f"Login to {registry_host}")
     bash(f"docker login {shlex.quote(registry_host)} -u {shlex.quote(username)} --password-stdin", stdin_text=token)

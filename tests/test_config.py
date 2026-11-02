@@ -446,7 +446,7 @@ class TestCharts:
         config = load_config(tmp_path)
 
         assert config is not None and config.k8s is not None
-        assert config.k8s.rendering
+        assert config.k8s.charts == {"loki": "oci://ghcr.io/grafana/helm-charts/loki@" + DIGEST}
 
     def test_bare_path_rejected(self, tmp_path: Path) -> None:
         write_config(

@@ -267,10 +267,6 @@ class K8sConfig(BaseModel):
     vars: dict[str, str] = Field(default_factory=dict)
     charts: dict[str, str] = Field(default_factory=dict)
 
-    @property
-    def rendering(self) -> bool:
-        return bool(self.workloads or self.charts)
-
     @field_validator("charts")
     @classmethod
     def _require_upstream_native_refs(cls, charts: dict[str, str]) -> dict[str, str]:
@@ -292,7 +288,7 @@ class K8sConfig(BaseModel):
 
     @model_validator(mode="after")
     def _require_a_rendering(self) -> Self:
-        if not self.rendering:
+        if not (self.workloads or self.charts):
             raise ValueError("the k8s section declares neither workloads nor charts; remove it")
         return self
 
@@ -401,11 +397,11 @@ class DockerDevkitConfig(BaseModel):
         namespace = destination if destination is not None else self.repository
         services: dict[str, dict[str, dict[str, BakeValue]]] = {}
         for service in self.service_builds.values():
-            axis = service.axis
             for target, variant in service.target_variants:
                 args: dict[str, str] = {key: f"${{{key}:-}}" for key in self.base_images}
-                if axis is not None and variant is not None:
-                    args[axis] = variant
+                if variant is not None:
+                    assert service.axis is not None
+                    args[service.axis] = variant
                 args.update({sha: f"${{{sha}:?err}}" for sha in service.sha_args})
                 build: dict[str, BakeValue] = {"dockerfile": service.dockerfile}
                 if dev:

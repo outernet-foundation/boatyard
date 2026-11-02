@@ -10,7 +10,7 @@ import typer
 from bashrun.bash import bash, bash_output
 
 from docker_devkit.config import Target, load_config
-from docker_devkit.score import SECRETS_FILE, SECRETS_OUTPUT, generate_artifacts
+from docker_devkit.score import generate_artifacts
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
@@ -64,12 +64,7 @@ def generate_score(
                 bash(f"tar -xzf {archive} -C {bin_dir} {requirement.extract}")
                 Path(archive).unlink()
             os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
-            generate_artifacts(config, target, False)
-            outputs = [bundle.output for bundle in bundles]
-            if k8s_rendering:
-                outputs.append(config.k8s_output_path(False))
-            if (root / SECRETS_FILE).is_file():
-                outputs.append(root / SECRETS_OUTPUT)
+            outputs = generate_artifacts(config, target, False)
             pathspec = " ".join(output.as_posix() for output in outputs)
             if bash_output(f"git status --porcelain -- {pathspec}").strip():
                 bash(f"git diff -- {pathspec}")

@@ -27,8 +27,6 @@ class BakedImage(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     image_name: str = Field(default="", alias="image.name")
-    digest: str = Field(default="", alias="containerimage.digest")
-    ref: str = ""
     tags: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -37,9 +35,8 @@ class BakedImage(BaseModel):
             reference = reference.strip()
             if not reference:
                 continue
-            repository, separator, tag = reference.split("@", 1)[0].rpartition(":")
+            _repository, separator, tag = reference.split("@", 1)[0].rpartition(":")
             if separator:
-                self.ref = repository
                 self.tags.append(tag)
         return self
 
@@ -129,11 +126,6 @@ def run_build(
     if not pushing and not targets_opt:
         check_gc_limits()
 
-    # The incremental lock write rides every building run (the uv sync shape): anyone who
-    # builds also locks, and bake reads the freshly written entries as environment.
-    written = write_lock(config)
-    os.environ.update(env_entries(written))
-
     host = host_platform()
 
     target_variants = {
@@ -197,6 +189,13 @@ def run_build(
                 f"No service targets this machine's arch ({host}); "
                 f"name targets with --targets to cross-build. Services: {_address_vocabulary(config.service_builds)}"
             )
+
+    # The incremental lock write rides every building run (the uv sync shape): anyone who
+    # builds also locks, landing only after target selection and its refusals so a failing
+    # invocation leaves the tree untouched; bake reads the freshly written entries as
+    # environment.
+    written = write_lock(config)
+    os.environ.update(env_entries(written))
 
     rendered = config.render_bake(push=pushing, host=host, destination=destination, dev=dev)
 
