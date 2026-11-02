@@ -32,7 +32,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 ## Modules
 
 `config.py` schema + load; `dockerfiles.py` Dockerfile declarations + sha machinery (`ServiceBuild`, `derive_services`); `config_lock.py` lock schema + parsers; `lock.py` lock engine + projections; `compose.py` compose invocation
-  (`select`/`render` + kit); `bake.py` build pipeline; `score.py` score shared base; `score_compose.py`/`score_k8s.py` rendering pipelines; `verbs/score.py` owns `generate_artifacts`;
+  (`select`/`render` + kit); `bake.py` build pipeline; `score.py` score shared base; `score_compose.py`/`score_k8s.py` rendering pipelines; `verbs/score.py` the score verb (generation inline) + `ensure_tools`;
   `publish.py` publish preparation; `crane.py` pinned crane installer; `cli.py` the single console-script app composing the verb apps namelessly; `verbs/*` one module per command. Model modules run root → leaves: root record first
   (`RootModel` subscripts quote forward refs; the one inversion is a parent whose field default constructs the child), functions callers-before-callees; imports absolute; `config_lock`/`dockerfiles` ← `config` one-way. Also in `config.py` (the shared leaf): `Yaml`,
   `is_mapping`/`is_list`, `double_dollars` (the one `$`-doubling home), `PLACEHOLDER`/`COMPOSE_HOLE`/`ENV_NAME_PATTERN`, `EDGE_SERVICE_NAME`, `chart_lock_key`, `load_yaml_file`. Lifecycle stays a separate package from codegen (disjoint dependency surfaces — bundling would force
@@ -137,7 +137,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
   sha256(metadata.name) per workload (the state-format coupling is bounded by the pinned tool version); `--local` writes the gitignored local output with the local storage class; charts render through `helm template` against the
   lock's `{NAME}_CHART` entry (a chart without its lock entry refuses naming the lock verb; helm is a renderer, never a deployer); both tool state dirs are per-run temp — output reproduces from a fresh clone.
 - Substrate law: compose renderings consume the lock's platform manifests (the artifact records the exact bytes one machine runs); k8s renderings consume the index form (kubelet resolves per node).
-- The pinned tools must be on `PATH` at the exact pinned versions — generation refuses loudly listing them; the verb owns the pinned-tool fetch into a per-run temp bin prepended to `PATH`.
+- `ensure_tools` (verbs/score.py) installs the three pinned tools into `/usr/local/bin` (crane law): `version`-probe each, fetch on absence or pin mismatch.
 - `--check` = the CI staleness gate: self-skips (exit 0) where nothing generates; otherwise regenerates in-process, and any `git status` change over the written outputs exits 1 printing the diff; `--check` + `--local` are mutually
   exclusive.
 - Post-passes on compose output are typed transformations on `ComposeDocument`, dumped exactly once — pydantic's declared-fields-first order is the artifacts' deterministic key order: service-name collapse
@@ -177,8 +177,8 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 
 - Everything the substrate needs that score's container model doesn't carry lives in the workload file as `outernet.internal/*` annotations — `boatyard.yml` never carries a per-workload runtime fact; the shipped patch templates
   (package data in `src/boatyard/patch_templates/`) are the annotation reader — one annotation, one template, one behavior; consumer repos never author one; refusal laws live in boatyard code (templates are data and cannot
-  refuse); the lens is two models — `WorkloadDocument` (strict `dict[str, str]` annotations, `metadata.name` pinned to the workload file stem) and `ComposeWorkloadDocument` (adds httpGet-requires-probe-adapter) — one parse home: `load_workload`/`load_compose_workload`
-  in `config.py` (read + lens + `context={"source"}` stem pin), all readers; dev-toggles-on-k8s-only refuses in score_k8s; score propagates `metadata.annotations` into both renderings — diffs must include the annotation lines.
+  refuse); the lens is two models — `WorkloadDocument` (strict `dict[str, str]` annotations, `metadata.name` pinned to the workload file stem) and `ComposeWorkloadDocument` (adds httpGet-requires-probe-adapter) — one parse home: `WorkloadDocument.load(path)`
+  (read + lens + `context={"source"}` stem pin; the compose lens inherits it), all readers; dev-toggles-on-k8s-only refuses in score_k8s; score propagates `metadata.annotations` into both renderings — diffs must include the annotation lines.
 
 | Annotation | Behavior |
 |---|---|
