@@ -16,10 +16,8 @@ from pydantic import (
 
 from docker_devkit.config import (
     CONSUMER_INTERPOLATED_ANNOTATION,
-    DEV_TOGGLES_ANNOTATION,
+    ComposeWorkloadDocument,
     EDGE_SERVICE_NAME,
-    PROBE_ADAPTER_ANNOTATION,
-    WorkloadDocument,
     Yaml,
     double_dollars,
     is_mapping,
@@ -134,30 +132,14 @@ def generate_compose(
     for bundle in bundles:
         # Collect per-workload annotation facts and enforce the compose placement laws.
         interpolated_targets: set[str] = set()
-        toggle_services: dict[str, str] = {}
         for name in bundle.workloads:
-            workload = validate(WorkloadDocument, load_yaml_file(score_dir / name), name)
+            workload = validate(ComposeWorkloadDocument, load_yaml_file(score_dir / name), name)
             annotations = workload.metadata.annotations
 
             # Track the declared files whose contents ride un-doubled.
             consumer_interpolated = annotations.get(CONSUMER_INTERPOLATED_ANNOTATION)
             if consumer_interpolated is not None:
                 interpolated_targets.update(consumer_interpolated.split(","))
-
-            # Refuse httpGet probes without a probe adapter; score-compose drops httpGet.
-            if annotations.get(PROBE_ADAPTER_ANNOTATION) is None:
-                for probe in workload.http_get_probes:
-                    raise ValueError(f"{name}: a {probe} httpGet requires {PROBE_ADAPTER_ANNOTATION}")
-
-            # Record dev-toggle ownership per service and refuse collisions.
-            toggle_raw, service_name = workload.dev_toggles
-            if toggle_raw is not None and service_name is not None:
-                if service_name in toggle_services:
-                    raise ValueError(
-                        f"{toggle_services[service_name]} and {name} both declare "
-                        f"{DEV_TOGGLES_ANNOTATION} for {service_name}"
-                    )
-                toggle_services[service_name] = name
 
         # Assemble the patch templates, adding the GPU template for the bundle's variant.
         templates = [HEALTHCHECK_TEMPLATE, RESTART_TEMPLATE]

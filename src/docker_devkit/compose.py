@@ -23,7 +23,7 @@ from docker_devkit.config import (
     RouteConfig,
     ServiceEntry,
     ServiceGroup,
-    WorkloadDocument,
+    ComposeWorkloadDocument,
     Yaml,
     double_dollars,
     is_mapping,
@@ -193,11 +193,12 @@ def select(config: Config, environment: Mapping[str, str]) -> Selection:
                 document = yaml.safe_load(source_path.read_text(encoding="utf-8"))
             except yaml.YAMLError as error:
                 raise ValueError(f"{workload}: {error}") from error
-            workload_document = validate(WorkloadDocument, document, workload)
-            raw, service_name = workload_document.dev_toggles
-            if raw is None or service_name is None or service_name not in output_services:
+            annotations = validate(ComposeWorkloadDocument, document, workload).metadata.annotations
+            raw = annotations.get(DEV_TOGGLES_ANNOTATION)
+            stem = Path(workload).stem
+            if raw is None or stem not in output_services:
                 continue
-            dev_toggles[service_name] = parse_dev_toggles(raw)
+            dev_toggles[stem] = parse_dev_toggles(raw)
 
     return Selection(
         includes=includes,

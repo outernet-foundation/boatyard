@@ -148,6 +148,32 @@ class TestOldSectionsDied:
             Config.load(tmp_path)
 
 
+class TestWorkloadReferences:
+    def test_nested_service_workload_rejected(self, tmp_path: Path) -> None:
+        write_config(
+            tmp_path,
+            {"requires": ">=0.1", "project_name": "example", "services": {"core": {"workloads": ["nested/api.yaml"]}}},
+        )
+
+        with pytest.raises(ValidationError, match=r"flat \.yaml file name"):
+            Config.load(tmp_path)
+
+    def test_non_yaml_service_workload_rejected(self, tmp_path: Path) -> None:
+        write_config(
+            tmp_path,
+            {"requires": ">=0.1", "project_name": "example", "services": {"core": {"workloads": ["api.yml"]}}},
+        )
+
+        with pytest.raises(ValidationError, match=r"flat \.yaml file name"):
+            Config.load(tmp_path)
+
+    def test_nested_k8s_workload_rejected(self, tmp_path: Path) -> None:
+        write_config(tmp_path, {"requires": ">=0.1", "k8s": {"workloads": ["nested/api.yaml"]}})
+
+        with pytest.raises(ValidationError, match=r"flat \.yaml file name"):
+            Config.load(tmp_path)
+
+
 class TestVariants:
     def test_declared_axes_load(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "variants": {"TORCH_DEVICE": ["cuda", "rocm"]}})

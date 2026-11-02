@@ -357,7 +357,7 @@ GENERATED_COMPOSE = (
 
 def _generate_compose(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, generated: str) -> Path:
     (tmp_path / "stack" / "score").mkdir(parents=True)
-    (tmp_path / "stack" / "score" / "api.yaml").write_text("containers: {}\n", encoding="utf-8")
+    (tmp_path / "stack" / "score" / "api.yaml").write_text("metadata:\n  name: api\ncontainers: {}\n", encoding="utf-8")
     (tmp_path / "workloads" / "api").mkdir(parents=True)
     (tmp_path / "workloads" / "api" / "config.yaml").write_text("key: ${FOO}\n", encoding="utf-8")
     recorder = ComposeBashRecorder(generated)
@@ -449,8 +449,10 @@ def test_generate_compose_renames_the_gate_and_its_references_per_entry(
 
 def test_generate_compose_gate_names_differ_per_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
-    (tmp_path / "stack" / "score" / "api.yaml").write_text("containers: {}\n", encoding="utf-8")
-    (tmp_path / "stack" / "score" / "edge.yaml").write_text("containers: {}\n", encoding="utf-8")
+    (tmp_path / "stack" / "score" / "api.yaml").write_text("metadata:\n  name: api\ncontainers: {}\n", encoding="utf-8")
+    (tmp_path / "stack" / "score" / "edge.yaml").write_text(
+        "metadata:\n  name: edge\ncontainers: {}\n", encoding="utf-8"
+    )
     recorder = ComposeBashRecorder(GATED_COMPOSE)
     monkeypatch.setattr(score_module, "bash", recorder.run)
     config = _root_config(
@@ -499,7 +501,7 @@ def test_workload_image_holes_resolve_from_the_lock_into_the_rendered_copy(
 ) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "api.yaml").write_text(
-        "containers:\n  api:\n    image: ${API_IMAGE}\n",
+        "metadata:\n  name: api\ncontainers:\n  api:\n    image: ${API_IMAGE}\n",
         encoding="utf-8",
     )
     recorder = WorkloadContentsRecorder()
@@ -517,14 +519,14 @@ def test_workload_image_holes_resolve_from_the_lock_into_the_rendered_copy(
 
     assert (
         recorder.workload_contents["api.yaml"]
-        == "containers:\n  api:\n    image: ghcr.io/org/api@sha256:" + "a" * 64 + "\n"
+        == "metadata:\n  name: api\ncontainers:\n  api:\n    image: ghcr.io/org/api@sha256:" + "a" * 64 + "\n"
     )
 
 
 def test_workload_image_hole_with_no_lock_entry_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "api.yaml").write_text(
-        "containers:\n  api:\n    image: ${API_IMAGE}\n",
+        "metadata:\n  name: api\ncontainers:\n  api:\n    image: ${API_IMAGE}\n",
         encoding="utf-8",
     )
     recorder = WorkloadContentsRecorder()
@@ -639,18 +641,14 @@ def _compose_init_templates(
     return [[Path(token).name for token in command.split() if token.endswith(".tpl")] for command in inits]
 
 
-WORKLOAD_REFERENCING_CONFIG = """
+def _workload_referencing(resource: str, name: str) -> str:
+    return f"""
 resources:
-  config:
-    type: example-config
-containers: {}
-"""
-
-WORKLOAD_REFERENCING_STATE = """
-resources:
-  state:
-    type: example-state
-containers: {}
+  {resource}:
+    type: example-{resource}
+metadata:
+  name: {name}
+containers: {{}}
 """
 
 
@@ -665,7 +663,7 @@ def test_gate_pin_stays_unregistered_without_provisioner_services(
         config,
         {},
         {
-            "stack/score/api.yaml": WORKLOAD_REFERENCING_STATE,
+            "stack/score/api.yaml": _workload_referencing("state", "api"),
             "stack/score/compose/state.yaml": PROVISIONER_WITHOUT_SERVICES,
         },
     )
@@ -685,7 +683,7 @@ def test_gate_pin_refuses_a_gate_forming_run_without_the_lock_entry(
             config,
             {},
             {
-                "stack/score/api.yaml": WORKLOAD_REFERENCING_CONFIG,
+                "stack/score/api.yaml": _workload_referencing("config", "api"),
                 "stack/score/compose/config.yaml": PROVISIONER_WITH_SERVICES,
             },
         )
@@ -693,8 +691,8 @@ def test_gate_pin_refuses_a_gate_forming_run_without_the_lock_entry(
 
 def test_provisioners_register_by_resource_type_closure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sources = {
-        "stack/score/api.yaml": WORKLOAD_REFERENCING_STATE,
-        "stack/score/gateway.yaml": WORKLOAD_REFERENCING_CONFIG,
+        "stack/score/api.yaml": _workload_referencing("state", "api"),
+        "stack/score/gateway.yaml": _workload_referencing("config", "gateway"),
         "stack/score/compose/config.yaml": PROVISIONER_WITH_SERVICES,
         "stack/score/compose/state.yaml": PROVISIONER_WITHOUT_SERVICES,
         "stack/score/compose/orphan.yaml": "- uri: template://example/orphan\n  type: orphan-type\n",
@@ -716,6 +714,8 @@ def test_provisioners_register_by_resource_type_closure(tmp_path: Path, monkeypa
 
 
 WORKLOAD_WITH_LIVENESS = """
+metadata:
+  name: api
 containers:
   api:
     image: ${API_IMAGE:?err}
@@ -727,6 +727,7 @@ containers:
 
 WORKLOAD_WITH_READINESS = """
 metadata:
+  name: api
   annotations:
     outernet.internal/probe-adapter: python-urllib
 containers:
@@ -739,6 +740,8 @@ containers:
 """
 
 WORKLOAD_WITH_UNADAPTED_READINESS = """
+metadata:
+  name: api
 containers:
   api:
     image: ${API_IMAGE:?err}
@@ -789,7 +792,7 @@ def test_unknown_probe_adapter_values_refuse_naming_the_workload(
             config,
             {},
             {
-                "stack/score/api.yaml": "metadata:\n  annotations:\n    outernet.internal/probe-adapter: curl\ncontainers: {}\n",
+                "stack/score/api.yaml": "metadata:\n  name: api\n  annotations:\n    outernet.internal/probe-adapter: curl\ncontainers: {}\n",
             },
         )
 
@@ -825,7 +828,7 @@ def test_restart_values_outside_the_compose_enum_refuse_naming_the_workload(
             {},
             {
                 "stack/score/api.yaml": (
-                    "metadata:\n  annotations:\n    outernet.internal/restart: always-please\ncontainers: {}\n"
+                    "metadata:\n  name: api\n  annotations:\n    outernet.internal/restart: always-please\ncontainers: {}\n"
                 ),
             },
         )
@@ -841,7 +844,7 @@ def test_restart_annotation_with_an_enum_value_passes(tmp_path: Path, monkeypatc
         {},
         {
             "stack/score/api.yaml": (
-                "metadata:\n  annotations:\n    outernet.internal/restart: on-failure\ncontainers: {}\n"
+                "metadata:\n  name: api\n  annotations:\n    outernet.internal/restart: on-failure\ncontainers: {}\n"
             ),
         },
     )
@@ -861,15 +864,13 @@ def test_bare_literal_workload_image_refuses_naming_the_workload(
             config,
             {},
             {
-                "stack/score/api.yaml": "containers:\n  api:\n    image: ghcr.io/example/api:1\n",
+                "stack/score/api.yaml": "metadata:\n  name: api\ncontainers:\n  api:\n    image: ghcr.io/example/api:1\n",
             },
         )
 
 
-def _toggles_workload(annotation: object) -> str:
-    return (
-        f"metadata:\n  name: api\n  annotations:\n    outernet.internal/dev-toggles: {annotation!r}\ncontainers: {{}}\n"
-    )
+def _toggles_workload(annotation: object, name: str = "api") -> str:
+    return f"metadata:\n  name: {name}\n  annotations:\n    outernet.internal/dev-toggles: {annotation!r}\ncontainers: {{}}\n"
 
 
 def test_dev_toggles_spelling_refuses_at_generation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -889,30 +890,19 @@ def test_a_non_string_dev_toggles_annotation_refuses(tmp_path: Path, monkeypatch
         _compose_init_templates(monkeypatch, tmp_path, config, {}, {"stack/score/api.yaml": _toggles_workload(True)})
 
 
-def test_dev_toggles_without_metadata_name_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_workload_without_metadata_name_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _bundle_config()
-    source = "metadata:\n  annotations:\n    outernet.internal/dev-toggles: RELOAD=true\ncontainers: {}\n"
 
-    with pytest.raises(ValueError, match=r"api\.yaml.*metadata\.name"):
+    with pytest.raises(ValueError, match=r"api\.yaml.*metadata\.name must be 'api'"):
+        _compose_init_templates(monkeypatch, tmp_path, config, {}, {"stack/score/api.yaml": "containers: {}\n"})
+
+
+def test_a_workload_name_mismatching_the_file_stem_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _bundle_config()
+    source = "metadata:\n  name: apis\ncontainers: {}\n"
+
+    with pytest.raises(ValueError, match=r"api\.yaml.*metadata\.name must be 'api'"):
         _compose_init_templates(monkeypatch, tmp_path, config, {}, {"stack/score/api.yaml": source})
-
-
-def test_two_workloads_toggling_one_service_refuse_at_generation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config = _bundle_config(workloads=["api.yaml", "api2.yaml"])
-
-    with pytest.raises(ValueError, match=r"both declare.*dev-toggles.*api"):
-        _compose_init_templates(
-            monkeypatch,
-            tmp_path,
-            config,
-            {},
-            {
-                "stack/score/api.yaml": _toggles_workload("RELOAD=true"),
-                "stack/score/api2.yaml": _toggles_workload("DEBUG=false"),
-            },
-        )
 
 
 def test_a_rendering_defining_the_edge_service_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -933,7 +923,7 @@ def test_dev_toggles_on_a_k8s_only_workload_refuses(tmp_path: Path) -> None:
     config = _root_config(k8s={"workloads": ["k8s-only.yaml"]})
     source = tmp_path / "stack" / "score" / "k8s-only.yaml"
     source.parent.mkdir(parents=True, exist_ok=True)
-    source.write_text(_toggles_workload("RELOAD=true"), encoding="utf-8")
+    source.write_text(_toggles_workload("RELOAD=true", "k8s-only"), encoding="utf-8")
 
     assert config.k8s is not None
     config.root = tmp_path
@@ -962,6 +952,7 @@ def test_consumer_interpolated_names_must_match_declared_files(tmp_path: Path, m
             {
                 "stack/score/api.yaml": (
                     "metadata:\n"
+                    "  name: api\n"
                     "  annotations:\n"
                     "    outernet.internal/consumer-interpolated: /etc/rathole/client.toml\n"
                     "containers: {}\n"
@@ -972,6 +963,7 @@ def test_consumer_interpolated_names_must_match_declared_files(tmp_path: Path, m
 
 WORKLOAD_WITH_INTERPOLATED_FILE = """\
 metadata:
+  name: rathole-client
   annotations:
     outernet.internal/consumer-interpolated: /etc/rathole/client.toml
 containers:
@@ -1054,7 +1046,7 @@ def test_gpu_compose_templates_register_per_the_renderings_variant(
         config,
         {},
         {
-            "stack/score/api.yaml": "containers: {}\n",
+            "stack/score/api.yaml": "metadata:\n  name: api\ncontainers: {}\n",
         },
     )
 
@@ -1066,7 +1058,7 @@ def test_gpu_compose_templates_register_per_the_renderings_variant(
 
 def test_k8s_builtin_templates_register_on_every_init(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
-    (tmp_path / "stack" / "score" / "api.yaml").write_text("containers: {}\n", encoding="utf-8")
+    (tmp_path / "stack" / "score" / "api.yaml").write_text("metadata:\n  name: api\ncontainers: {}\n", encoding="utf-8")
     output = Path("stack/generated/k8s/manifests.yaml")
     recorder = K8sBashRecorder(tmp_path / output, tmp_path / "stack/generated/k8s/.score-k8s/state.yaml")
     monkeypatch.setattr(score_module, "bash", recorder.run)

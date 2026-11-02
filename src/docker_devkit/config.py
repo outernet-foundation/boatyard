@@ -16,6 +16,7 @@ from pydantic import (
     Field,
     Tag,
     ValidationError,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -424,8 +425,7 @@ class ServiceEntry(BaseModel):
         if self.ref is not None and self.vars:
             raise ValueError("vars is not allowed with ref:")
         for name in self.workloads:
-            if not name:
-                raise ValueError("workload names must be non-empty")
+            require_workload_reference(name)
         return self
 
 
@@ -479,6 +479,8 @@ class K8sConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> Self:
+        for name in self.workloads:
+            require_workload_reference(name)
         for name, reference in self.charts.items():
             if not name:
                 raise ValueError("charts: names must be non-empty")
@@ -539,6 +541,13 @@ class WorkloadDocument(BaseModel):
     containers: dict[str, WorkloadContainer] = Field(default_factory=dict)
 
     @model_validator(mode="after")
+    def _require_name_matching_file_stem(self, info: ValidationInfo) -> Self:
+        source = info.context.get("source") if info.context is not None else None
+        if source is not None and self.metadata.name != Path(source).stem:
+            raise ValueError(f"metadata.name must be {Path(source).stem!r} to match the workload file name")
+        return self
+
+    @model_validator(mode="after")
     def _validate_deployment_surface_annotations(self) -> Self:
         annotations = self.metadata.annotations
 
@@ -576,27 +585,24 @@ class WorkloadDocument(BaseModel):
         if annotations.get(DEV_TOGGLES_ANNOTATION) is not None:
             if not annotations[DEV_TOGGLES_ANNOTATION].strip():
                 raise ValueError(f"{DEV_TOGGLES_ANNOTATION} must be a comma-separated NAME=default string")
-            if not self.metadata.name:
-                raise ValueError("metadata.name is required")
             parse_dev_toggles(annotations[DEV_TOGGLES_ANNOTATION])
 
         return self
 
-    @property
-    def dev_toggles(self) -> tuple[str | None, str | None]:
-        return self.metadata.annotations.get(DEV_TOGGLES_ANNOTATION), self.metadata.name
 
-    @property
-    def http_get_probes(self) -> list[str]:
-        return [
-            probe
-            for container in self.containers.values()
+class ComposeWorkloadDocument(WorkloadDocument):
+    @model_validator(mode="after")
+    def _require_probe_adapter_for_http_get(self) -> Self:
+        if self.metadata.annotations.get(PROBE_ADAPTER_ANNOTATION) is not None:
+            return self
+        for container in self.containers.values():
             for probe, block in (
                 ("readinessProbe", container.readiness_probe),
                 ("livenessProbe", container.liveness_probe),
-            )
-            if block is not None and block.http_get is not None
-        ]
+            ):
+                if block is not None and block.http_get is not None:
+                    raise ValueError(f"a {probe} httpGet requires {PROBE_ADAPTER_ANNOTATION}")
+        return self
 
 
 class ComposeBundle(NamedTuple):
@@ -606,9 +612,14 @@ class ComposeBundle(NamedTuple):
     vars: dict[str, str]
 
 
+def require_workload_reference(name: str) -> None:
+    if re.fullmatch(r"[A-Za-z0-9._-]+\.yaml", name) is None:
+        raise ValueError(f"workload reference {name!r} must be a flat .yaml file name")
+
+
 def validate[ModelT: BaseModel](model: type[ModelT], value: Yaml, source: str) -> ModelT:
     try:
-        return model.model_validate(value)
+        return model.model_validate(value, context={"source": source})
     except ValidationError as error:
         raise ValueError(f"{source}: {_validation_error_text(error)}") from error
 
