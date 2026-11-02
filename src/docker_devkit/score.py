@@ -221,26 +221,20 @@ def contains_marker(node: Yaml) -> bool:
 def resolve_markers(
     node: Yaml, root: Path, images: dict[str, str], source: str, ancestors: tuple[Path, ...] = ()
 ) -> Yaml:
-    entry = _marker_entry(node, MARKERS)
-    if entry is not None:
-        marker, value = entry
-        return _resolve_marker(marker, value, root, images, source, ancestors)
+    if is_list(node):
+        return [resolve_markers(item, root, images, source, ancestors) for item in node]
 
-    if is_mapping(node):
+    if not is_mapping(node):
+        return node
+
+    entry = _marker_entry(node, MARKERS)
+    if entry is None:
         image = node.get(IMAGE_FIELD)
         if isinstance(image, str) and IMAGE_HOLE_PATTERN.search(image) is None:
             raise ValueError(f"{source}: image {image!r} must consume the lock (lock: NAME / lock-image: NAME)")
         return {key: resolve_markers(value, root, images, source, ancestors) for key, value in node.items()}
 
-    if is_list(node):
-        return [resolve_markers(item, root, images, source, ancestors) for item in node]
-
-    return node
-
-
-def _resolve_marker(
-    marker: str, value: Yaml, root: Path, images: dict[str, str], source: str, ancestors: tuple[Path, ...]
-) -> Yaml:
+    marker, value = entry
     if marker in INCLUDE_MARKERS:
         if not isinstance(value, str):
             raise ValueError(f"{source}: {marker} takes a repo-root-relative path string, not {type(value).__name__}")
