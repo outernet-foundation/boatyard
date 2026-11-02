@@ -35,7 +35,8 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
   (`select`/`render` + kit); `bake.py` build pipeline; `score.py` score shared base; `score_compose.py`/`score_k8s.py` rendering pipelines; `verbs/score.py` the score verb (generation inline) + `ensure_tools`;
   `publish.py` publish preparation; `crane.py` pinned crane installer; `cli.py` the single console-script app composing the verb apps namelessly; `verbs/*` one module per command. Model modules run root → leaves: root record first
   (`RootModel` subscripts quote forward refs; the one inversion is a parent whose field default constructs the child), functions callers-before-callees; imports absolute; `config_lock`/`dockerfiles` ← `config` one-way. Also in `config.py` (the shared leaf): `Yaml`,
-  `is_mapping`/`is_list`, `double_dollars` (the one `$`-doubling home), `PLACEHOLDER`/`COMPOSE_HOLE`/`ENV_NAME_PATTERN`, `EDGE_SERVICE_NAME`, `chart_lock_key`, `load_yaml_file`, `compose_bundle_output` (the one compose-output path join). Lifecycle stays a separate package from codegen (disjoint dependency surfaces — bundling would force
+  `is_mapping`/`is_list`, `double_dollars` (the one `$`-doubling home), `PLACEHOLDER`/`COMPOSE_HOLE`/`ENV_NAME_PATTERN`, `EDGE_SERVICE_NAME`, `chart_lock_key`, `load_yaml_file`,
+  `compose_bundle_output_path` (the one compose-output path join). Lifecycle stays a separate package from codegen (disjoint dependency surfaces — bundling would force
   stack-only consumers to install `sqlacodegen`, `psycopg`, `datamodel-code-generator`).
 
 ## Config schema
