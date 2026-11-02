@@ -283,8 +283,7 @@ def generate_artifacts(config: DockerDevkitConfig, target: Target, local: bool) 
         if target in ("both", "compose"):
             consumed: set[str] = set()
             for bundle in config.compose_bundles():
-                artifact = bundle.output
-                for match in COMPOSE_HOLE.finditer(artifact.read_text(encoding="utf-8")):
+                for match in COMPOSE_HOLE.finditer(bundle.output.read_text(encoding="utf-8")):
                     if len(match.group(1)) % 2 == 1:
                         consumed.add(match.group(2))
             declaration.validate_consumed(consumed, "compose", SECRETS_FILE.as_posix())
@@ -590,13 +589,12 @@ def compiled_provisioners(
         yield CompiledProvisioners(paths=paths, declares_services=declares_services)
 
 
-def generate_k8s(config: DockerDevkitConfig, k8s: K8sConfig, output: Path, lock: ImageLock) -> None:
+def generate_k8s(config: DockerDevkitConfig, k8s: K8sConfig, output_path: Path, lock: ImageLock) -> None:
     # Run score-k8s in the output's directory; it writes its .score-k8s state under its cwd.
     # The output arrives root-absolute (config.k8s_output_path).
     assert config.root is not None
     root = config.root
     images = env_entries(lock)
-    output_path = output
     state_dir = output_path.parent / ".score-k8s"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     score_dir = config.score_dir_path()

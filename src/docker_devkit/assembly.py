@@ -33,14 +33,9 @@ from docker_devkit.lock import compose_env_entries, render_env_entries
 
 ENV_FILE = Path(".env")
 BUNDLES_VARIABLE = "BUNDLES"
-PROFILES_VARIABLE = "COMPOSE_PROFILES"
-
-DEV_MOUNT_TARGET = "/app"
 
 EDGE_LISTEN_PORT = 8443
 EDGE_CONFIG_NAME = "devkit-edge-caddyfile"
-EDGE_CONFIG_TARGET = "/etc/caddy/Caddyfile"
-CADDY_IMAGE_HOLE = f"${{{CADDY_IMAGE}:?err}}"
 
 
 class Assembly:
@@ -102,7 +97,7 @@ class Assembly:
 
         auth_option = choices.get(AUTH_GROUP_NAME)
 
-        self.profiles = _split_names(environment.get(PROFILES_VARIABLE, ""))
+        self.profiles = _split_names(environment.get("COMPOSE_PROFILES", ""))
         self.forwarded = None
         if auth_option is not None:
             public_url = environment.get("PUBLIC_URL", "").strip()
@@ -189,8 +184,8 @@ class Assembly:
         if self.routes:
             assert self.config.gateway is not None
             services[EDGE_SERVICE_NAME] = {
-                "image": CADDY_IMAGE_HOLE,
-                "configs": [{"source": EDGE_CONFIG_NAME, "target": EDGE_CONFIG_TARGET}],
+                "image": f"${{{CADDY_IMAGE}:?err}}",
+                "configs": [{"source": EDGE_CONFIG_NAME, "target": "/etc/caddy/Caddyfile"}],
                 "ports": [{"target": str(EDGE_LISTEN_PORT), "published": self.config.gateway, "protocol": "tcp"}],
                 **({"environment": self.forwarded} if self.forwarded is not None else {}),
             }
@@ -249,7 +244,7 @@ class Assembly:
                         {
                             "type": "bind",
                             "source": self.root.resolve().as_posix(),
-                            "target": DEV_MOUNT_TARGET,
+                            "target": "/app",
                             "read_only": True,
                         }
                     ],
@@ -370,6 +365,18 @@ def require_compose_stack(config: DockerDevkitConfig | None) -> DockerDevkitConf
     return config
 
 
+def _compose_config(
+    root: Path, compose_files: list[Path], *arguments: str, lock_env_file: Path | None = None
+) -> list[str]:
+    return [
+        line.strip()
+        for line in bash_output(
+            compose_command(root, compose_files, "config", *arguments, lock_env_file=lock_env_file)
+        ).splitlines()
+        if line.strip()
+    ]
+
+
 def compose_command(root: Path, compose_files: list[Path], *arguments: str, lock_env_file: Path | None = None) -> str:
     quoted_arguments = [shlex.quote(argument) for argument in arguments]
     files_arguments = " ".join(f"-f {shlex.quote(str(compose_file))}" for compose_file in compose_files)
@@ -412,18 +419,6 @@ def write_temp_compose_file(stack: ExitStack, document: Mapping[str, object], pr
         path = Path(handle.name)
     stack.callback(path.unlink, missing_ok=True)
     return path
-
-
-def _compose_config(
-    root: Path, compose_files: list[Path], *arguments: str, lock_env_file: Path | None = None
-) -> list[str]:
-    return [
-        line.strip()
-        for line in bash_output(
-            compose_command(root, compose_files, "config", *arguments, lock_env_file=lock_env_file)
-        ).splitlines()
-        if line.strip()
-    ]
 
 
 def _split_names(value: str) -> list[str]:

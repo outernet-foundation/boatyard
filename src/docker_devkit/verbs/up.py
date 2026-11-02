@@ -13,8 +13,6 @@ from docker_devkit.assembly import Assembly, compose_command
 from docker_devkit.bake import run_build
 from docker_devkit.config import DockerDevkitConfig, load_config
 
-_MANIFEST_ABSENT_PATTERN = re.compile(r"\b404\b|not found|manifest unknown", re.IGNORECASE)
-
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
 
@@ -77,7 +75,7 @@ def up(
 
 
 def _probe_lock_entries(config: DockerDevkitConfig) -> None:
-    lock = config.lock_entries()
+    lock = config.image_lock()
     references = sorted(
         set(
             [reference for entry in lock.images.values() for reference in entry.recorded_digests]
@@ -90,7 +88,7 @@ def _probe_lock_entries(config: DockerDevkitConfig) -> None:
             bash_output(f"docker buildx imagetools inspect {shlex.quote(value)}")
         except CalledProcessError as error:
             stderr = (error.stderr or str(error)).strip()
-            if _MANIFEST_ABSENT_PATTERN.search(stderr):
+            if re.search(r"\b404\b|not found|manifest unknown", stderr, re.IGNORECASE):
                 raise RuntimeError(
                     f"Image {reference or value} (digest {digest or 'unknown'}) is not mirrored yet; "
                     "the CI mirror job populates it when the declaring change runs"

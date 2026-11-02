@@ -13,5 +13,4 @@ app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 @app.command()
 def docker_build_matrix() -> None:
     config = load_config(Path.cwd())
-    partitions = config.build_partitions() if config is not None else []
-    print(json.dumps(partitions))
+    print(json.dumps(config.build_partitions() if config is not None else []))

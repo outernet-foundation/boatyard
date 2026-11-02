@@ -25,10 +25,10 @@ def build(
             "--targets", "-t", help="Build these targets: bare names select default cells, name/cell a declared cell."
         ),
     ] = None,
-    no_cache: bool = typer.Option(False, "--no-cache", help="Force rebuild by disabling cache usage."),
+    no_cache: Annotated[bool, typer.Option("--no-cache", help="Force rebuild by disabling cache usage.")] = False,
     dev: Annotated[
         bool, typer.Option("--dev", help="Build each Dockerfile-declared dev stage under the :dev tag (local-only).")
     ] = False,
 ) -> None:
-    targets = [service for value in targets_opt or [] for service in value.split()] or None
+    targets = [address for value in targets_opt or [] for address in value.split()] or None
     run_build(push=push, targets_opt=targets, no_cache=no_cache, dev=dev)

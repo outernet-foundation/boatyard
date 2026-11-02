@@ -32,7 +32,6 @@ PYTHON_VERSION_PATH = Path(".python-version")
 
 ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 PLATFORM_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$")
-VARIANT_VALUE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 SHA256_DIGEST_REGEX = r"sha256:[a-f0-9]{64}"
 
@@ -45,26 +44,9 @@ DECLARED_REFERENCE_PATTERN = re.compile(
 # tool.uv.required-version (an exact == pin only — a range refuses loudly), {python}
 # from .python-version. The vendor's tag grammar stays authored data in the string.
 TEMPLATE_KEY_PATTERN = re.compile(r"\{([a-z][a-z0-9_]*)\}")
-UV_EXACT_PIN_PATTERN = re.compile(r"^==(?P<version>[^,*\s]+)$")
 
 CHART_REFERENCE_PREFIX = "oci://"
 
-SCORE_DIR = Path("stack/score")
-K8S_OUTPUT = Path("stack/generated/k8s/manifests.yaml")
-K8S_LOCAL_OUTPUT = Path("stack/generated/k8s/manifests.local.yaml")
-SCORE_COMPOSE_VERSION = "0.42.0"
-SCORE_K8S_VERSION = "0.15.0"
-HELM_VERSION = "3.22.1"
-
-BUNDLE_OUTPUT_DIR = Path("stack/generated/compose")
-
-# A route path is a /-rooted segment chain, optionally wildcarded by a trailing /*; the
-# root catch-all is exactly /*.
-ROUTE_PATH_PATTERN = re.compile(r"^(?:/\*|/(?:[^/\s*]+(?:/[^/\s*]+)*)?(?:/\*)?)$")
-# An upstream is a compose service name and a literal port.
-ROUTE_UPSTREAM_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*:[0-9]+$")
-# A remote include is an OCI reference pinned by digest.
-REMOTE_REF_PATTERN = re.compile(rf"^oci://\S+@{SHA256_DIGEST_REGEX}$")
 # A compose env hole: ${NAME}, ${NAME:?err}, ${NAME:-default}.
 ENV_HOLE_PATTERN = re.compile(r"^\$\{[A-Z][A-Z0-9_]*(?::[^{}]*)?\}$")
 PORT_PATTERN = re.compile(r"^[0-9]+$")
@@ -89,7 +71,18 @@ type BakeValue = str | list[str] | dict[str, str]
 
 Target = Literal["both", "compose", "k8s"]
 
-PLAIN_VARIANT = "common"
+
+def load_config(root: Path) -> DockerDevkitConfig | None:
+    path = root / DEFAULT_CONFIG_PATH
+    if not path.exists():
+        return None
+    config = DockerDevkitConfig.model_validate(load_strict_yaml(path.read_text(encoding="utf-8")).data)
+    installed = importlib.metadata.version("docker-devkit")
+    if installed != DEV_SENTINEL and not SpecifierSet(config.requires).contains(installed, prereleases=True):
+        raise SystemExit(f"docker-devkit {installed} does not satisfy requires={config.requires!r}")
+    config.root = root
+    config.finalize()
+    return config
 
 
 def chart_lock_key(name: str) -> str:
@@ -163,14 +156,14 @@ class RouteConfig(BaseModel):
     @field_validator("path")
     @classmethod
     def _require_route_path(cls, path: str) -> str:
-        if ROUTE_PATH_PATTERN.fullmatch(path) is None:
+        if re.fullmatch(r"(?:/\*|/(?:[^/\s*]+(?:/[^/\s*]+)*)?(?:/\*)?)", path) is None:
             raise ValueError(f"route path {path!r} must be a /-rooted segment chain, optionally wildcarded as …/*")
         return path
 
     @field_validator("upstream")
     @classmethod
     def _require_upstream(cls, upstream: str) -> str:
-        if ROUTE_UPSTREAM_PATTERN.fullmatch(upstream) is None:
+        if re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*:[0-9]+", upstream) is None:
             raise ValueError(f"route upstream {upstream!r} must be a service name and a literal port (grafana:3000)")
         return upstream
 
@@ -223,7 +216,7 @@ class ServiceEntry(BaseModel):
     @field_validator("ref")
     @classmethod
     def _require_digest_pinned_ref(cls, ref: str | None) -> str | None:
-        if ref is not None and REMOTE_REF_PATTERN.fullmatch(ref) is None:
+        if ref is not None and re.fullmatch(rf"oci://\S+@{SHA256_DIGEST_REGEX}", ref) is None:
             raise ValueError(f"ref {ref!r} must be a digest-pinned OCI include (oci://…@sha256:…)")
         return ref
 
@@ -293,6 +286,88 @@ class K8sConfig(BaseModel):
         return self
 
 
+class ImageLockEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    index: str
+    platforms: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("index", "platforms")
+    @classmethod
+    def _require_digest_pins(cls, value: str | dict[str, str], info: ValidationInfo) -> str | dict[str, str]:
+        context: dict[str, object] = info.context or {}
+        source = context.get("path", "the image lock")
+        pins = value.items() if isinstance(value, dict) else [(info.field_name, value)]
+        for site, reference in pins:
+            if not reference.rpartition("@")[2].startswith("sha256:"):
+                raise ValueError(f"{source}: entry field {site} is not digest-pinned ({reference!r})")
+        if isinstance(value, dict):
+            for platform in value:
+                if PLATFORM_PATTERN.fullmatch(platform) is None:
+                    raise ValueError(f"{source}: platform key {platform!r} must be an os/arch pair like linux/arm64")
+        return value
+
+    @property
+    def recorded_digests(self) -> list[str]:
+        # The digest set the up/mirror presence probes walk: the index plus every platform manifest.
+        return [self.index, *self.platforms.values()]
+
+
+class ImageLock(BaseModel):
+    # The structured lock beside the root config: registry-resolved facts, written by the
+    # lock verb and build's incremental freeze, never hand-authored.
+    model_config = ConfigDict(extra="forbid")
+
+    images: dict[str, ImageLockEntry] = Field(default_factory=dict)
+    charts: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("charts")
+    @classmethod
+    def _require_digest_pinned_charts(cls, charts: dict[str, str], info: ValidationInfo) -> dict[str, str]:
+        context: dict[str, object] = info.context or {}
+        for name, reference in charts.items():
+            if not reference.rpartition("@")[2].startswith("sha256:"):
+                raise ValueError(
+                    f"{context.get('path', 'the image lock')}: chart {name} is not digest-pinned ({reference!r})"
+                )
+        return charts
+
+    @model_validator(mode="after")
+    def _require_one_flat_vocabulary(self, info: ValidationInfo) -> Self:
+        context: dict[str, object] = info.context or {}
+        shared = sorted(self.images.keys() & self.charts.keys())
+        if shared:
+            raise ValueError(
+                f"{context.get('path', 'the image lock')}: names {shared} appear under both images and charts; "
+                "the env projection carries one flat vocabulary"
+            )
+        return self
+
+    def require(self, name: str, subject: str, hint: str = "the lock verb writes it") -> str:
+        # The one "lock lacks NAME" refusal every lock consumer raises; the image entry
+        # answers by its index reference, the chart entry flat.
+        if name in self.images:
+            return self.images[name].index
+        if name in self.charts:
+            return self.charts[name]
+        raise RuntimeError(f"{subject}: {LOCK_PATH.as_posix()} lacks the {name} entry ({hint})")
+
+
+class ComposeBundle(NamedTuple):
+    name: str
+    output: Path
+    workloads: list[str]
+    vars: dict[str, str]
+
+
+class ToolRequirement(NamedTuple):
+    binary: str
+    version: str
+    release: str
+    archive: str
+    extract: str
+
+
 class DockerDevkitConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -307,12 +382,12 @@ class DockerDevkitConfig(BaseModel):
     k8s: K8sConfig | None = None
     mirror_prefix: str = DEFAULT_MIRROR_PREFIX
 
-    score_dir: Path = SCORE_DIR
-    k8s_output: Path = K8S_OUTPUT
-    k8s_local_output: Path = K8S_LOCAL_OUTPUT
-    score_compose_version: str = SCORE_COMPOSE_VERSION
-    score_k8s_version: str = SCORE_K8S_VERSION
-    helm_version: str = HELM_VERSION
+    score_dir: Path = Path("stack/score")
+    k8s_output: Path = Path("stack/generated/k8s/manifests.yaml")
+    k8s_local_output: Path = Path("stack/generated/k8s/manifests.local.yaml")
+    score_compose_version: str = "0.42.0"
+    score_k8s_version: str = "0.15.0"
+    helm_version: str = "3.22.1"
 
     # Derived by load_config from the Dockerfile tree (derive_services); never authored.
     service_builds: dict[str, ServiceBuild] = Field(default_factory=dict, exclude=True)
@@ -325,11 +400,11 @@ class DockerDevkitConfig(BaseModel):
         assert self.root is not None
         return compute_service_shas(self.root, self.service_builds)
 
-    def lock_entries(self) -> ImageLock:
+    def image_lock(self) -> ImageLock:
         # The lock read where absence is legal; required-lock callers parse directly.
         assert self.root is not None
         lock_path = self.root / LOCK_PATH
-        return parse_image_lock(lock_path) if lock_path.is_file() else ImageLock.model_validate({})
+        return parse_image_lock(lock_path) if lock_path.is_file() else ImageLock()
 
     @property
     def declared_charts(self) -> dict[str, str]:
@@ -365,7 +440,7 @@ class DockerDevkitConfig(BaseModel):
 
     def bundle_output(self, name: str) -> Path:
         assert self.root is not None
-        return self.root / BUNDLE_OUTPUT_DIR / f"compose.{name}.yaml"
+        return self.root / "stack/generated/compose" / f"compose.{name}.yaml"
 
     def chart_values_path(self, chart: str) -> Path:
         assert self.root is not None
@@ -489,7 +564,7 @@ class DockerDevkitConfig(BaseModel):
         for group in sorted(sorted(member_list) for member_list in members.values()):
             for name in group:
                 for target, variant in services[name].target_variants:
-                    cell = variant if variant is not None else PLAIN_VARIANT
+                    cell = variant if variant is not None else "common"
                     entries_by_variant.setdefault((services[name].axis, cell), []).append(target)
 
         return [
@@ -569,7 +644,7 @@ class DockerDevkitConfig(BaseModel):
                 )
             seen: set[str] = set()
             for value in values:
-                if VARIANT_VALUE_PATTERN.fullmatch(value) is None:
+                if re.fullmatch(r"[a-z0-9][a-z0-9_-]*", value) is None:
                     raise ValueError(
                         f"variants.{axis}: value {value!r} must be a bare lowercase spelling like cuda; it rides target names"
                     )
@@ -743,7 +818,7 @@ class DockerDevkitConfig(BaseModel):
                         f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version is not declared; "
                         "a {uv} template resolves from that exact pin"
                     )
-                pin_match = UV_EXACT_PIN_PATTERN.fullmatch(declared.strip())
+                pin_match = re.fullmatch(r"==(?P<version>[^,*\s]+)", declared.strip())
                 if pin_match is None:
                     raise RuntimeError(
                         f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version {declared!r} is a range, "
@@ -844,88 +919,6 @@ def is_list(value: object) -> TypeIs[list[object]]:
     return isinstance(value, list)
 
 
-class ImageLockEntry(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    index: str
-    platforms: dict[str, str] = Field(default_factory=dict)
-
-    @field_validator("index", "platforms")
-    @classmethod
-    def _require_digest_pins(cls, value: str | dict[str, str], info: ValidationInfo) -> str | dict[str, str]:
-        context: dict[str, object] = info.context or {}
-        source = context.get("path", "the image lock")
-        pins = value.items() if isinstance(value, dict) else [(info.field_name, value)]
-        for site, reference in pins:
-            if not reference.rpartition("@")[2].startswith("sha256:"):
-                raise ValueError(f"{source}: entry field {site} is not digest-pinned ({reference!r})")
-        if isinstance(value, dict):
-            for platform in value:
-                if PLATFORM_PATTERN.fullmatch(platform) is None:
-                    raise ValueError(f"{source}: platform key {platform!r} must be an os/arch pair like linux/arm64")
-        return value
-
-    @property
-    def recorded_digests(self) -> list[str]:
-        # The digest set the up/mirror presence probes walk: the index plus every platform manifest.
-        return [self.index, *self.platforms.values()]
-
-
-class ImageLock(BaseModel):
-    # The structured lock beside the root config: registry-resolved facts, written by the
-    # lock verb and build's incremental freeze, never hand-authored.
-    model_config = ConfigDict(extra="forbid")
-
-    images: dict[str, ImageLockEntry] = Field(default_factory=dict)
-    charts: dict[str, str] = Field(default_factory=dict)
-
-    @field_validator("charts")
-    @classmethod
-    def _require_digest_pinned_charts(cls, charts: dict[str, str], info: ValidationInfo) -> dict[str, str]:
-        context: dict[str, object] = info.context or {}
-        for name, reference in charts.items():
-            if not reference.rpartition("@")[2].startswith("sha256:"):
-                raise ValueError(
-                    f"{context.get('path', 'the image lock')}: chart {name} is not digest-pinned ({reference!r})"
-                )
-        return charts
-
-    @model_validator(mode="after")
-    def _require_one_flat_vocabulary(self, info: ValidationInfo) -> Self:
-        context: dict[str, object] = info.context or {}
-        shared = sorted(self.images.keys() & self.charts.keys())
-        if shared:
-            raise ValueError(
-                f"{context.get('path', 'the image lock')}: names {shared} appear under both images and charts; "
-                "the env projection carries one flat vocabulary"
-            )
-        return self
-
-    def require(self, name: str, subject: str, hint: str = "the lock verb writes it") -> str:
-        # The one "lock lacks NAME" refusal every lock consumer raises; the image entry
-        # answers by its index reference, the chart entry flat.
-        if name in self.images:
-            return self.images[name].index
-        if name in self.charts:
-            return self.charts[name]
-        raise RuntimeError(f"{subject}: {LOCK_PATH.as_posix()} lacks the {name} entry ({hint})")
-
-
-class ComposeBundle(NamedTuple):
-    name: str
-    output: Path
-    workloads: list[str]
-    vars: dict[str, str]
-
-
-class ToolRequirement(NamedTuple):
-    binary: str
-    version: str
-    release: str
-    archive: str
-    extract: str
-
-
 def _reject_duplicate_keys(node: yaml.Node, source: str) -> None:
     # The stock loader silently keeps the last of duplicate mapping keys; the lock
     # refuses them, with the offending line from the node mark.
@@ -994,19 +987,6 @@ def _find(parent: dict[str, str], service: str) -> str:
     while parent[service] != service:
         parent[service], service = root, parent[service]
     return root
-
-
-def load_config(root: Path) -> DockerDevkitConfig | None:
-    path = root / DEFAULT_CONFIG_PATH
-    if not path.exists():
-        return None
-    config = DockerDevkitConfig.model_validate(load_strict_yaml(path.read_text(encoding="utf-8")).data)
-    installed = importlib.metadata.version("docker-devkit")
-    if installed != DEV_SENTINEL and not SpecifierSet(config.requires).contains(installed, prereleases=True):
-        raise SystemExit(f"docker-devkit {installed} does not satisfy requires={config.requires!r}")
-    config.root = root
-    config.finalize()
-    return config
 
 
 def service_sha_env(name: str) -> str:
