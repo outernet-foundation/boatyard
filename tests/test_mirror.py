@@ -241,7 +241,7 @@ class TestMirrorVerb:
         result = runner.invoke(mirror.app, [])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
         assert "LOKI_CHART" in str(result.exception)
 
     def test_errors_without_a_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -270,4 +270,4 @@ class TestMirrorVerb:
         result = runner.invoke(mirror.app, [])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)

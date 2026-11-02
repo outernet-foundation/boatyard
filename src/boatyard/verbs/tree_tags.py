@@ -8,13 +8,11 @@ import typer
 from boatyard import dockerfiles
 from boatyard.config import Config
 from boatyard.dockerfiles import service_sha_env
-from boatyard.verbs.entry import entry
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
 
 @app.command()
-@entry
 def tree_tags(
     services: Annotated[
         list[str] | None,

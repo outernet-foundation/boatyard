@@ -207,7 +207,7 @@ class TestDefaultTargets:
         result = runner.invoke(build.app, [])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
         assert "this machine's arch" in str(result.exception)
         assert "--targets" in str(result.exception)
 
@@ -323,7 +323,7 @@ class TestBuildKeysGuard:
         result = runner.invoke(build.app, [])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
         assert "no Dockerfile service derives" in str(result.exception)
 
 
@@ -406,7 +406,7 @@ class TestDevBuilds:
         result = runner.invoke(build.app, ["--dev"])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
         assert "no service declares a dev stage" in str(result.exception)
 
     def test_dev_explicit_target_without_dev_stage_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -435,7 +435,7 @@ class TestBakeFailure:
         result = runner.invoke(build.app, [])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
         assert "rendered bake file" in str(result.exception)
         assert f"{REPOSITORY}/api:latest" in str(result.exception)
 
@@ -499,7 +499,7 @@ class TestPushDestination:
         result = runner.invoke(build.app, ["--push", "--targets", "zed-capture"])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
 
     def test_bake_output_not_covering_the_targets_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(bake_module, "bash", MissingTargetRunner().run)
@@ -512,7 +512,7 @@ class TestPushDestination:
         result = runner.invoke(build.app, ["--targets", "zed-capture"])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
         assert "does not cover" in str(result.exception)
 
     def test_an_address_with_a_scheme_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

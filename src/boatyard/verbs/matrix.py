@@ -6,13 +6,11 @@ from pathlib import Path
 import typer
 
 from boatyard.config import Config
-from boatyard.verbs.entry import entry
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
 
 @app.command()
-@entry
 def docker_build_matrix() -> None:
     config = Config.load(Path.cwd())
     if config is None:

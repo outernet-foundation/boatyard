@@ -575,7 +575,7 @@ class TestLockCheck:
         result = runner.invoke(lock.app, ["--check"])
 
         assert result.exit_code == 1, result.output
-        assert "image lock is stale" in result.output
+        assert "image lock is stale" in str(result.exception)
         entry = _read_lock(tmp_path)["images"]["UV_IMAGE"]
         assert entry["index"].endswith(f"uv:0.11.0@{DIGEST_B}")
 

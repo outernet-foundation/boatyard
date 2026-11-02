@@ -15,13 +15,11 @@ from boatyard.compose import (
     write_temp_compose_file,
 )
 from boatyard.config import Config, require_compose_stack
-from boatyard.verbs.entry import entry
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
 
 @app.command()
-@entry
 def down(
     volumes: Annotated[bool, typer.Option("--volumes", "-v", help="Remove named volumes.")] = False,
 ) -> None:

@@ -12,13 +12,11 @@ from boatyard.config import (
 )
 from boatyard.config_lock import read_config_lock
 from boatyard.crane import install_crane
-from boatyard.verbs.entry import entry
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
 
 @app.command()
-@entry
 def mirror() -> None:
     root = Path.cwd()
     config = Config.load(root)

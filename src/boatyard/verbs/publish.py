@@ -14,7 +14,6 @@ from boatyard import dockerfiles
 from boatyard.config import Config
 from boatyard.config_lock import LOCK_PATH, parse_config_lock
 from boatyard.crane import install_crane
-from boatyard.verbs.entry import entry
 from boatyard.lock import env_entries
 from boatyard.publish import (
     STUB_VALUE,
@@ -28,7 +27,6 @@ app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
 
 
 @app.command()
-@entry
 def publish_compose(
     bundle: Annotated[
         str | None,

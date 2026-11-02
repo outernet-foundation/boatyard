@@ -299,7 +299,7 @@ class TestProfileForwarding:
         result = runner.invoke(up.app, [])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
         assert "ghost" in str(result.exception)
 
     def test_absent_profiles_forward_no_flags(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -464,7 +464,7 @@ class TestSelectionLaw:
         result = runner.invoke(up.app, [])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
         assert "selects nothing and no bare entry exists" in str(result.exception)
 
     def test_unknown_name_refuses_listing_the_vocabulary(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -473,7 +473,7 @@ class TestSelectionLaw:
         result = runner.invoke(up.app, [])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
         message = str(result.exception)
         assert "ghost" in message
         assert "cuda" in message and "keycloak" in message and "livekit" in message
@@ -484,7 +484,7 @@ class TestSelectionLaw:
         result = runner.invoke(up.app, [])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
         assert "options are" in str(result.exception)
 
     def test_two_options_of_one_group_refuse(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -493,7 +493,7 @@ class TestSelectionLaw:
         result = runner.invoke(up.app, [])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
         assert "at most one option per group (placeframe)" in str(result.exception)
 
     def test_shell_environment_overrides_the_env_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -523,7 +523,7 @@ class TestSelectionLaw:
         result = runner.invoke(up.app, [])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
         assert "must exist and declare services" in str(result.exception)
 
     def test_up_in_a_services_less_repo_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -535,7 +535,7 @@ class TestSelectionLaw:
         result = runner.invoke(up.app, [])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
         assert "must exist and declare services" in str(result.exception)
 
     def test_missing_local_output_refuses_naming_generate_score(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -547,7 +547,7 @@ class TestSelectionLaw:
         result = runner.invoke(up.app, [])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
         assert "generate-score" in str(result.exception)
 
 
@@ -624,7 +624,7 @@ class TestUpMaterialization:
         result = runner.invoke(up.app, [])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
         assert "CADDY_IMAGE" in str(result.exception)
 
     def test_an_auth_selection_without_public_url_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -639,7 +639,7 @@ class TestUpMaterialization:
         result = runner.invoke(up.app, [])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
         assert "PUBLIC_URL" in str(result.exception)
 
 
@@ -656,7 +656,7 @@ class TestUpValidation:
         result = self._invoke_up(tmp_path, monkeypatch, "api edge livekit keycloak")
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
         assert "/grafana/* upstream grafana" in str(result.exception)
 
     def test_the_selected_auth_upstream_absent_from_the_assembly_refuses(
@@ -665,7 +665,7 @@ class TestUpValidation:
         result = self._invoke_up(tmp_path, monkeypatch, "api grafana edge livekit")
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
         assert "route /auth/* upstream keycloak" in str(result.exception)
 
     def test_a_port_owning_service_absent_from_the_assembly_refuses(
@@ -674,7 +674,7 @@ class TestUpValidation:
         result = self._invoke_up(tmp_path, monkeypatch, "api grafana edge keycloak")
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
         assert "livekit" in str(result.exception)
 
 
@@ -708,7 +708,7 @@ class TestServiceExclusion:
         result = runner.invoke(up.app, [])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
         message = str(result.exception)
         assert "compose.a.yaml" in message and "compose.b.yaml" in message
         assert "api" in message
@@ -808,7 +808,7 @@ class TestDownTeardown:
         result = runner.invoke(down.app, [])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
         assert "must exist and declare services" in str(result.exception)
 
     def test_down_in_a_services_less_repo_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -820,7 +820,7 @@ class TestDownTeardown:
         result = runner.invoke(down.app, [])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
         assert "must exist and declare services" in str(result.exception)
 
 
@@ -940,7 +940,7 @@ class TestDevOverlay:
         result = runner.invoke(up.app, ["--dev"])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
         assert "requires a dev shape" in str(result.exception)
 
     def test_up_dev_builds_both_shapes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -1105,7 +1105,7 @@ class TestLockEnvSynthesis:
         result = self._invoke_up_with_lock(tmp_path, monkeypatch, HandoffRecorder())
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
         message = str(result.exception)
         assert "PLATFORM=" in message
         assert "linux/amd64" in message and "linux/arm64" in message
@@ -1118,7 +1118,7 @@ class TestLockEnvSynthesis:
         result = self._invoke_up_with_lock(tmp_path, monkeypatch, HandoffRecorder())
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
         message = str(result.exception)
         assert "linux/ppc64le" in message
         assert "linux/amd64" in message
@@ -1137,7 +1137,7 @@ class TestLockEnvSynthesis:
         result = self._invoke_up_with_lock(tmp_path, monkeypatch, HandoffRecorder())
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
         message = str(result.exception)
         assert "ALPINE_IMAGE" in message
         assert "linux/amd64" in message

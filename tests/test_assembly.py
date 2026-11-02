@@ -232,7 +232,7 @@ class TestEdgeStanza:
         result = runner.invoke(up.app, [])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, SystemExit)
+        assert isinstance(result.exception, ValueError)
         assert "routes are declared; gateway is required" in str(result.exception)
 
 
