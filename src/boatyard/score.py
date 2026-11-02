@@ -3,14 +3,14 @@ from __future__ import annotations
 import os
 import re
 import shlex
-from collections.abc import Callable, Generator
+from collections.abc import Generator
 from contextlib import ExitStack, contextmanager
 from functools import partial
 from hashlib import sha256
 from importlib.resources import as_file, files
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import NamedTuple, Self
+from typing import Self
 
 import yaml
 from bashrun.bash import bash
@@ -126,11 +126,6 @@ class AuthoredProvisioner(BaseModel):
         raise ValueError(f"{info.field_name} is in score's compiled string form; a {shape} is required")
 
 
-class CompiledProvisioners(NamedTuple):
-    paths: list[Path]
-    declares_services: bool
-
-
 class ComposeDumper(yaml.SafeDumper):
     pass
 
@@ -151,7 +146,6 @@ def render_score(
     output: Path,
     images: dict[str, str],
     service_shas: dict[str, str],
-    gate: Callable[[CompiledProvisioners], None] | None = None,
 ) -> None:
     # Derive the per-substrate names and create the output parent.
     root = config.root
@@ -190,7 +184,6 @@ def render_score(
 
         # Compile the selected provisioners into a per-run tempdir under score_dir.
         paths: list[Path] = []
-        declares_services = False
         if names:
             directory = Path(stack.enter_context(TemporaryDirectory(prefix="compiled-provisioners-", dir=score_dir)))
             for name in names:
@@ -204,8 +197,6 @@ def render_score(
                     AuthoredProvisioner.model_validate(entry)
                     if not is_mapping(entry):
                         continue
-                    if entry.get("services"):
-                        declares_services = True
 
                     # Compile each entry in authored key order.
                     compiled: dict[str, Yaml] = {}
@@ -221,15 +212,9 @@ def render_score(
                 target.write_text(dump_compose(compiled_entries), encoding="utf-8", newline="")
                 paths.append(target)
 
-        # Run the gate over the compiled provisioners.
-        provisioners = CompiledProvisioners(paths=paths, declares_services=declares_services)
-        if gate is not None:
-            gate(provisioners)
-
         # Build the tool flags and run init.
         flags = "".join(
-            f" --provisioners {shlex.quote(Path(os.path.relpath(path, working_dir)).as_posix())}"
-            for path in provisioners.paths
+            f" --provisioners {shlex.quote(Path(os.path.relpath(path, working_dir)).as_posix())}" for path in paths
         )
         flags += "".join(
             f" --patch-templates {shlex.quote(Path(os.path.relpath(builtin_templates / name, working_dir)).as_posix())}"

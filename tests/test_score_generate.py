@@ -273,7 +273,14 @@ class TestMarkerSubstrateResolution:
                     "LOKI_IMAGE": {
                         "index": LOKI_INDEX,
                         "platforms": {"linux/amd64": LOKI_MANIFEST, "linux/arm64": LOKI_INDEX},
-                    }
+                    },
+                    "ALPINE_IMAGE": {
+                        "index": GATE_LOCK["ALPINE_IMAGE"],
+                        "platforms": {
+                            "linux/amd64": GATE_LOCK["ALPINE_IMAGE"],
+                            "linux/arm64": GATE_LOCK["ALPINE_IMAGE"],
+                        },
+                    },
                 }
             }),
             encoding="utf-8",
@@ -379,11 +386,12 @@ def _generate_compose(
     config = _root_config(
         repository="ghcr.io/org/repo",
         project_name="example",
+        platforms=["linux/amd64"],
         services={"core": {"workloads": ["api.yaml"]}},
     )
     config.root = tmp_path
 
-    score_compose_module.generate_compose(config, ConfigLock.model_validate({}), {}, secrets=secrets)
+    score_compose_module.generate_compose(config, _lock_for_images(GATE_LOCK), {}, secrets=secrets)
     return tmp_path / "stack" / "generated" / "compose" / "compose.core.yaml"
 
 
@@ -474,6 +482,7 @@ def test_generate_compose_gate_names_differ_per_entry(tmp_path: Path, monkeypatc
     config = _root_config(
         repository="ghcr.io/org/repo",
         project_name="example",
+        platforms=["linux/amd64"],
         services={
             "core": {"workloads": ["api.yaml"]},
             "edge": {"workloads": ["edge.yaml"]},
@@ -481,7 +490,7 @@ def test_generate_compose_gate_names_differ_per_entry(tmp_path: Path, monkeypatc
     )
     config.root = tmp_path
 
-    score_compose_module.generate_compose(config, ConfigLock.model_validate({}), {}, secrets=_alpine_secrets())
+    score_compose_module.generate_compose(config, _lock_for_images(GATE_LOCK), {}, secrets=_alpine_secrets())
 
     core = yaml.safe_load((tmp_path / "stack/generated/compose/compose.core.yaml").read_text(encoding="utf-8"))
     edge = yaml.safe_load((tmp_path / "stack/generated/compose/compose.edge.yaml").read_text(encoding="utf-8"))
@@ -532,7 +541,7 @@ def test_workload_image_holes_resolve_from_the_lock_into_the_rendered_copy(
 
     score_compose_module.generate_compose(
         config,
-        _lock_for_images({"API_IMAGE": "ghcr.io/org/api@sha256:" + "a" * 64}),
+        _lock_for_images({"API_IMAGE": "ghcr.io/org/api@sha256:" + "a" * 64, **GATE_LOCK}),
         {},
         secrets=_empty_secrets(),
     )
@@ -554,12 +563,13 @@ def test_workload_image_hole_with_no_lock_entry_refuses(tmp_path: Path, monkeypa
     config = _root_config(
         repository="ghcr.io/org/repo",
         project_name="example",
+        platforms=["linux/amd64"],
         services={"core": {"workloads": ["api.yaml"]}},
     )
     config.root = tmp_path
 
     with pytest.raises(ValueError, match=r"api\.yaml.*API_IMAGE.*image lock"):
-        score_compose_module.generate_compose(config, ConfigLock.model_validate({}), {}, secrets=_empty_secrets())
+        score_compose_module.generate_compose(config, _lock_for_images(GATE_LOCK), {}, secrets=_empty_secrets())
 
 
 SHIPPED_TEMPLATES = {
@@ -644,6 +654,7 @@ def _bundle_config(**bundle: object) -> Config:
     return _root_config(
         repository="ghcr.io/org/repo",
         project_name="example",
+        platforms=["linux/amd64"],
         services={"core": {"workloads": ["api.yaml"], **bundle}},  # type: ignore[arg-type]
     )
 
@@ -664,9 +675,9 @@ def _compose_init_templates(
     recorder = ComposeBashRecorder(generated)
     monkeypatch.setattr(score_module, "bash", recorder.run)
     config.root = tmp_path
-    if images:
-        config.platforms = ["linux/amd64"]
-    score_compose_module.generate_compose(config, _lock_for_images(images), {}, secrets=_empty_secrets())
+    score_compose_module.generate_compose(
+        config, _lock_for_images({**images, **GATE_LOCK}), {}, secrets=_empty_secrets()
+    )
     inits = [command for command in recorder.commands if command.startswith("score-compose init")]
     return [[Path(token).name for token in command.split() if token.endswith(".tpl")] for command in inits]
 
@@ -701,22 +712,12 @@ def test_gate_pin_stays_unregistered_without_provisioner_services(
     assert templates == [["probe-adapter-healthchecks.tpl", "restart.tpl"]]
 
 
-def test_gate_pin_refuses_a_gate_forming_run_without_the_lock_entry(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_generate_compose_requires_the_alpine_image_lock_entry(tmp_path: Path) -> None:
     config = _bundle_config()
+    config.root = tmp_path
 
-    with pytest.raises(ValueError, match="ALPINE_IMAGE"):
-        _compose_init_templates(
-            monkeypatch,
-            tmp_path,
-            config,
-            {},
-            {
-                "stack/score/api.yaml": _workload_referencing("config", "api"),
-                "stack/score/compose/config.yaml": PROVISIONER_WITH_SERVICES,
-            },
-        )
+    with pytest.raises(ValueError, match="must carry the ALPINE_IMAGE entry"):
+        score_compose_module.generate_compose(config, ConfigLock.model_validate({}), {}, secrets=_empty_secrets())
 
 
 def test_provisioners_register_by_resource_type_closure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1026,13 +1027,14 @@ def test_consumer_interpolated_binds_ride_undoubled(tmp_path: Path, monkeypatch:
     config = _root_config(
         repository="ghcr.io/org/repo",
         project_name="example",
+        platforms=["linux/amd64"],
         services={"rathole-client": {"workloads": ["rathole-client.yaml"]}},
     )
     config.root = tmp_path
 
     score_compose_module.generate_compose(
         config,
-        ConfigLock.model_validate({}),
+        _lock_for_images(GATE_LOCK),
         {},
         secrets=SecretsDeclaration.model_validate({"TUNNEL_CONTROL_ENDPOINT": "tunnel"}),
     )
@@ -1053,6 +1055,7 @@ def test_gpu_compose_templates_register_per_the_renderings_variant(
     config = _root_config(
         repository="ghcr.io/org/repo",
         project_name="example",
+        platforms=["linux/amd64"],
         services={
             "core-cuda": {"workloads": ["api.yaml"], "vars": {"GPU_VARIANT": "cuda"}},
             "core-rocm": {"workloads": ["api.yaml"], "vars": {"GPU_VARIANT": "rocm"}},
@@ -1243,7 +1246,11 @@ def _verb_repo(tmp_path: Path) -> None:
                 "LOKI_IMAGE": {
                     "index": LOKI_INDEX,
                     "platforms": {"linux/amd64": LOKI_MANIFEST},
-                }
+                },
+                "ALPINE_IMAGE": {
+                    "index": GATE_LOCK["ALPINE_IMAGE"],
+                    "platforms": {"linux/amd64": GATE_LOCK["ALPINE_IMAGE"]},
+                },
             }
         }),
         encoding="utf-8",

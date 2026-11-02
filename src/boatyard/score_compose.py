@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 import shutil
-from functools import partial
 from pathlib import Path
 from typing import Literal, Self
 
@@ -28,7 +27,6 @@ from boatyard.config import (
 from boatyard.config_lock import LOCK_PATH, ConfigLock
 from boatyard.lock import compose_env_entries
 from boatyard.score import (
-    CompiledProvisioners,
     SECRETS_FILE,
     SecretsDeclaration,
     dump_compose,
@@ -129,6 +127,8 @@ def generate_compose(
     score_dir = root / config.score_dir
     score_state = score_dir / STATE_PREFIX
     images = compose_env_entries(lock, config, merged_environment(root))
+    if "ALPINE_IMAGE" not in images:
+        raise ValueError(f"{LOCK_PATH.as_posix()}: the image lock must carry the ALPINE_IMAGE entry")
 
     for bundle in bundles:
         # Collect per-workload annotation facts and enforce the compose placement laws.
@@ -160,7 +160,6 @@ def generate_compose(
             output=output,
             images=images,
             service_shas=service_shas,
-            gate=partial(_require_alpine_when_declaring_services, images=images, bundle_name=bundle.name),
         )
 
         # Pin the synthesized gate's bare alpine image to the ALPINE_IMAGE lock hole.
@@ -240,13 +239,3 @@ def generate_compose(
     secrets.validate_consumed(consumed, "compose", SECRETS_FILE.as_posix())
 
     return [bundle.output for bundle in bundles]
-
-
-def _require_alpine_when_declaring_services(
-    provisioners: CompiledProvisioners, *, images: dict[str, str], bundle_name: str
-) -> None:
-    if provisioners.declares_services and "ALPINE_IMAGE" not in images:
-        raise ValueError(
-            f"bundle {bundle_name!r}: its provisioners declare services; "
-            f"{LOCK_PATH.as_posix()} must carry the ALPINE_IMAGE entry"
-        )
