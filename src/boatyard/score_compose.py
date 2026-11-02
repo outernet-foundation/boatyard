@@ -16,19 +16,17 @@ from pydantic import (
 
 from boatyard.config import (
     CONSUMER_INTERPOLATED_ANNOTATION,
-    ComposeWorkloadDocument,
     EDGE_SERVICE_NAME,
     Yaml,
     double_dollars,
     is_mapping,
-    validate,
+    load_compose_workload,
     Config,
 )
 from boatyard.config_lock import LOCK_PATH
 from boatyard.score import (
     CompiledProvisioners,
     dump_compose,
-    load_yaml_file,
     render_score,
     write_generated_file,
 )
@@ -133,7 +131,7 @@ def generate_compose(
         # Collect per-workload annotation facts and enforce the compose placement laws.
         interpolated_targets: set[str] = set()
         for name in bundle.workloads:
-            workload = validate(ComposeWorkloadDocument, load_yaml_file(score_dir / name), name)
+            workload = load_compose_workload(score_dir, name)
             annotations = workload.metadata.annotations
 
             # Track the declared files whose contents ride un-doubled.
@@ -170,7 +168,7 @@ def generate_compose(
         if is_mapping(gate_service):
             gate_service["image"] = "${ALPINE_IMAGE:?err}"
         # Parse the rendered output into the typed compose document.
-        document = validate(ComposeDocument, raw, output.as_posix())
+        document = ComposeDocument.model_validate(raw)
         services = document.services or {}
 
         # Collapse doubled {workload}-{container} service names.

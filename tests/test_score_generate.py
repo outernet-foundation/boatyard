@@ -752,12 +752,10 @@ containers:
 """
 
 
-def test_httpget_probe_without_the_adapter_annotation_refuses_naming_the_workload(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_httpget_probe_without_the_adapter_annotation_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _bundle_config()
 
-    with pytest.raises(ValueError, match=r"api\.yaml.*readinessProbe httpGet.*probe-adapter"):
+    with pytest.raises(ValidationError, match=r"readinessProbe httpGet.*probe-adapter"):
         _compose_init_templates(
             monkeypatch,
             tmp_path,
@@ -768,7 +766,7 @@ def test_httpget_probe_without_the_adapter_annotation_refuses_naming_the_workloa
             },
         )
 
-    with pytest.raises(ValueError, match=r"api\.yaml.*livenessProbe httpGet.*probe-adapter"):
+    with pytest.raises(ValidationError, match=r"livenessProbe httpGet.*probe-adapter"):
         _compose_init_templates(
             monkeypatch,
             tmp_path,
@@ -780,12 +778,10 @@ def test_httpget_probe_without_the_adapter_annotation_refuses_naming_the_workloa
         )
 
 
-def test_unknown_probe_adapter_values_refuse_naming_the_workload(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_unknown_probe_adapter_values_refuse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _bundle_config()
 
-    with pytest.raises(ValueError, match=r"api\.yaml.*supported adapters"):
+    with pytest.raises(ValidationError, match=r"supported adapters"):
         _compose_init_templates(
             monkeypatch,
             tmp_path,
@@ -815,12 +811,10 @@ def test_adapted_probe_bearing_workloads_register_the_healthcheck_template(
     assert templates == [["probe-adapter-healthchecks.tpl", "restart.tpl"]]
 
 
-def test_restart_values_outside_the_compose_enum_refuse_naming_the_workload(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_restart_values_outside_the_compose_enum_refuse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _bundle_config()
 
-    with pytest.raises(ValueError, match=r"api\.yaml.*restart policies"):
+    with pytest.raises(ValidationError, match=r"restart policies"):
         _compose_init_templates(
             monkeypatch,
             tmp_path,
@@ -852,12 +846,10 @@ def test_restart_annotation_with_an_enum_value_passes(tmp_path: Path, monkeypatc
     assert templates == [["probe-adapter-healthchecks.tpl", "restart.tpl"]]
 
 
-def test_bare_literal_workload_image_refuses_naming_the_workload(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_bare_literal_workload_image_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _bundle_config()
 
-    with pytest.raises(ValueError, match=r"api\.yaml.*image.*must bind"):
+    with pytest.raises(ValidationError, match=r"image.*must bind"):
         _compose_init_templates(
             monkeypatch,
             tmp_path,
@@ -886,14 +878,14 @@ def test_dev_toggles_spelling_refuses_at_generation(tmp_path: Path, monkeypatch:
 def test_a_non_string_dev_toggles_annotation_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _bundle_config()
 
-    with pytest.raises(ValueError, match=r"api\.yaml.*annotations"):
+    with pytest.raises(ValidationError, match=r"annotations.*dev-toggles"):
         _compose_init_templates(monkeypatch, tmp_path, config, {}, {"stack/score/api.yaml": _toggles_workload(True)})
 
 
 def test_a_workload_without_metadata_name_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _bundle_config()
 
-    with pytest.raises(ValueError, match=r"api\.yaml.*metadata\.name must be 'api'"):
+    with pytest.raises(ValidationError, match=r"metadata\.name must be 'api'"):
         _compose_init_templates(monkeypatch, tmp_path, config, {}, {"stack/score/api.yaml": "containers: {}\n"})
 
 
@@ -901,7 +893,7 @@ def test_a_workload_name_mismatching_the_file_stem_refuses(tmp_path: Path, monke
     config = _bundle_config()
     source = "metadata:\n  name: apis\ncontainers: {}\n"
 
-    with pytest.raises(ValueError, match=r"api\.yaml.*metadata\.name must be 'api'"):
+    with pytest.raises(ValidationError, match=r"metadata\.name must be 'api'"):
         _compose_init_templates(monkeypatch, tmp_path, config, {}, {"stack/score/api.yaml": source})
 
 
@@ -943,7 +935,7 @@ def test_dev_toggles_on_a_k8s_only_workload_refuses(tmp_path: Path) -> None:
 def test_consumer_interpolated_names_must_match_declared_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _bundle_config()
 
-    with pytest.raises(ValueError, match=r"api\.yaml.*files:"):
+    with pytest.raises(ValidationError, match=r"names no declared files"):
         _compose_init_templates(
             monkeypatch,
             tmp_path,

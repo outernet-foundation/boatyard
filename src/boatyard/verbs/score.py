@@ -12,7 +12,7 @@ from bashrun.bash import bash, bash_output
 
 from boatyard import dockerfiles
 from boatyard.compose import merged_environment
-from boatyard.config import COMPOSE_HOLE, Config, Target, validate
+from boatyard.config import COMPOSE_HOLE, Config, Target, load_yaml_file
 from boatyard.config_lock import LOCK_PATH, parse_config_lock
 from boatyard.lock import compose_env_entries
 from boatyard.score import (
@@ -20,7 +20,6 @@ from boatyard.score import (
     SECRETS_OUTPUT,
     SecretsDeclaration,
     collect_secret_keys,
-    load_yaml_file,
     split_documents,
     write_generated_file,
 )
@@ -161,7 +160,7 @@ def generate_artifacts(
         declaration_path = root / SECRETS_FILE
         k8s_secret = f"{config.project_name}-secrets"
 
-        declaration = validate(SecretsDeclaration, load_yaml_file(declaration_path), declaration_path.as_posix())
+        declaration = SecretsDeclaration.model_validate(load_yaml_file(declaration_path))
 
         if target in ("both", "compose"):
             consumed: set[str] = set()

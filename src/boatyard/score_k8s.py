@@ -15,20 +15,18 @@ from pydantic import (
 from boatyard.config import (
     DEV_TOGGLES_ANNOTATION,
     K8sConfig,
-    WorkloadDocument,
     Yaml,
     Config,
     chart_lock_key,
     is_list,
     is_mapping,
-    validate,
+    load_workload,
 )
 from boatyard.config_lock import ConfigLock
 from boatyard.lock import env_entries
 from boatyard.score import (
     MARKERS,
     dump_compose,
-    load_yaml_file,
     marker_entry,
     render_score,
     resolve_markers,
@@ -78,7 +76,7 @@ def generate_k8s(
     for name in k8s.workloads:
         if name in compose_workloads:
             continue
-        k8s_annotations = validate(WorkloadDocument, load_yaml_file(score_dir / name), name).metadata.annotations
+        k8s_annotations = load_workload(score_dir, name).metadata.annotations
         if DEV_TOGGLES_ANNOTATION in k8s_annotations:
             raise ValueError(
                 f"{name}: {DEV_TOGGLES_ANNOTATION} is compose dev-overlay vocabulary; this workload renders k8s-only"

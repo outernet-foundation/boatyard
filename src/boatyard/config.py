@@ -15,12 +15,12 @@ from pydantic import (
     Discriminator,
     Field,
     Tag,
-    ValidationError,
     ValidationInfo,
     field_validator,
     model_validator,
 )
 from strictyaml import load as load_strict_yaml
+from yaml import YAMLError, safe_load
 
 from boatyard.config_lock import (
     LOCK_PATH,
@@ -617,24 +617,19 @@ def require_workload_reference(name: str) -> None:
         raise ValueError(f"workload reference {name!r} must be a flat .yaml file name")
 
 
-def validate[ModelT: BaseModel](model: type[ModelT], value: Yaml, source: str) -> ModelT:
+def load_yaml_file(path: Path) -> Yaml:
     try:
-        return model.model_validate(value, context={"source": source})
-    except ValidationError as error:
-        raise ValueError(f"{source}: {_validation_error_text(error)}") from error
+        return safe_load(path.read_text(encoding="utf-8"))
+    except YAMLError as error:
+        raise ValueError(f"{path.as_posix()}: {error}") from error
 
 
-def _validation_error_text(error: ValidationError) -> str:
-    parts: list[str] = []
-    for item in error.errors():
-        message = item["msg"]
-        stripped = message.removeprefix("Value error, ")
-        if stripped != message:
-            parts.append(stripped)
-        else:
-            location = ".".join(str(piece) for piece in item["loc"])
-            parts.append(f"{location}: {message}")
-    return "; ".join(parts)
+def load_workload(score_dir: Path, name: str) -> WorkloadDocument:
+    return WorkloadDocument.model_validate(load_yaml_file(score_dir / name), context={"source": name})
+
+
+def load_compose_workload(score_dir: Path, name: str) -> ComposeWorkloadDocument:
+    return ComposeWorkloadDocument.model_validate(load_yaml_file(score_dir / name), context={"source": name})
 
 
 def require_compose_stack(config: Config | None) -> Config:

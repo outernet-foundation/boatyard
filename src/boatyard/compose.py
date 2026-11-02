@@ -23,12 +23,11 @@ from boatyard.config import (
     RouteConfig,
     ServiceEntry,
     ServiceGroup,
-    ComposeWorkloadDocument,
     Yaml,
     double_dollars,
     is_mapping,
+    load_compose_workload,
     parse_dev_toggles,
-    validate,
 )
 from boatyard.config_lock import LOCK_PATH, parse_config_lock
 from boatyard.lock import compose_env_entries, render_env_entries
@@ -186,14 +185,10 @@ def select(config: Config, environment: Mapping[str, str]) -> Selection:
         name for name, service in config.service_builds.items() if service.dev_stage and name in output_services
     ]
     dev_toggles: dict[str, dict[str, str]] = {}
+    score_dir = config.root / config.score_dir
     for bundle in config.compose_bundles():
         for workload in bundle.workloads:
-            source_path = config.root / config.score_dir / workload
-            try:
-                document = yaml.safe_load(source_path.read_text(encoding="utf-8"))
-            except yaml.YAMLError as error:
-                raise ValueError(f"{workload}: {error}") from error
-            annotations = validate(ComposeWorkloadDocument, document, workload).metadata.annotations
+            annotations = load_compose_workload(score_dir, workload).metadata.annotations
             raw = annotations.get(DEV_TOGGLES_ANNOTATION)
             stem = Path(workload).stem
             if raw is None or stem not in output_services:

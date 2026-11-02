@@ -29,9 +29,9 @@ from boatyard.config import (
     Yaml,
     is_list,
     is_mapping,
-    validate,
+    load_workload,
+    load_yaml_file,
     Config,
-    WorkloadDocument,
 )
 
 PATCH_TEMPLATES_DIR = "patch_templates"
@@ -200,7 +200,7 @@ def render_score(
                     continue
                 compiled_entries: list[Yaml] = []
                 for entry in document:
-                    validate(AuthoredProvisioner, entry, name)
+                    AuthoredProvisioner.model_validate(entry)
                     if not is_mapping(entry):
                         continue
                     if entry.get("services"):
@@ -248,7 +248,7 @@ def render_score(
                 entries = {}
                 state["workloads"] = entries
             for name in workloads:
-                workload_name = validate(WorkloadDocument, load_yaml_file(score_dir / name), name).metadata.name
+                workload_name = load_workload(score_dir, name).metadata.name
                 if not workload_name:
                     continue
                 entry = entries.get(workload_name)
@@ -421,13 +421,6 @@ def write_generated_file(path: Path, text: str) -> None:
         handle.write(text)
 
     path.chmod(0o644)
-
-
-def load_yaml_file(path: Path) -> Yaml:
-    try:
-        return yaml.safe_load(path.read_text(encoding="utf-8"))
-    except yaml.YAMLError as error:
-        raise ValueError(f"{path.as_posix()}: {error}") from error
 
 
 def split_documents(text: str) -> list[str]:
