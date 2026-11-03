@@ -163,11 +163,11 @@ def generate_compose(
         services = document.services or {}
 
         # Pair each rendered {workload}-{container} service with its owning workload and its collapsed container name.
-        services_map: dict[str, tuple[ComposeService, ComposeWorkloadDocument | None, str]] = {}
-        for workload_name, workload in workloads:
-            for container_name in workload.containers:
-                service_name = f"{workload_name}-{container_name}"
-                services_map[service_name] = (services[service_name], workload, container_name)
+        services_map: dict[str, tuple[ComposeService, ComposeWorkloadDocument | None, str]] = {
+            (service_name := f"{workload_name}-{container_name}"): (services[service_name], workload, container_name)
+            for workload_name, workload in workloads
+            for container_name in workload.containers
+        }
 
         # Carry services no workload owns — score-synthesized helpers and provisioner
         # services — through under their rendered names.
