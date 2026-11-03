@@ -36,7 +36,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
   `publish.py` publish preparation; `crane.py` pinned crane installer; `cli.py` the single console-script app composing the verb apps namelessly; `verbs/*` one module per command. Model modules run root → leaves: root record first
   (`RootModel` subscripts quote forward refs; the one inversion is a parent whose field default constructs the child), functions callers-before-callees; imports absolute; `config_lock`/`dockerfiles` ← `config` one-way. Also in `config.py` (the shared leaf): `Yaml`,
   `is_mapping`/`is_list`, `double_dollars` (the one `$`-doubling home), `PLACEHOLDER`/`COMPOSE_HOLE`/`ENV_NAME_PATTERN`, `EDGE_SERVICE_NAME`, `chart_lock_key`, `load_yaml_file`,
-  `compose_bundle_output_path` (the one compose-output path join). Lifecycle stays a separate package from codegen (disjoint dependency surfaces — bundling would force
+  `compose_bundle_output_path` (the one compose-output path join), `qualified_option_name` (the one qualified-name join). Lifecycle stays a separate package from codegen (disjoint dependency surfaces — bundling would force
   stack-only consumers to install `sqlacodegen`, `psycopg`, `datamodel-code-generator`).
 
 ## Config schema
@@ -48,8 +48,8 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
   `.python-version`); a literal value in place of a template = the deliberate-skew escape hatch.
 - `variants`: ALL_CAPS axis → bare lowercase values, first = the default cell; declared, never probed. `platforms` required exactly when `base_images` is; charts arch-neutral, exempt.
 - `project_name` required iff `services`; `gateway` is optional — it refuses at assembly only when routes need it.
-- `services`: groups (`options:` mutually exclusive) + bare riding entries; every entry/option is `ref:` (digest-pinned OCI include) or `workloads:`/`vars:`; workload references are flat `*.yaml` names (both sections; the `metadata.name` pin keys on stems); one flat name vocabulary, collide-refuse;
-  `auth` reserved — its options declare exactly one route; routes `/`-rooted, edge-wide unique, `strip_prefix` requires a wildcard; ports use the mapping form (service, published, target).
+- `services`: groups (`options:` mutually exclusive) + bare riding entries; every entry/option is `ref:` (digest-pinned OCI include) or `workloads:`/`vars:`; workload references are flat `*.yaml` names (both sections; `metadata.name` pins on stems); an option's name outside its group is its
+  qualified `group-dash-option` name; the vocabulary (qualified + bare spellings) refuses duplicates at load; `auth` reserved — options declare exactly one route; routes `/`-rooted, edge-wide unique, `strip_prefix` requires a wildcard; ports use the mapping form (service, published, target).
 - `k8s`: `workloads`, `vars`, `charts` name → `oci://…:tag|@digest`; the map key IS the `{NAME}_CHART` lock key; a section declaring neither workloads nor charts refuses.
 - `mirror_prefix`: root override (non-empty, no trailing slash), else `DEFAULT_MIRROR_PREFIX` (`ghcr.io/outernet-foundation/mirror`).
 - Root-model invisible defaults: `score_dir` (`stack/score`), k8s output paths, the three tool pins.
@@ -96,9 +96,9 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 
 ## Compose assembly and BUNDLES=
 
-- Selection law: `BUNDLES=` names options only (a bare entry's name refuses as unselectable); ≤ one option per group; zero options legal exactly when riders or routes carry the assembly (omitting the auth pick = the anonymous edge); an
-  options-only repo with an empty selection refuses; unknown names refuse listing the vocabulary; the `up` verb owns the entry gate — no config or no `services:` refuses, a set `BUNDLES=` refuses first; `select()` owns the selection laws. `COMPOSE_PROFILES`: shell-env-over-`.env`, comma-split,
-  deduped, forwarded as `--profile` flags; unknown profiles refuse before probe and build. Membership law: everything about the docker compose invocation — selection, rendering, invocation spelling, staged inputs — lives in `compose.py`; nothing else lands there.
+- Selection law: `BUNDLES=` names options only, by qualified `group-dash-option` spelling (a bare entry's name refuses as unselectable); ≤ one option per group; zero options legal exactly when riders or routes carry the assembly (omitting the auth pick = the anonymous edge); an options-only
+  repo with an empty selection refuses; unknown names refuse listing the qualified vocabulary; the `up` entry gate refuses a set `BUNDLES=` in a repo without `services:`; `select()` owns the selection laws. `COMPOSE_PROFILES`: shell-env-over-`.env`, comma-split, deduped, forwarded
+  as `--profile` flags. Membership law: everything about the docker compose invocation — selection, rendering, invocation spelling, staged inputs — lives in `compose.py`; nothing else lands there.
 - The materialized root carries the project `name:`, the `include:` list (remote refs verbatim, local outputs by absolute path, in `services:` declaration order), the emitted edge (iff any route rides), parent-file port stanzas; compose
   merges parent ports into included services and honors `!reset` — the merge needs compose ≥ 2.40.
 - Validation teeth, in `render()`: with routes or ports, `docker compose config --services` must list every route upstream + every port's owning service; selected profiles must appear in `config --profiles`; a selected
@@ -132,7 +132,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 
 ## Score generation
 
-- Deterministic generation from `stack/score/` into `stack/generated/`; one compose rendering per local option + bare entry (output `stack/generated/compose/compose.{name}.yaml`; the compose state dir is re-created per entry); k8s = one
+- Deterministic generation from `stack/score/` into `stack/generated/`; one compose rendering per local option (qualified name) + bare entry (output `stack/generated/compose/compose.{name}.yaml`; the compose state dir is re-created per entry); k8s = one
   monolithic rendering over `k8s.workloads` + `k8s.vars`, untouched by `BUNDLES=`, with instance names deterministic by construction — state.yaml pre-seeds `InstanceSuffix` = `-` + first 10 hex of sha256(metadata.name) per workload between init
   and generate (state-format coupling bounded by the pinned tool version); `--local` writes the gitignored local output with the local storage class; charts render through `helm template` against the
   lock's `{NAME}_CHART` entry (a chart without its lock entry refuses naming the lock verb; helm is a renderer, never a deployer); both tools run in their output directory (`score.py`); state deleted after the run — `stack/score/` stays read-only; output reproduces from a fresh clone.
@@ -167,7 +167,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 
 ## Publish
 
-- Publishing happens iff local entries are declared — no flag, no section; artifact names derive from `repository` (`{repository}/{entry-or-option}`); `--plan` prints the entries as a bare JSON array (`[]` when none), no
+- Publishing happens iff local entries are declared — no flag, no section; artifact names derive from `repository` (`{repository}/{qualified-or-entry-name}`); `--plan` prints the entries as a bare JSON array (`[]` when none), no
   login, no publish — the CI getter's derivation source; bake substitutes `${ALL_CAPS}` holes against `service_shas()` tree-tags + the lock's index projection; unresolved vars stay holes in the artifact for the consumer's `.env`
   (non-empty stubs set only so publish's interpolation validation passes); authored `configs.content` rides verbatim (single-`$` holes = the include consumer's interpolation surface — `$`-doubling is score's concern, not publish's); image
   refs under `{repository}/` pin to `@sha256` via memoized `imagetools inspect`; each entry publishes once under the `<sha>` tag and aliases `<branch>` with `crane tag` (compose stamps wall-clock `created`, so the alias is the only way both
@@ -177,8 +177,8 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 
 - Everything the substrate needs that score's container model doesn't carry lives in the workload file as `outernet.internal/*` annotations — `boatyard.yml` never carries a per-workload runtime fact; the shipped patch templates
   (package data in `src/boatyard/patch_templates/`) are the annotation reader — one annotation, one template, one behavior; consumer repos never author one; refusal laws live in boatyard code (templates are data and cannot
-  refuse); the lens is two models — `WorkloadDocument` (strict `dict[str, str]` annotations, `metadata.name` pinned to the workload file stem, typed `resources` map with `type` required) and `ComposeWorkloadDocument` (adds httpGet-requires-probe-adapter) — one lens spelling: `WorkloadDocument.parse(raw, file_name)`
-  (stem pin; the compose lens inherits it); the score pipelines parse workloads once (`load_workloads` → `LoadedWorkload`: file name, raw, document); score propagates `metadata.annotations` into both renderings — diffs must include the annotation lines.
+  refuse); the lens is two models — `WorkloadDocument` (strict `dict[str, str]` annotations, `metadata.name` pinned to the workload file stem, typed `resources` map with `type` required) and `ComposeWorkloadDocument` (adds httpGet-requires-probe-adapter) — one lens spelling:
+  `WorkloadDocument.parse(raw, file_name)` (stem pin; the compose lens inherits it); the score pipelines parse workloads once (`load_workloads` → `LoadedWorkload`: file name, raw, document); score propagates `metadata.annotations` into both renderings.
 
 | Annotation | Behavior |
 |---|---|

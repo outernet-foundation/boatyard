@@ -14,12 +14,15 @@ this file and the code disagree, reconcile this file before touching code
 verify with the target repo's battery; commit as you go, prose and code in
 separate commits.
 
-## Snapshot (verified 2026-11-02)
+## Snapshot (verified 2026-11-03)
 
 - boatyard branch `refactor`: all consumer-contract work, the module-tiers
   refactor, the score unification, the boatyard rename + CLI refactors, and
   Work 1's disk-state service-hash phase (design signed off, battery green,
-  `pathspec` dropped) are landed locally, ahead of origin — unpushed.
+  `pathspec` dropped) and qualified-selection-names phase (qualified
+  `BUNDLES=` grammar, flat vocabulary law repealed into a qualified-vocabulary
+  collision check, options identified by qualified name in bundle outputs,
+  publish legs, and selection) are landed locally, ahead of origin — unpushed.
   `publish.yml` is wired (`packages.boatyard`, `major_minor: "0.6"`,
   `registry: pypi`).
 - PyPI: `boatyard` registered, nothing published. GitHub repo rename
