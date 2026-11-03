@@ -133,16 +133,7 @@ def generate_compose(
 
     outputs: list[Path] = []
     for name, entry in bundles:
-        # Collect per-workload annotation facts and enforce the compose placement laws.
-        interpolated_targets: set[str] = set()
-        for workload_name in entry.workloads:
-            workload = ComposeWorkloadDocument.load(score_dir / workload_name)
-            annotations = workload.metadata.annotations
-
-            # Track the declared files whose contents ride un-doubled.
-            consumer_interpolated = annotations.get(CONSUMER_INTERPOLATED_ANNOTATION)
-            if consumer_interpolated is not None:
-                interpolated_targets.update(consumer_interpolated.split(","))
+        workloads = [ComposeWorkloadDocument.load(score_dir / workload_name) for workload_name in entry.workloads]
 
         # Recreate the shared state dir and render the bundle through the spine.
         shutil.rmtree(score_state, ignore_errors=True)
@@ -165,6 +156,14 @@ def generate_compose(
             images=images,
             service_shas=service_shas,
         )
+
+        # Declared files whose contents ride un-doubled.
+        interpolated_targets = {
+            target
+            for workload in workloads
+            if CONSUMER_INTERPOLATED_ANNOTATION in workload.metadata.annotations
+            for target in workload.metadata.annotations[CONSUMER_INTERPOLATED_ANNOTATION].split(",")
+        }
 
         # Parse the rendered output into the typed compose document.
         raw = yaml.safe_load(output_path.read_text(encoding="utf-8"))
