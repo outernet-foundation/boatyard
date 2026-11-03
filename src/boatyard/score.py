@@ -15,6 +15,7 @@ from bashrun.bash import bash
 from pydantic import (
     BaseModel,
     ConfigDict,
+    Field,
     RootModel,
     ValidationInfo,
     field_validator,
@@ -139,6 +140,13 @@ class ImageReference(NamedTuple):
     digest: str
 
 
+class ToolState(BaseModel):
+    # The score tools' state.yaml, pinned by the tool version; this view types only the shape boatyard touches.
+    model_config = ConfigDict(extra="allow")
+
+    workloads: dict[str, dict[str, Yaml]] = Field(default_factory=dict)
+
+
 def _represent_multiline(dumper: yaml.SafeDumper, value: str) -> yaml.ScalarNode:
     return yaml.ScalarNode("tag:yaml.org,2002:str", value, style="|" if "\n" in value else None)
 
@@ -171,14 +179,7 @@ def render_score(
         ExitStack() as stack,
     ):
         # Collect the resource types the workloads reference.
-        referenced: set[str] = set()
-        for workload in workloads:
-            resources = workload.raw.get("resources") if is_mapping(workload.raw) else None
-            if is_mapping(resources):
-                for resource in resources.values():
-                    resource_type = resource.get("type") if is_mapping(resource) else None
-                    if isinstance(resource_type, str):
-                        referenced.add(resource_type)
+        referenced = {resource.type for workload in workloads for resource in workload.document.resources.values()}
 
         # Select the rendering's provisioner files that declare a referenced type.
         selected: list[tuple[str, list[Yaml]]] = []
@@ -199,12 +200,11 @@ def render_score(
                 for entry in entries:
                     resolved = resolve_markers(entry, context)
                     AuthoredProvisioner.model_validate(resolved)
-                    if not is_mapping(resolved):
-                        continue
-                    compiled_entries.append({
-                        key: dump_yaml(value) if key in STRING_FORM_FIELDS and value is not None else value
-                        for key, value in resolved.items()
-                    })
+                    if is_mapping(resolved):
+                        compiled_entries.append({
+                            key: dump_yaml(value) if key in STRING_FORM_FIELDS and value is not None else value
+                            for key, value in resolved.items()
+                        })
                 target = directory / name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 write_file(target, dump_yaml(compiled_entries))
@@ -224,21 +224,11 @@ def render_score(
         # Pre-seed each workload's instance suffix so generated names are deterministic.
         if substrate == "k8s":
             state_path = state_dir(tool, output) / "state.yaml"
-            state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
-            if not is_mapping(state):
-                state = {}
-            entries = state.get("workloads")
-            if not is_mapping(entries):
-                entries = {}
-                state["workloads"] = entries
+            state = ToolState.model_validate(yaml.safe_load(state_path.read_text(encoding="utf-8")) or {})
             for workload in workloads:
                 workload_name = Path(workload.file_name).stem
-                entry = entries.get(workload_name)
-                if not is_mapping(entry):
-                    entry = {}
-                    entries[workload_name] = entry
-                entry["instance_suffix"] = "-" + sha256(workload_name.encode()).hexdigest()[:10]
-            write_file(state_path, dump_yaml(state))
+                state.workloads.setdefault(workload_name, {})["instance_suffix"] = instance_suffix(workload_name)
+            write_file(state_path, dump_yaml(state.model_dump()))
 
         # Render the expanded workload copies and run generate.
         copies_directory = Path(stack.enter_context(TemporaryDirectory()))
@@ -274,6 +264,10 @@ def state_dir(tool: str, output: Path) -> Path:
 
 def state_dir_name(tool: str) -> str:
     return f".{tool}"
+
+
+def instance_suffix(workload_name: str) -> str:
+    return "-" + sha256(workload_name.encode()).hexdigest()[:10]
 
 
 def resolve_markers(node: Yaml, context: MarkerContext) -> Yaml:

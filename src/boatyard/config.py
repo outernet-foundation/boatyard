@@ -531,11 +531,18 @@ class WorkloadContainer(BaseModel):
         return value
 
 
+class WorkloadResource(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: str
+
+
 class WorkloadDocument(BaseModel):
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
     metadata: WorkloadMetadata = Field(default_factory=WorkloadMetadata)
     containers: dict[str, WorkloadContainer] = Field(default_factory=dict)
+    resources: dict[str, WorkloadResource] = Field(default_factory=dict)
 
     @classmethod
     def load(cls, path: Path) -> Self:

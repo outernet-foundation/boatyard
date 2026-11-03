@@ -15,7 +15,7 @@ from boatyard import score as score_module
 from boatyard import score_compose as score_compose_module
 from boatyard import score_k8s as score_k8s_module
 from boatyard.verbs import score as score_verb_module
-from boatyard.config import Config
+from boatyard.config import Config, WorkloadDocument
 from boatyard.config_lock import ConfigLock
 from boatyard.score import SecretsDeclaration, write_file
 from boatyard.score_compose import BindVolume, ComposeService
@@ -896,6 +896,19 @@ def test_unknown_probe_adapter_values_refuse(tmp_path: Path, monkeypatch: pytest
                 "stack/score/api.yaml": "metadata:\n  name: api\n  annotations:\n    outernet.internal/probe-adapter: curl\ncontainers: {}\n",
             },
         )
+
+
+def test_workload_resources_parse_typed() -> None:
+    document = WorkloadDocument.parse(
+        {"resources": {"db": {"type": "example-db"}}, "metadata": {"name": "api"}}, "api.yaml"
+    )
+
+    assert document.resources["db"].type == "example-db"
+
+
+def test_workload_resources_without_a_type_refuse() -> None:
+    with pytest.raises(ValidationError, match=r"resources\.db\.type"):
+        WorkloadDocument.parse({"resources": {"db": {"id": "main"}}, "metadata": {"name": "api"}}, "api.yaml")
 
 
 def test_adapted_probe_bearing_workloads_register_the_healthcheck_template(
