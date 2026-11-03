@@ -202,7 +202,26 @@ def generate_compose(
         # Inline every bind volume as a top-level configs entry and carry the gate rename into each depends_on.
         contents: dict[str, ComposeConfig] = {}
         for service, workload, _collapsed_name in services_map.values():
-            inline_binds(service, workload, contents, score_dir, root)
+            binds = [volume for volume in service.volumes or [] if isinstance(volume, BindVolume)]
+            if binds:
+                # Carry the owning workload's declared consumer-interpolated files un-doubled.
+                interpolated_targets = (
+                    workload.metadata.annotations[CONSUMER_INTERPOLATED_ANNOTATION].split(",")
+                    if workload is not None and CONSUMER_INTERPOLATED_ANNOTATION in workload.metadata.annotations
+                    else []
+                )
+                references: list[ComposeConfigReference] = []
+                for bind in binds:
+                    # Resolve state-dir sources against score_dir, other sources against the repo root.
+                    path = score_dir / bind.source if bind.source.startswith(STATE_PREFIX) else root / bind.source
+                    text = path.read_text(encoding="utf-8")
+                    if bind.target not in interpolated_targets:
+                        text = double_dollars(text)
+                    contents[path.name] = ComposeConfig(content=text)
+                    references.append(ComposeConfigReference(source=path.name, target=bind.target))
+                service.configs = [*(service.configs or []), *references]
+                service.volumes = [volume for volume in service.volumes or [] if not isinstance(volume, BindVolume)] or None
+
             depends_on = service.depends_on
             if isinstance(depends_on, dict) and GATE_SERVICE in depends_on:
                 depends_on[gate] = depends_on.pop(GATE_SERVICE)
@@ -228,32 +247,3 @@ def generate_compose(
     secrets.validate_consumed(consumed, "compose", SECRETS_FILE.as_posix())
 
     return outputs
-
-
-def inline_binds(
-    service: ComposeService,
-    workload: ComposeWorkloadDocument | None,
-    contents: dict[str, ComposeConfig],
-    score_dir: Path,
-    root: Path,
-) -> None:
-    binds = [volume for volume in service.volumes or [] if isinstance(volume, BindVolume)]
-    if not binds:
-        return
-    # Declared files of the owning workload whose contents ride un-doubled.
-    interpolated_targets = (
-        workload.metadata.annotations[CONSUMER_INTERPOLATED_ANNOTATION].split(",")
-        if workload is not None and CONSUMER_INTERPOLATED_ANNOTATION in workload.metadata.annotations
-        else []
-    )
-    references: list[ComposeConfigReference] = []
-    for bind in binds:
-        # Resolve state-dir sources against score_dir, other sources against the repo root.
-        path = score_dir / bind.source if bind.source.startswith(STATE_PREFIX) else root / bind.source
-        text = path.read_text(encoding="utf-8")
-        if bind.target not in interpolated_targets:
-            text = double_dollars(text)
-        contents[path.name] = ComposeConfig(content=text)
-        references.append(ComposeConfigReference(source=path.name, target=bind.target))
-    service.configs = [*(service.configs or []), *references]
-    service.volumes = [volume for volume in service.volumes or [] if not isinstance(volume, BindVolume)] or None
