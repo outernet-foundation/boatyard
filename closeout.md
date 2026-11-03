@@ -5,13 +5,12 @@ consolidated files (`plan-artifact-identity.md`,
 `plan-artifact-identity-implementation.md`, `plan-consumer-contract.md`,
 `plan-consumer-contract-implementation.md`, `score-refactor-plan.md`,
 `boatyard.md`) live in git history. `AGENTS.md` is the present-truth operations
-manual for the shipped surface; this file is the remaining-work record.
-`plan-apt-hermeticity.md` and `plan-mirror-digest-retention.md` are separate
-initiatives, untouched here. Every decision below is closed — do not
-re-litigate without its recorded flip condition. If this file and the code
-disagree, reconcile this file before touching code (spec-first). One work unit
-per session; verify with the target repo's battery; commit as you go, prose and
-code in separate commits.
+manual for the shipped surface; this file is the remaining-work
+record. Every decision below is closed — do not re-litigate without its
+recorded flip condition. If this file and the code disagree, reconcile this
+file before touching code (spec-first). One work unit per session; verify with
+the target repo's battery; commit as you go, prose and code in separate
+commits.
 
 ## Snapshot (verified 2026-11-02)
 
@@ -23,7 +22,7 @@ code in separate commits.
   (docker-devkit → boatyard) is an operator item, status unverified.
 - No `lock-env` verb exists (a stale name in the absorbed ADR): lock env is
   synthesized per-run inside `compose.py`/`bake.py` at the compose/bake edges.
-- Consumers and toolkit, all verified still on docker-devkit spellings:
+- Consumers and toolkit, all verified still on docker-devkit spellings: 
 
 | Repo | Pin today | Library imports to dissolve |
 |---|---|---|
@@ -48,11 +47,17 @@ These rulings bind every work unit below.
   artifact formats (`stack/generated/**`). Nothing lands that a consumer could
   only use by importing `boatyard`; every consumer touch is CLI, declarations,
   or artifacts.
+- Content identity hashes the working tree, never git state: the hash reads
+  the same source the build compiles (the `.dockerignore` allowlist, one
+  shared matcher), so dirt is content and a lying tag is unrepresentable.
+  "The tag of commit X" means "the tag of a clean checkout of X";
+  clean-checkout reproducibility is the CI-side invariant — no workflow step
+  writes into a hashed path before `build` / `generate-score --check`.
 - Three-class principle: authored facts in the config, registry-resolved facts
   in the lock, tree-derived facts computed on demand and never committed.
 - Fail closed: unknown name, missing lock entry, template composing a
-  nonexistent tag, literal image reference, unattributable construct, dirty
-  content-addressed build path — all refuse loudly, never silently.
+  nonexistent tag, literal image reference — all refuse loudly, never
+  silently.
 - Platform facts come from declarations, never from the touching machine;
   variant axes follow the same law (value sets and defaults declared, never
   probed).
@@ -83,39 +88,183 @@ These rulings bind every work unit below.
 ## Sequence
 
 ```
-1  release     boatyard 0.6.0 — operator; the pin target
-2  toolkit     cutover onto boatyard spellings; the SHA the wave bumps to
-3  sweep       all five consumers repin once, relock, rename, drop imports
-4  precision   attribution-based tree tags; boatyard release + consumer re-key
-5  semver      per-unit image + bundle version lines (toolkit, bar, boatyard)
-6  pin+over    qualified grammar, bundle lock pinning, overrides — one release
+1  build-out   the iteration unit on the refactor branch: disk-state service
+               hashes, qualified BUNDLES= grammar, ref tag grammar + _BUNDLE
+               lock entries, path-form bundle overrides
+2  release     boatyard 0.6.0 — operator; one release, the pin target
+3  toolkit     cutover onto boatyard spellings; the SHA the wave bumps to
+4  sweep       all five consumers repin once, relock, rename, drop imports,
+               adopt the iteration unit
+5  precision   attribution-based tree tags over the disk-state basis
+6  semver      per-unit image + bundle version lines (toolkit, bar, boatyard)
 7  adoption    one commit per consumer repo onto 5–6
-8  overlay     cross-repo dev overlay — trigger-gated, not scheduled
+8  overlay     cross-repo dev overlay — trigger-gated on rebuild latency
 ```
 
-Order within a unit is strict; unit order is fixed. 4 precedes 5 by
-construction: the change gate in 5 compares tree tags, and tags are a
-trustworthy change signal only once 4 makes them source-precise — every
-over-inclusion is a spurious version bump. 5 and 6 are separate releases,
-each independently testable; 6 ships the qualified grammar, lock writer,
-probe, and override together because they are one cluster in the selection
-machinery (an override shipped before bundle pinning would be built against a
-digest-ref spelling 6 deletes). Consumers adopt once, in 7, never per feature.
+Order within a unit is strict; unit order is fixed. 1 precedes 2 deliberately:
+one release and one sweep carry the iteration unit — with no consumer on
+old-basis tags there is no re-key wave at all, the world adopts disk-state
+tags from day one, old git-basis `tree-` tags freeze in ghcr, and infra's
+three `tree-` pins keep resolving as frozen digests. Nothing consumer-facing
+ships separately. 3 runs parallel to 1 (only the sweep's `uses:` bumps order
+on it). 5 precedes 6 by construction: the change gate in 6 compares tree
+tags, and tags are a trustworthy change signal only once 5 makes them
+source-precise — every over-inclusion is a spurious version bump. 6 is one
+release with its adoption in 7; consumers adopt once, never per feature.
 
-## Work 1 — Release 0.6.0 (operator)
+## Work 1 — Iteration unit (build-out)
 
-Hand branch/SHA to the operator: push `refactor`, merge, tag through the
-normal release flow (the toolkit's binding owns it); the PyPI publish rides
-the flow — the name is registered, no placeholder race. One release, one
-consumer pin; nothing consumer-facing ships separately. Confirm the GitHub
-repo rename happened (Settings → Rename; old blob URLs redirect, consumers fix
-links in Work 3). Optional: a final `docker-devkit` release whose description
-points at `boatyard` (precedent: `stack-toolkit` ≤0.1.1 signposts) — skip if
-unwanted.
+Lands on the refactor branch; 0.6.0 publishes only after it. Order within:
+disk-state hashing first (everything downstream builds on tags that track
+disk state), then the selection cluster. The phases ship as one release
+because they are one cluster in the selection machinery; an override shipped
+before bundle pinning would be built against a digest-ref spelling the
+grammar deletes, and the grammar flip breaks `.env` spellings — relock and
+flip are atomic per repo, riding Work 4's wave.
+
+### Disk-state service hashes
+
+The old hash read git objects while the build compiled the disk; every
+lying-tag vector (a dirty build under a stale tag, an untracked file entering
+image bits the hash never saw) flowed from that mismatch, and the dirty-tree
+guard this plan once carried was policing over a defect that disappears when
+the sources unify. Dirt is content; nothing refuses; there is no flag and no
+second channel.
+
+- `compute_service_shas` walks the disk under the `.dockerignore` allowlist
+  with the same matcher semantics the build context applies — one shared
+  matcher, one home. Deterministic serialization: sorted paths, exec bit,
+  bytes.
+- Identity is content-state, not commit-state: a local dirty state mints a
+  machine-local name that never leaves the daemon; clean checkouts anywhere
+  reproduce the same tags from the same commit.
+- No push-with-dirty refusal: pushing dirty-content tags is honest
+  (content-named bits) and the PR channel already publishes uncertified
+  ephemera; certification discipline lives in Work 6's stable channel, which
+  builds from clean CI.
+- CI-side invariant, audited in this unit: no toolkit workflow step writes
+  into a hashed path before `build` / `generate-score --check` — a drifting
+  workspace mints drifting tags and Work 6 would bump versions on noise.
+- The serialization change re-keys every existing `tree-` tag at placeframe's
+  regeneration in Work 4; with no consumer computing tags on the old basis,
+  this is a non-event, not a re-key wave.
+
+Verify: matcher golden tests diffing the hash's file set against actual
+docker build contexts; determinism (clean checkout twice → identical tags);
+dirty edit → re-key of the affected services; untracked-but-context-visible
+file → enters the image and re-keys (correct, not noise); empty service set
+still returns `{}` without walking.
+
+### Qualified selection names
+
+`BUNDLES=` becomes qualified `group-dash-option`, uniformly, for every option
+— no unqualified short forms even when unambiguous (one grammar rule beats a
+conditional rule; a group gaining a second option would break every bare
+spelling; one spelling per bundle greps). Bare entries are their own root and
+ride unconditionally, as today. The flat-vocabulary collision law is repealed:
+qualified names are structurally unique (group names unique as dict keys,
+option names unique within group), so two groups may each carry a `cuda`
+option and no hand-uniquing (`pf-cuda`) is forced on authors.
+At-most-one-option-per-group refusal unchanged; unknown names refuse loudly
+listing the qualified vocabulary; a bare entry's name refuses as unselectable.
+
+### Ref grammar and lock entries
+
+- `ref:` carries a tag, never a digest: a digest spelling refuses at config
+  load — the hand-copy workflow this kills becomes unrepresentable, not merely
+  discouraged. Any published channel spelling is a legal pin — stable semver
+  (`0.3.1`), dev (`0.3.1-dev.42`), sha (`{40-hex}`) — matching how packages
+  accept dev pins. Exactly one denylist entry: `latest` refuses (the sole
+  mutable spelling, repointed at every stable release — the standing
+  pin-everything law, not channel policing). Exact tags only, no range
+  specifiers (`>=`, `.x`): Renovate's docker manager bumps exact pins exactly
+  as it already does for `base_images` and charts; dev/prerelease pins get no
+  automated bump (Renovate skips prereleases) — accepted, the same behavior
+  package dev pins see. Flip condition for channel restrictions (certified-only
+  pins): a first consumer policy that wants them; if restrictions ever come,
+  they come everywhere at once (packages, images, bundles).
+- Lock entries: `{QUALIFIED_NAME}_BUNDLE={reference}@sha256:…` — the qualified
+  selection name upper-cased plus `_BUNDLE` (`PLACEFRAME_CUDA_BUNDLE`,
+  `TUNNEL_RATHOLE_BUNDLE`, bare `LIVEKIT_BUNDLE`), bundles arch-neutral (no
+  index/platforms structure). Written by the `lock` verb,
+  declaration-incremental like every lock line (unchanged tag copies its
+  frozen digest forward; tag bump re-resolves; `--upgrade` re-resolves
+  everything); `_BUNDLE` names collision-refuse against `base_images` keys at
+  load. A version-tagged ref without its lock entry refuses loudly naming
+  `boatyard lock` — the charts law, verbatim.
+- First-party artifacts resolve direct — org ghcr refs, un-prefixed; the
+  mirror is for upstreams that can hurt us; ours can't. The `mirror` verb
+  never enumerates bundle declarations. (The absorbed plan's standing default
+  "org-internal rides the mirror" never shipped and is reversed: two
+  resolutions for the same artifacts at two levels of one pull — bundle
+  mirrored, its embedded images direct — is incoherence, and mirroring
+  ourselves buys insurance against our own discipline at doubled storage.)
+- `up`'s fail-closed probe stays one law over every lock entry; bundle entries
+  probe via `crane digest` (compose-bundle media types are not image indexes;
+  `buildx imagetools inspect` may refuse them), under the same
+  stderr-classification law as image probes. `up` includes the lock's digest
+  ref; the yaml tag is never used directly at bring-up.
+- The loop this buys once Work 6 lands: producer release mints `{version}` on
+  the certified bundle digest; the consumer's upgrade is a yaml tag bump
+  (Renovate-native) plus a relock, with the digest movement visible as a
+  one-line lock diff in review — no registry pages, no hand-copying, no drift.
+
+### Local bundle overrides (Stage 1)
+
+`.env` may carry `BUNDLE_OVERRIDE_<QUALIFIED_NAME>` per machine — never
+committed, one variable per override, commentable per-line, the same qualified
+identity as `BUNDLES=` and the lock key. Value grammar: a filesystem path
+(relative resolves against the consumer repo root, so sibling checkouts work
+anywhere; absolute legal) or an `oci://` ref of any channel — the ref form
+tests a colleague's landed-but-unreleased bundle without local builds and
+without dirtying the tree. Unknown names refuse loudly listing the vocabulary;
+a known-but-unselected name is inert — the override rides with selection.
+
+An overridden option skips its lock-entry fail-closed probe and its
+lock-entry requirement — testing a bundle that may not be published at any
+digest yet is the point. The path form gets the same teeth as a local bundle
+output: must exist and parse, refuses an `edge` service, service-name
+collisions with other selected sources refuse, route/port validation runs
+unchanged. Producer-lock attachment (path form only): the bundle's
+third-party holes (`${LOKI_IMAGE:?err}`, …) have no declaration source in the
+consumer, and lock lines are never hand-authored — so the producer's
+`boatyard.lock.yml` attaches as an extra `--env-file`, derived
+deterministically from the override path's fixed
+`stack/generated/compose/` layout (three parents up), ordered so the
+consumer's own declarations win any shared key (pin the precedence against
+the version-pinned compose binary in tests). The ref form attaches nothing —
+registry bundles had their holes filled at publish.
+
+The iteration loop this buys: edit in the producer → `build` +
+`generate-score` (fresh disk-state `tree-` tags land in the local daemon; the
+regenerated `stack/generated/**` diff rides the working tree and lands with
+the work) → `uv run up` in the consumer. No commit until a content-addressed
+artifact is wanted; `up`'s `--pull missing` serves local-only tree tags. The
+expensive part of the old loop (push, CI, digest-copy) is what disappears.
+
+Verify per phase: matcher battery above; qualified resolution incl.
+same-named options in two groups and the refusal list; digest/`latest`/range
+refusals; lock-key derivation including bare entries;
+declaration-incremental copy-forward, tag-bump re-resolve, `--upgrade`;
+collision refusal; missing-entry refusal naming the relock; bundle probe
+classification; materialized root carries digest refs; both override value
+forms; the inert override; probe and requirement skip; producer-lock
+attachment and ordering; `edge` and collision teeth.
+
+## Work 2 — Release 0.6.0 (operator)
+
+Hand branch/SHA to the operator: push `refactor` (now carrying Work 1),
+merge, tag through the normal release flow (the toolkit's binding owns it);
+the PyPI publish rides the flow — the name is registered, no placeholder
+race. One release, one consumer pin; nothing consumer-facing ships
+separately. Confirm the GitHub repo rename happened (Settings → Rename; old
+blob URLs redirect, consumers fix links in Work 4). Optional: a final
+`docker-devkit` release whose description points at `boatyard` (precedent:
+`stack-toolkit` ≤0.1.1 signposts) — skip if unwanted.
 
 Verify: the release published; `AGENTS.md` matches the shipped surface.
 
-## Work 2 — github-actions-toolkit cutover
+## Work 3 — github-actions-toolkit cutover
 
 - `src/github_actions_toolkit/config.py`: `DOCKER_DEVKIT_CONFIG_PATH` →
   `Path("boatyard.yml")` (plain-YAML presence probe; the resolver-cycle law
@@ -132,7 +281,7 @@ Verify: the release published; `AGENTS.md` matches the shipped surface.
 
 Verify: the toolkit's own suite green.
 
-## Work 3 — Consumer sweep (one wave)
+## Work 4 — Consumer sweep (one wave)
 
 Open by re-running the archaeology greps to re-derive the edit list against
 wherever the release actually landed. Common to all five, order within a repo
@@ -153,20 +302,28 @@ code → lockfiles → prose:
    entry from 0.6.0. placeframe declares its variant axis
    (`variants: {TORCH_DEVICE: [cuda, rocm]}`, cuda the default cell) in the
    same relock.
-5. Every consumer's toolkit `uses:` SHAs bump to the Work-2 commit — one SHA
+5. Every consumer's toolkit `uses:` SHAs bump to the Work-3 commit — one SHA
    per repo (Make-it-Sing starts a SHA behind and jumps from further back).
-6. Docs: `docker-devkit` → `boatyard` / `boatyard.yml` / `boatyard.lock.yml`;
+6. `.env` `BUNDLES=` flips to qualified spellings, atomic with the relock
+   (the grammar flip breaks the old spellings): placeframe
+   `core-cuda,auth-keycloak,tunnel-ngrok`; Make-it-Sing
+   `placeframe-cuda,tunnel-rathole`; the rest theirs.
+7. Bundle `ref:` entries flip digest → tag spellings (`{40-hex}` sha tags —
+   published today), atomic with the relock: digest refs refuse at load under
+   the new grammar. The relock writes the `_BUNDLE` lock entries; nothing is
+   hand-authored.
+8. Docs: `docker-devkit` → `boatyard` / `boatyard.yml` / `boatyard.lock.yml`;
    `uv run <verb>` → `uv run boatyard <verb>`; GitHub doc links to the renamed
    repo. `--lock-only` is a dead flag everywhere → `boatyard lock` (plus
    `--upgrade` where the old text said `--lock-only --upgrade`).
-7. Consumer env reads go through a consumer-local module implementing
+9. Consumer env reads go through a consumer-local module implementing
    compose's env-file grammar (`KEY=VALUE`, `#` comments, no interpolation —
    compose is the file's authoritative reader, so its rules are the spec; no
    dotenv dependency, no shared micro-package, filename hardcoded as the
    scripts already spell it).
-8. `stack/secrets.yaml` is required from 0.6.0 — consumers lacking it add the
-   file (an empty file is legal: the empty declaration, no keys consumable)
-   and commit the mint artifact `stack/generated/secrets.txt` it generates.
+10. `stack/secrets.yaml` is required from 0.6.0 — consumers lacking it add the
+    file (an empty file is legal: the empty declaration, no keys consumable)
+    and commit the mint artifact `stack/generated/secrets.txt` it generates.
 
 Per-repo:
 
@@ -189,8 +346,8 @@ Per-repo:
   Dockerfiles and the `stack/AGENTS.md` "devkit's built-in gate-pin template"
   line (the gate pin moved into `generate_compose`) go in the docs pass. After
   the relock: one deliberate `stack/generated/**` regeneration cycle — the
-  structured lock changes every marker-resolved image reference (compose-side
-  resolution now selects platform manifests) — commit the bump, run
+  structured lock changes every marker-resolved image reference, and the
+  disk-state basis re-keys every own-service tag — commit the bump, run
   `boatyard generate-score`, commit the artifacts in a second commit
   (placeframe's CI disables the score-staleness gate; operator discipline
   covers this cycle).
@@ -205,7 +362,9 @@ Per-repo:
   (`zed-aoa-diagnosis-handoff.md` gates the deploy on exactly this; update
   only its still-live instructions). The repin touches both declarations (the
   root exact pin and the `scripts/` member floor).
-- **Make-it-Sing, lbe-toolkit** — standard renames; lbe-toolkit's floating uv
+- **Make-it-Sing, lbe-toolkit** — standard renames and the step-6/7 flips;
+  Make-it-Sing adds `BUNDLE_OVERRIDE_PLACEFRAME_CUDA` locally (never
+  committed — the point of the iteration unit); lbe-toolkit's floating uv
   tag (`ghcr.io/astral-sh/uv:python3.13-…`) becomes an `{uv}`-templated value
   in the same relock: intent stays authored, components derive.
 - **infra-rathole** — README carries `uv run build --lock-only` (→ `uv run
@@ -215,19 +374,21 @@ Per-repo:
   consumers edit nothing; the renamed container at next bring-up is expected.
 
 Verify: consumer CI green end-to-end; grep over the five repos returns zero
-`boatyard` imports; the placeframe regeneration diff committed and reviewed;
-capture-tool's lock carries arm64 platform manifests; `up` probes pass against
-the mirror; every toolkit `uses:` ref carries one SHA and every
-`--lock-only`/`--gpu` mention is gone from consumer docs and workflows.
+`boatyard` imports; the placeframe regeneration diff committed and reviewed
+(disk-basis tags minted); capture-tool's lock carries arm64 platform
+manifests; `up` probes pass against the mirror; every toolkit `uses:` ref
+carries one SHA and every `--lock-only`/`--gpu` mention is gone from consumer
+docs and workflows; Make-it-Sing's `up` assembles through the path override
+against a sibling placeframe checkout.
 
-## Work 4 — Precision cluster: attribution-based tree tags (boatyard)
+## Work 5 — Precision cluster: attribution-based tree tags (boatyard)
 
-The tagging system this serves: two tag grammars, two jobs — `tree-{hash}` is
-content identity on every channel; release channels add unit versions
-(`{unit}-v{semver}` git tags, registry semver, `{base}-dev.{count}`) once Work
-5 lands. Today `tree-` tags over-include (whole allowlist contexts), so they
-are not yet a precise change signal. Three phases, one boatyard release, one
-consumer re-key.
+Two tag grammars, two jobs — `tree-{hash}` is content identity on every
+channel; release channels add unit versions (`{unit}-v{semver}` git tags,
+registry semver, `{base}-dev.{count}`) once Work 6 lands. Post-sweep tags are
+disk-state but over-inclusive (whole allowlist contexts), so they are not yet
+a precise change signal. Three phases, one boatyard release, one consumer
+regeneration.
 
 ### Attribution parser and construct guard
 
@@ -261,10 +422,10 @@ service, variant-bearing or not).
 - `compute_service_shas` hashes, per service: the Dockerfile itself (any
   recipe change re-keys, keeping the closure self-consistent — a new `COPY`
   line moves the hash at the same moment the newly copied files enter the
-  resolved set); the resolved `COPY`/`ADD` set against the allowlisted
-  committed tree (shared roots enter only when copied); the lock entries whose
-  names intersect the Dockerfile's `ARG` declarations, serialized from the
-  structured model (declared-but-unused args still hash; compose-runtime-only
+  resolved set); the resolved `COPY`/`ADD` set read from the working tree
+  under the allowlist (shared roots enter only when copied); the lock entries
+  whose names intersect the Dockerfile's `ARG` declarations, serialized from
+  the structured model (declared-but-unused args still hash; compose-runtime-only
   entries drop out of build hashes entirely); the service's build mapping; and
   each context dependency's computed tree hash embedded as a synthetic entry —
   hash-of-hash over the DAG, no circularity.
@@ -273,7 +434,11 @@ service, variant-bearing or not).
   edit that matches nothing matched changed no bits, so no re-key is correct.
 - Services sharing one Dockerfile dir hash identically (the variant difference
   is an arg inside the build mapping); a variant-arg edit re-keys both. An
-  empty service set still returns `{}` without touching git.
+  empty service set still returns `{}` without walking.
+
+The dirty-tree guard this plan once carried is dissolved by Work 1's
+disk-state basis: the hash reads what the build compiles, dirt is content,
+nothing refuses.
 
 Verify (the negative-test battery): a lock line for an undeclared base edited
 → unaffected services unchanged; another service's manifest arg edited → this
@@ -282,38 +447,26 @@ service unchanged; a shared-root file no service copies edited → no re-key; a
 dependency-dir edit → dependent re-keys; declared-arg lock edit → re-key. And
 one per loud failure and per attributed construct from the parser above.
 
-### Dirty-tree guard
+### Release and regeneration
 
-`build` and `up --build` run `git status --porcelain` filtered to the
-allowlisted set (modified and untracked both count) and refuse loudly listing
-the offending paths — the hash is over the committed tree while builds compile
-the working tree, and post-precision this is the only remaining way a `tree-`
-tag can lie. `build --dev` and bare `up` are exempt (dev tags are not
-content-addressed; the bind-mount workflow runs dirty by design; bare `up`
-pulls committed-tree tags and is self-consistent). `lock`, `generate-score`,
-and `publish-compose` carry no guard (clean CI checkouts make it a no-op
-there).
-
-### Release and re-key wave
-
-boatyard ships one patch release carrying the three phases above (pre-1.0;
+boatyard ships one patch release carrying the two phases above (pre-1.0;
 breaking rides the patch flow). The image-building consumers — placeframe,
-placeframe-capture-tool, Make-it-Sing — repin onto it before Work 5's change
+placeframe-capture-tool, Make-it-Sing — repin onto it before Work 6's change
 detection ever runs: the toolkit compares tree tags recorded by consumer CI
 builds, so those builds must compute precise tags at the certified head. The
 repin is a `uv.lock` bump — no declaration changes, no lock rewrite. placeframe
 runs one deliberate `stack/generated/**` regeneration cycle after the re-key
 (every image gets a fresh `tree-` tag at its next build; same two-commit shape
-as Work 3's cycle). Old `tree-` tags freeze in place — CI never re-pushes them,
+as Work 4's cycle). Old `tree-` tags freeze in place — CI never re-pushes them,
 so existing pins convert from movable to actually-immutable; infra's three
 `tree-` pins keep resolving to frozen digests, re-pointed at leisure or at
-Work 5's version tags. Calibration-corpus rows keep their old
+Work 6's version tags. Calibration-corpus rows keep their old
 `pipeline_version` values (the existing re-key hard-fail on redeploy stands).
 
 Verify: consumer CI green end-to-end; the regeneration diff committed and
 reviewed; a rebuild of an unchanged tree keeps its tag.
 
-## Work 5 — Per-unit semver image and bundle lines (toolkit + bar + boatyard)
+## Work 6 — Per-unit semver image and bundle lines (toolkit + bar + boatyard)
 
 Version space: per-unit semver lines with tag-everything — every release
 aliases the full image set (changed images at their new version, unchanged at
@@ -368,7 +521,7 @@ Channels and spellings:
 - Release notes: pr/dev/stable render from one spine; the images table is
   `Image | Version` (the changed/unchanged pattern of the packages table); a
   Bundle row links the ghcr version page — the human and Renovate discovery
-  surface (consumers no longer hand-copy digests at all once Work 6 lands).
+  surface (consumers no longer hand-copy digests at all once this lands).
 
 Aliasing mechanism (verified live against `registry:2` with the pinned oras
 1.2.2): a new primitive in build-artifact-registry beside `promote_scope`
@@ -410,132 +563,30 @@ Delivery order:
    for push vs load mode; sha-only publish tests; the toolkit reusable
    renders without the flag.
 
-## Work 6 — Qualified grammar, bundle pinning, overrides (boatyard, one release)
-
-One boatyard consumer-surface release carrying all four phases below;
-consumers relock only in Work 7's wave — the grammar flip breaks `.env`
-spellings, so relock and flip are atomic per repo.
-
-### Qualified selection names
-
-`BUNDLES=` becomes qualified `group-dash-option`, uniformly, for every option
-— no unqualified short forms even when unambiguous (one grammar rule beats a
-conditional rule; a group gaining a second option would break every bare
-spelling; one spelling per bundle greps). Bare entries are their own root and
-ride unconditionally, as today. The flat-vocabulary collision law is repealed:
-qualified names are structurally unique (group names unique as dict keys,
-option names unique within group), so two groups may each carry a `cuda`
-option and no hand-uniquing (`pf-cuda`) is forced on authors.
-At-most-one-option-per-group refusal unchanged; unknown names refuse loudly
-listing the qualified vocabulary; a bare entry's name refuses as unselectable.
-
-### Ref grammar and lock entries
-
-- `ref:` carries a tag, never a digest: a digest spelling refuses at config
-  load — the hand-copy workflow this kills becomes unrepresentable, not merely
-  discouraged. Any published channel spelling is a legal pin — stable semver
-  (`0.3.1`), dev (`0.3.1-dev.42`), sha (`{40-hex}`) — matching how packages
-  accept dev pins. Exactly one denylist entry: `latest` refuses (the sole
-  mutable spelling, repointed at every stable release — the standing
-  pin-everything law, not channel policing). Exact tags only, no range
-  specifiers (`>=`, `.x`): Renovate's docker manager bumps exact pins exactly
-  as it already does for `base_images` and charts; dev/prerelease pins get no
-  automated bump (Renovate skips prereleases) — accepted, the same behavior
-  package dev pins see. Flip condition for channel restrictions (certified-only
-  pins): a first consumer policy that wants them; if restrictions ever come,
-  they come everywhere at once (packages, images, bundles).
-- Lock entries: `{QUALIFIED_NAME}_BUNDLE={reference}@sha256:…` — the qualified
-  selection name upper-cased plus `_BUNDLE` (`PLACEFRAME_CUDA_BUNDLE`,
-  `TUNNEL_RATHOLE_BUNDLE`, bare `LIVEKIT_BUNDLE`), bundles arch-neutral (no
-  index/platforms structure). Written by the `lock` verb,
-  declaration-incremental like every lock line (unchanged tag copies its
-  frozen digest forward; tag bump re-resolves; `--upgrade` re-resolves
-  everything); `_BUNDLE` names collision-refuse against `base_images` keys at
-  load. A version-tagged ref without its lock entry refuses loudly naming
-  `boatyard lock` — the charts law, verbatim.
-- First-party artifacts resolve direct — org ghcr refs, un-prefixed; the
-  mirror is for upstreams that can hurt us; ours can't. The `mirror` verb
-  never enumerates bundle declarations. (The absorbed plan's standing default
-  "org-internal rides the mirror" never shipped and is reversed: two
-  resolutions for the same artifacts at two levels of one pull — bundle
-  mirrored, its embedded images direct — is incoherence, and mirroring
-  ourselves buys insurance against our own discipline at doubled storage.)
-- `up`'s fail-closed probe stays one law over every lock entry; bundle entries
-  probe via `crane digest` (compose-bundle media types are not image indexes;
-  `buildx imagetools inspect` may refuse them), under the same
-  stderr-classification law as image probes. `up` includes the lock's digest
-  ref; the yaml tag is never used directly at bring-up.
-- The loop this buys: producer release mints `{version}` on the certified
-  bundle digest; the consumer's upgrade is a yaml tag bump (Renovate-native)
-  plus a relock, with the digest movement visible as a one-line lock diff in
-  review — no registry pages, no hand-copying, no drift.
-
-### Local bundle overrides (Stage 1)
-
-`.env` may carry `BUNDLE_OVERRIDE_<QUALIFIED_NAME>` per machine — never
-committed, one variable per override, commentable per-line, the same qualified
-identity as `BUNDLES=` and the lock key. Value grammar: a filesystem path
-(relative resolves against the consumer repo root, so sibling checkouts work
-anywhere; absolute legal) or an `oci://` ref of any channel — the ref form
-tests a colleague's landed-but-unreleased bundle without local builds and
-without dirtying the tree. Unknown names refuse loudly listing the vocabulary;
-a known-but-unselected name is inert — the override rides with selection.
-
-An overridden option skips its lock-entry fail-closed probe and its
-lock-entry requirement — testing a bundle that may not be published at any
-digest yet is the point. The path form gets the same teeth as a local bundle
-output: must exist and parse, refuses an `edge` service, service-name
-collisions with other selected sources refuse, route/port validation runs
-unchanged. Producer-lock attachment (path form only): the bundle's
-third-party holes (`${LOKI_IMAGE:?err}`, …) have no declaration source in the
-consumer, and lock lines are never hand-authored — so the producer's
-`boatyard.lock.yml` attaches as an extra `--env-file`, derived
-deterministically from the override path's fixed
-`stack/generated/compose/` layout (three parents up), ordered so the
-consumer's own declarations win any shared key (pin the precedence against
-the version-pinned compose binary in tests). The ref form attaches nothing —
-registry bundles had their holes filled at publish.
-
-The iteration loop this buys: commit in the producer → `generate-score` +
-`build` (tree-sha-tagged images land in the local daemon) → `uv run up` in
-the consumer. `up`'s `--pull missing` already serves local-only tree tags.
-Tree shas hash `git ls-tree HEAD`, so the unit of iteration is commit →
-build, not save → reup; the expensive part of the old loop (push, CI,
-digest-copy) is what disappears.
-
-Verify per phase: qualified resolution incl. same-named options in two groups
-and the refusal list; digest/`latest`/range refusals; lock-key derivation
-including bare entries; declaration-incremental copy-forward, tag-bump
-re-resolve, `--upgrade`; collision refusal; missing-entry refusal naming the
-relock; bundle probe classification; materialized root carries digest refs;
-both override value forms; the inert override; probe and requirement skip;
-producer-lock attachment and ordering; `edge` and collision teeth.
-
 ## Work 7 — Adoption wave
 
-One commit per consumer repo, onto Works 5–6. The Work-3 relock and its
-regeneration rode the consumer-contract wave; the Work-4 re-key rode the
-precision wave; the items here are strictly the Work-5/6 additions.
+One commit per consumer repo, onto Works 5–6. The Work-4 sweep already carried
+the grammar adoption (qualified `.env`, tag-spelled refs, `_BUNDLE` lock
+entries, overrides in Make-it-Sing); the items here are strictly the Work-6
+additions.
 
 - **placeframe** — `publish.yml` gains `images:` (13 units) and `bundles:`
   (`placeframe`, variants cuda/rocm, compose source paths); one adoption
-  commit: relock onto the Work-6 devkit release, bump the toolkit pin, flip
-  `.env` `BUNDLES=` to qualified spellings
-  (`core-cuda,auth-keycloak,tunnel-ngrok`); no `--branch` usage survives. The
+  commit: relock onto the Work-6 devkit release, bump the toolkit pin. The
   unused `.dockerignore` allowlist entry `packages/generated/csharp/api-client/`
   is removed — it re-keys nothing under precision and shrinks every build
   context. The first release after adoption mints image and bundle versions;
   the release body carries the `Image | Version` table and the bundle row.
 - **Make-it-Sing** — `publish.yml` gains `images:` for `livekit-token`;
-  `:latest` references gone; `.env` flips to `BUNDLES=placeframe-cuda,tunnel-rathole`;
-  the yaml bundle ref flips from digest to version tag; the `lock` verb
-  writes `PLACEFRAME_CUDA_BUNDLE` and `TUNNEL_RATHOLE_BUNDLE`. Tag hygiene:
+  `:latest` references gone; the yaml bundle ref flips from sha tag to
+  version tag; the `lock` verb re-resolves `PLACEFRAME_CUDA_BUNDLE` and
+  `TUNNEL_RATHOLE_BUNDLE` onto the version pins. Tag hygiene:
   stale git releases and tags `pr-4-237`, `pr-4-238`, `pr-6-250` deleted;
   `pr-5-248` and `pr-7-254` checked against still-open PRs first and deleted
   if orphaned (deletion needs contents-write — hand off to the operator if
   the session token cannot).
 - **placeframe-capture-tool** — `images:` for its workloads; `:latest`
-  removal; `.env` flip; relock onto the Work-6 release.
+  removal; relock onto the Work-6 release.
 - **infra** — its three `tree-` pins switch to version tags; no deadline (the
   frozen tree pins remain valid indefinitely).
 
@@ -545,9 +596,10 @@ placeframe's `.dockerignore`.
 
 ## Work 8 — Cross-repo dev overlay (trigger-gated)
 
-Build only when the trigger holds: the Work-6 commit → rebuild loop proves
-too slow in daily consumer-driven development. A session taking this work
-first confirms the trigger; otherwise it does not run.
+Build only when the trigger holds: the save → build → up loop's rebuild
+latency proves too slow in daily consumer-driven development (the commit
+friction is gone — Work 1 made the unit of iteration save → build). A session
+taking this work first confirms the trigger; otherwise it does not run.
 
 With a path-form override active, `up --dev` generates overlay entries from
 the producer's declaration: the producer's dev-stage services, the producer's
@@ -567,11 +619,6 @@ holes present; bind sources point at the producer root.
   resolves tags to digests for org artifacts exactly as for third parties.
 - App CalVer conversion retired (consistent with images staying semver);
   per-image CalVer aliases available later as free additional tags.
-- Range specifiers for bundle refs: rejected — exact tags plus Renovate is
-  the docker/chart-native pattern; ranges drag resolver semantics into the
-  devkit.
-- Channel-restriction policy: deferred with its flip condition recorded in
-  Work 6.
 
 ## Open drill — GPU template collapse [LOW, operator's lead]
 
