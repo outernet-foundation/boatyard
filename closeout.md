@@ -10,8 +10,9 @@ plan files this record absorbed live in git history. `AGENTS.md` is the
 present-truth operations manual for the shipped surface. Every decision
 below is closed — do not re-litigate without its recorded flip condition. If
 this file and the code disagree, reconcile this file before touching code
-(spec-first). One work unit per session; verify with the target repo's
-battery; commit as you go, prose and code in separate commits.
+(spec-first). One phase per session — never a whole work unit in one go;
+verify with the target repo's battery; commit as you go, prose and code in
+separate commits.
 
 ## Snapshot (verified 2026-11-02)
 
@@ -128,9 +129,28 @@ the sources unify. Dirt is content; nothing refuses; there is no flag and no
 second channel.
 
 - `compute_service_shas` walks the disk under the `.dockerignore` allowlist
-  with the same matcher semantics the build context applies — one shared
-  matcher, one home. Deterministic serialization: sorted paths, exec bit,
-  bytes.
+  with one shared matcher, one home — and the matcher implements exactly the
+  allowlist grammar the org law mandates: comments, one `*`, `!path` /
+  `!path/` re-includes; a file rides iff it sits under a re-include path.
+  Every other line (bare patterns like `__pycache__`, `**`, `?`, ranges,
+  re-include-then-subtract) refuses loudly at load. The grammar stays small
+  enough that buildkit's behavior over it is trivial, so agreement with the
+  real build context holds by construction. Do NOT port buildkit's full
+  patternmatcher, and do NOT use pathspec/gitignore semantics: the two
+  diverge on precisely the lines the restriction refuses (a bare pattern is
+  root-anchored in buildkit, basename-any-level in gitignore) — restriction,
+  not porting, is the fix.
+- Pinned empirically against `docker buildx build --output type=local`
+  (2026-11-03): `#` lines are not comments to buildkit (inert root-anchored
+  patterns — nothing strips them, none may matter); directory symlinks never
+  enter the context; nested `!deep/re-include/` works with no parent
+  re-include; exec bits ride through. The golden test builds a tree in the
+  real pattern shape and asserts the walk's file set (paths, symlinks, exec
+  bits) equals the exported context — daemon-gated (skipif), green in CI.
+- Deterministic serialization: sorted paths, exec bit, bytes, sha256 —
+  `tree-<hex>`. No git anywhere in tag minting: enumeration is an os.walk,
+  and git buys nothing (classification was never a git capability, and
+  temp-index staging writes loose objects into `.git/objects`).
 - Identity is content-state, not commit-state: a local dirty state mints a
   machine-local name that never leaves the daemon; clean checkouts anywhere
   reproduce the same tags from the same commit.
@@ -138,9 +158,12 @@ second channel.
   (content-named bits) and the PR channel already publishes uncertified
   ephemera; certification discipline lives in Work 6's stable channel, which
   builds from clean CI.
-- CI-side invariant, audited in this unit: no toolkit workflow step writes
-  into a hashed path before `build` / `generate-score --check` — a drifting
-  workspace mints drifting tags and Work 6 would bump versions on noise.
+- CI-side invariant, audited 2026-11-03 and holding: no toolkit workflow
+  step writes into a hashed path before `build` / `generate-score --check` —
+  every pre-hash write lands outside the allowlist (the runner.temp toolkit
+  clone, `~/.cache/uv`, `.venv` / `metadata.json` / the lock at the excluded
+  repo root). A drifting workspace mints drifting tags and Work 6 would bump
+  versions on noise.
 - The serialization change re-keys every existing `tree-` tag at placeframe's
   regeneration in Work 4; with no consumer computing tags on the old basis,
   this is a non-event, not a re-key wave.
