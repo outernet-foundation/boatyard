@@ -85,41 +85,40 @@ def generate_k8s(
     )
 
     # Render the charts through helm template.
-    if k8s.charts:
-        chart_blocks: list[str] = []
-        with TemporaryDirectory(prefix="resolved-values-") as values_directory:
-            values_dir = Path(values_directory)
-            for chart_name in k8s.charts:
-                # Every values file rides through marker resolution, so the literal-image guard is universal.
-                path = config.root / config.score_dir / "k8s" / "values" / f"{chart_name}.yaml"
-                values_path = values_dir / path.relative_to(config.root)
-                values_path.parent.mkdir(parents=True, exist_ok=True)
-                write_file(
-                    values_path,
-                    dump_yaml(
-                        resolve_markers(
-                            yaml.safe_load(path.read_text(encoding="utf-8")),
-                            MarkerContext(config.root, images, path.as_posix()),
-                        )
-                    ),
-                )
+    chart_blocks: list[str] = []
+    with TemporaryDirectory(prefix="resolved-values-") as values_directory:
+        values_dir = Path(values_directory)
+        for chart_name in k8s.charts:
+            # Every values file rides through marker resolution, so the literal-image guard is universal.
+            path = config.root / config.score_dir / "k8s" / "values" / f"{chart_name}.yaml"
+            values_path = values_dir / path.relative_to(config.root)
+            values_path.parent.mkdir(parents=True, exist_ok=True)
+            write_file(
+                values_path,
+                dump_yaml(
+                    resolve_markers(
+                        yaml.safe_load(path.read_text(encoding="utf-8")),
+                        MarkerContext(config.root, images, path.as_posix()),
+                    )
+                ),
+            )
 
-                # Render the chart through helm template with the values file and the locked chart reference.
-                chart_blocks.extend(
-                    split_documents(
-                        bash_output(
-                            f"helm template {chart_name} oci://"
-                            f"{lock.require(chart_lock_key(chart_name), f'chart {chart_name!r}')}"
-                            f" --values {values_path.as_posix()}"
-                        )
+            # Render the chart through helm template with the values file and the locked chart reference.
+            chart_blocks.extend(
+                split_documents(
+                    bash_output(
+                        f"helm template {chart_name} oci://"
+                        f"{lock.require(chart_lock_key(chart_name), f'chart {chart_name!r}')}"
+                        f" --values {values_path.as_posix()}"
                     )
                 )
+            )
 
-        # Append the rendered charts to the k8s output, preserving any existing content.
-        write_file(
-            output_path,
-            output_path.read_text(encoding="utf-8") + "".join(f"---\n{block}" for block in chart_blocks),
-        )
+    # Append the rendered charts to the k8s output, preserving any existing content.
+    write_file(
+        output_path,
+        output_path.read_text(encoding="utf-8") + "".join(f"---\n{block}" for block in chart_blocks),
+    )
 
     # Sort documents by kind, namespace, and name.
     decorated: list[tuple[str, str, str, int, str]] = []
