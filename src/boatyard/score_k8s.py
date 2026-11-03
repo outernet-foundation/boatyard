@@ -68,11 +68,8 @@ def generate_k8s(
     local: bool,
     secrets: SecretsDeclaration,
 ) -> Path:
-    output_path = config.root / (config.k8s_local_output if local else config.k8s_output)
-    tool_state = state_dir("score-k8s", output_path)
-    images = env_entries(lock)
     score_dir = config.root / config.score_dir
-    rendering_vars = {**k8s.vars, STORAGE_CLASS_VAR: LOCAL_STORAGE_CLASS if local else CLOUD_STORAGE_CLASS}
+    images = env_entries(lock)
 
     compose_workloads = {workload for _, entry in config.local_service_entries() for workload in entry.workloads}
     for name in k8s.workloads:
@@ -84,11 +81,14 @@ def generate_k8s(
                 f"{name}: {DEV_TOGGLES_ANNOTATION} is compose dev-overlay vocabulary; this workload renders k8s-only"
             )
 
+    output_path = config.root / (config.k8s_local_output if local else config.k8s_output)
+    tool_state = state_dir("score-k8s", output_path)
+
     render_score(
         config,
         is_k8s=True,
         workloads=k8s.workloads,
-        rendering_vars=rendering_vars,
+        rendering_vars={**k8s.vars, STORAGE_CLASS_VAR: LOCAL_STORAGE_CLASS if local else CLOUD_STORAGE_CLASS},
         templates=[GPU_POD_TEMPLATE, SCALE_TO_ZERO_TEMPLATE],
         output=output_path,
         images=images,

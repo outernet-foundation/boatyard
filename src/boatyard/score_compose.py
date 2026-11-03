@@ -129,6 +129,7 @@ def generate_compose(
     score_dir = config.root / config.score_dir
     state_prefix = f"{state_dir_name(TOOL)}/"
     images = compose_env_entries(lock, config, merged_environment(config.root))
+
     if "ALPINE_IMAGE" not in images:
         raise ValueError(f"{LOCK_PATH.as_posix()}: the image lock must carry the ALPINE_IMAGE entry")
 
