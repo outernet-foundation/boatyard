@@ -242,8 +242,19 @@ def render_score(
 
         # Render the expanded workload copies and run generate.
         copies_directory = Path(stack.enter_context(TemporaryDirectory()))
+        replacements = hole_values(rendering_vars, service_shas, images)
         for workload in workloads:
-            expanded = expanded_workload(workload, rendering_vars, service_shas, images)
+            expanded = dump_yaml(workload.raw)
+            for variable, value in replacements.items():
+                expanded = expanded.replace(f"${{{variable}}}", value)
+
+            leftover = PLACEHOLDER.search(expanded)
+            if leftover is not None:
+                raise ValueError(
+                    f"{workload.file_name}: ${{{leftover.group(1)}}} is set in none of the rendering vars, "
+                    "the service shas, or the image lock"
+                )
+
             (copies_directory / workload.file_name).write_text(expanded, "utf-8")
         rendered = " ".join((copies_directory / workload.file_name).as_posix() for workload in workloads)
         bash(f"{tool} generate {rendered} --output {output.as_posix()}", cwd=working_dir)
@@ -423,26 +434,6 @@ def split_image_reference(reference: str, source: str) -> ImageReference:
         raise ValueError(f"{source}: lock reference {reference!r} has no registry/repository split")
 
     return ImageReference(registry, repository, tag, digest)
-
-
-def expanded_workload(
-    workload: LoadedWorkload,
-    rendering_vars: dict[str, str],
-    service_shas: dict[str, str],
-    images: dict[str, str],
-) -> str:
-    text = dump_yaml(workload.raw)
-    for variable, value in hole_values(rendering_vars, service_shas, images).items():
-        text = text.replace(f"${{{variable}}}", value)
-
-    leftover = PLACEHOLDER.search(text)
-    if leftover is not None:
-        raise ValueError(
-            f"{workload.file_name}: ${{{leftover.group(1)}}} is set in none of the rendering vars, "
-            "the service shas, or the image lock"
-        )
-
-    return text
 
 
 def hole_values(rendering_vars: dict[str, str], service_shas: dict[str, str], images: dict[str, str]) -> dict[str, str]:
