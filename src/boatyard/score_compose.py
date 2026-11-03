@@ -247,8 +247,8 @@ def generate_compose(
         write_file(output_path, dump_yaml(document.dump()))
         outputs.append(output_path)
 
-    # Remove the compose state dir after the last entry
-    shutil.rmtree(tool_state, ignore_errors=True)
+        # Remove the entry's compose state dir
+        shutil.rmtree(tool_state, ignore_errors=True)
 
     # Validate the consumed secrets against the declaration
     consumed: set[str] = set()

@@ -123,7 +123,7 @@ def generate_score(
     if target in ("both", "compose"):
         outputs.extend(generate_compose(config, lock, service_shas, secrets))
 
-    if target in ("both", "k8s"):
+    if target in ("both", "k8s") and config.k8s is not None:
         outputs.append(generate_k8s(config, config.k8s, lock, service_shas, local, secrets))
 
     secrets_output = root / SECRETS_OUTPUT
