@@ -183,9 +183,7 @@ def render_score(
         if rendering_dir.is_dir():
             for path in sorted(rendering_dir.glob("*.yaml")):
                 entries = load_yaml_file(path)
-                if is_list(entries) and any(
-                    is_mapping(entry) and entry.get("type") in referenced for entry in entries
-                ):
+                if is_list(entries) and any(is_mapping(entry) and entry.get("type") in referenced for entry in entries):
                     selected.append((f"{rendering}/{path.name}", entries))
 
         # Compile the selected provisioners into a per-run tempdir under score_dir.
@@ -199,12 +197,10 @@ def render_score(
                     AuthoredProvisioner.model_validate(resolved)
                     if not is_mapping(resolved):
                         continue
-                    compiled_entries.append(
-                        {
-                            key: dump_yaml(value) if key in STRING_FORM_FIELDS and value is not None else value
-                            for key, value in resolved.items()
-                        }
-                    )
+                    compiled_entries.append({
+                        key: dump_yaml(value) if key in STRING_FORM_FIELDS and value is not None else value
+                        for key, value in resolved.items()
+                    })
                 target = directory / name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 write_file(target, dump_yaml(compiled_entries))
@@ -377,7 +373,9 @@ def rendered_workloads(
 
         for workload in workloads:
             source = dump_yaml(workload.raw)
-            rendered = PLACEHOLDER.sub(partial(_placeholder_value, rendering_vars, service_shas, images, workload.file_name), source)
+            rendered = PLACEHOLDER.sub(
+                partial(_placeholder_value, rendering_vars, service_shas, images, workload.file_name), source
+            )
             (directory / workload.file_name).write_text(rendered, "utf-8")
 
         yield " ".join((directory / workload.file_name).as_posix() for workload in workloads)
