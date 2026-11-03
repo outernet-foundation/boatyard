@@ -209,26 +209,26 @@ def generate_compose(
                 service.depends_on = [gate if dependency == GATE_SERVICE else dependency for dependency in depends_on]
 
             binds = [volume for volume in service.volumes or [] if isinstance(volume, BindVolume)]
-            if binds:
-                # Carry the owning workload's declared consumer-interpolated files un-doubled.
-                interpolated_targets = (
-                    workload.metadata.annotations[CONSUMER_INTERPOLATED_ANNOTATION].split(",")
-                    if workload is not None and CONSUMER_INTERPOLATED_ANNOTATION in workload.metadata.annotations
-                    else []
-                )
-                references: list[ComposeConfigReference] = []
-                for bind in binds:
-                    # Resolve state-dir sources against score_dir, other sources against the repo root.
-                    path = score_dir / bind.source if bind.source.startswith(STATE_PREFIX) else root / bind.source
-                    text = path.read_text(encoding="utf-8")
-                    if bind.target not in interpolated_targets:
-                        text = double_dollars(text)
-                    contents[path.name] = ComposeConfig(content=text)
-                    references.append(ComposeConfigReference(source=path.name, target=bind.target))
-                service.configs = [*(service.configs or []), *references]
-                service.volumes = [
-                    volume for volume in service.volumes or [] if not isinstance(volume, BindVolume)
-                ] or None
+            if not binds:
+                continue
+
+            # Carry the owning workload's declared consumer-interpolated files un-doubled.
+            interpolated_targets = (
+                workload.metadata.annotations[CONSUMER_INTERPOLATED_ANNOTATION].split(",")
+                if workload is not None and CONSUMER_INTERPOLATED_ANNOTATION in workload.metadata.annotations
+                else []
+            )
+            references: list[ComposeConfigReference] = []
+            for bind in binds:
+                # Resolve state-dir sources against score_dir, other sources against the repo root.
+                path = score_dir / bind.source if bind.source.startswith(STATE_PREFIX) else root / bind.source
+                text = path.read_text(encoding="utf-8")
+                if bind.target not in interpolated_targets:
+                    text = double_dollars(text)
+                contents[path.name] = ComposeConfig(content=text)
+                references.append(ComposeConfigReference(source=path.name, target=bind.target))
+            service.configs = [*(service.configs or []), *references]
+            service.volumes = [volume for volume in service.volumes or [] if not isinstance(volume, BindVolume)] or None
 
         # Write the transformed document.
         document.services = {collapsed_name: service for service, _workload, collapsed_name in services_map.values()}
