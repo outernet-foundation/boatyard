@@ -157,17 +157,8 @@ def generate_compose(
             service_shas=service_shas,
         )
 
-        # Declared files whose contents ride un-doubled.
-        interpolated_targets = {
-            target
-            for workload in workloads
-            if CONSUMER_INTERPOLATED_ANNOTATION in workload.metadata.annotations
-            for target in workload.metadata.annotations[CONSUMER_INTERPOLATED_ANNOTATION].split(",")
-        }
-
         # Parse the rendered output into the typed compose document.
-        raw = yaml.safe_load(output_path.read_text(encoding="utf-8"))
-        document = ComposeDocument.model_validate(raw)
+        document = ComposeDocument.model_validate(yaml.safe_load(output_path.read_text(encoding="utf-8")))
         services = document.services or {}
 
         # Collapse doubled {workload}-{container} service names.
@@ -214,15 +205,17 @@ def generate_compose(
                 # Resolve state-dir sources against score_dir, other sources against the repo root.
                 path = score_dir / bind.source if bind.source.startswith(STATE_PREFIX) else root / bind.source
                 text = path.read_text(encoding="utf-8")
-                if bind.target not in interpolated_targets:
+                if not any(
+                    target == bind.target
+                    for workload in workloads
+                    if CONSUMER_INTERPOLATED_ANNOTATION in workload.metadata.annotations
+                    for target in workload.metadata.annotations[CONSUMER_INTERPOLATED_ANNOTATION].split(",")
+                ):
                     text = double_dollars(text)
                 contents[path.name] = ComposeConfig(content=text)
                 references.append(ComposeConfigReference(source=path.name, target=bind.target))
             service.configs = [*(service.configs or []), *references]
-            remaining: list[BindVolume | OtherVolume] = [
-                volume for volume in service.volumes or [] if not isinstance(volume, BindVolume)
-            ]
-            service.volumes = remaining or None
+            service.volumes = [volume for volume in service.volumes or [] if not isinstance(volume, BindVolume)] or None
 
         # Write the transformed document.
         document.services = collapsed
