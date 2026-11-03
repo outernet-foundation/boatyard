@@ -209,15 +209,17 @@ def render_score(
 
         # Render the expanded workload copies and run generate.
         copies_directory = Path(stack.enter_context(TemporaryDirectory()))
-        replacements: dict[str, str] = {}
-        for source in (rendering_vars, service_shas, images):
-            for variable, value in source.items():
-                if value and variable not in replacements:
-                    replacements[variable] = value
+        # Later sources overwrite earlier ones, so the sources run lowest-priority first.
+        variable_values = {
+            variable: value
+            for source in (images, service_shas, rendering_vars)
+            for variable, value in source.items()
+            if value
+        }
 
         for workload in workloads:
             expanded = dump_yaml(workload.raw)
-            for variable, value in replacements.items():
+            for variable, value in variable_values.items():
                 expanded = expanded.replace(f"${{{variable}}}", value)
 
             leftover = PLACEHOLDER.search(expanded)
