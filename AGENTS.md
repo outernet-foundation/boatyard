@@ -2,14 +2,14 @@
 
 Docker-stack lifecycle verbs as a generic package for any repo shipping a compose graph: bring-up/tear-down, cross-build, score generation; `up` derives the whole assembly, edge caddy included, from the root `boatyard.yml`. No Python
   API — the contracts are the verb CLI (`boatyard <verb>`), the declaration schema (`boatyard.yml` + `boatyard.lock.yml`), and committed artifact formats. Three-class principle: authored facts in the config, registry-resolved in the lock, tree-derived
-  (  `tree-<hash>`) computed on demand, never committed. PyPI identity starts at `0.1.0` (`stack-toolkit` ≤0.1.1 = signposts); deps resolve from PyPI, git-source pins only in scratch branches. github-actions-toolkit
+  (`tree-<hash>`) computed on demand, never committed. PyPI identity starts at `0.1.0`; deps resolve from PyPI, git-source pins only in scratch branches. github-actions-toolkit
   owns the consumer workflow contract and is never a project dependency (resolver cycle); from 1.0 on breaking changes ship with a manually bumped `major_minor`. Fresh-repo assumption: no code handles an obsolete format
   — a past artifact gets the plain parse refusal, never a migration path.
 
 ## Commands
 
 - Quick loop: `uv run pytest`, `uv run ruff check`.
-- Full gate: `uv run --locked scripts/preflight.py` (wraps `preflight-python`: uv sync, ruff, basedpyright, deptry, pytest, lock checks).
+- Full gate: `uv run --locked scripts/preflight.py` (wraps `preflight-python`).
 
 ## Verbs
 
@@ -27,7 +27,7 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
 - `generate-score`: `--target` `--local` `--check`
 - `docker-build-matrix`: bare JSON array on stdout
 
-Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lock` verb owns them), no `--gpu` anywhere, no `--compose-file` (the verbs own the compose invocation). `tree-tags`' whole contract is a string — no JSON, no service-list endpoint, no `{SERVICE}_SHA` names.
+Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lock` verb owns them), no `--gpu` anywhere, no `--compose-file` (the verbs own the compose invocation). `tree-tags`' whole contract is a bare string — no JSON, no `{SERVICE}_SHA` names.
 
 ## Modules
 
@@ -53,9 +53,8 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 - `k8s`: `workloads`, `vars`, `charts` name → `oci://…:tag|@digest`; the map key IS the `{NAME}_CHART` lock key; a section declaring neither workloads nor charts refuses.
 - `mirror_prefix`: root override (non-empty, no trailing slash), else `DEFAULT_MIRROR_PREFIX` (`ghcr.io/outernet-foundation/mirror`).
 - Root-model invisible defaults: `score_dir` (`stack/score`), k8s output paths, the three tool pins.
-- Load refusals (`Config.resolve`): Dockerfile services or local entries without `repository`; `base_images`/`k8s.charts` without the committed lock (pairing law); a declared chart without `stack/score/k8s/values/{chart}.yaml`; routes without `CADDY_IMAGE` in
-  the lock.
-- `mirrored_ref(reference, prefix)` = the only prefix join — injects the prefix, rejects an already-prefixed reference (double-prefix guard).
+- Load refusals (`Config.resolve`): Dockerfile services or local entries without `repository`; `base_images`/`k8s.charts` without the committed lock; a declared chart without `stack/score/k8s/values/{chart}.yaml`; routes without `CADDY_IMAGE` in the lock.
+- `mirrored_ref(reference, prefix)` = the only prefix join — injects the prefix, rejects an already-prefixed reference.
 - Derivation shape law: `Config` carries authored data and validation; a member may hold real derivation logic (`local_service_entries`, `declared_charts`), but a member that only delegates to another module's function is a
   pass-through — call the function at the consumer, `compute_service_shas` module-qualified (test seam); `root` defaults to the working directory, `resolve` injects the load root, excluded, never-authored;
   `parse_dev_toggles` = the one dev-toggles parser (ALL_CAPS, non-empty defaults, no duplicates).
@@ -85,15 +84,15 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 
 ## Mirror namespace
 
-- Third-party images and charts are consumed through the org mirror namespace: upstream manifests get GC'd; strangers, CI, and prod always pull the mirror; CI = the single writer — engineers never push to the namespace, and error text
+- Third-party images and charts are consumed through the org mirror namespace: upstream manifests get GC'd; all pulls hit the mirror; CI = the single writer — engineers never push to the namespace, and error text
   never teaches them to.
 - Declarations are upstream-native; the prefixed form is derived; `mirrored_ref` = the single join.
 - `up` fails closed over the lock: probes every recorded digest (index + platform manifests + charts) before bring-up; only a registry 404 / manifest-unknown stderr verdict = the not-mirrored error — unauthorized or transport failures
   report as probe failures carrying the underlying text; no escape flag; the fix is to let CI's mirror job run.
 - The `mirror` verb probes presence per reference over every recorded digest (`crane digest`; partially mirrored still triggers the copy; probe failure falls through to `crane copy`, the loud gate — probe errors never classified); one
   `crane copy {ref} {prefix}/{ref}` per lacking reference copies the whole index; every declared reference is a target — nothing filtered, so drifted declarations cannot silently mirror zero; zero declared targets = a loud error; the
-  footer splits copied/present; bashrun + plain prints; crane from the shared pinned installer (`crane.py` — install always runs so the pin, not a preexisting binary, decides the version).
-- `build --push` leaves bake's `metadata.json` in the working directory — the handoff the toolkit's builds_ref step reads; builds_ref distilling + ORAS knowledge live toolkit-side; boatyard reads no `REGISTRY` facts.
+  footer splits copied/present; bashrun + plain prints; crane's installer always runs so the pin, not a preexisting binary, decides the version.
+- `build --push` leaves bake's `metadata.json` in the working directory — the handoff the toolkit's builds_ref step reads; boatyard reads no `REGISTRY` facts.
 
 ## Compose assembly and BUNDLES=
 
@@ -101,7 +100,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
   options-only repo with an empty selection refuses; unknown names refuse listing the vocabulary; the `up` verb owns the entry gate — no config or no `services:` refuses, a set `BUNDLES=` refuses first; `select()` owns the selection laws. `COMPOSE_PROFILES`: shell-env-over-`.env`, comma-split,
   deduped, forwarded as `--profile` flags; unknown profiles refuse before probe and build. Membership law: everything about the docker compose invocation — selection, rendering, invocation spelling, staged inputs — lives in `compose.py`; nothing else lands there.
 - The materialized root carries the project `name:`, the `include:` list (remote refs verbatim, local outputs by absolute path, in `services:` declaration order), the emitted edge (iff any route rides), parent-file port stanzas; compose
-  merges parent ports into included services and honors `!reset` — the merge needs compose ≥ 2.40 (2.24–2.39 answer `conflicts with imported resource`).
+  merges parent ports into included services and honors `!reset` — the merge needs compose ≥ 2.40.
 - Validation teeth, in `render()`: with routes or ports, `docker compose config --services` must list every route upstream + every port's owning service; selected profiles must appear in `config --profiles`; a selected
   bundle output that does not exist refuses naming generate-score; two selected local outputs sharing a service name refuse.
 - Edge stanza: `image: ${CADDY_IMAGE:?err}` (the lock hole), the Caddyfile configs entry, `gateway:` as published port, `FORWARDED_PROTO`/`FORWARDED_PORT` derived from `PUBLIC_URL` under a selected auth option (refusing when absent); the
@@ -119,7 +118,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 
 - `run_build` renders the deterministic per-run bake file (authored key order, byte-identical for identical configs; bake validates its own input — no document model); it takes the already-loaded `config` — the
   build verb loads the config and owns its flag refusals; a failed bake re-raises with the rendered content attached.
-- Push axis: `--push` (bool) pushes for the config's `repository`;   `--push-to <addr>` re-roots tags + cache refs under that registry; the flags together refuse; an address with a scheme, trailing slash, or host
+- Push axis: `--push` (bool) pushes for the config's `repository`; `--push-to <addr>` re-roots tags + cache refs under that registry; the flags together refuse; an address with a scheme, trailing slash, or host
   carrying neither `.` nor `:` refuses; `--push` without a declared `repository` refuses; `--dev` with either push flag refuses (dev stages are local-only).
 - `host_platform()` = the one host fact left: default targets are every service's default cell restricted to this machine's arch, and an empty default set refuses naming the arch + `--targets` (bake with no target arguments builds every
   service, silently defeating the selection); `--targets`: bare name = default cell, `name/cell`, suffixed target name; unknown names/cells refuse listing the vocabulary.
@@ -134,24 +133,24 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 ## Score generation
 
 - Deterministic generation from `stack/score/` into `stack/generated/`; one compose rendering per local option + bare entry (output `stack/generated/compose/compose.{name}.yaml`; the compose state dir is re-created per entry); k8s = one
-  monolithic rendering over `k8s.workloads` + `k8s.vars`, untouched by `BUNDLES=`, with instance names deterministic by construction — state.yaml is pre-seeded between init and generate with `InstanceSuffix` = `-` + first 10 hex of
-  sha256(metadata.name) per workload (the state-format coupling is bounded by the pinned tool version); `--local` writes the gitignored local output with the local storage class; charts render through `helm template` against the
+  monolithic rendering over `k8s.workloads` + `k8s.vars`, untouched by `BUNDLES=`, with instance names deterministic by construction — state.yaml pre-seeds `InstanceSuffix` = `-` + first 10 hex of sha256(metadata.name) per workload between init
+  and generate (state-format coupling bounded by the pinned tool version); `--local` writes the gitignored local output with the local storage class; charts render through `helm template` against the
   lock's `{NAME}_CHART` entry (a chart without its lock entry refuses naming the lock verb; helm is a renderer, never a deployer); both tool state dirs are per-run temp — output reproduces from a fresh clone.
 - Substrate law: compose renderings consume the lock's platform manifests (the artifact records the exact bytes one machine runs); k8s renderings consume the index form (kubelet resolves per node).
 - `ensure_tools` (verbs/score.py) installs the three pinned tools into `/usr/local/bin` (crane law): `version`-probe each, fetch on absence or pin mismatch.
-- `--check` = the CI staleness gate: self-skips (exit 0) where nothing generates; otherwise regenerates in-process, and any `git status` change over the written outputs exits 1 printing the diff; `--check` + `--local` are mutually
+- `--check` = the CI staleness gate: self-skips (exit 0) where nothing generates; otherwise regenerates in-process; any `git status` change over the outputs exits 1 printing the diff; `--check` + `--local` are mutually
   exclusive.
-- Post-passes on compose output are typed transformations on `ComposeDocument`, dumped exactly once — pydantic's declared-fields-first order is the artifacts' deterministic key order: service-name collapse
-  (`{workload}-{container}` → workload, collision loud); per-entry gate rename `wait-for-resources` → `wait-for-resources-{entry}` with its image pinned to the `ALPINE_IMAGE` lock hole and `depends_on` following (collision loud); the edge-reserved check; bind inlining — every `type: bind` volume becomes a top-level `configs.content` entry, zero host-filesystem references in committed artifacts (the `$`-doubling law's single exception: `outernet.internal/consumer-interpolated` files).
+- Post-passes on compose output are typed transformations on `ComposeDocument`, dumped exactly once — pydantic's declared-fields-first order is the artifacts' deterministic key order: a workload-major pass attributes `{workload}-{container}` services per
+  the workload's declared containers (stem = the pinned `metadata.name`), collapsing the doubled container to the workload name (collision loud) and inlining every `type: bind` volume as a top-level `configs.content` entry — zero
+  host-filesystem references in committed artifacts; the `$`-doubling exception rides the owning workload's consumer-interpolated declaration; workload-less services (synthesized, provisioners) ride through unconditionally
+  doubled — a workload-prefixed name no declared container owns refuses; per-entry gate rename `wait-for-resources` → `wait-for-resources-{entry}` with its image pinned to the `ALPINE_IMAGE` lock hole and `depends_on` following (collision loud); the edge-reserved check.
 - The image lock is required and non-empty; the compose target requires the `ALPINE_IMAGE` entry.
-- `$`-doubling law, stated once: a literal `$` doubles whenever file text rides inside a compose document (edge Caddyfile, publish's file-sourced configs, score's bind inlining); text outside a compose document (k8s-side inclusion, k8s
-  manifests) never doubles.
+- `$`-doubling law, stated once: a literal `$` doubles whenever file text rides inside a compose document (edge Caddyfile, publish's file-sourced configs, score's bind inlining); text outside a compose document (k8s-side inclusion, k8s manifests) never doubles.
 - `docker-build-matrix` cell schema (`targets`, `variant`) = a named contract with the binding — renaming a key breaks its fanout YAML; one partition per closure × variant cell.
 
 ## Provisioners and markers
 
-- Authored provisioner files carry `state`/`outputs`/`volumes`/`services` as real YAML mappings + `manifests` as a real list — score's string form is generated, never authored; a field already in string form = a loud validation error;
-  `extra="forbid"`.
+- Authored provisioner files carry `state`/`outputs`/`volumes`/`services` as real YAML mappings + `manifests` as a real list — score's string form is generated, never authored; a field already in string form = a loud validation error; `extra="forbid"`.
 - Compilation resolves include markers, then lock markers, both before validation; the compiled form lives in a per-run tempdir under `score_dir`, never the committed tree; `--provisioners` paths stay POSIX-relative;
   authored key order controls dump order at every level; comments are dropped; registration derives by resource-type closure in sorted-filename order;
   orphan provisioner files silently no-ship.
@@ -162,13 +161,13 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 
 ## Secrets
 
-- `stack/secrets.yaml` is required (missing refuses at generate-score; an empty file = the empty declaration, no keys consumable) — `KEY: description` or `KEY: {description, mint: true}` (string specs coerce; keys ALL_CAPS); each rendering's consumed keys validate as a subset (pair-variance is legitimate);
+- `stack/secrets.yaml` is required (missing refuses at generate-score; an empty file = the empty declaration) — `KEY: description` or `KEY: {description, mint: true}` (string specs coerce; keys ALL_CAPS); each rendering's consumed keys validate as a subset (pair-variance legal);
   the cluster Secret derives `{project_name}-secrets`; k8s consumption = `secretKeyRef` naming it (wholesale `envFrom`/`extraEnvFrom` `secretRef`s impose no per-key constraint); compose consumption = `${ALL_CAPS}` brace holes with odd `$`-parity (`$$`-escaped
   `configs.content` doesn't count); the mint list artifact (`stack/generated/secrets.txt`) generates from the declaration alone.
 
 ## Publish
 
-- Publishing happens iff local entries are declared — no flag, no section; artifact names derive from `repository` (`{repository}/{entry-or-option}`); `--plan` prints the entries as a bare JSON array (`[]` without local entries), no
+- Publishing happens iff local entries are declared — no flag, no section; artifact names derive from `repository` (`{repository}/{entry-or-option}`); `--plan` prints the entries as a bare JSON array (`[]` when none), no
   login, no publish — the CI getter's derivation source; bake substitutes `${ALL_CAPS}` holes against `service_shas()` tree-tags + the lock's index projection; unresolved vars stay holes in the artifact for the consumer's `.env`
   (non-empty stubs set only so publish's interpolation validation passes); authored `configs.content` rides verbatim (single-`$` holes = the include consumer's interpolation surface — `$`-doubling is score's concern, not publish's); image
   refs under `{repository}/` pin to `@sha256` via memoized `imagetools inspect`; each entry publishes once under the `<sha>` tag and aliases `<branch>` with `crane tag` (compose stamps wall-clock `created`, so the alias is the only way both
@@ -187,7 +186,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 | `outernet.internal/restart` | compose enum (`no`/`always`/`on-failure`/`unless-stopped`); outside refuses |
 | `outernet.internal/probe-adapter` | `python-urllib` or `bash-http`; an httpGet probe without the annotation refuses loudly — score-compose silently drops httpGet |
 | `outernet.internal/consumer-interpolated` | declared `files:` names ride un-doubled; a name matching no declared file refuses |
-| `outernet.internal/dev-toggles` | consumed at `up --dev`; no template, no artifact change; on a k8s-only workload refuses (compose vocabulary) |
+| `outernet.internal/dev-toggles` | consumed at `up --dev`; no template, no artifact change; on a k8s-only workload refuses |
 
 ## This file's rules
 
