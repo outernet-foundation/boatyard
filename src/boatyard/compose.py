@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import shlex
-from collections.abc import Mapping
-from contextlib import ExitStack
+from collections.abc import Generator, Mapping
+from contextlib import ExitStack, contextmanager
 from itertools import combinations, groupby, starmap
 from os import environ
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from types import TracebackType
-from typing import NamedTuple, Self
+from typing import NamedTuple
 
 import yaml
 from bashrun.bash import bash_output
@@ -48,14 +47,8 @@ EDGE_CONFIG_NAME = "devkit-edge-caddyfile"
 OVERRIDE_LAYOUT = ("stack", "generated", "compose")
 
 
-class DevFacts(NamedTuple):
-    services: list[str]
-    toggles: dict[str, dict[str, str]]
-
-
 class BundleOverride(NamedTuple):
     name: str
-    reference: str | None
     path: Path | None
 
 
@@ -66,8 +59,8 @@ class Selection(NamedTuple):
     auth_route: RouteConfig | None
     forwarded: dict[str, str] | None
     profiles: list[str]
-    output_services: set[str]
-    dev_facts: DevFacts
+    dev_services: list[str]
+    dev_toggles: dict[str, dict[str, str]]
     overrides: list[BundleOverride]
 
 
@@ -76,28 +69,6 @@ class Invocation(NamedTuple):
     lock_env_file: Path | None
     extra_env_files: list[Path]
     profiles: list[str]
-
-
-class LockEnvUnwind:
-    def __init__(self, path: Path | None) -> None:
-        self.path = path
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> bool | None:
-        if self.path is None:
-            return None
-        if exc_type is not None:
-            keep_lock_env_file(self.path)
-        else:
-            self.path.unlink(missing_ok=True)
-        return None
 
 
 def select(config: Config, environment: Mapping[str, str]) -> Selection:
@@ -138,9 +109,9 @@ def select(config: Config, environment: Mapping[str, str]) -> Selection:
         for key, value in environment.items()
         if key.startswith(BUNDLE_OVERRIDE_PREFIX)
     }
-    vocabulary = sorted(options.keys() | set(riding))
     unknown = sorted(name for name in raw_overrides if name not in options and name not in riding)
     if unknown:
+        vocabulary = sorted(options.keys() | set(riding))
         raise ValueError(f"{BUNDLE_OVERRIDE_PREFIX}* names {unknown}; the bundle vocabulary is {vocabulary}")
     selected_names = set(starmap(qualified_option_name, choices.items())) | set(riding)
     selected_overrides = {name: value for name, value in raw_overrides.items() if name in selected_names}
@@ -190,7 +161,7 @@ def select(config: Config, environment: Mapping[str, str]) -> Selection:
                 raise ValueError(f"{variable}: empty; a value is a filesystem path or an oci:// reference")
             if value.startswith(OCI_REFERENCE_PREFIX):
                 require_bundle_reference(value)
-                overrides.append(BundleOverride(name=name, reference=value, path=None))
+                overrides.append(BundleOverride(name=name, path=None))
                 includes.append(value)
                 continue
             candidate = Path(value)
@@ -201,7 +172,7 @@ def select(config: Config, environment: Mapping[str, str]) -> Selection:
                 )
             if not path.is_file():
                 raise ValueError(f"{variable}: {path.as_posix()} does not exist")
-            overrides.append(BundleOverride(name=name, reference=None, path=path))
+            overrides.append(BundleOverride(name=name, path=path))
             includes.append(path.as_posix())
             local_outputs.append(path)
             continue
@@ -268,22 +239,21 @@ def select(config: Config, environment: Mapping[str, str]) -> Selection:
         auth_route=auth_route,
         forwarded=forwarded,
         profiles=profiles,
-        output_services=output_services,
-        dev_facts=DevFacts(services=dev_services, toggles=dev_toggles),
+        dev_services=dev_services,
+        dev_toggles=dev_toggles,
         overrides=overrides,
     )
 
 
 def render(
-    root: Path,
     config: Config,
     environment: Mapping[str, str],
     selection: Selection,
     stack: ExitStack,
-    dev: bool = False,
+    dev: bool,
 ) -> Invocation:
     # Materialize the per-run files.
-    lock_env_file = write_lock_env_file(root, config, environment, stack)
+    lock_env_file = write_lock_env_file(config, environment, stack)
     producer_env_files = write_producer_env_files(selection.overrides, environment, stack)
     compose_files: list[Path] = []
 
@@ -348,19 +318,19 @@ def render(
     if dev:
         # Render the dev overlay.
         overlay_services: dict[str, Yaml] = {}
-        for name in selection.dev_facts.services:
+        for name in selection.dev_services:
             overlay_services[name] = {
                 "image": f"{config.repository}/{name}:dev",
                 "volumes": [
                     {
                         "type": "bind",
-                        "source": root.resolve().as_posix(),
+                        "source": config.root.resolve().as_posix(),
                         "target": "/app",
                         "read_only": True,
                     }
                 ],
             }
-        for service_name, toggles in selection.dev_facts.toggles.items():
+        for service_name, toggles in selection.dev_toggles.items():
             service = overlay_services.get(service_name)
             if not is_mapping(service):
                 service = {}
@@ -377,7 +347,7 @@ def render(
         # Validate every route upstream and port owner against compose's own resolution.
         resolved = set(
             _compose_config(
-                root, compose_files, "--services", lock_env_file=lock_env_file, extra_env_files=producer_env_files
+                config.root, compose_files, "--services", lock_env_file=lock_env_file, extra_env_files=producer_env_files
             )
         )
         for route in selection.routes:
@@ -392,7 +362,7 @@ def render(
     if selection.profiles:
         # Refuse profile names the compose files do not define.
         defined = _compose_config(
-            root, compose_files, "--profiles", lock_env_file=lock_env_file, extra_env_files=producer_env_files
+            config.root, compose_files, "--profiles", lock_env_file=lock_env_file, extra_env_files=producer_env_files
         )
         unknown = [profile for profile in selection.profiles if profile not in defined]
         if unknown:
@@ -432,8 +402,8 @@ def _compose_config(
     root: Path,
     compose_files: list[Path],
     *arguments: str,
-    lock_env_file: Path | None = None,
-    extra_env_files: list[Path] | None = None,
+    lock_env_file: Path | None,
+    extra_env_files: list[Path] | None,
 ) -> list[str]:
     return [
         line.strip()
@@ -466,19 +436,35 @@ def compose_command(
     return " ".join([prefix, *quoted_arguments])
 
 
-def write_lock_env_file(root: Path, config: Config, environment: Mapping[str, str], stack: ExitStack) -> Path | None:
-    lock_path = root / LOCK_PATH
+@contextmanager
+def lock_env_unwind(path: Path) -> Generator[None]:
+    try:
+        yield
+    except BaseException:
+        print(f"lock env file kept for inspection: {path}")
+        print(path.read_text(encoding="utf-8"), end="")
+        raise
+
+    path.unlink(missing_ok=True)
+
+
+def write_env_file(entries: Mapping[str, str], prefix: str, stack: ExitStack) -> Path:
+    with NamedTemporaryFile("w", suffix=".env", prefix=prefix, delete=False, encoding="utf-8") as handle:
+        handle.write(render_env_entries(entries))
+        path = Path(handle.name)
+    stack.enter_context(lock_env_unwind(path))
+    return path
+
+
+def write_lock_env_file(config: Config, environment: Mapping[str, str], stack: ExitStack) -> Path | None:
+    lock_path = config.root / LOCK_PATH
     if not lock_path.is_file():
         return None
     entries = compose_env_entries(parse_config_lock(lock_path), config, environment)
     if not entries:
         # A bundles-only lock carries nothing the compose environment consumes.
         return None
-    with NamedTemporaryFile("w", suffix=".env", prefix="devkit-lock-env-", delete=False, encoding="utf-8") as handle:
-        handle.write(render_env_entries(entries))
-        path = Path(handle.name)
-    stack.enter_context(LockEnvUnwind(path))
-    return path
+    return write_env_file(entries, "devkit-lock-env-", stack)
 
 
 def write_producer_env_files(
@@ -496,21 +482,8 @@ def write_producer_env_files(
         entries = producer_env_entries(parse_config_lock(producer_lock), environment)
         if not entries:
             continue
-        with NamedTemporaryFile(
-            "w", suffix=".env", prefix="devkit-producer-env-", delete=False, encoding="utf-8"
-        ) as handle:
-            handle.write(render_env_entries(entries))
-            path = Path(handle.name)
-        stack.enter_context(LockEnvUnwind(path))
-        files.append(path)
+        files.append(write_env_file(entries, "devkit-producer-env-", stack))
     return files
-
-
-def keep_lock_env_file(path: Path | None) -> None:
-    if path is None:
-        return
-    print(f"lock env file kept for inspection: {path}")
-    print(path.read_text(encoding="utf-8"), end="")
 
 
 def write_temp_compose_file(stack: ExitStack, document: Mapping[str, Yaml], prefix: str) -> Path:

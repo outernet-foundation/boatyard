@@ -59,7 +59,7 @@ def up(
     # Select, render, and validate the invocation.
     with ExitStack() as stack:
         selection = select(config, environment)
-        invocation = render(root, config, environment, selection, stack, dev=dev)
+        invocation = render(config, environment, selection, stack, dev=dev)
 
         # Probe every lock entry before bring-up; an overridden bundle skips its probe —
         # testing a bundle not published at any digest yet is the override's point.
