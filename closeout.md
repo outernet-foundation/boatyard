@@ -159,40 +159,31 @@ def compute_service_shas(repo_root: Path, service_builds: dict[str, ServiceBuild
     _require_single_top(tops, "services")
     workload_prefix = f"{next(iter(tops))}/"
 
-    # Reject .dockerignore files that are anything other than an allowlist
-    found_star = False
+    # Require that .dockerignore is an allowlist
     includes: list[str] = []
-    for number, raw in enumerate((repo_root / ".dockerignore").read_text(encoding="utf-8").splitlines(), start=1):
-        text = raw.strip()
-        if not text or text.startswith("#"):
+    rules = [line.strip() for line in (repo_root / ".dockerignore").read_text(encoding="utf-8").splitlines()]
+    if sum(1 for rule in rules if rule == "*") != 1:
+        raise ValueError(".dockerignore: must contain exactly one '*' line")
+    for number, rule in enumerate(rules, start=1):
+        if not rule or rule.startswith("#") or rule == "*":
             continue
-        if text == "*":
-            if found_star:
-                raise ValueError(f".dockerignore:{number}: only one '*' line is allowed")
-            found_star = True
-            continue
-        if not text.startswith("!"):
+        if not rule.startswith("!"):
             raise ValueError(
-                f".dockerignore:{number}: only allowlists are supported ('*' + '!path' lines); got {text!r}"
+                f".dockerignore:{number}: only allowlists are supported ('*' + '!path' lines); got {rule!r}"
             )
-        path = text[1:].strip("/")
+        path = rule[1:].strip("/")
         if not path or any(character in path for character in "*?[]\\"):
             raise ValueError(
-                f".dockerignore:{number}: re-include lines must be literal paths without wildcards; got {text!r}"
+                f".dockerignore:{number}: re-include lines must be literal paths without wildcards; got {rule!r}"
             )
         includes.append(path)
-    if not found_star:
-        raise ValueError(".dockerignore: missing the '*' line; only allowlists are supported")
 
     # Walk the disk; a file enters the hash iff it sits under a re-include path.
-    allowed: list[str] = []
-    for directory, _dirnames, filenames in os.walk(repo_root):
-        relative = Path(directory).relative_to(repo_root).as_posix()
-        prefix = "" if relative == "." else f"{relative}/"
-        for name in filenames:
-            path = f"{prefix}{name}"
-            if any(path == include or path.startswith(include + "/") for include in includes):
-                allowed.append(path)
+    allowed = [
+        path
+        for path in (entry.relative_to(repo_root).as_posix() for entry in repo_root.rglob("*") if entry.is_file())
+        if any(path == include or path.startswith(include + "/") for include in includes)
+    ]
 
     # Partition into shared and per-service paths, dropping workload-root files owned by no service.
     shared_paths = [path for path in allowed if not path.startswith(workload_prefix)]
