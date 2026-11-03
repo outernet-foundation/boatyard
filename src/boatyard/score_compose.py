@@ -16,7 +16,6 @@ from pydantic import (
 from boatyard.compose import merged_environment
 from boatyard.config import (
     COMPOSE_HOLE,
-    CONSUMER_INTERPOLATED_ANNOTATION,
     ComposeWorkloadDocument,
     EDGE_SERVICE_NAME,
     Yaml,
@@ -215,11 +214,7 @@ def generate_compose(
                 continue
 
             # Leave declared consumer-interpolated targets un-doubled
-            interpolated_targets = (
-                workload.metadata.annotations[CONSUMER_INTERPOLATED_ANNOTATION].split(",")
-                if workload is not None and CONSUMER_INTERPOLATED_ANNOTATION in workload.metadata.annotations
-                else []
-            )
+            interpolated_targets = workload.consumer_interpolated_targets() if workload is not None else []
             if document.configs is None:
                 document.configs = {}
             if service.configs is None:

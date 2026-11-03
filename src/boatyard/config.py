@@ -605,6 +605,10 @@ class ComposeWorkloadDocument(WorkloadDocument):
                     raise ValueError(f"a {probe} httpGet requires {PROBE_ADAPTER_ANNOTATION}")
         return self
 
+    def consumer_interpolated_targets(self) -> list[str]:
+        annotation = self.metadata.annotations.get(CONSUMER_INTERPOLATED_ANNOTATION)
+        return annotation.split(",") if annotation is not None else []
+
 
 def require_workload_reference(name: str) -> None:
     if re.fullmatch(r"[A-Za-z0-9._-]+\.yaml", name) is None:
