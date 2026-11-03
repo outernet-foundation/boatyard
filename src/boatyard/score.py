@@ -10,7 +10,7 @@ from hashlib import sha256
 from importlib.resources import as_file, files
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Self
+from typing import Literal, Self
 
 import yaml
 from bashrun.bash import bash
@@ -48,7 +48,7 @@ LOCK_IMAGE_MARKER = "lock-image"
 INCLUDE_MARKERS = (TEXT_MARKER, YAML_MARKER)
 LOCK_MARKERS = (LOCK_MARKER, LOCK_IMAGE_MARKER)
 MARKERS = INCLUDE_MARKERS + LOCK_MARKERS
-DIGEST_FIELDS = ("digest", "sha")
+Substrate = Literal["compose", "k8s"]
 IMAGE_FIELD = "image"
 IMAGE_HOLE_PATTERN = re.compile(r"\$\{|{{")
 
@@ -70,7 +70,7 @@ class SecretsDeclaration(RootModel[dict[str, "SecretKey"]]):
                 raise ValueError(f"{name!r} must be an ALL_CAPS key")
         return self
 
-    def validate_consumed(self, consumed: set[str], rendering: str, source: str) -> None:
+    def validate_consumed(self, consumed: set[str], rendering: Substrate, source: str) -> None:
         undeclared = sorted(consumed - self.root.keys())
         if undeclared:
             raise ValueError(f"{source}: the {rendering} rendering consumes undeclared keys: " + ", ".join(undeclared))
@@ -94,14 +94,7 @@ class LockImageSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     key: str
-    digest_field: str = "digest"
-
-    @field_validator("digest_field")
-    @classmethod
-    def _require_known_digest_field(cls, value: str) -> str:
-        if value not in DIGEST_FIELDS:
-            raise ValueError(f"digest_field must be one of {DIGEST_FIELDS}")
-        return value
+    digest_field: Literal["digest", "sha"] = "digest"
 
 
 class AuthoredProvisioner(BaseModel):
@@ -139,7 +132,7 @@ LiteralBlockDumper.add_representer(str, _represent_multiline)
 
 def render_score(
     config: Config,
-    is_k8s: bool,
+    substrate: Substrate,
     workloads: list[str],
     rendering_vars: dict[str, str],
     templates: list[str],
@@ -150,11 +143,11 @@ def render_score(
     # Derive the per-substrate names and create the output parent.
     root = config.root
     score_dir = root / config.score_dir
-    tool = "score-k8s" if is_k8s else "score-compose"
-    rendering = "k8s" if is_k8s else "compose"
+    tool = f"score-{substrate}"
+    rendering = substrate
     # Both tools write their state dir into the cwd; run them in the output directory.
     working_dir = output.parent
-    project_name = None if is_k8s else config.project_name
+    project_name = None if substrate == "k8s" else config.project_name
     output.parent.mkdir(parents=True, exist_ok=True)
 
     with (
@@ -217,7 +210,7 @@ def render_score(
         bash(f"{tool} init{project} --no-sample{flags}", cwd=working_dir)
 
         # Pre-seed each workload's instance suffix so generated names are deterministic.
-        if is_k8s:
+        if substrate == "k8s":
             state_path = state_dir(tool, output) / "state.yaml"
             state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
             if not is_mapping(state):

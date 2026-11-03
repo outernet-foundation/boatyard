@@ -148,7 +148,7 @@ def generate_compose(
         shutil.rmtree(tool_state, ignore_errors=True)
         render_score(
             config,
-            is_k8s=False,
+            substrate="compose",
             workloads=entry.workloads,
             rendering_vars=entry.vars,
             templates=[

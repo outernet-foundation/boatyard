@@ -78,7 +78,7 @@ def generate_k8s(
 
     render_score(
         config,
-        is_k8s=True,
+        substrate="k8s",
         workloads=k8s.workloads,
         rendering_vars={**k8s.vars, STORAGE_CLASS_VAR: LOCAL_STORAGE_CLASS if local else CLOUD_STORAGE_CLASS},
         templates=[GPU_POD_TEMPLATE, SCALE_TO_ZERO_TEMPLATE],
