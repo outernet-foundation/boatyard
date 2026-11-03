@@ -447,17 +447,11 @@ def test_generate_compose_refuses_a_container_and_residual_service_sharing_a_nam
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     generated = (
-        "services:\n"
-        "  api-sidecar:\n"
-        "    image: ghcr.io/org/api:1\n"
-        "  sidecar:\n"
-        "    image: ghcr.io/org/sidecar:1\n"
+        "services:\n  api-sidecar:\n    image: ghcr.io/org/api:1\n  sidecar:\n    image: ghcr.io/org/sidecar:1\n"
     )
 
     with pytest.raises(ValueError, match="claimed by more than one"):
-        _generate_compose(
-            monkeypatch, tmp_path, generated, _empty_secrets(), workload="api", container="sidecar"
-        )
+        _generate_compose(monkeypatch, tmp_path, generated, _empty_secrets(), workload="api", container="sidecar")
 
 
 def test_generate_compose_carries_a_coincidentally_prefixed_service_through(
@@ -499,11 +493,7 @@ def test_generate_compose_refuses_a_container_name_shared_across_workloads(
         "metadata:\n  name: beta\ncontainers:\n  sidecar: {}\n", encoding="utf-8"
     )
     recorder = ComposeBashRecorder(
-        "services:\n"
-        "  alpha-sidecar:\n"
-        "    image: ghcr.io/org/alpha:1\n"
-        "  beta-sidecar:\n"
-        "    image: ghcr.io/org/beta:1\n"
+        "services:\n  alpha-sidecar:\n    image: ghcr.io/org/alpha:1\n  beta-sidecar:\n    image: ghcr.io/org/beta:1\n"
     )
     monkeypatch.setattr(score_module, "bash", recorder.run)
     config = _root_config(
