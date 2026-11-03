@@ -10,7 +10,7 @@ from hashlib import sha256
 from importlib.resources import as_file, files
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Literal, Self
+from typing import Literal, NamedTuple, Self
 
 import yaml
 from bashrun.bash import bash
@@ -121,6 +121,13 @@ class AuthoredProvisioner(BaseModel):
 
 class LiteralBlockDumper(yaml.SafeDumper):
     pass
+
+
+class ImageReferenceParts(NamedTuple):
+    registry: str
+    repository: str
+    tag: str | None
+    digest: str
 
 
 def _represent_multiline(dumper: yaml.SafeDumper, value: str) -> yaml.ScalarNode:
@@ -299,28 +306,13 @@ def resolve_markers(
         )
     if image_spec.key not in images:
         raise ValueError(f"{source}: lock entry {image_spec.key!r} does not exist in the image lock")
-    reference = images[image_spec.key]
-    path_part, _, digest = reference.rpartition("@")
-
-    tagged = path_part.rpartition(":")
-    if tagged[1] and "/" not in tagged[2]:
-        registry_part, tag = tagged[0], tagged[2]
-    else:
-        registry_part, tag = path_part, None
-
-    fields: dict[str, Yaml] = {}
-    registry, separator, repository = registry_part.rpartition("/")
-    if not separator or not registry or not repository:
-        raise ValueError(f"{source}: lock reference {reference!r} has no registry/repository split")
-    fields["registry"] = registry
-    fields["repository"] = repository
-    if tag is not None:
-        fields["tag"] = tag
-
-    if image_spec.digest_field == "sha":
-        fields["sha"] = digest.removeprefix("sha256:")
-    else:
-        fields["digest"] = digest
+    parts = image_reference_parts(source, images[image_spec.key])
+    fields: dict[str, Yaml] = {"registry": parts.registry, "repository": parts.repository}
+    if parts.tag is not None:
+        fields["tag"] = parts.tag
+    fields[image_spec.digest_field] = (
+        parts.digest.removeprefix("sha256:") if image_spec.digest_field == "sha" else parts.digest
+    )
     return fields
 
 
@@ -331,6 +323,19 @@ def marker_entry(node: Yaml, markers: tuple[str, ...]) -> tuple[str, Yaml] | Non
             return (key, value)
 
     return None
+
+
+def image_reference_parts(source: str, reference: str) -> ImageReferenceParts:
+    path_part, _, digest = reference.rpartition("@")
+    tagged = path_part.rpartition(":")
+    tag: str | None = None
+    registry_part = path_part
+    if tagged[1] and "/" not in tagged[2]:
+        registry_part, tag = tagged[0], tagged[2]
+    registry, separator, repository = registry_part.rpartition("/")
+    if not separator or not registry or not repository:
+        raise ValueError(f"{source}: lock reference {reference!r} has no registry/repository split")
+    return ImageReferenceParts(registry, repository, tag, digest)
 
 
 def collect_secret_keys(node: Yaml, secret_name: str, consumed: set[str]) -> None:
