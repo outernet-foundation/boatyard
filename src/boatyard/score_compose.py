@@ -118,7 +118,7 @@ class ComposeConfig(BaseModel):
 def generate_compose(
     config: Config, lock: ConfigLock, service_shas: dict[str, str], secrets: SecretsDeclaration
 ) -> list[Path]:
-    # Collect the local bundles (group options and bare entries) in declaration order.
+    # Collect the local bundles in declaration order.
     bundles = config.local_service_entries()
     if not bundles:
         raise ValueError("the compose target requires local service entries (workloads:)")
@@ -137,7 +137,7 @@ def generate_compose(
         ]
         gate = f"{GATE_SERVICE}-{name}"
 
-        # Recreate the shared state dir and render the bundle through the spine.
+        # Render the bundle from a clean state dir.
         shutil.rmtree(score_state, ignore_errors=True)
         output_path = compose_bundle_output_path(root, name)
         render_score(
@@ -159,10 +159,10 @@ def generate_compose(
             service_shas=service_shas,
         )
 
-        # Parse the rendered output into the typed compose document.
+        # Parse the rendering into the typed document.
         document = ComposeDocument.model_validate(yaml.safe_load(output_path.read_text(encoding="utf-8")))
 
-        # Pair each rendered {workload}-{container} service with its owning workload and its collapsed container name.
+        # Attribute rendered container services to their owning workloads.
         services_map: dict[str, tuple[ComposeService, ComposeWorkloadDocument | None, str]] = {
             (service_name := f"{workload_name}-{container_name}"): (
                 document.services[service_name],
@@ -173,14 +173,12 @@ def generate_compose(
             for container_name in workload.containers
         }
 
-        # Carry services no workload owns — score-synthesized helpers and provisioner
-        # services — through under their rendered names.
+        # Carry workload-less services through under their rendered names.
         for service_name, service in document.services.items():
             if service_name in services_map:
                 continue
 
-            # Pin the score-synthesized wait-for-resources gate to the ALPINE_IMAGE lock hole and rename it per entry,
-            # since all bundle outputs merge into one compose project.
+            # Rename the gate to the per-entry name and pin its image to the lock hole.
             if service_name == GATE_SERVICE:
                 gate_service = document.services[GATE_SERVICE]
                 gate_service.image = "${ALPINE_IMAGE:?err}"
@@ -189,7 +187,7 @@ def generate_compose(
 
             services_map[service_name] = (service, None, service_name)
 
-        # Refuse a collapsed name claimed twice before rekeying the document.
+        # Refuse a collapsed name claimed twice.
         collapsed_names = [collapsed_name for _service, _workload, collapsed_name in services_map.values()]
         if len(collapsed_names) != len(set(collapsed_names)):
             duplicates = sorted({collapsed for collapsed in collapsed_names if collapsed_names.count(collapsed) > 1})
@@ -199,20 +197,21 @@ def generate_compose(
         if EDGE_SERVICE_NAME in collapsed_names:
             raise ValueError(f"bundle {name!r} rendering defines the reserved service {EDGE_SERVICE_NAME!r}")
 
-        # Inline every bind volume as a top-level configs entry and carry the gate rename into each depends_on.
         contents: dict[str, ComposeConfig] = {}
         for service, workload, _collapsed_name in services_map.values():
+            # Point gate references in depends_on at the renamed gate.
             depends_on = service.depends_on
             if isinstance(depends_on, dict) and GATE_SERVICE in depends_on:
                 depends_on[gate] = depends_on.pop(GATE_SERVICE)
             elif isinstance(depends_on, list) and GATE_SERVICE in depends_on:
                 service.depends_on = [gate if dependency == GATE_SERVICE else dependency for dependency in depends_on]
 
+            # Inline every bind volume as a top-level configs entry.
             binds = [volume for volume in service.volumes or [] if isinstance(volume, BindVolume)]
             if not binds:
                 continue
 
-            # Carry the owning workload's declared consumer-interpolated files un-doubled.
+            # Leave declared consumer-interpolated targets un-doubled.
             interpolated_targets = (
                 workload.metadata.annotations[CONSUMER_INTERPOLATED_ANNOTATION].split(",")
                 if workload is not None and CONSUMER_INTERPOLATED_ANNOTATION in workload.metadata.annotations
@@ -220,7 +219,7 @@ def generate_compose(
             )
             references: list[ComposeConfigReference] = []
             for bind in binds:
-                # Resolve state-dir sources against score_dir, other sources against the repo root.
+                # Resolve state-dir sources against score_dir, others against root.
                 path = score_dir / bind.source if bind.source.startswith(STATE_PREFIX) else root / bind.source
                 text = path.read_text(encoding="utf-8")
                 if bind.target not in interpolated_targets:
