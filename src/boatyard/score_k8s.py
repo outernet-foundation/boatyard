@@ -27,7 +27,6 @@ from boatyard.score import (
     MARKERS,
     SECRETS_FILE,
     SecretsDeclaration,
-    collect_secret_keys,
     dump_yaml,
     load_workloads,
     marker_entry,
@@ -151,3 +150,19 @@ def contains_marker(node: Yaml) -> bool:
         return any(contains_marker(item) for item in node)
 
     return False
+
+
+def collect_secret_keys(node: Yaml, secret_name: str, consumed: set[str]) -> None:
+    if is_mapping(node):
+        reference = node.get("secretKeyRef")
+        if is_mapping(reference) and reference.get("name") == secret_name:
+            key = reference.get("key")
+            if isinstance(key, str):
+                consumed.add(key)
+
+        for value in node.values():
+            collect_secret_keys(value, secret_name, consumed)
+
+    elif is_list(node):
+        for item in node:
+            collect_secret_keys(item, secret_name, consumed)

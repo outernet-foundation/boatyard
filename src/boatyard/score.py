@@ -3,8 +3,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
-from collections.abc import Generator
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack
 from functools import partial
 from hashlib import sha256
 from importlib.resources import as_file, files
@@ -237,8 +236,15 @@ def render_score(
             write_file(state_path, dump_yaml(state))
 
         # Render the expanded workload copies and run generate.
-        with rendered_workloads(workloads, rendering_vars, images, service_shas) as rendered:
-            bash(f"{tool} generate {rendered} --output {output.as_posix()}", cwd=working_dir)
+        copies_directory = Path(stack.enter_context(TemporaryDirectory()))
+        for workload in workloads:
+            expanded = PLACEHOLDER.sub(
+                partial(_placeholder_value, rendering_vars, service_shas, images, workload.file_name),
+                dump_yaml(workload.raw),
+            )
+            (copies_directory / workload.file_name).write_text(expanded, "utf-8")
+        rendered = " ".join((copies_directory / workload.file_name).as_posix() for workload in workloads)
+        bash(f"{tool} generate {rendered} --output {output.as_posix()}", cwd=working_dir)
 
 
 def load_workloads(score_dir: Path, names: list[str], lens: type[WorkloadDocument]) -> list[LoadedWorkload]:
@@ -343,42 +349,6 @@ def image_reference_parts(source: str, reference: str) -> ImageReferenceParts:
     if not separator or not registry or not repository:
         raise ValueError(f"{source}: lock reference {reference!r} has no registry/repository split")
     return ImageReferenceParts(registry, repository, tag, digest)
-
-
-def collect_secret_keys(node: Yaml, secret_name: str, consumed: set[str]) -> None:
-    if is_mapping(node):
-        reference = node.get("secretKeyRef")
-        if is_mapping(reference) and reference.get("name") == secret_name:
-            key = reference.get("key")
-            if isinstance(key, str):
-                consumed.add(key)
-
-        for value in node.values():
-            collect_secret_keys(value, secret_name, consumed)
-
-    elif is_list(node):
-        for item in node:
-            collect_secret_keys(item, secret_name, consumed)
-
-
-@contextmanager
-def rendered_workloads(
-    workloads: list[LoadedWorkload],
-    rendering_vars: dict[str, str],
-    images: dict[str, str],
-    service_shas: dict[str, str],
-) -> Generator[str]:
-    with TemporaryDirectory() as temporary_directory:
-        directory = Path(temporary_directory)
-
-        for workload in workloads:
-            source = dump_yaml(workload.raw)
-            rendered = PLACEHOLDER.sub(
-                partial(_placeholder_value, rendering_vars, service_shas, images, workload.file_name), source
-            )
-            (directory / workload.file_name).write_text(rendered, "utf-8")
-
-        yield " ".join((directory / workload.file_name).as_posix() for workload in workloads)
 
 
 def _placeholder_value(
