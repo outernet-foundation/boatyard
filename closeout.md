@@ -128,18 +128,103 @@ guard this plan once carried was policing over a defect that disappears when
 the sources unify. Dirt is content; nothing refuses; there is no flag and no
 second channel.
 
-- `compute_service_shas` walks the disk under the `.dockerignore` allowlist
-  with one shared matcher, one home — and the matcher implements exactly the
-  allowlist grammar the org law mandates: comments, one `*`, `!path` /
-  `!path/` re-includes; a file rides iff it sits under a re-include path.
-  Every other line (bare patterns like `__pycache__`, `**`, `?`, ranges,
-  re-include-then-subtract) refuses loudly at load. The grammar stays small
-  enough that buildkit's behavior over it is trivial, so agreement with the
-  real build context holds by construction. Do NOT port buildkit's full
-  patternmatcher, and do NOT use pathspec/gitignore semantics: the two
-  diverge on precisely the lines the restriction refuses (a bare pattern is
-  root-anchored in buildkit, basename-any-level in gitignore) — restriction,
-  not porting, is the fix.
+**Matcher design — DRAFT, NOT LOCKED. The first action of the session that
+picks this up is to present this block verbatim to the operator for review;
+iterate on the design here until sign-off, and only then implement.**
+
+The grammar is the allowlist and nothing else: comments, one `*`, `!path`
+re-includes; every other line refuses at load, naming the line number and
+the invariant. No pathspec (the dependency leaves pyproject), no buildkit
+patternmatcher port, no new module, no class, no single-call helper — the
+matcher is ~20 flat lines inline in `compute_service_shas`; a missing
+`.dockerignore` fails as the plain `FileNotFoundError`. Restriction, not
+porting, is the fix: pathspec/gitignore semantics and buildkit diverge on
+precisely the lines this grammar refuses (a bare pattern is root-anchored
+in buildkit, basename-any-level in gitignore), so refusing them keeps the
+matcher trivial and its agreement with the real build context true by
+construction.
+
+```python
+def compute_service_shas(repo_root: Path, service_builds: dict[str, ServiceBuild]) -> dict[str, str]:
+    repo_root = repo_root.resolve()
+
+    service_dirs = {str(PurePosixPath(service.dockerfile).parent) for service in service_builds.values()}
+
+    if not service_dirs:
+        # Skip the disk walk when no services exist.
+        return {}
+
+    # Derive the workload root as the single top-level directory holding every service.
+    tops = {PurePosixPath(service_dir).parts[0] for service_dir in service_dirs}
+    _require_single_top(tops, "services")
+    workload_prefix = f"{next(iter(tops))}/"
+
+    # The .dockerignore grammar is the allowlist: comments, one '*', '!path' re-includes.
+    entries: list[tuple[int, str]] = []
+    for number, raw in enumerate((repo_root / ".dockerignore").read_text(encoding="utf-8").splitlines(), start=1):
+        text = raw.strip()
+        if text and not text.startswith("#"):
+            entries.append((number, text))
+    stars = [text for _number, text in entries if text == "*"]
+    if len(stars) != 1:
+        raise ValueError(f".dockerignore: exactly one '*' line is required; found {len(stars)}")
+    includes: list[str] = []
+    for number, text in entries:
+        if text == "*":
+            continue
+        if not text.startswith("!"):
+            raise ValueError(f".dockerignore:{number}: expected a comment, '*', or '!path'; got {text!r}")
+        path = text[1:].strip("/")
+        if not path or any(character in path for character in "*?[]\\"):
+            raise ValueError(f".dockerignore:{number}: re-include paths are plain paths; got {text!r}")
+        includes.append(path)
+
+    # Walk the disk; a file enters the hash iff it sits under a re-include path.
+    allowed: list[str] = []
+    for directory, _dirnames, filenames in os.walk(repo_root):
+        relative = Path(directory).relative_to(repo_root).as_posix()
+        prefix = "" if relative == "." else f"{relative}/"
+        for name in filenames:
+            path = f"{prefix}{name}"
+            if any(path == include or path.startswith(include + "/") for include in includes):
+                allowed.append(path)
+    allowed.sort()
+
+    shared_paths: list[str] = []
+    per_service: dict[str, list[str]] = {directory: [] for directory in service_dirs}
+
+    # Sort entries into shared and per-service paths, dropping workload-root files owned by no service.
+    for path in allowed:
+        if path.startswith(workload_prefix):
+            for service_dir in service_dirs:
+                if path.startswith(service_dir + "/"):
+                    per_service[service_dir].append(path)
+                    break
+        else:
+            shared_paths.append(path)
+
+    result: dict[str, str] = {}
+    for service_dir in sorted(service_dirs):
+        entries_for_service = sorted(shared_paths + per_service[service_dir])
+        result[service_sha_env(PurePosixPath(service_dir).name)] = f"tree-{_hash_paths(repo_root, entries_for_service)}"
+    return result
+
+
+def _hash_paths(repo_root: Path, paths: list[str]) -> str:
+    digest = hashlib.sha256()
+    for path in paths:
+        full = repo_root / path
+        if full.is_symlink():
+            mode = SYMLINK_MODE
+            content = full.readlink().as_posix().encode()
+        else:
+            mode = EXECUTABLE_MODE if full.stat().st_mode & 0o111 else FILE_MODE
+            content = full.read_bytes()
+        digest.update(f"{mode} {len(content)} {path}\0".encode())
+        digest.update(content)
+    return digest.hexdigest()
+```
+
 - Pinned empirically against `docker buildx build --output type=local`
   (2026-11-03): `#` lines are not comments to buildkit (inert root-anchored
   patterns — nothing strips them, none may matter); directory symlinks never
@@ -168,11 +253,14 @@ second channel.
   regeneration in Work 4; with no consumer computing tags on the old basis,
   this is a non-event, not a re-key wave.
 
-Verify: matcher golden tests diffing the hash's file set against actual
-docker build contexts; determinism (clean checkout twice → identical tags);
-dirty edit → re-key of the affected services; untracked-but-context-visible
-file → enters the image and re-keys (correct, not noise); empty service set
-still returns `{}` without walking.
+Verify: the operator signs off on the draft block above before any
+implementation; matcher golden tests diffing the hash's file set against
+actual docker build contexts; the grammar refusals (bare pattern, wildcard
+in a re-include, second or missing `*`) refuse loudly through
+`compute_service_shas` on fixture trees; determinism (clean checkout twice →
+identical tags); dirty edit → re-key of the affected services;
+untracked-but-context-visible file → enters the image and re-keys (correct,
+not noise); empty service set still returns `{}` without walking.
 
 ### Qualified selection names
 
