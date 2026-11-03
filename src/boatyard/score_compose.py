@@ -74,8 +74,10 @@ class ComposeService(BaseModel):
     def bind_volumes(self) -> list[BindVolume]:
         return [volume for volume in self.volumes or [] if isinstance(volume, BindVolume)]
 
-    def strip_bind_volumes(self) -> None:
+    def strip_bind_volumes(self) -> list[BindVolume]:
+        binds = self.bind_volumes
         self.volumes = [volume for volume in self.volumes or [] if not isinstance(volume, BindVolume)] or None
+        return binds
 
 
 class ComposeConfigReference(BaseModel):
@@ -216,7 +218,7 @@ def generate_compose(
                 ]
 
             # Inline every bind volume as a top-level configs entry
-            binds = service.bind_volumes
+            binds = service.strip_bind_volumes()
             if not binds:
                 continue
 
@@ -233,7 +235,6 @@ def generate_compose(
                     text = double_dollars(text)
                 document.configs[path.name] = ComposeConfig(content=text)
                 service.configs.append(ComposeConfigReference(source=path.name, target=bind.target))
-            service.strip_bind_volumes()
 
         # Write the transformed document
         write_generated_file(output_path, dump_compose(document.dump()))
