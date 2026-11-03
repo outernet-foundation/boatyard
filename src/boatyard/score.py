@@ -122,13 +122,6 @@ class LiteralBlockDumper(yaml.SafeDumper):
     pass
 
 
-class ImageReferenceParts(NamedTuple):
-    registry: str
-    repository: str
-    tag: str | None
-    digest: str
-
-
 class LoadedWorkload(NamedTuple):
     file_name: str
     raw: Yaml
@@ -319,13 +312,20 @@ def resolve_markers(
         )
     if image_spec.key not in images:
         raise ValueError(f"{source}: lock entry {image_spec.key!r} does not exist in the image lock")
-    parts = image_reference_parts(source, images[image_spec.key])
-    fields: dict[str, Yaml] = {"registry": parts.registry, "repository": parts.repository}
-    if parts.tag is not None:
-        fields["tag"] = parts.tag
-    fields[image_spec.digest_field] = (
-        parts.digest.removeprefix("sha256:") if image_spec.digest_field == "sha" else parts.digest
-    )
+    reference = images[image_spec.key]
+    path_part, _, digest = reference.rpartition("@")
+    tagged = path_part.rpartition(":")
+    tag: str | None = None
+    registry_part = path_part
+    if tagged[1] and "/" not in tagged[2]:
+        registry_part, tag = tagged[0], tagged[2]
+    registry, separator, repository = registry_part.rpartition("/")
+    if not separator or not registry or not repository:
+        raise ValueError(f"{source}: lock reference {reference!r} has no registry/repository split")
+    fields: dict[str, Yaml] = {"registry": registry, "repository": repository}
+    if tag is not None:
+        fields["tag"] = tag
+    fields[image_spec.digest_field] = digest.removeprefix("sha256:") if image_spec.digest_field == "sha" else digest
     return fields
 
 
@@ -336,19 +336,6 @@ def marker_entry(node: Yaml, markers: tuple[str, ...]) -> tuple[str, Yaml] | Non
             return (key, value)
 
     return None
-
-
-def image_reference_parts(source: str, reference: str) -> ImageReferenceParts:
-    path_part, _, digest = reference.rpartition("@")
-    tagged = path_part.rpartition(":")
-    tag: str | None = None
-    registry_part = path_part
-    if tagged[1] and "/" not in tagged[2]:
-        registry_part, tag = tagged[0], tagged[2]
-    registry, separator, repository = registry_part.rpartition("/")
-    if not separator or not registry or not repository:
-        raise ValueError(f"{source}: lock reference {reference!r} has no registry/repository split")
-    return ImageReferenceParts(registry, repository, tag, digest)
 
 
 def _placeholder_value(
