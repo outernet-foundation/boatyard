@@ -114,7 +114,7 @@ class LoadedWorkload(NamedTuple):
 
 
 class ToolState(BaseModel):
-    # The score tools' state.yaml, pinned by the tool version; this view types only the shape boatyard touches.
+    # Type only the workloads shape of the tool-owned state file
     model_config = ConfigDict(extra="allow")
 
     workloads: dict[str, dict[str, Yaml]] = Field(default_factory=dict)
@@ -137,12 +137,12 @@ def render_score(
     images: dict[str, str],
     service_shas: dict[str, str],
 ) -> None:
-    # Derive the per-substrate names and create the output parent.
+    # Derive the per-substrate names and create the output parent
     root = config.root
     score_dir = root / config.score_dir
     tool = f"score-{substrate}"
     rendering = substrate
-    # Both tools write their state dir into the cwd; run them in the output directory.
+    # Run both tools in the output directory because both write their state dir into the cwd
     working_dir = output.parent
     project_name = None if substrate == "k8s" else config.project_name
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -151,10 +151,10 @@ def render_score(
         as_file(files("boatyard") / PATCH_TEMPLATES_DIR) as builtin_templates,
         ExitStack() as stack,
     ):
-        # Collect the resource types the workloads reference.
+        # Collect the resource types the workloads reference
         referenced = {resource.type for workload in workloads for resource in workload.document.resources.values()}
 
-        # Select the rendering's provisioner files that declare a referenced type.
+        # Select the rendering's provisioner files that declare a referenced type
         selected: list[tuple[str, list[Yaml]]] = []
         rendering_dir = score_dir / rendering
         if rendering_dir.is_dir():
@@ -163,7 +163,7 @@ def render_score(
                 if is_list(entries) and any(is_mapping(entry) and entry.get("type") in referenced for entry in entries):
                     selected.append((f"{rendering}/{path.name}", entries))
 
-        # Compile the selected provisioners into a per-run tempdir under score_dir.
+        # Compile the selected provisioners into a per-run tempdir under score_dir
         paths: list[Path] = []
         directory = Path(stack.enter_context(TemporaryDirectory(prefix="compiled-provisioners-", dir=score_dir)))
         for name, entries in selected:
@@ -182,7 +182,7 @@ def render_score(
             write_file(target, dump_yaml(compiled_entries))
             paths.append(target)
 
-        # Build the tool flags and run init.
+        # Build the tool flags and run init
         provisioner_flags = "".join(
             f" --provisioners {shlex.quote(Path(os.path.relpath(path, working_dir)).as_posix())}" for path in paths
         )
@@ -196,7 +196,7 @@ def render_score(
             cwd=working_dir,
         )
 
-        # Pre-seed each workload's instance suffix so generated names are deterministic.
+        # Pre-seed each workload's instance suffix so generated names are deterministic
         if substrate == "k8s":
             state_path = output.parent / f".{tool}" / "state.yaml"
             state = ToolState.model_validate(yaml.safe_load(state_path.read_text(encoding="utf-8")) or {})
@@ -207,9 +207,9 @@ def render_score(
                 )
             write_file(state_path, dump_yaml(state.model_dump()))
 
-        # Render the expanded workload copies and run generate.
+        # Render the expanded workload copies and run generate
         copies_directory = Path(stack.enter_context(TemporaryDirectory()))
-        # Later sources overwrite earlier ones, so the sources run lowest-priority first.
+        # List the sources lowest-priority first so later ones overwrite earlier ones
         variable_values = {
             variable: value
             for source in (images, service_shas, rendering_vars)
