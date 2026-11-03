@@ -124,9 +124,6 @@ class ComposeConfig(BaseModel):
 def generate_compose(
     config: Config, lock: ConfigLock, service_shas: dict[str, str], secrets: SecretsDeclaration
 ) -> list[Path]:
-    # Collect the local bundles in declaration order
-    bundles = config.local_service_entries()
-
     score_dir = config.root / config.score_dir
     score_state = score_dir / STATE_PREFIX
     images = compose_env_entries(lock, config, merged_environment(config.root))
@@ -134,7 +131,7 @@ def generate_compose(
         raise ValueError(f"{LOCK_PATH.as_posix()}: the image lock must carry the ALPINE_IMAGE entry")
 
     outputs: list[Path] = []
-    for name, entry in bundles:
+    for name, entry in config.local_service_entries():
         workloads = [
             (Path(workload_file).stem, ComposeWorkloadDocument.load(score_dir / workload_file))
             for workload_file in entry.workloads
