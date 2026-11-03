@@ -159,24 +159,30 @@ def compute_service_shas(repo_root: Path, service_builds: dict[str, ServiceBuild
     _require_single_top(tops, "services")
     workload_prefix = f"{next(iter(tops))}/"
 
-    # The .dockerignore grammar is the allowlist: comments, one '*', '!path' re-includes.
-    stars = 0
+    # Reject .dockerignore files that are anything other than an allowlist
+    found_star = False
     includes: list[str] = []
     for number, raw in enumerate((repo_root / ".dockerignore").read_text(encoding="utf-8").splitlines(), start=1):
         text = raw.strip()
         if not text or text.startswith("#"):
             continue
         if text == "*":
-            stars += 1
+            if found_star:
+                raise ValueError(f".dockerignore:{number}: only one '*' line is allowed")
+            found_star = True
             continue
         if not text.startswith("!"):
-            raise ValueError(f".dockerignore:{number}: expected a comment, '*', or '!path'; got {text!r}")
+            raise ValueError(
+                f".dockerignore:{number}: only allowlists are supported ('*' + '!path' lines); got {text!r}"
+            )
         path = text[1:].strip("/")
         if not path or any(character in path for character in "*?[]\\"):
-            raise ValueError(f".dockerignore:{number}: re-include paths are plain paths; got {text!r}")
+            raise ValueError(
+                f".dockerignore:{number}: re-include lines must be literal paths without wildcards; got {text!r}"
+            )
         includes.append(path)
-    if stars != 1:
-        raise ValueError(f".dockerignore: exactly one '*' line is required; found {stars}")
+    if not found_star:
+        raise ValueError(".dockerignore: missing the '*' line; only allowlists are supported")
 
     # Walk the disk; a file enters the hash iff it sits under a re-include path.
     allowed: list[str] = []
