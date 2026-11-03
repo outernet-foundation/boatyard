@@ -92,11 +92,17 @@ def generate_k8s(
             for chart_name in k8s.charts:
                 # Every values file rides through marker resolution, so the literal-image guard is universal.
                 path = config.root / config.score_dir / "k8s" / "values" / f"{chart_name}.yaml"
-                document = yaml.safe_load(path.read_text(encoding="utf-8"))
-                resolved = resolve_markers(document, MarkerContext(config.root, images, path.as_posix()))
                 values_path = values_dir / path.relative_to(config.root)
                 values_path.parent.mkdir(parents=True, exist_ok=True)
-                write_file(values_path, dump_yaml(resolved))
+                write_file(
+                    values_path,
+                    dump_yaml(
+                        resolve_markers(
+                            yaml.safe_load(path.read_text(encoding="utf-8")),
+                            MarkerContext(config.root, images, path.as_posix()),
+                        )
+                    ),
+                )
 
                 # Render the chart through helm template with the values file and the locked chart reference.
                 chart_blocks.extend(
