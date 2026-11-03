@@ -178,8 +178,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 - Everything the substrate needs that score's container model doesn't carry lives in the workload file as `outernet.internal/*` annotations — `boatyard.yml` never carries a per-workload runtime fact; the shipped patch templates
   (package data in `src/boatyard/patch_templates/`) are the annotation reader — one annotation, one template, one behavior; consumer repos never author one; refusal laws live in boatyard code (templates are data and cannot
   refuse); the lens is two models — `WorkloadDocument` (strict `dict[str, str]` annotations, `metadata.name` pinned to the workload file stem) and `ComposeWorkloadDocument` (adds httpGet-requires-probe-adapter) — one lens spelling: `WorkloadDocument.parse(raw, file_name)`
-  (`context={"source"}` stem pin; `load(path)` = read + parse; the compose lens inherits it), all readers; the score pipelines parse each workload file once (`load_workloads` → `LoadedWorkload`: file name, raw, document) and pass the records down; score propagates
-  `metadata.annotations` into both renderings — diffs must include the annotation lines.
+  (stem pin; the compose lens inherits it); the score pipelines parse workloads once (`load_workloads` → `LoadedWorkload`: file name, raw, document); score propagates `metadata.annotations` into both renderings — diffs must include the annotation lines.
 
 | Annotation | Behavior |
 |---|---|
