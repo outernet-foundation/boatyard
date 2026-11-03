@@ -8,6 +8,7 @@ import yaml
 from pydantic import (
     BaseModel,
     ConfigDict,
+    Field,
     field_validator,
     model_validator,
 )
@@ -44,13 +45,13 @@ GPU_COMPOSE_TEMPLATES = {"cuda": "gpu-cuda.tpl", "rocm": "gpu-rocm.tpl"}
 class ComposeDocument(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    services: dict[str, ComposeService] | None = None
+    services: dict[str, ComposeService] = Field(default_factory=dict)
     configs: dict[str, ComposeConfig] | None = None
 
     @model_validator(mode="after")
     def _reject_colliding_bind_basenames(self) -> Self:
         seen: dict[str, str] = {}
-        for service in (self.services or {}).values():
+        for service in self.services.values():
             for volume in service.volumes or []:
                 if not isinstance(volume, BindVolume):
                     continue
@@ -160,7 +161,7 @@ def generate_compose(
 
         # Parse the rendered output into the typed compose document.
         document = ComposeDocument.model_validate(yaml.safe_load(output_path.read_text(encoding="utf-8")))
-        services = document.services or {}
+        services = document.services
 
         # Pair each rendered {workload}-{container} service with its owning workload and its collapsed container name.
         services_map: dict[str, tuple[ComposeService, ComposeWorkloadDocument | None, str]] = {
