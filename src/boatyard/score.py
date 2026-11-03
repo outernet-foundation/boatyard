@@ -135,6 +135,13 @@ class MarkerContext(NamedTuple):
     ancestors: tuple[Path, ...] = ()
 
 
+class ImageReference(NamedTuple):
+    registry: str
+    repository: str
+    tag: str | None
+    digest: str
+
+
 def _represent_multiline(dumper: yaml.SafeDumper, value: str) -> yaml.ScalarNode:
     return yaml.ScalarNode("tag:yaml.org,2002:str", value, style="|" if "\n" in value else None)
 
@@ -265,74 +272,115 @@ def state_dir_name(tool: str) -> str:
 
 
 def resolve_markers(node: Yaml, context: MarkerContext) -> Yaml:
-    # Resolve every element of a list.
-    if is_list(node):
-        return [resolve_markers(item, context) for item in node]
+    # Includes splice in structure that may itself carry lock markers, so includes resolve first.
+    return resolve_locks(expand_includes(node, context), context)
 
-    # Pass scalars through untouched.
-    if not is_mapping(node):
-        return node
 
+def expand_includes(node: Yaml, context: MarkerContext) -> Yaml:
+    match node:
+        case list():
+            # Resolve every element of a list.
+            expanded = [expand_includes(item, context) for item in node]
+        case dict():
+            match tuple(node.items()):
+                # A single-key include marker splices in file content.
+                case [(marker, value)] if marker == TEXT_MARKER:
+                    expanded = include_text(value, context)
+                case [(marker, value)] if marker == YAML_MARKER:
+                    expanded = include_yaml(value, context)
+                # A lock marker owns its value whole; the lock pass consumes or refuses it.
+                case [(marker, _)] if marker in LOCK_MARKERS:
+                    expanded = node
+                # Any other mapping resolves child by child.
+                case entries:
+                    expanded = {key: expand_includes(child, context) for key, child in entries}
+        case _:
+            # Scalars pass through untouched.
+            expanded = node
+
+    return expanded
+
+
+def include_text(value: Yaml, context: MarkerContext) -> str:
+    path = included_path(value, TEXT_MARKER, context)
+    return path.read_text(encoding="utf-8")
+
+
+def include_yaml(value: Yaml, context: MarkerContext) -> Yaml:
+    path = included_path(value, YAML_MARKER, context)
+
+    try:
+        parsed = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as error:
+        raise ValueError(f"{context.source}: include {value!r} is not valid YAML: {error}") from error
+
+    if parsed is None:
+        raise ValueError(f"{context.source}: include {value!r} is empty")
+
+    return expand_includes(parsed, context._replace(ancestors=(*context.ancestors, path)))
+
+
+def included_path(value: Yaml, marker: str, context: MarkerContext) -> Path:
     source = context.source
-    images = context.images
 
-    # Detect a single-key marker mapping.
-    entry = marker_entry(node, MARKERS)
-    if entry is None:
-        # Refuse a literal image that bypasses the lock.
-        image = node.get(IMAGE_FIELD)
-        if isinstance(image, str) and IMAGE_HOLE_PATTERN.search(image) is None:
-            raise ValueError(f"{source}: image {image!r} must consume the lock (lock: NAME / lock-image: NAME)")
-
-        # Resolve the children of a plain mapping.
-        return {key: resolve_markers(value, context) for key, value in node.items()}
-
-    marker, value = entry
-
-    # Insert the included file's bytes or parsed structure.
-    if marker in INCLUDE_MARKERS:
-        # Anchor include paths at the repo root.
-        if not isinstance(value, str):
+    match value:
+        case str():
+            relative = Path(value)
+        case _:
             raise ValueError(f"{source}: {marker} takes a repo-root-relative path string, not {type(value).__name__}")
 
-        relative = Path(value)
-        if relative.is_absolute() or ".." in relative.parts:
-            raise ValueError(f"{source}: include path {value!r} must anchor at the repo root")
+    # Anchor include paths at the repo root.
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError(f"{source}: include path {value!r} must anchor at the repo root")
 
-        path = context.root / relative
+    path = context.root / relative
 
-        # Refuse cycles and missing targets.
-        if path in context.ancestors:
-            raise ValueError(f"{source}: include {value!r} participates in a cycle")
-        if not path.is_file():
-            raise ValueError(f"{source}: include {value!r} does not exist at the repo root")
+    # Refuse cycles and missing targets.
+    if path in context.ancestors:
+        raise ValueError(f"{source}: include {value!r} participates in a cycle")
+    if not path.is_file():
+        raise ValueError(f"{source}: include {value!r} does not exist at the repo root")
 
-        text = path.read_text(encoding="utf-8")
+    return path
 
-        # Return bytes verbatim.
-        if marker == TEXT_MARKER:
-            return text
 
-        # Parse and re-walk the spliced structure.
-        try:
-            parsed = yaml.safe_load(text)
-        except yaml.YAMLError as error:
-            raise ValueError(f"{source}: include {value!r} is not valid YAML: {error}") from error
+def resolve_locks(node: Yaml, context: MarkerContext) -> Yaml:
+    match node:
+        case list():
+            # Resolve every element of a list.
+            resolved = [resolve_locks(item, context) for item in node]
+        case dict():
+            match tuple(node.items()):
+                # A single-key lock marker substitutes the locked reference as one string.
+                case [(marker, value)] if marker == LOCK_MARKER:
+                    resolved = locked_reference(value, context)
+                case [(marker, value)] if marker == LOCK_IMAGE_MARKER:
+                    resolved = lock_image_fields(value, context.images, context.source)
+                # A plain mapping refuses literal images, then resolves child by child.
+                case entries:
+                    _check_literal_image(node, context.source)
+                    resolved = {key: resolve_locks(child, context) for key, child in entries}
+        case _:
+            # Scalars pass through untouched.
+            resolved = node
 
-        if parsed is None:
-            raise ValueError(f"{source}: include {value!r} is empty")
+    return resolved
 
-        return resolve_markers(parsed, context._replace(ancestors=(*context.ancestors, path)))
 
-    # Substitute the full locked reference as one string.
-    if marker == LOCK_MARKER:
-        if not isinstance(value, str):
-            raise ValueError(f"{source}: lock takes a lock-entry name string, not {type(value).__name__}")
-        if value not in images:
-            raise ValueError(f"{source}: lock entry {value!r} does not exist in the image lock")
-        return images[value]
+def locked_reference(value: Yaml, context: MarkerContext) -> str:
+    match value:
+        case str() if value in context.images:
+            reference = context.images[value]
+        case str():
+            raise ValueError(f"{context.source}: lock entry {value!r} does not exist in the image lock")
+        case _:
+            raise ValueError(f"{context.source}: lock takes a lock-entry name string, not {type(value).__name__}")
 
-    # Split the locked reference into chart fields.
+    return reference
+
+
+def lock_image_fields(value: Yaml, images: dict[str, str], source: str) -> dict[str, Yaml]:
+    # A bare string names the lock entry; a mapping spells key and digest_field.
     if isinstance(value, str):
         image_spec = LockImageSpec(key=value)
     elif is_mapping(value):
@@ -345,27 +393,42 @@ def resolve_markers(node: Yaml, context: MarkerContext) -> Yaml:
     if image_spec.key not in images:
         raise ValueError(f"{source}: lock entry {image_spec.key!r} does not exist in the image lock")
 
-    # Peel the digest, then the tag, then the registry/repository split.
-    reference = images[image_spec.key]
+    reference = split_image_reference(images[image_spec.key], source)
+
+    # Assemble the chart fields in the chart-convention key order, under the digest spelling.
+    fields: dict[str, Yaml] = {"registry": reference.registry, "repository": reference.repository}
+    if reference.tag is not None:
+        fields["tag"] = reference.tag
+
+    digest = reference.digest
+    fields[image_spec.digest_field] = digest.removeprefix("sha256:") if image_spec.digest_field == "sha" else digest
+
+    return fields
+
+
+def _check_literal_image(node: dict[str, Yaml], source: str) -> None:
+    image = node.get(IMAGE_FIELD)
+    if isinstance(image, str) and IMAGE_HOLE_PATTERN.search(image) is None:
+        raise ValueError(f"{source}: image {image!r} must consume the lock (lock: NAME / lock-image: NAME)")
+
+
+def split_image_reference(reference: str, source: str) -> ImageReference:
+    # Peel the trailing digest.
     path_part, _, digest = reference.rpartition("@")
+
+    # A colon starts a tag only when no slash follows it, so a registry port stays part of the registry.
     tagged = path_part.rpartition(":")
     tag: str | None = None
     registry_part = path_part
     if tagged[1] and "/" not in tagged[2]:
         registry_part, tag = tagged[0], tagged[2]
 
+    # The last slash splits a multi-segment registry from the repository.
     registry, separator, repository = registry_part.rpartition("/")
     if not separator or not registry or not repository:
         raise ValueError(f"{source}: lock reference {reference!r} has no registry/repository split")
 
-    # Assemble the chart fields under the digest spelling.
-    fields: dict[str, Yaml] = {"registry": registry, "repository": repository}
-    if tag is not None:
-        fields["tag"] = tag
-
-    fields[image_spec.digest_field] = digest.removeprefix("sha256:") if image_spec.digest_field == "sha" else digest
-
-    return fields
+    return ImageReference(registry, repository, tag, digest)
 
 
 def marker_entry(node: Yaml, markers: tuple[str, ...]) -> tuple[str, Yaml] | None:

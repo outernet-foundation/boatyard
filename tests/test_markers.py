@@ -261,6 +261,22 @@ def test_lock_image_marker_splits_untagged_references_without_a_tag_field() -> N
     }
 
 
+def test_lock_image_marker_treats_a_port_colon_as_registry_not_tag() -> None:
+    ported = "registry.internal:5000/team/app@" + DIGEST
+
+    resolved = resolve_markers(
+        {"image": {"lock-image": "APP_IMAGE"}}, MarkerContext(Path(), {"APP_IMAGE": ported}, "app.yaml")
+    )
+
+    assert resolved == {
+        "image": {
+            "registry": "registry.internal:5000/team",
+            "repository": "app",
+            "digest": DIGEST,
+        }
+    }
+
+
 def test_literal_image_values_refuse_naming_the_lock_marker() -> None:
     with pytest.raises(ValueError, match=r"k8s\.yaml.*'ghcr.io/example/app:v1' must consume the lock.*lock: NAME"):
         resolve_markers({"image": "ghcr.io/example/app:v1"}, MarkerContext(Path(), {}, "k8s.yaml"))
