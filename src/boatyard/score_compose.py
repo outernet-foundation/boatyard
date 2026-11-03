@@ -222,7 +222,6 @@ def generate_compose(
             if not bind_volumes:
                 continue
 
-            # Leave declared consumer-interpolated targets un-doubled
             if document.configs is None:
                 document.configs = {}
             if service.configs is None:
@@ -235,6 +234,7 @@ def generate_compose(
                     else root / bind_volume.source
                 )
                 text = path.read_text(encoding="utf-8")
+                # Double every $ except on targets the workload declared consumer-interpolated
                 if workload and bind_volume.target not in workload.consumer_interpolated_targets:
                     text = double_dollars(text)
                 document.configs[path.name] = ComposeConfig(content=text)
