@@ -249,15 +249,16 @@ class Config(BaseModel):
         return self.k8s.charts if self.k8s is not None else {}
 
     def local_service_entries(self) -> list[tuple[str, ServiceEntry]]:
-        # Group options and bare entries in declaration order, remote refs excluded.
-        return [
-            (name, entry)
-            for name, entry in chain.from_iterable(
-                entry.options.items() if isinstance(entry, ServiceGroup) else ((name, entry),)
-                for name, entry in self.services.items()
+        # Options ride under their qualified name; bare entries are their own root. Remote refs excluded.
+        flattened = chain.from_iterable(
+            (
+                ((qualified_option_name(name, option_name), option) for option_name, option in entry.options.items())
+                if isinstance(entry, ServiceGroup)
+                else ((name, entry),)
             )
-            if not entry.remote
-        ]
+            for name, entry in self.services.items()
+        )
+        return [(name, entry) for name, entry in flattened if not entry.remote]
 
     @field_validator("requires")
     @classmethod
@@ -322,17 +323,21 @@ class Config(BaseModel):
     def _validate_services(
         cls, services: dict[str, ServiceGroup | ServiceEntry]
     ) -> dict[str, ServiceGroup | ServiceEntry]:
-        # Reject name collisions between entries and options.
-        entry_names = set(services)
-        claimed: set[str] = set()
+        # The qualified vocabulary (options as group-dash-option, bare entries as their root
+        # name) must be collision-free: two declaration sites never produce one spelling.
+        vocabulary: dict[str, str] = {}
         for name, entry in services.items():
             if isinstance(entry, ServiceGroup):
-                for option_name in entry.options:
-                    if option_name in entry_names or option_name in claimed:
-                        raise ValueError(
-                            f"services.{name}.options.{option_name}: {option_name} is already an entry or option name"
-                        )
-                    claimed.add(option_name)
+                sites = {
+                    qualified_option_name(name, option_name): f"services.{name}.options.{option_name}"
+                    for option_name in entry.options
+                }
+            else:
+                sites = {name: f"services.{name}"}
+            for spelling, site in sites.items():
+                if spelling in vocabulary:
+                    raise ValueError(f"{site}: {spelling} is already claimed at {vocabulary[spelling]}")
+                vocabulary[spelling] = site
 
         # Collect every route with its declaration site; paths are edge-wide unique.
         route_sites = [
@@ -629,6 +634,10 @@ def require_workload_reference(name: str) -> None:
 
 def compose_bundle_output_path(root: Path, name: str) -> Path:
     return root / COMPOSE_OUTPUT_DIR / f"compose.{name}.yaml"
+
+
+def qualified_option_name(group: str, option_name: str) -> str:
+    return f"{group}-{option_name}"
 
 
 def load_yaml_file(path: Path) -> Yaml:

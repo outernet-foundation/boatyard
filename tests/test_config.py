@@ -733,16 +733,31 @@ class TestServices:
         assert Config.load(tmp_path) is not None
 
 
-class TestFlatVocabulary:
+class TestQualifiedVocabulary:
     def _config(self, services: dict[str, object]) -> dict[str, object]:
         return {
             "requires": ">=0.1",
+            "repository": "ghcr.io/org/repo",
             "project_name": "example",
             "gateway": "8080",
             "services": services,
         }
 
-    def test_an_option_colliding_with_an_entry_name_refuses(self, tmp_path: Path) -> None:
+    def test_the_same_option_name_in_two_groups_loads_qualified(self, tmp_path: Path) -> None:
+        write_config(
+            tmp_path,
+            self._config({
+                "one": {"options": {"cuda": {"workloads": ["api.yaml"]}}},
+                "two": {"options": {"cuda": {"workloads": ["edge.yaml"]}}},
+            }),
+        )
+
+        config = Config.load(tmp_path)
+
+        assert config is not None
+        assert [name for name, _entry in config.local_service_entries()] == ["one-cuda", "two-cuda"]
+
+    def test_an_option_and_a_bare_entry_sharing_a_name_load(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,
             self._config({
@@ -751,19 +766,30 @@ class TestFlatVocabulary:
             }),
         )
 
-        with pytest.raises(ValidationError, match=r"livekit is already an entry or option name"):
-            Config.load(tmp_path)
+        assert Config.load(tmp_path) is not None
 
-    def test_an_option_colliding_across_groups_refuses(self, tmp_path: Path) -> None:
+    def test_two_sites_producing_one_qualified_spelling_refuse(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,
             self._config({
-                "one": {"options": {"cuda": {"ref": "oci://ghcr.io/org/repo/x@" + DIGEST}}},
-                "two": {"options": {"cuda": {"ref": "oci://ghcr.io/org/repo/y@" + DIGEST}}},
+                "a": {"options": {"b-c": {"workloads": ["api.yaml"]}}},
+                "a-b": {"options": {"c": {"workloads": ["api.yaml"]}}},
             }),
         )
 
-        with pytest.raises(ValidationError, match=r"cuda is already an entry or option name"):
+        with pytest.raises(ValidationError, match=r"a-b-c is already claimed at"):
+            Config.load(tmp_path)
+
+    def test_a_bare_entry_matching_a_qualified_spelling_refuses(self, tmp_path: Path) -> None:
+        write_config(
+            tmp_path,
+            self._config({
+                "tunnel-ngrok": {"ref": "oci://ghcr.io/org/repo/x@" + DIGEST},
+                "tunnel": {"options": {"ngrok": {"workloads": ["api.yaml"]}}},
+            }),
+        )
+
+        with pytest.raises(ValidationError, match=r"tunnel-ngrok is already claimed at"):
             Config.load(tmp_path)
 
 
@@ -1283,8 +1309,8 @@ def test_local_service_entries_flatten_in_declaration_order_skipping_refs(tmp_pa
 
     assert config is not None
     assert [(name, entry.workloads) for name, entry in config.local_service_entries()] == [
-        ("cuda", ["api.yaml"]),
-        ("rocm", ["api.yaml"]),
+        ("placeframe-cuda", ["api.yaml"]),
+        ("placeframe-rocm", ["api.yaml"]),
         ("solo", ["solo.yaml"]),
     ]
 

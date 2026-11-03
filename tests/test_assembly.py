@@ -77,7 +77,7 @@ def _write_edge_tree(
         encoding="utf-8",
     )
     (tmp_path / ".env").write_text(
-        f"GATEWAY_PORT=58080\nPUBLIC_URL={public_url}\nBUNDLES={'keycloak' if auth else ''}\n",
+        f"GATEWAY_PORT=58080\nPUBLIC_URL={public_url}\nBUNDLES={'auth-keycloak' if auth else ''}\n",
         encoding="utf-8",
     )
     monkeypatch.delenv("BUNDLES", raising=False)

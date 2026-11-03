@@ -316,7 +316,7 @@ class TestProfileForwarding:
         ]
 
 
-def _write_consumer_tree(root: Path, *, bundles: str | None = "cuda,keycloak") -> Path:
+def _write_consumer_tree(root: Path, *, bundles: str | None = "placeframe-cuda,auth-keycloak") -> Path:
     # Write the canonical consumer tree; bundles=None writes no BUNDLES line.
     _write_config(
         root,
@@ -359,8 +359,8 @@ def _write_consumer_tree(root: Path, *, bundles: str | None = "cuda,keycloak") -
         },
     )
     _write_lock(root)
-    cuda = _write_bundle_output(root, "cuda", ["api", "grafana"])
-    _write_bundle_output(root, "rocm", ["api", "grafana"])
+    cuda = _write_bundle_output(root, "placeframe-cuda", ["api", "grafana"])
+    _write_bundle_output(root, "placeframe-rocm", ["api", "grafana"])
     _write_workload(root, "api.yaml", "api")
     environment = "GATEWAY_PORT=58080\nLIVEKIT_SIGNALING_PORT=6178\nPUBLIC_URL=http://192.168.8.10:58080\n"
     if bundles is not None:
@@ -374,7 +374,7 @@ class TestSelectionLaw:
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
-        bundles: str | None = "cuda,keycloak",
+        bundles: str | None = "placeframe-cuda,auth-keycloak",
         services: str = "api grafana edge livekit keycloak",
     ) -> AssemblyRecorder:
         _write_consumer_tree(tmp_path, bundles=bundles)
@@ -396,8 +396,44 @@ class TestSelectionLaw:
         [document] = recorder.documents
         assert document["include"] == [
             KEYCLOAK_REF,
-            (tmp_path / "stack/generated/compose/compose.cuda.yaml").resolve().as_posix(),
+            (tmp_path / "stack/generated/compose/compose.placeframe-cuda.yaml").resolve().as_posix(),
             LIVEKIT_REF,
+        ]
+
+    def test_same_named_options_in_two_groups_select_together(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        _write_config(
+            tmp_path,
+            {
+                "project_name": "demo",
+                "repository": "ghcr.io/org/demo",
+                "platforms": ["linux/amd64"],
+                "services": {
+                    "one": {"options": {"cuda": {"workloads": ["api.yaml"]}}},
+                    "two": {"options": {"cuda": {"workloads": ["edge.yaml"]}}},
+                },
+            },
+        )
+        _write_lock(tmp_path)
+        one_cuda = _write_bundle_output(tmp_path, "one-cuda", ["api"])
+        _write_bundle_output(tmp_path, "two-cuda", ["edge"])
+        _write_workload(tmp_path, "api.yaml", "api")
+        _write_workload(tmp_path, "edge.yaml", "edge")
+        (tmp_path / ".env").write_text("BUNDLES=one-cuda,two-cuda\n", encoding="utf-8")
+        monkeypatch.delenv("BUNDLES", raising=False)
+        recorder = AssemblyRecorder()
+        handler = PresentProbeAndServices("api", "edge").run
+        monkeypatch.setattr(compose, "bash_output", handler)
+        monkeypatch.setattr(up, "bash_output", handler)
+        monkeypatch.setattr(up, "bash_handoff", recorder.run)
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code == 0, result.output
+        [document] = recorder.documents
+        assert document["include"] == [
+            one_cuda.resolve().as_posix(),
+            (tmp_path / "stack/generated/compose/compose.two-cuda.yaml").resolve().as_posix(),
         ]
 
     def test_zero_selection_is_legal_when_bare_entries_and_routes_carry_the_assembly(
@@ -455,7 +491,7 @@ class TestSelectionLaw:
             },
         )
         _write_lock(tmp_path)
-        _write_bundle_output(tmp_path, "cuda", ["api"])
+        _write_bundle_output(tmp_path, "placeframe-cuda", ["api"])
         _write_workload(tmp_path, "api.yaml", "api")
         (tmp_path / ".env").write_text("BUNDLES=\n", encoding="utf-8")
         monkeypatch.delenv("BUNDLES", raising=False)
@@ -469,7 +505,7 @@ class TestSelectionLaw:
         assert "selects nothing and no bare entry exists" in str(result.exception)
 
     def test_unknown_name_refuses_listing_the_vocabulary(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        self._invoke_up(tmp_path, monkeypatch, bundles="cuda,ghost")
+        self._invoke_up(tmp_path, monkeypatch, bundles="placeframe-cuda,ghost")
 
         result = runner.invoke(app, ["up"])
 
@@ -477,7 +513,7 @@ class TestSelectionLaw:
         assert isinstance(result.exception, ValueError)
         message = str(result.exception)
         assert "ghost" in message
-        assert "cuda" in message and "keycloak" in message and "livekit" in message
+        assert "placeframe-cuda" in message and "auth-keycloak" in message and "livekit" in message
 
     def test_a_bare_entry_name_is_not_selectable(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._invoke_up(tmp_path, monkeypatch, bundles="livekit")
@@ -489,7 +525,7 @@ class TestSelectionLaw:
         assert "options are" in str(result.exception)
 
     def test_two_options_of_one_group_refuse(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        self._invoke_up(tmp_path, monkeypatch, bundles="cuda,rocm")
+        self._invoke_up(tmp_path, monkeypatch, bundles="placeframe-cuda,placeframe-rocm")
 
         result = runner.invoke(app, ["up"])
 
@@ -499,7 +535,7 @@ class TestSelectionLaw:
 
     def test_shell_environment_overrides_the_env_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._invoke_up(tmp_path, monkeypatch)
-        monkeypatch.setenv("BUNDLES", "rocm,keycloak")
+        monkeypatch.setenv("BUNDLES", "placeframe-rocm,auth-keycloak")
 
         result = runner.invoke(app, ["up"])
 
@@ -541,7 +577,7 @@ class TestSelectionLaw:
 
     def test_missing_local_output_refuses_naming_generate_score(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_consumer_tree(tmp_path)
-        (tmp_path / "stack" / "generated" / "compose" / "compose.cuda.yaml").unlink()
+        (tmp_path / "stack" / "generated" / "compose" / "compose.placeframe-cuda.yaml").unlink()
         monkeypatch.delenv("BUNDLES", raising=False)
         monkeypatch.chdir(tmp_path)
 
@@ -572,7 +608,7 @@ class TestUpMaterialization:
         assert document["name"] == "demo"
         assert document["include"] == [
             KEYCLOAK_REF,
-            (tmp_path / "stack/generated/compose/compose.cuda.yaml").resolve().as_posix(),
+            (tmp_path / "stack/generated/compose/compose.placeframe-cuda.yaml").resolve().as_posix(),
             LIVEKIT_REF,
         ]
         edge = document["services"]["edge"]
@@ -598,7 +634,7 @@ class TestUpMaterialization:
     def test_the_anonymous_edge_omits_the_auth_route_and_auth_env(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        _write_consumer_tree(tmp_path, bundles="cuda")
+        _write_consumer_tree(tmp_path, bundles="placeframe-cuda")
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
         handler = PresentProbeAndServices("api", "grafana", "edge", "livekit").run
@@ -631,7 +667,7 @@ class TestUpMaterialization:
     def test_an_auth_selection_without_public_url_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_consumer_tree(tmp_path)
         (tmp_path / ".env").write_text(
-            "BUNDLES=cuda,keycloak\nGATEWAY_PORT=58080\nLIVEKIT_SIGNALING_PORT=6178\n",
+            "BUNDLES=placeframe-cuda,auth-keycloak\nGATEWAY_PORT=58080\nLIVEKIT_SIGNALING_PORT=6178\n",
             encoding="utf-8",
         )
         monkeypatch.delenv("BUNDLES", raising=False)
@@ -699,10 +735,10 @@ class TestServiceExclusion:
             },
         )
         _write_lock(tmp_path)
-        _write_bundle_output(tmp_path, "a", ["api"])
-        _write_bundle_output(tmp_path, "b", ["api"])
+        _write_bundle_output(tmp_path, "left-a", ["api"])
+        _write_bundle_output(tmp_path, "right-b", ["api"])
         _write_workload(tmp_path, "api.yaml", "api")
-        (tmp_path / ".env").write_text("BUNDLES=a,b\n", encoding="utf-8")
+        (tmp_path / ".env").write_text("BUNDLES=left-a,right-b\n", encoding="utf-8")
         monkeypatch.delenv("BUNDLES", raising=False)
         monkeypatch.chdir(tmp_path)
 
@@ -711,7 +747,7 @@ class TestServiceExclusion:
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
         message = str(result.exception)
-        assert "compose.a.yaml" in message and "compose.b.yaml" in message
+        assert "compose.left-a.yaml" in message and "compose.right-b.yaml" in message
         assert "api" in message
 
     def test_the_same_overlap_stays_legal_at_down(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -733,10 +769,10 @@ class TestServiceExclusion:
             },
         )
         _write_lock(tmp_path)
-        _write_bundle_output(tmp_path, "a", ["api"])
-        _write_bundle_output(tmp_path, "b", ["api"])
+        _write_bundle_output(tmp_path, "left-a", ["api"])
+        _write_bundle_output(tmp_path, "right-b", ["api"])
         _write_workload(tmp_path, "api.yaml", "api")
-        (tmp_path / ".env").write_text("BUNDLES=a,b\n", encoding="utf-8")
+        (tmp_path / ".env").write_text("BUNDLES=left-a,right-b\n", encoding="utf-8")
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
         monkeypatch.setattr(down, "bash_handoff", recorder.run)
@@ -773,7 +809,7 @@ class TestDownTeardown:
 
     def test_down_is_identical_under_every_selection(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         commands: list[str] = []
-        for bundles in ("cuda,keycloak", "", None):
+        for bundles in ("placeframe-cuda,auth-keycloak", "", None):
             tree = tmp_path / f"tree-{len(commands)}"
             tree.mkdir()
             _write_consumer_tree(tree, bundles=bundles)
@@ -850,11 +886,11 @@ def _write_dev_tree(
     service_directory = root / "workloads" / "api"
     service_directory.mkdir(parents=True, exist_ok=True)
     (service_directory / "Dockerfile").write_text(dockerfile, encoding="utf-8")
-    _write_bundle_output(root, "core", ["api"])
-    _write_bundle_output(root, "edge", ["edge"])
+    _write_bundle_output(root, "apps-core", ["api"])
+    _write_bundle_output(root, "apps-edge", ["edge"])
     _write_workload(root, "api.yaml", "api", api_annotations)
     _write_workload(root, "edge.yaml", "edge", edge_annotations)
-    (root / ".env").write_text("BUNDLES=core\n", encoding="utf-8")
+    (root / ".env").write_text("BUNDLES=apps-core\n", encoding="utf-8")
 
 
 MULTI_STAGE_DOCKERFILE = "ARG BASE_IMAGE\nFROM ${BASE_IMAGE} AS dev\nFROM dev AS runtime\n"
@@ -920,7 +956,7 @@ class TestDevOverlay:
             api_annotations={DEV_TOGGLES: "RELOAD=true"},
             edge_annotations={DEV_TOGGLES: "DEBUG_EDGE=false"},
         )
-        (tmp_path / ".env").write_text("BUNDLES=edge\n", encoding="utf-8")
+        (tmp_path / ".env").write_text("BUNDLES=apps-edge\n", encoding="utf-8")
         monkeypatch.delenv("BUNDLES", raising=False)
         monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
         recorder = OverlayRecorder()

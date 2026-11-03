@@ -29,6 +29,7 @@ from boatyard.config import (
     double_dollars,
     is_mapping,
     parse_dev_toggles,
+    qualified_option_name,
 )
 from boatyard.config_lock import LOCK_PATH, parse_config_lock
 from boatyard.lock import compose_env_entries, render_env_entries
@@ -89,7 +90,7 @@ def select(config: Config, environment: Mapping[str, str]) -> Selection:
     root = config.root
 
     options = {
-        option_name: name
+        qualified_option_name(name, option_name): (name, option_name)
         for name, entry in config.services.items()
         if isinstance(entry, ServiceGroup)
         for option_name in entry.options
@@ -107,12 +108,13 @@ def select(config: Config, environment: Mapping[str, str]) -> Selection:
         )
     choices: dict[str, str] = {}
     for name in names:
-        group = options[name]
+        group, option_name = options[name]
         if group in choices:
             raise ValueError(
-                f"{BUNDLES_VARIABLE}= selects {choices[group]} and {name}; at most one option per group ({group})"
+                f"{BUNDLES_VARIABLE}= selects {qualified_option_name(group, choices[group])} and {name}; "
+                f"at most one option per group ({group})"
             )
-        choices[group] = name
+        choices[group] = option_name
 
     auth_option = choices.get(AUTH_GROUP_NAME)
 
@@ -139,7 +141,7 @@ def select(config: Config, environment: Mapping[str, str]) -> Selection:
             entries.append((name, entry))
             option_name = choices.get(name)
             if option_name is not None:
-                entries.append((option_name, entry.options[option_name]))
+                entries.append((qualified_option_name(name, option_name), entry.options[option_name]))
         else:
             entries.append((name, entry))
 
