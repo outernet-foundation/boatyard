@@ -24,7 +24,7 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
 - `tree-tags`: positional service names, bare `tree-` tags on stdout
 - `mirror`: no flags
 - `publish-compose`: `--plan` `--bundle` `--branch`
-- `generate-score`: `--target` `--local` `--check`
+- `generate-score`: `--target` `--local` `--check`; `both` means both substrates — the verb refuses (BadParameter) a one-substrate repo under `both` or the absent target, naming the matching narrower `--target`; the rendering pipelines carry no substrate-presence checks
 - `docker-build-matrix`: bare JSON array on stdout
 
 Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lock` verb owns them), no `--gpu` anywhere, no `--compose-file` (the verbs own the compose invocation). `tree-tags`' whole contract is a bare string — no JSON, no `{SERVICE}_SHA` names.
