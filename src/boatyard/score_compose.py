@@ -218,8 +218,8 @@ def generate_compose(
                 ]
 
             # Inline every bind volume as a top-level configs entry
-            binds = service.strip_bind_volumes()
-            if not binds:
+            bind_volumes = service.strip_bind_volumes()
+            if not bind_volumes:
                 continue
 
             # Leave declared consumer-interpolated targets un-doubled
@@ -227,14 +227,18 @@ def generate_compose(
                 document.configs = {}
             if service.configs is None:
                 service.configs = []
-            for bind in binds:
+            for bind_volume in bind_volumes:
                 # Resolve state-dir sources against score_dir, others against root
-                path = score_dir / bind.source if bind.source.startswith(STATE_PREFIX) else root / bind.source
+                path = (
+                    score_dir / bind_volume.source
+                    if bind_volume.source.startswith(STATE_PREFIX)
+                    else root / bind_volume.source
+                )
                 text = path.read_text(encoding="utf-8")
-                if workload and bind.target not in workload.consumer_interpolated_targets:
+                if workload and bind_volume.target not in workload.consumer_interpolated_targets:
                     text = double_dollars(text)
                 document.configs[path.name] = ComposeConfig(content=text)
-                service.configs.append(ComposeConfigReference(source=path.name, target=bind.target))
+                service.configs.append(ComposeConfigReference(source=path.name, target=bind_volume.target))
 
         # Write the transformed document
         write_generated_file(output_path, dump_compose(document.dump()))
