@@ -4,7 +4,6 @@ import os
 import re
 import shlex
 from contextlib import ExitStack
-from functools import partial
 from hashlib import sha256
 from importlib.resources import as_file, files
 from pathlib import Path
@@ -244,10 +243,7 @@ def render_score(
         # Render the expanded workload copies and run generate.
         copies_directory = Path(stack.enter_context(TemporaryDirectory()))
         for workload in workloads:
-            expanded = PLACEHOLDER.sub(
-                partial(_placeholder_value, rendering_vars, service_shas, images, workload.file_name),
-                dump_yaml(workload.raw),
-            )
+            expanded = expanded_workload(workload, rendering_vars, service_shas, images)
             (copies_directory / workload.file_name).write_text(expanded, "utf-8")
         rendered = " ".join((copies_directory / workload.file_name).as_posix() for workload in workloads)
         bash(f"{tool} generate {rendered} --output {output.as_posix()}", cwd=working_dir)
@@ -429,20 +425,34 @@ def split_image_reference(reference: str, source: str) -> ImageReference:
     return ImageReference(registry, repository, tag, digest)
 
 
-def _placeholder_value(
+def expanded_workload(
+    workload: LoadedWorkload,
     rendering_vars: dict[str, str],
     service_shas: dict[str, str],
     images: dict[str, str],
-    workload_name: str,
-    match: re.Match[str],
 ) -> str:
-    variable = match.group(1)
-    value = rendering_vars.get(variable) or service_shas.get(variable) or images.get(variable)
-    if not value:
+    text = dump_yaml(workload.raw)
+    for variable, value in hole_values(rendering_vars, service_shas, images).items():
+        text = text.replace(f"${{{variable}}}", value)
+
+    leftover = PLACEHOLDER.search(text)
+    if leftover is not None:
         raise ValueError(
-            f"{workload_name}: ${{{variable}}} is set in none of the rendering vars, the service shas, or the image lock"
+            f"{workload.file_name}: ${{{leftover.group(1)}}} is set in none of the rendering vars, "
+            "the service shas, or the image lock"
         )
-    return value
+
+    return text
+
+
+def hole_values(rendering_vars: dict[str, str], service_shas: dict[str, str], images: dict[str, str]) -> dict[str, str]:
+    # Per variable, the first non-empty value across the three sources, in priority order.
+    values: dict[str, str] = {}
+    for source in (rendering_vars, service_shas, images):
+        for variable, value in source.items():
+            if value and variable not in values:
+                values[variable] = value
+    return values
 
 
 def dump_yaml(value: Yaml) -> str:
