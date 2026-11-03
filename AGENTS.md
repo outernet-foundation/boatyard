@@ -141,7 +141,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 - `--check` = the CI staleness gate: self-skips (exit 0) where nothing generates; otherwise regenerates in-process; any `git status` change over the outputs exits 1 printing the diff; `--check` + `--local` are mutually
   exclusive.
 - Post-passes on compose output are typed transformations on `ComposeDocument`, dumped exactly once — pydantic's declared-fields-first order is the artifacts' deterministic key order: a workload-major pass attributes `{workload}-{container}` services per
-  the workload's declared containers (stem = the pinned `metadata.name`), collapsing the doubled container to the workload name (collision loud) and inlining every `type: bind` volume as a top-level `configs.content` entry — zero
+  the workload's declared containers (stem = the pinned `metadata.name`), collapsing each to the container name, unique across the entry's rendering (collision loud), and inlining every `type: bind` volume as a top-level `configs.content` entry — zero
   host-filesystem references in committed artifacts; the `$`-doubling exception rides the owning workload's consumer-interpolated declaration; workload-less services (synthesized, provisioners) ride through unconditionally
   doubled — a workload-prefixed name no declared container owns refuses; per-entry gate rename `wait-for-resources` → `wait-for-resources-{entry}` with its image pinned to the `ALPINE_IMAGE` lock hole and `depends_on` following (collision loud); the edge-reserved check.
 - The image lock is required and non-empty; the compose target requires the `ALPINE_IMAGE` entry.
