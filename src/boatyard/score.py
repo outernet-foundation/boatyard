@@ -265,44 +265,66 @@ def state_dir_name(tool: str) -> str:
 
 
 def resolve_markers(node: Yaml, context: MarkerContext) -> Yaml:
+    # Resolve every element of a list.
     if is_list(node):
         return [resolve_markers(item, context) for item in node]
 
+    # Pass scalars through untouched.
     if not is_mapping(node):
         return node
 
     source = context.source
     images = context.images
+
+    # Detect a single-key marker mapping.
     entry = marker_entry(node, MARKERS)
     if entry is None:
+        # Refuse a literal image that bypasses the lock.
         image = node.get(IMAGE_FIELD)
         if isinstance(image, str) and IMAGE_HOLE_PATTERN.search(image) is None:
             raise ValueError(f"{source}: image {image!r} must consume the lock (lock: NAME / lock-image: NAME)")
+
+        # Resolve the children of a plain mapping.
         return {key: resolve_markers(value, context) for key, value in node.items()}
 
     marker, value = entry
+
+    # Insert the included file's bytes or parsed structure.
     if marker in INCLUDE_MARKERS:
+        # Anchor include paths at the repo root.
         if not isinstance(value, str):
             raise ValueError(f"{source}: {marker} takes a repo-root-relative path string, not {type(value).__name__}")
+
         relative = Path(value)
         if relative.is_absolute() or ".." in relative.parts:
             raise ValueError(f"{source}: include path {value!r} must anchor at the repo root")
+
         path = context.root / relative
+
+        # Refuse cycles and missing targets.
         if path in context.ancestors:
             raise ValueError(f"{source}: include {value!r} participates in a cycle")
         if not path.is_file():
             raise ValueError(f"{source}: include {value!r} does not exist at the repo root")
+
         text = path.read_text(encoding="utf-8")
+
+        # Return bytes verbatim.
         if marker == TEXT_MARKER:
             return text
+
+        # Parse and re-walk the spliced structure.
         try:
             parsed = yaml.safe_load(text)
         except yaml.YAMLError as error:
             raise ValueError(f"{source}: include {value!r} is not valid YAML: {error}") from error
+
         if parsed is None:
             raise ValueError(f"{source}: include {value!r} is empty")
+
         return resolve_markers(parsed, context._replace(ancestors=(*context.ancestors, path)))
 
+    # Substitute the full locked reference as one string.
     if marker == LOCK_MARKER:
         if not isinstance(value, str):
             raise ValueError(f"{source}: lock takes a lock-entry name string, not {type(value).__name__}")
@@ -310,6 +332,7 @@ def resolve_markers(node: Yaml, context: MarkerContext) -> Yaml:
             raise ValueError(f"{source}: lock entry {value!r} does not exist in the image lock")
         return images[value]
 
+    # Split the locked reference into chart fields.
     if isinstance(value, str):
         image_spec = LockImageSpec(key=value)
     elif is_mapping(value):
@@ -318,8 +341,11 @@ def resolve_markers(node: Yaml, context: MarkerContext) -> Yaml:
         raise ValueError(
             f"{source}: lock-image takes a lock-entry name or a key/digest_field mapping, not {type(value).__name__}"
         )
+
     if image_spec.key not in images:
         raise ValueError(f"{source}: lock entry {image_spec.key!r} does not exist in the image lock")
+
+    # Peel the digest, then the tag, then the registry/repository split.
     reference = images[image_spec.key]
     path_part, _, digest = reference.rpartition("@")
     tagged = path_part.rpartition(":")
@@ -327,13 +353,18 @@ def resolve_markers(node: Yaml, context: MarkerContext) -> Yaml:
     registry_part = path_part
     if tagged[1] and "/" not in tagged[2]:
         registry_part, tag = tagged[0], tagged[2]
+
     registry, separator, repository = registry_part.rpartition("/")
     if not separator or not registry or not repository:
         raise ValueError(f"{source}: lock reference {reference!r} has no registry/repository split")
+
+    # Assemble the chart fields under the digest spelling.
     fields: dict[str, Yaml] = {"registry": registry, "repository": repository}
     if tag is not None:
         fields["tag"] = tag
+
     fields[image_spec.digest_field] = digest.removeprefix("sha256:") if image_spec.digest_field == "sha" else digest
+
     return fields
 
 
