@@ -72,16 +72,17 @@ class TestTreeTags:
         assert after[0] != before[0]
         assert after[1] == before[1]
 
-    def test_uncommitted_edits_do_not_move_the_tags(
+    def test_uncommitted_edits_move_the_affected_tag(
         self, repo: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
     ) -> None:
         monkeypatch.chdir(repo)
-        before = _tags(repo, capfd, "api")
+        before = _tags(repo, capfd, "api", "worker")
 
         (repo / "workloads" / "api" / "main.py").write_text("print('uncommitted')\n", encoding="utf-8")
-        after = _tags(repo, capfd, "api")
+        after = _tags(repo, capfd, "api", "worker")
 
-        assert after == before
+        assert after[0] != before[0]
+        assert after[1] == before[1]
 
     def test_unknown_names_refuse_listing_the_vocabulary(self, repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(repo)

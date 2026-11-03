@@ -1,3 +1,4 @@
+import os
 import subprocess
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -298,17 +299,128 @@ class TestComputeServiceShas:
         shas_after = compute_service_shas(repo, builds)
         assert shas_before == shas_after
 
-    def test_should_not_change_from_uncommitted_edits(self, repo: Path):
+    def test_should_rekey_only_the_affected_service_on_a_dirty_edit(self, repo: Path):
         builds = _service_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
         shas_before = compute_service_shas(repo, builds)
 
         (repo / "workloads" / "app" / "main.py").write_text("print('uncommitted')")
 
         shas_after = compute_service_shas(repo, builds)
-        assert shas_before == shas_after
+        assert shas_before["APP_SHA"] != shas_after["APP_SHA"]
+        assert shas_before["WORKER_SHA"] == shas_after["WORKER_SHA"]
+
+    def test_should_rekey_on_an_untracked_context_visible_file(self, repo: Path):
+        builds = _service_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
+        shas_before = compute_service_shas(repo, builds)
+
+        (repo / "workloads" / "app" / "new_module.py").write_text("print('untracked')")
+
+        shas_after = compute_service_shas(repo, builds)
+        assert shas_before["APP_SHA"] != shas_after["APP_SHA"]
+        assert shas_before["WORKER_SHA"] == shas_after["WORKER_SHA"]
 
     def test_should_raise_when_services_span_multiple_top_level_dirs(self, repo: Path):
         builds = _service_builds("workloads/app/Dockerfile", "other/worker/Dockerfile")
 
         with pytest.raises(ValueError, match="multiple top-level"):
             compute_service_shas(repo, builds)
+
+
+class TestComputeServiceShasGrammar:
+    def test_should_refuse_a_bare_pattern(self, tmp_path: Path):
+        (tmp_path / ".dockerignore").write_text("*\n!workloads/\n__pycache__\n")
+
+        with pytest.raises(ValueError, match="only allowlists are supported"):
+            compute_service_shas(tmp_path, _service_builds("workloads/app/Dockerfile"))
+
+    def test_should_refuse_a_wildcard_re_include(self, tmp_path: Path):
+        (tmp_path / ".dockerignore").write_text("*\n!workloads/*\n")
+
+        with pytest.raises(ValueError, match="literal paths without wildcards"):
+            compute_service_shas(tmp_path, _service_builds("workloads/app/Dockerfile"))
+
+    def test_should_refuse_a_missing_star(self, tmp_path: Path):
+        (tmp_path / ".dockerignore").write_text("!workloads/\n")
+
+        with pytest.raises(ValueError, match=r"exactly one '\*' line"):
+            compute_service_shas(tmp_path, _service_builds("workloads/app/Dockerfile"))
+
+    def test_should_refuse_a_second_star(self, tmp_path: Path):
+        (tmp_path / ".dockerignore").write_text("*\n*\n!workloads/\n")
+
+        with pytest.raises(ValueError, match=r"exactly one '\*' line"):
+            compute_service_shas(tmp_path, _service_builds("workloads/app/Dockerfile"))
+
+
+def _docker_available() -> bool:
+    try:
+        subprocess.run(["docker", "info"], capture_output=True, check=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return True
+
+
+class TestComputeServiceShasContextGolden:
+    pytestmark = pytest.mark.skipif(not _docker_available(), reason="docker daemon required")
+
+    def test_the_hashed_file_set_equals_the_exported_build_context(self, tmp_path: Path):
+        _init_repo(tmp_path)
+        (tmp_path / ".dockerignore").write_text("*\n!workloads/app/\n")
+        app = tmp_path / "workloads" / "app"
+        app.mkdir(parents=True)
+        (app / "Dockerfile").write_text("FROM scratch\nCOPY . /\n")
+        (app / "main.py").write_text("print('hello')\n")
+        helper = app / "helper.py"
+        helper.write_text("x = 1\n")
+        helper.chmod(0o755)
+        (app / "link.py").symlink_to("helper.py")
+
+        builds = _service_builds("workloads/app/Dockerfile")
+        shas = compute_service_shas(tmp_path, builds)
+        tree_hash = shas["APP_SHA"].removeprefix("tree-")
+        listed = subprocess.run(
+            ["git", "ls-tree", "-r", tree_hash],
+            cwd=str(tmp_path),
+            capture_output=True,
+            check=True,
+            text=True,
+        ).stdout.splitlines()
+        hashed: dict[str, str] = {}
+        for line in listed:
+            meta, path = line.split("\t", 1)
+            hashed[path] = meta.split()[0]
+
+        # The oracle is the exported context: FROM scratch + COPY . / makes buildx write out exactly what it ships.
+        builder = f"boatyard-golden-{os.getpid()}"
+        create = subprocess.run(["docker", "buildx", "create", "--name", builder, "--use"], capture_output=True)
+        if create.returncode != 0:
+            subprocess.run(["docker", "buildx", "use", builder], capture_output=True, check=True)
+        try:
+            export = tmp_path / "export"
+            command = [
+                "docker",
+                "buildx",
+                "build",
+                "-f",
+                "workloads/app/Dockerfile",
+                "--output",
+                f"type=local,dest={export}",
+                ".",
+            ]
+            subprocess.run(command, cwd=str(tmp_path), capture_output=True, check=True, timeout=300)
+        finally:
+            subprocess.run(["docker", "buildx", "rm", builder], capture_output=True, check=False)
+
+        exported: dict[str, str] = {}
+        for directory, _dirnames, filenames in os.walk(export):
+            for name in filenames:
+                full = Path(directory) / name
+                relative = full.relative_to(export).as_posix()
+                if full.is_symlink():
+                    exported[relative] = "120000"
+                elif full.stat().st_mode & 0o111:
+                    exported[relative] = "100755"
+                else:
+                    exported[relative] = "100644"
+
+        assert exported == hashed
