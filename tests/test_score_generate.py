@@ -36,7 +36,7 @@ def _empty_secrets() -> SecretsDeclaration:
 
 
 def _alpine_secrets() -> SecretsDeclaration:
-    return SecretsDeclaration.model_validate({"ALPINE_IMAGE": "the wait-for-resources gate image"})
+    return SecretsDeclaration.model_validate({"ALPINE_IMAGE": "the wait-for-resources barrier image"})
 
 
 def test_tool_pin_defaults_live_on_the_root_model() -> None:
@@ -275,10 +275,10 @@ class TestMarkerSubstrateResolution:
                         "platforms": {"linux/amd64": LOKI_MANIFEST, "linux/arm64": LOKI_INDEX},
                     },
                     "ALPINE_IMAGE": {
-                        "index": GATE_LOCK["ALPINE_IMAGE"],
+                        "index": ALPINE_LOCK["ALPINE_IMAGE"],
                         "platforms": {
-                            "linux/amd64": GATE_LOCK["ALPINE_IMAGE"],
-                            "linux/arm64": GATE_LOCK["ALPINE_IMAGE"],
+                            "linux/amd64": ALPINE_LOCK["ALPINE_IMAGE"],
+                            "linux/arm64": ALPINE_LOCK["ALPINE_IMAGE"],
                         },
                     },
                 }
@@ -401,7 +401,7 @@ def _generate_compose(
     )
     config.root = tmp_path
 
-    score_compose_module.generate_compose(config, _lock_for_images(GATE_LOCK), {}, secrets=secrets)
+    score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), {}, secrets=secrets)
     return tmp_path / "stack" / "generated" / "compose" / "compose.core.yaml"
 
 
@@ -515,10 +515,10 @@ def test_generate_compose_refuses_a_container_name_shared_across_workloads(
     config.root = tmp_path
 
     with pytest.raises(ValueError, match="claimed by more than one"):
-        score_compose_module.generate_compose(config, _lock_for_images(GATE_LOCK), {}, secrets=_empty_secrets())
+        score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), {}, secrets=_empty_secrets())
 
 
-GATED_COMPOSE = (
+COMPOSE_WITH_BARRIER = (
     "services:\n"
     "  api-api:\n"
     "    image: ghcr.io/org/api:1\n"
@@ -533,10 +533,10 @@ GATED_COMPOSE = (
 )
 
 
-def test_generate_compose_renames_the_gate_and_its_references_per_entry(
+def test_generate_compose_renames_the_barrier_and_its_references_per_entry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    output = _generate_compose(monkeypatch, tmp_path, GATED_COMPOSE, _alpine_secrets())
+    output = _generate_compose(monkeypatch, tmp_path, COMPOSE_WITH_BARRIER, _alpine_secrets())
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
     assert list(document["services"]) == ["api", "pf-postgres", "wait-for-resources-core"]
@@ -545,7 +545,7 @@ def test_generate_compose_renames_the_gate_and_its_references_per_entry(
     assert document["services"]["wait-for-resources-core"]["image"] == "${ALPINE_IMAGE:?err}"
 
 
-def test_generate_compose_gate_names_differ_per_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_generate_compose_barrier_names_differ_per_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "api.yaml").write_text(
         "metadata:\n  name: api\ncontainers:\n  api: {}\n", encoding="utf-8"
@@ -553,7 +553,7 @@ def test_generate_compose_gate_names_differ_per_entry(tmp_path: Path, monkeypatc
     (tmp_path / "stack" / "score" / "edge.yaml").write_text(
         "metadata:\n  name: edge\ncontainers: {}\n", encoding="utf-8"
     )
-    recorder = ComposeBashRecorder(GATED_COMPOSE)
+    recorder = ComposeBashRecorder(COMPOSE_WITH_BARRIER)
     monkeypatch.setattr(score_module, "bash", recorder.run)
     config = _root_config(
         repository="ghcr.io/org/repo",
@@ -566,7 +566,7 @@ def test_generate_compose_gate_names_differ_per_entry(tmp_path: Path, monkeypatc
     )
     config.root = tmp_path
 
-    score_compose_module.generate_compose(config, _lock_for_images(GATE_LOCK), {}, secrets=_alpine_secrets())
+    score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), {}, secrets=_alpine_secrets())
 
     core = yaml.safe_load((tmp_path / "stack/generated/compose/compose.core.yaml").read_text(encoding="utf-8"))
     edge = yaml.safe_load((tmp_path / "stack/generated/compose/compose.edge.yaml").read_text(encoding="utf-8"))
@@ -574,8 +574,8 @@ def test_generate_compose_gate_names_differ_per_entry(tmp_path: Path, monkeypatc
     assert "wait-for-resources-edge" in edge["services"]
 
 
-def test_generate_compose_refuses_a_gate_rename_collision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    colliding = GATED_COMPOSE + "  wait-for-resources-core:\n    image: ghcr.io/org/api:2\n"
+def test_generate_compose_refuses_a_barrier_rename_collision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    colliding = COMPOSE_WITH_BARRIER + "  wait-for-resources-core:\n    image: ghcr.io/org/api:2\n"
 
     with pytest.raises(ValueError, match="claimed by more than one"):
         _generate_compose(monkeypatch, tmp_path, colliding, _alpine_secrets())
@@ -617,7 +617,7 @@ def test_workload_image_holes_resolve_from_the_lock_into_the_rendered_copy(
 
     score_compose_module.generate_compose(
         config,
-        _lock_for_images({"API_IMAGE": "ghcr.io/org/api@sha256:" + "a" * 64, **GATE_LOCK}),
+        _lock_for_images({"API_IMAGE": "ghcr.io/org/api@sha256:" + "a" * 64, **ALPINE_LOCK}),
         {},
         secrets=_empty_secrets(),
     )
@@ -645,7 +645,7 @@ def test_workload_image_hole_with_no_lock_entry_refuses(tmp_path: Path, monkeypa
     config.root = tmp_path
 
     with pytest.raises(ValueError, match=r"api\.yaml.*API_IMAGE.*image lock"):
-        score_compose_module.generate_compose(config, _lock_for_images(GATE_LOCK), {}, secrets=_empty_secrets())
+        score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), {}, secrets=_empty_secrets())
 
 
 SHIPPED_TEMPLATES = {
@@ -715,7 +715,7 @@ PROVISIONER_WITHOUT_SERVICES = """
     key: value
 """
 
-GATE_LOCK = {"ALPINE_IMAGE": "ghcr.io/outernet-foundation/mirror/docker.io/library/alpine:3.21.0@" + DIGEST}
+ALPINE_LOCK = {"ALPINE_IMAGE": "ghcr.io/outernet-foundation/mirror/docker.io/library/alpine:3.21.0@" + DIGEST}
 
 
 def _lock_for_images(images: dict[str, str]) -> ConfigLock:
@@ -752,7 +752,7 @@ def _compose_init_templates(
     monkeypatch.setattr(score_module, "bash", recorder.run)
     config.root = tmp_path
     score_compose_module.generate_compose(
-        config, _lock_for_images({**images, **GATE_LOCK}), {}, secrets=_empty_secrets()
+        config, _lock_for_images({**images, **ALPINE_LOCK}), {}, secrets=_empty_secrets()
     )
     inits = [command for command in recorder.commands if command.startswith("score-compose init")]
     return [[Path(token).name for token in command.split() if token.endswith(".tpl")] for command in inits]
@@ -769,7 +769,7 @@ containers: {{}}
 """
 
 
-def test_gate_pin_stays_unregistered_without_provisioner_services(
+def test_barrier_pin_stays_unregistered_without_provisioner_services(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = _bundle_config()
@@ -814,7 +814,7 @@ def test_provisioners_register_by_resource_type_closure(tmp_path: Path, monkeypa
     recorder = ComposeBashRecorder("services: {}\n")
     monkeypatch.setattr(score_module, "bash", recorder.run)
 
-    score_compose_module.generate_compose(config, _lock_for_images(GATE_LOCK), {}, secrets=_empty_secrets())
+    score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), {}, secrets=_empty_secrets())
 
     init = next(command for command in recorder.commands if command.startswith("score-compose init"))
     provisioners = [token for token in init.split() if token.endswith(".yaml")]
@@ -1111,7 +1111,7 @@ def test_consumer_interpolated_binds_ride_undoubled(tmp_path: Path, monkeypatch:
 
     score_compose_module.generate_compose(
         config,
-        _lock_for_images(GATE_LOCK),
+        _lock_for_images(ALPINE_LOCK),
         {},
         secrets=SecretsDeclaration.model_validate({"TUNNEL_CONTROL_ENDPOINT": "tunnel"}),
     )
@@ -1325,8 +1325,8 @@ def _verb_repo(tmp_path: Path) -> None:
                     "platforms": {"linux/amd64": LOKI_MANIFEST},
                 },
                 "ALPINE_IMAGE": {
-                    "index": GATE_LOCK["ALPINE_IMAGE"],
-                    "platforms": {"linux/amd64": GATE_LOCK["ALPINE_IMAGE"]},
+                    "index": ALPINE_LOCK["ALPINE_IMAGE"],
+                    "platforms": {"linux/amd64": ALPINE_LOCK["ALPINE_IMAGE"]},
                 },
             }
         }),

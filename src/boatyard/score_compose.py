@@ -35,7 +35,7 @@ from boatyard.score import (
 
 STATE_PREFIX = ".score-compose/"
 
-GATE_SERVICE = "wait-for-resources"
+BARRIER_SERVICE = "wait-for-resources"
 HEALTHCHECK_TEMPLATE = "probe-adapter-healthchecks.tpl"
 RESTART_TEMPLATE = "restart.tpl"
 GPU_COMPOSE_TEMPLATES = {"cuda": "gpu-cuda.tpl", "rocm": "gpu-rocm.tpl"}
@@ -140,7 +140,7 @@ def generate_compose(
             (Path(workload_file).stem, ComposeWorkloadDocument.load(score_dir / workload_file))
             for workload_file in entry.workloads
         ]
-        gate = f"{GATE_SERVICE}-{name}"
+        barrier = f"{BARRIER_SERVICE}-{name}"
 
         # Render the bundle from a clean state dir
         shutil.rmtree(score_state, ignore_errors=True)
@@ -183,11 +183,11 @@ def generate_compose(
             if service_name in services_map:
                 continue
 
-            # Rename the gate to the per-entry name and pin its image to the lock hole
-            if service_name == GATE_SERVICE:
-                gate_service = document.services[GATE_SERVICE]
-                gate_service.image = "${ALPINE_IMAGE:?err}"
-                services_map[GATE_SERVICE] = (gate_service, None, gate)
+            # Rename the barrier to the per-entry name and pin its image to the lock hole
+            if service_name == BARRIER_SERVICE:
+                barrier_service = document.services[BARRIER_SERVICE]
+                barrier_service.image = "${ALPINE_IMAGE:?err}"
+                services_map[BARRIER_SERVICE] = (barrier_service, None, barrier)
                 continue
 
             services_map[service_name] = (service, None, service_name)
@@ -207,12 +207,14 @@ def generate_compose(
         for service, workload, collapsed_name in services_map.values():
             document.services[collapsed_name] = service
 
-            # Point gate references in depends_on at the renamed gate
+            # Point barrier references in depends_on at the renamed barrier
             depends_on = service.depends_on
-            if isinstance(depends_on, dict) and GATE_SERVICE in depends_on:
-                depends_on[gate] = depends_on.pop(GATE_SERVICE)
-            elif isinstance(depends_on, list) and GATE_SERVICE in depends_on:
-                service.depends_on = [gate if dependency == GATE_SERVICE else dependency for dependency in depends_on]
+            if isinstance(depends_on, dict) and BARRIER_SERVICE in depends_on:
+                depends_on[barrier] = depends_on.pop(BARRIER_SERVICE)
+            elif isinstance(depends_on, list) and BARRIER_SERVICE in depends_on:
+                service.depends_on = [
+                    barrier if dependency == BARRIER_SERVICE else dependency for dependency in depends_on
+                ]
 
             # Inline every bind volume as a top-level configs entry
             binds = service.bind_volumes
