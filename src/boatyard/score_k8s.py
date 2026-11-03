@@ -28,12 +28,12 @@ from boatyard.score import (
     SECRETS_FILE,
     SecretsDeclaration,
     collect_secret_keys,
-    dump_compose,
+    dump_yaml,
     marker_entry,
     render_score,
     resolve_markers,
     split_documents,
-    write_generated_file,
+    write_file,
 )
 
 GPU_POD_TEMPLATE = "gpu-pod.tpl"
@@ -110,7 +110,7 @@ def generate_k8s(
                     resolved = resolve_markers(document, root, images, path.as_posix())
                     values_path = values_dir / path.relative_to(root)
                     values_path.parent.mkdir(parents=True, exist_ok=True)
-                    write_generated_file(values_path, dump_compose(resolved))
+                    write_file(values_path, dump_yaml(resolved))
 
                 # Render the chart through helm template with the values file and the locked chart reference.
                 chart_blocks.extend(
@@ -124,7 +124,7 @@ def generate_k8s(
                 )
 
         # Append the rendered charts to the k8s output, preserving any existing content.
-        write_generated_file(
+        write_file(
             output_path,
             output_path.read_text(encoding="utf-8") + "".join(f"---\n{block}" for block in chart_blocks),
         )
@@ -136,7 +136,7 @@ def generate_k8s(
         manifest = ManifestDocument.model_validate(yaml.safe_load(block) or {})
         decorated.append((manifest.kind, manifest.metadata.namespace, manifest.metadata.name, index, block))
     decorated.sort()
-    write_generated_file(output_path, "".join(f"---\n{block}" for *_, block in decorated))
+    write_file(output_path, "".join(f"---\n{block}" for *_, block in decorated))
 
     shutil.rmtree(state_dir, ignore_errors=True)
 

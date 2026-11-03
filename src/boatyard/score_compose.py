@@ -28,9 +28,9 @@ from boatyard.lock import compose_env_entries
 from boatyard.score import (
     SECRETS_FILE,
     SecretsDeclaration,
-    dump_compose,
+    dump_yaml,
     render_score,
-    write_generated_file,
+    write_file,
 )
 
 STATE_PREFIX = ".score-compose/"
@@ -245,7 +245,7 @@ def generate_compose(
                 service.configs.append(ComposeConfigReference(source=path.name, target=bind_volume.target))
 
         # Write the transformed document
-        write_generated_file(output_path, dump_compose(document.dump()))
+        write_file(output_path, dump_yaml(document.dump()))
         outputs.append(output_path)
 
     # Remove the compose state dir after the last entry

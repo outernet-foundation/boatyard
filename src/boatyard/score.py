@@ -126,7 +126,7 @@ class AuthoredProvisioner(BaseModel):
         raise ValueError(f"{info.field_name} is in score's compiled string form; a {shape} is required")
 
 
-class ComposeDumper(yaml.SafeDumper):
+class LiteralBlockDumper(yaml.SafeDumper):
     pass
 
 
@@ -134,7 +134,7 @@ def _represent_multiline(dumper: yaml.SafeDumper, value: str) -> yaml.ScalarNode
     return yaml.ScalarNode("tag:yaml.org,2002:str", value, style="|" if "\n" in value else None)
 
 
-ComposeDumper.add_representer(str, _represent_multiline)
+LiteralBlockDumper.add_representer(str, _represent_multiline)
 
 
 def render_score(
@@ -203,13 +203,13 @@ def render_score(
                     for key, value in entry.items():
                         if key in STRING_FORM_FIELDS:
                             if value is not None:
-                                compiled[key] = dump_compose(value)
+                                compiled[key] = dump_yaml(value)
                         else:
                             compiled[key] = value
                     compiled_entries.append(compiled)
                 target = directory / name
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(dump_compose(compiled_entries), encoding="utf-8", newline="")
+                target.write_text(dump_yaml(compiled_entries), encoding="utf-8", newline="")
                 paths.append(target)
 
         # Build the tool flags and run init.
@@ -242,7 +242,7 @@ def render_score(
                     entry = {}
                     entries[workload_name] = entry
                 entry["instance_suffix"] = "-" + sha256(workload_name.encode()).hexdigest()[:10]
-            write_generated_file(state_path, dump_compose(state))
+            write_file(state_path, dump_yaml(state))
 
         # Render the expanded workload copies and run generate.
         with rendered_workloads(config, workloads, rendering_vars, images, service_shas) as rendered:
@@ -368,7 +368,7 @@ def rendered_workloads(
 
         for name in workloads:
             source_path = config.root / config.score_dir / name
-            source = dump_compose(load_yaml_file(source_path))
+            source = dump_yaml(load_yaml_file(source_path))
             rendered = PLACEHOLDER.sub(partial(_placeholder_value, rendering_vars, service_shas, images, name), source)
             (directory / name).write_text(rendered, "utf-8")
 
@@ -391,10 +391,10 @@ def _placeholder_value(
     return value
 
 
-def dump_compose(value: Yaml) -> str:
+def dump_yaml(value: Yaml) -> str:
     return yaml.dump(
         value,
-        Dumper=ComposeDumper,
+        Dumper=LiteralBlockDumper,
         default_flow_style=False,
         sort_keys=False,
         width=1_000_000,
@@ -402,7 +402,7 @@ def dump_compose(value: Yaml) -> str:
     )
 
 
-def write_generated_file(path: Path, text: str) -> None:
+def write_file(path: Path, text: str) -> None:
     with path.open("w", encoding="utf-8", newline="") as handle:
         handle.write(text)
 

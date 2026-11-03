@@ -16,7 +16,7 @@ from boatyard import score_k8s as score_k8s_module
 from boatyard.verbs import score as score_verb_module
 from boatyard.config import Config
 from boatyard.config_lock import ConfigLock
-from boatyard.score import SecretsDeclaration, write_generated_file
+from boatyard.score import SecretsDeclaration, write_file
 from boatyard.score_compose import BindVolume, ComposeService
 from boatyard.score_k8s import generate_k8s
 
@@ -80,7 +80,7 @@ def test_write_normalises_file_mode(tmp_path: Path) -> None:
     path.write_text("placeholder", encoding="utf-8")
     path.chmod(0o755)
 
-    write_generated_file(path, "content\n")
+    write_file(path, "content\n")
 
     assert path.stat().st_mode & 0o777 == 0o644
     assert path.read_text(encoding="utf-8") == "content\n"
