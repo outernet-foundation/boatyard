@@ -17,9 +17,11 @@ separate commits.
 ## Snapshot (verified 2026-11-02)
 
 - boatyard branch `refactor`: all consumer-contract work, the module-tiers
-  refactor, the score unification, and the boatyard rename + CLI refactors are
-  landed locally, ahead of origin — unpushed. `publish.yml` is wired
-  (`packages.boatyard`, `major_minor: "0.6"`, `registry: pypi`).
+  refactor, the score unification, the boatyard rename + CLI refactors, and
+  Work 1's disk-state service-hash phase (design signed off, battery green,
+  `pathspec` dropped) are landed locally, ahead of origin — unpushed.
+  `publish.yml` is wired (`packages.boatyard`, `major_minor: "0.6"`,
+  `registry: pypi`).
 - PyPI: `boatyard` registered, nothing published. GitHub repo rename
   (docker-devkit → boatyard) is an operator item, status unverified.
 - No `lock-env` verb exists (a stale name in the absorbed ADR): lock env is
@@ -128,10 +130,6 @@ guard this plan once carried was policing over a defect that disappears when
 the sources unify. Dirt is content; nothing refuses; there is no flag and no
 second channel.
 
-**Matcher design — DRAFT, NOT LOCKED. The first action of the session that
-picks this up is to present this block verbatim to the operator for review;
-iterate on the design here until sign-off, and only then implement.**
-
 The grammar is the allowlist and nothing else: comments, one `*`, `!path`
 re-includes; every other line refuses at load, naming the line number and
 the invariant. No pathspec (the dependency leaves pyproject), no buildkit
@@ -215,7 +213,7 @@ def compute_service_shas(repo_root: Path, service_builds: dict[str, ServiceBuild
   real pattern shape and asserts the walk's file set (paths, symlinks, exec
   bits) equals the exported context — daemon-gated (skipif), green in CI.
 - Deterministic serialization, and it stays git's — no hand-rolled hash anywhere:
-  enumeration is an os.walk under the grammar; the walked paths stage into a
+  enumeration is a disk `rglob` walk under the grammar; the walked paths stage into a
   fresh per-service temp index (`git -c core.autocrlf=false update-index --add
   --stdin`; git derives modes and symlinks from disk) and `git write-tree`
   mints `tree-{OID}`, the same tag grammar as the old code. Conversion pinned
@@ -241,15 +239,6 @@ def compute_service_shas(repo_root: Path, service_builds: dict[str, ServiceBuild
   nothing — re-keys happen only where content genuinely differs (a dirty
   edit, a newly visible untracked file) or where the grammar forced an
   allowlist edit (bare patterns refuse at load now).
-
-Verify: the operator signs off on the draft block above before any
-implementation; matcher golden tests diffing the hash's file set against
-actual docker build contexts; the grammar refusals (bare pattern, wildcard
-in a re-include, second or missing `*`) refuse loudly through
-`compute_service_shas` on fixture trees; determinism (clean checkout twice →
-identical tags); dirty edit → re-key of the affected services;
-untracked-but-context-visible file → enters the image and re-keys (correct,
-not noise); empty service set still returns `{}` without walking.
 
 ### Qualified selection names
 
