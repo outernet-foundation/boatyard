@@ -100,23 +100,30 @@ def generate_k8s(
         with TemporaryDirectory(prefix="resolved-values-") as values_directory:
             values_dir = Path(values_directory)
             for chart_name in k8s.charts:
-                key = chart_lock_key(chart_name)
-                entry = lock.require(key, f"chart {chart_name!r}")
                 # Pass a marker-free values file through untouched; resolve markers into a tempdir copy.
-                values_arguments: list[str] = []
                 path = root / config.score_dir / "k8s" / "values" / f"{chart_name}.yaml"
                 document = yaml.safe_load(path.read_text(encoding="utf-8"))
+
                 if not contains_marker(document):
-                    values_arguments.append(path.as_posix())
+                    values_path = path
                 else:
                     resolved = resolve_markers(document, root, images, path.as_posix())
-                    target = values_dir / path.relative_to(root)
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    write_generated_file(target, dump_compose(resolved))
-                    values_arguments.append(target.as_posix())
-                values = "".join(f" --values {argument}" for argument in values_arguments)
-                rendered = bash_output(f"helm template {chart_name} oci://{entry}{values}")
-                chart_blocks.extend(split_documents(rendered))
+                    values_path = values_dir / path.relative_to(root)
+                    values_path.parent.mkdir(parents=True, exist_ok=True)
+                    write_generated_file(values_path, dump_compose(resolved))
+
+                # Render the chart through helm template with the values file and the locked chart reference.
+                chart_blocks.extend(
+                    split_documents(
+                        bash_output(
+                            f"helm template {chart_name} oci://"
+                            f"{lock.require(chart_lock_key(chart_name), f'chart {chart_name!r}')}"
+                            f" --values {values_path.as_posix()}"
+                        )
+                    )
+                )
+
+        # Append the rendered charts to the k8s output, preserving any existing content.
         write_generated_file(
             output_path,
             output_path.read_text(encoding="utf-8") + "".join(f"---\n{block}" for block in chart_blocks),
