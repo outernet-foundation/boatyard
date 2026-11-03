@@ -162,14 +162,9 @@ def generate_compose(
         services = document.services or {}
 
         # Walk each workload's declared containers: attribute the rendered
-        # {workload}-{container} services, collapse the doubled container name to the
-        # workload name, and pair each service with its owning workload.
-        services_map: dict[str, tuple[ComposeService, ComposeWorkloadDocument | None]] = {}
-        attributed_names = {
-            f"{workload_name}-{container_name}"
-            for workload_name, workload in workloads
-            for container_name in workload.containers
-        }
+        # {workload}-{container} services, pairing each with its owning workload and
+        # its collapsed name (the doubled container name shortens to the workload name).
+        services_map: dict[str, tuple[ComposeService, ComposeWorkloadDocument | None, str]] = {}
         for workload_name, workload in workloads:
             for container_name in workload.containers:
                 service_name = f"{workload_name}-{container_name}"
@@ -181,19 +176,19 @@ def generate_compose(
                     raise ValueError(
                         f"service rename {service_name} -> {collapsed_name} collides with an existing service"
                     )
-                services_map[collapsed_name] = (service, workload)
+                services_map[service_name] = (service, workload, collapsed_name)
 
         # Carry services no workload owns — score-synthesized helpers and provisioner
         # services — through with unconditional doubling; a name wearing a workload's
         # prefix without a declared container behind it refuses.
         for service_name, service in services.items():
-            if service_name in attributed_names or service_name == GATE_SERVICE:
+            if service_name in services_map or service_name == GATE_SERVICE:
                 continue
             if any(service_name.startswith(f"{workload_name}-") for workload_name, _workload in workloads):
                 raise ValueError(
                     f"rendered service {service_name!r} carries a workload prefix but no declared container owns it"
                 )
-            services_map[service_name] = (service, None)
+            services_map[service_name] = (service, None, service_name)
 
         # score synthesizes wait-for-resources, an alpine gate the bundle's services
         # depend on so nothing starts before the stack's dependencies are ready. All
@@ -201,18 +196,18 @@ def generate_compose(
         # ALPINE_IMAGE lock hole, rename it per entry, and follow depends_on.
         gate = f"{GATE_SERVICE}-{name}"
         if GATE_SERVICE in services:
-            if gate in services_map:
+            if any(gate == collapsed_name for _service, _workload, collapsed_name in services_map.values()):
                 raise ValueError(f"gate rename {GATE_SERVICE} -> {gate} collides with an existing service")
             gate_service = services[GATE_SERVICE]
             gate_service.image = "${ALPINE_IMAGE:?err}"
-            services_map[gate] = (gate_service, None)
+            services_map[GATE_SERVICE] = (gate_service, None, gate)
 
         # Refuse renderings that define the reserved edge service.
-        if EDGE_SERVICE_NAME in services_map:
+        if any(collapsed_name == EDGE_SERVICE_NAME for _service, _workload, collapsed_name in services_map.values()):
             raise ValueError(f"bundle {name!r} rendering defines the reserved service {EDGE_SERVICE_NAME!r}")
 
         contents: dict[str, ComposeConfig] = {}
-        for service, workload in services_map.values():
+        for service, workload, _collapsed_name in services_map.values():
             inline_binds(service, workload, contents, score_dir, root)
             depends_on = service.depends_on
             if isinstance(depends_on, dict) and GATE_SERVICE in depends_on:
@@ -221,7 +216,7 @@ def generate_compose(
                 service.depends_on = [gate if dependency == GATE_SERVICE else dependency for dependency in depends_on]
 
         # Write the transformed document.
-        document.services = {service_name: service for service_name, (service, _workload) in services_map.items()}
+        document.services = {collapsed_name: service for service, _workload, collapsed_name in services_map.values()}
         if contents:
             document.configs = {**(document.configs or {}), **contents}
         write_generated_file(output_path, dump_compose(document.dump()))
