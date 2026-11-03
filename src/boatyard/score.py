@@ -192,47 +192,56 @@ def render_score(
 
         # Compile the selected provisioners into a per-run tempdir under score_dir.
         paths: list[Path] = []
-        if selected:
-            directory = Path(stack.enter_context(TemporaryDirectory(prefix="compiled-provisioners-", dir=score_dir)))
-            for name, entries in selected:
-                context = MarkerContext(root=root, images=images, source=name)
-                compiled_entries: list[Yaml] = []
-                for entry in entries:
-                    resolved = resolve_markers(entry, context)
-                    AuthoredProvisioner.model_validate(resolved)
-                    if is_mapping(resolved):
-                        compiled_entries.append({
-                            key: dump_yaml(value) if key in STRING_FORM_FIELDS and value is not None else value
-                            for key, value in resolved.items()
-                        })
-                target = directory / name
-                target.parent.mkdir(parents=True, exist_ok=True)
-                write_file(target, dump_yaml(compiled_entries))
-                paths.append(target)
+        directory = Path(stack.enter_context(TemporaryDirectory(prefix="compiled-provisioners-", dir=score_dir)))
+        for name, entries in selected:
+            context = MarkerContext(root=root, images=images, source=name)
+            compiled_entries: list[Yaml] = []
+            for entry in entries:
+                resolved = resolve_markers(entry, context)
+                AuthoredProvisioner.model_validate(resolved)
+                if is_mapping(resolved):
+                    compiled_entries.append({
+                        key: dump_yaml(value) if key in STRING_FORM_FIELDS and value is not None else value
+                        for key, value in resolved.items()
+                    })
+            target = directory / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            write_file(target, dump_yaml(compiled_entries))
+            paths.append(target)
 
         # Build the tool flags and run init.
-        flags = "".join(
+        provisioner_flags = "".join(
             f" --provisioners {shlex.quote(Path(os.path.relpath(path, working_dir)).as_posix())}" for path in paths
         )
-        flags += "".join(
+        template_flags = "".join(
             f" --patch-templates {shlex.quote(Path(os.path.relpath(builtin_templates / name, working_dir)).as_posix())}"
             for name in templates
         )
-        project = f" --project {project_name}" if project_name is not None else ""
-        bash(f"{tool} init{project} --no-sample{flags}", cwd=working_dir)
+        bash(
+            f"{tool} init{' --project ' + project_name if project_name is not None else ''}"
+            f" --no-sample{provisioner_flags}{template_flags}",
+            cwd=working_dir,
+        )
 
         # Pre-seed each workload's instance suffix so generated names are deterministic.
         if substrate == "k8s":
-            state_path = state_dir(tool, output) / "state.yaml"
+            state_path = output.parent / f".{tool}" / "state.yaml"
             state = ToolState.model_validate(yaml.safe_load(state_path.read_text(encoding="utf-8")) or {})
             for workload in workloads:
                 workload_name = Path(workload.file_name).stem
-                state.workloads.setdefault(workload_name, {})["instance_suffix"] = instance_suffix(workload_name)
+                state.workloads.setdefault(workload_name, {})["instance_suffix"] = (
+                    "-" + sha256(workload_name.encode()).hexdigest()[:10]
+                )
             write_file(state_path, dump_yaml(state.model_dump()))
 
         # Render the expanded workload copies and run generate.
         copies_directory = Path(stack.enter_context(TemporaryDirectory()))
-        replacements = hole_values(rendering_vars, service_shas, images)
+        replacements: dict[str, str] = {}
+        for source in (rendering_vars, service_shas, images):
+            for variable, value in source.items():
+                if value and variable not in replacements:
+                    replacements[variable] = value
+
         for workload in workloads:
             expanded = dump_yaml(workload.raw)
             for variable, value in replacements.items():
@@ -256,18 +265,6 @@ def load_workloads(score_dir: Path, names: list[str], lens: type[WorkloadDocumen
         raw = load_yaml_file(score_dir / name)
         loaded.append(LoadedWorkload(name, raw, lens.parse(raw, name)))
     return loaded
-
-
-def state_dir(tool: str, output: Path) -> Path:
-    return output.parent / state_dir_name(tool)
-
-
-def state_dir_name(tool: str) -> str:
-    return f".{tool}"
-
-
-def instance_suffix(workload_name: str) -> str:
-    return "-" + sha256(workload_name.encode()).hexdigest()[:10]
 
 
 def resolve_markers(node: Yaml, context: MarkerContext) -> Yaml:
@@ -428,16 +425,6 @@ def split_image_reference(reference: str, source: str) -> ImageReference:
         raise ValueError(f"{source}: lock reference {reference!r} has no registry/repository split")
 
     return ImageReference(registry, repository, tag, digest)
-
-
-def hole_values(rendering_vars: dict[str, str], service_shas: dict[str, str], images: dict[str, str]) -> dict[str, str]:
-    # Per variable, the first non-empty value across the three sources, in priority order.
-    values: dict[str, str] = {}
-    for source in (rendering_vars, service_shas, images):
-        for variable, value in source.items():
-            if value and variable not in values:
-                values[variable] = value
-    return values
 
 
 def dump_yaml(value: Yaml) -> str:

@@ -32,8 +32,6 @@ from boatyard.score import (
     dump_yaml,
     load_workloads,
     render_score,
-    state_dir,
-    state_dir_name,
     write_file,
 )
 
@@ -129,7 +127,7 @@ def generate_compose(
     config: Config, lock: ConfigLock, service_shas: dict[str, str], secrets: SecretsDeclaration
 ) -> list[Path]:
     score_dir = config.root / config.score_dir
-    state_prefix = f"{state_dir_name(TOOL)}/"
+    state_prefix = f".{TOOL}/"
     images = compose_env_entries(lock, config, merged_environment(config.root))
 
     if "ALPINE_IMAGE" not in images:
@@ -141,7 +139,7 @@ def generate_compose(
         barrier = f"{BARRIER_SERVICE}-{name}"
 
         output_path = compose_bundle_output_path(config.root, name)
-        tool_state = state_dir(TOOL, output_path)
+        tool_state = output_path.parent / f".{TOOL}"
 
         # Render the bundle from a clean state dir
         shutil.rmtree(tool_state, ignore_errors=True)

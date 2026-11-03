@@ -32,7 +32,6 @@ from boatyard.score import (
     render_score,
     resolve_markers,
     split_documents,
-    state_dir,
     write_file,
 )
 
@@ -71,7 +70,7 @@ def generate_k8s(
     workloads = load_workloads(score_dir, k8s.workloads, WorkloadDocument)
 
     output_path = config.root / (config.k8s_local_output if local else config.k8s_output)
-    tool_state = state_dir("score-k8s", output_path)
+    tool_state = output_path.parent / ".score-k8s"
 
     render_score(
         config,
