@@ -202,6 +202,12 @@ def generate_compose(
         # Inline every bind volume as a top-level configs entry and carry the gate rename into each depends_on.
         contents: dict[str, ComposeConfig] = {}
         for service, workload, _collapsed_name in services_map.values():
+            depends_on = service.depends_on
+            if isinstance(depends_on, dict) and GATE_SERVICE in depends_on:
+                depends_on[gate] = depends_on.pop(GATE_SERVICE)
+            elif isinstance(depends_on, list) and GATE_SERVICE in depends_on:
+                service.depends_on = [gate if dependency == GATE_SERVICE else dependency for dependency in depends_on]
+
             binds = [volume for volume in service.volumes or [] if isinstance(volume, BindVolume)]
             if binds:
                 # Carry the owning workload's declared consumer-interpolated files un-doubled.
@@ -220,13 +226,9 @@ def generate_compose(
                     contents[path.name] = ComposeConfig(content=text)
                     references.append(ComposeConfigReference(source=path.name, target=bind.target))
                 service.configs = [*(service.configs or []), *references]
-                service.volumes = [volume for volume in service.volumes or [] if not isinstance(volume, BindVolume)] or None
-
-            depends_on = service.depends_on
-            if isinstance(depends_on, dict) and GATE_SERVICE in depends_on:
-                depends_on[gate] = depends_on.pop(GATE_SERVICE)
-            elif isinstance(depends_on, list) and GATE_SERVICE in depends_on:
-                service.depends_on = [gate if dependency == GATE_SERVICE else dependency for dependency in depends_on]
+                service.volumes = [
+                    volume for volume in service.volumes or [] if not isinstance(volume, BindVolume)
+                ] or None
 
         # Write the transformed document.
         document.services = {collapsed_name: service for service, _workload, collapsed_name in services_map.values()}
