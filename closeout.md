@@ -178,7 +178,7 @@ def compute_service_shas(repo_root: Path, service_builds: dict[str, ServiceBuild
             )
         includes.append(path)
 
-    # Walk the disk; a file enters the hash iff it sits under a re-include path.
+    # Collect allowlisted files
     allowed = [
         path
         for path in (entry.relative_to(repo_root).as_posix() for entry in repo_root.rglob("*") if entry.is_file())
