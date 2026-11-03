@@ -23,14 +23,13 @@ from boatyard.config import (
 )
 from boatyard.config_lock import ConfigLock
 from boatyard.lock import env_entries
+from boatyard.markers import MarkerContext, resolve_markers
 from boatyard.score import (
     SECRETS_FILE,
-    MarkerContext,
     SecretsDeclaration,
     dump_yaml,
     load_workloads,
     render_score,
-    resolve_markers,
     split_documents,
     write_file,
 )

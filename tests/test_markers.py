@@ -6,7 +6,7 @@ import yaml
 from pydantic import ValidationError
 
 from boatyard.config import is_mapping
-from boatyard.score import MarkerContext, resolve_markers
+from boatyard.markers import MarkerContext, resolve_markers
 
 RIVER = """// relay config
 loki.write "default" {
