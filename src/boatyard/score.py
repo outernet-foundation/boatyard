@@ -130,6 +130,12 @@ class ImageReferenceParts(NamedTuple):
     digest: str
 
 
+class LoadedWorkload(NamedTuple):
+    file_name: str
+    raw: Yaml
+    document: WorkloadDocument
+
+
 def _represent_multiline(dumper: yaml.SafeDumper, value: str) -> yaml.ScalarNode:
     return yaml.ScalarNode("tag:yaml.org,2002:str", value, style="|" if "\n" in value else None)
 
@@ -140,7 +146,7 @@ LiteralBlockDumper.add_representer(str, _represent_multiline)
 def render_score(
     config: Config,
     substrate: Substrate,
-    workloads: list[str],
+    workloads: list[LoadedWorkload],
     rendering_vars: dict[str, str],
     templates: list[str],
     output: Path,
@@ -163,9 +169,8 @@ def render_score(
     ):
         # Collect the resource types the workloads reference.
         referenced: set[str] = set()
-        for name in workloads:
-            document = load_yaml_file(score_dir / name)
-            resources = document.get("resources") if is_mapping(document) else None
+        for workload in workloads:
+            resources = workload.raw.get("resources") if is_mapping(workload.raw) else None
             if is_mapping(resources):
                 for resource in resources.values():
                     resource_type = resource.get("type") if is_mapping(resource) else None
@@ -226,10 +231,8 @@ def render_score(
             if not is_mapping(entries):
                 entries = {}
                 state["workloads"] = entries
-            for name in workloads:
-                workload_name = WorkloadDocument.load(score_dir / name).metadata.name
-                if not workload_name:
-                    continue
+            for workload in workloads:
+                workload_name = Path(workload.file_name).stem
                 entry = entries.get(workload_name)
                 if not is_mapping(entry):
                     entry = {}
@@ -238,8 +241,16 @@ def render_score(
             write_file(state_path, dump_yaml(state))
 
         # Render the expanded workload copies and run generate.
-        with rendered_workloads(config, workloads, rendering_vars, images, service_shas) as rendered:
+        with rendered_workloads(workloads, rendering_vars, images, service_shas) as rendered:
             bash(f"{tool} generate {rendered} --output {output.as_posix()}", cwd=working_dir)
+
+
+def load_workloads(score_dir: Path, names: list[str], lens: type[WorkloadDocument]) -> list[LoadedWorkload]:
+    loaded: list[LoadedWorkload] = []
+    for name in names:
+        raw = load_yaml_file(score_dir / name)
+        loaded.append(LoadedWorkload(name, raw, lens.parse(raw, name)))
+    return loaded
 
 
 def state_dir(tool: str, output: Path) -> Path:
@@ -356,8 +367,7 @@ def collect_secret_keys(node: Yaml, secret_name: str, consumed: set[str]) -> Non
 
 @contextmanager
 def rendered_workloads(
-    config: Config,
-    workloads: list[str],
+    workloads: list[LoadedWorkload],
     rendering_vars: dict[str, str],
     images: dict[str, str],
     service_shas: dict[str, str],
@@ -365,13 +375,12 @@ def rendered_workloads(
     with TemporaryDirectory() as temporary_directory:
         directory = Path(temporary_directory)
 
-        for name in workloads:
-            source_path = config.root / config.score_dir / name
-            source = dump_yaml(load_yaml_file(source_path))
-            rendered = PLACEHOLDER.sub(partial(_placeholder_value, rendering_vars, service_shas, images, name), source)
-            (directory / name).write_text(rendered, "utf-8")
+        for workload in workloads:
+            source = dump_yaml(workload.raw)
+            rendered = PLACEHOLDER.sub(partial(_placeholder_value, rendering_vars, service_shas, images, workload.file_name), source)
+            (directory / workload.file_name).write_text(rendered, "utf-8")
 
-        yield " ".join((directory / name).as_posix() for name in workloads)
+        yield " ".join((directory / workload.file_name).as_posix() for workload in workloads)
 
 
 def _placeholder_value(

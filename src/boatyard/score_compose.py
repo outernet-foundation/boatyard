@@ -18,6 +18,7 @@ from boatyard.config import (
     COMPOSE_HOLE,
     ComposeWorkloadDocument,
     EDGE_SERVICE_NAME,
+    WorkloadDocument,
     Yaml,
     compose_bundle_output_path,
     double_dollars,
@@ -29,6 +30,7 @@ from boatyard.score import (
     SECRETS_FILE,
     SecretsDeclaration,
     dump_yaml,
+    load_workloads,
     render_score,
     state_dir,
     state_dir_name,
@@ -135,10 +137,7 @@ def generate_compose(
 
     outputs: list[Path] = []
     for name, entry in config.local_service_entries():
-        workloads = [
-            (Path(workload_file).stem, ComposeWorkloadDocument.load(score_dir / workload_file))
-            for workload_file in entry.workloads
-        ]
+        workloads = load_workloads(score_dir, entry.workloads, ComposeWorkloadDocument)
         barrier = f"{BARRIER_SERVICE}-{name}"
 
         output_path = compose_bundle_output_path(config.root, name)
@@ -149,7 +148,7 @@ def generate_compose(
         render_score(
             config,
             substrate="compose",
-            workloads=entry.workloads,
+            workloads=workloads,
             rendering_vars=entry.vars,
             templates=[
                 HEALTHCHECK_TEMPLATE,
@@ -169,14 +168,14 @@ def generate_compose(
         document = ComposeDocument.model_validate(yaml.safe_load(output_path.read_text(encoding="utf-8")))
 
         # Attribute rendered container services to their owning workloads
-        services_map: dict[str, tuple[ComposeService, ComposeWorkloadDocument | None, str]] = {
-            (service_name := f"{workload_name}-{container_name}"): (
+        services_map: dict[str, tuple[ComposeService, WorkloadDocument | None, str]] = {
+            (service_name := f"{Path(workload.file_name).stem}-{container_name}"): (
                 document.services[service_name],
-                workload,
+                workload.document,
                 container_name,
             )
-            for workload_name, workload in workloads
-            for container_name in workload.containers
+            for workload in workloads
+            for container_name in workload.document.containers
         }
 
         # Carry workload-less services through under their rendered names

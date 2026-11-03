@@ -539,7 +539,11 @@ class WorkloadDocument(BaseModel):
 
     @classmethod
     def load(cls, path: Path) -> Self:
-        return cls.model_validate(load_yaml_file(path), context={"source": path.name})
+        return cls.parse(load_yaml_file(path), path.name)
+
+    @classmethod
+    def parse(cls, raw: Yaml, file_name: str) -> Self:
+        return cls.model_validate(raw, context={"source": file_name})
 
     @model_validator(mode="after")
     def _require_name_matching_file_stem(self, info: ValidationInfo) -> Self:
@@ -590,6 +594,11 @@ class WorkloadDocument(BaseModel):
 
         return self
 
+    @property
+    def consumer_interpolated_targets(self) -> list[str]:
+        annotation = self.metadata.annotations.get(CONSUMER_INTERPOLATED_ANNOTATION)
+        return annotation.split(",") if annotation is not None else []
+
 
 class ComposeWorkloadDocument(WorkloadDocument):
     @model_validator(mode="after")
@@ -604,11 +613,6 @@ class ComposeWorkloadDocument(WorkloadDocument):
                 if block is not None and block.http_get is not None:
                     raise ValueError(f"a {probe} httpGet requires {PROBE_ADAPTER_ANNOTATION}")
         return self
-
-    @property
-    def consumer_interpolated_targets(self) -> list[str]:
-        annotation = self.metadata.annotations.get(CONSUMER_INTERPOLATED_ANNOTATION)
-        return annotation.split(",") if annotation is not None else []
 
 
 def require_workload_reference(name: str) -> None:

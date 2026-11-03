@@ -29,6 +29,7 @@ from boatyard.score import (
     SecretsDeclaration,
     collect_secret_keys,
     dump_yaml,
+    load_workloads,
     marker_entry,
     render_score,
     resolve_markers,
@@ -69,9 +70,7 @@ def generate_k8s(
 ) -> Path:
     score_dir = config.root / config.score_dir
     images = env_entries(lock)
-
-    for name in k8s.workloads:
-        WorkloadDocument.load(score_dir / name)
+    workloads = load_workloads(score_dir, k8s.workloads, WorkloadDocument)
 
     output_path = config.root / (config.k8s_local_output if local else config.k8s_output)
     tool_state = state_dir("score-k8s", output_path)
@@ -79,7 +78,7 @@ def generate_k8s(
     render_score(
         config,
         substrate="k8s",
-        workloads=k8s.workloads,
+        workloads=workloads,
         rendering_vars={**k8s.vars, STORAGE_CLASS_VAR: LOCAL_STORAGE_CLASS if local else CLOUD_STORAGE_CLASS},
         templates=[GPU_POD_TEMPLATE, SCALE_TO_ZERO_TEMPLATE],
         output=output_path,
