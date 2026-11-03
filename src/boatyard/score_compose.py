@@ -117,7 +117,7 @@ class ComposeConfig(BaseModel):
 def generate_compose(
     config: Config, lock: ConfigLock, service_shas: dict[str, str], secrets: SecretsDeclaration
 ) -> list[Path]:
-    # Local bundles (group options and bare entries) in declaration order.
+    # Collect the local bundles (group options and bare entries) in declaration order.
     bundles = config.local_service_entries()
     if not bundles:
         raise ValueError("the compose target requires local service entries (workloads:)")
@@ -134,6 +134,7 @@ def generate_compose(
             (Path(workload_file).stem, ComposeWorkloadDocument.load(score_dir / workload_file))
             for workload_file in entry.workloads
         ]
+        gate = f"{GATE_SERVICE}-{name}"
 
         # Recreate the shared state dir and render the bundle through the spine.
         shutil.rmtree(score_state, ignore_errors=True)
@@ -161,9 +162,7 @@ def generate_compose(
         document = ComposeDocument.model_validate(yaml.safe_load(output_path.read_text(encoding="utf-8")))
         services = document.services or {}
 
-        # Walk each workload's declared containers: attribute the rendered
-        # {workload}-{container} services, pairing each with its owning workload and
-        # its collapsed name (the service name is the container name).
+        # Pair each rendered {workload}-{container} service with its owning workload and its collapsed container name.
         services_map: dict[str, tuple[ComposeService, ComposeWorkloadDocument | None, str]] = {}
         for workload_name, workload in workloads:
             for container_name in workload.containers:
@@ -173,19 +172,18 @@ def generate_compose(
         # Carry services no workload owns — score-synthesized helpers and provisioner
         # services — through under their rendered names.
         for service_name, service in services.items():
-            if service_name in services_map or service_name == GATE_SERVICE:
+            if service_name in services_map:
                 continue
-            services_map[service_name] = (service, None, service_name)
 
-        # score synthesizes wait-for-resources, an alpine gate the bundle's services
-        # depend on so nothing starts before the stack's dependencies are ready. All
-        # bundle outputs merge into one compose project, so pin its bare image to the
-        # ALPINE_IMAGE lock hole, rename it per entry, and follow depends_on.
-        gate = f"{GATE_SERVICE}-{name}"
-        if GATE_SERVICE in services:
-            gate_service = services[GATE_SERVICE]
-            gate_service.image = "${ALPINE_IMAGE:?err}"
-            services_map[GATE_SERVICE] = (gate_service, None, gate)
+            # Pin the score-synthesized wait-for-resources gate to the ALPINE_IMAGE lock hole and rename it per entry,
+            # since all bundle outputs merge into one compose project.
+            if service_name == GATE_SERVICE:
+                gate_service = services[GATE_SERVICE]
+                gate_service.image = "${ALPINE_IMAGE:?err}"
+                services_map[GATE_SERVICE] = (gate_service, None, gate)
+                continue
+
+            services_map[service_name] = (service, None, service_name)
 
         # Refuse a collapsed name claimed twice before rekeying the document.
         collapsed_names = [collapsed_name for _service, _workload, collapsed_name in services_map.values()]
@@ -197,6 +195,7 @@ def generate_compose(
         if EDGE_SERVICE_NAME in collapsed_names:
             raise ValueError(f"bundle {name!r} rendering defines the reserved service {EDGE_SERVICE_NAME!r}")
 
+        # Inline every bind volume as a top-level configs entry and carry the gate rename into each depends_on.
         contents: dict[str, ComposeConfig] = {}
         for service, workload, _collapsed_name in services_map.values():
             inline_binds(service, workload, contents, score_dir, root)
