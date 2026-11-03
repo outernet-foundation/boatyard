@@ -1011,18 +1011,6 @@ def test_a_rendering_defining_the_edge_service_refuses(tmp_path: Path, monkeypat
         )
 
 
-def test_dev_toggles_on_a_k8s_only_workload_refuses(tmp_path: Path) -> None:
-    config = _root_config(k8s={"workloads": ["k8s-only.yaml"]})
-    source = tmp_path / "stack" / "score" / "k8s-only.yaml"
-    source.parent.mkdir(parents=True, exist_ok=True)
-    source.write_text(_toggles_workload("RELOAD=true", "k8s-only"), encoding="utf-8")
-
-    assert config.k8s is not None
-    config.root = tmp_path
-    with pytest.raises(ValueError, match="renders k8s-only"):
-        generate_k8s(config, config.k8s, ConfigLock.model_validate({}), {}, local=False, secrets=_empty_secrets())
-
-
 def test_consumer_interpolated_names_must_match_declared_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _bundle_config()
 

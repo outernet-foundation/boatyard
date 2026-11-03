@@ -13,7 +13,6 @@ from pydantic import (
 )
 
 from boatyard.config import (
-    DEV_TOGGLES_ANNOTATION,
     K8sConfig,
     WorkloadDocument,
     Yaml,
@@ -71,15 +70,8 @@ def generate_k8s(
     score_dir = config.root / config.score_dir
     images = env_entries(lock)
 
-    compose_workloads = {workload for _, entry in config.local_service_entries() for workload in entry.workloads}
     for name in k8s.workloads:
-        if name in compose_workloads:
-            continue
-        k8s_annotations = WorkloadDocument.load(score_dir / name).metadata.annotations
-        if DEV_TOGGLES_ANNOTATION in k8s_annotations:
-            raise ValueError(
-                f"{name}: {DEV_TOGGLES_ANNOTATION} is compose dev-overlay vocabulary; this workload renders k8s-only"
-            )
+        WorkloadDocument.load(score_dir / name)
 
     output_path = config.root / (config.k8s_local_output if local else config.k8s_output)
     tool_state = state_dir("score-k8s", output_path)
