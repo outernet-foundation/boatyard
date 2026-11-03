@@ -128,6 +128,13 @@ class LoadedWorkload(NamedTuple):
     document: WorkloadDocument
 
 
+class MarkerContext(NamedTuple):
+    root: Path
+    images: dict[str, str]
+    source: str
+    ancestors: tuple[Path, ...] = ()
+
+
 def _represent_multiline(dumper: yaml.SafeDumper, value: str) -> yaml.ScalarNode:
     return yaml.ScalarNode("tag:yaml.org,2002:str", value, style="|" if "\n" in value else None)
 
@@ -183,9 +190,10 @@ def render_score(
         if selected:
             directory = Path(stack.enter_context(TemporaryDirectory(prefix="compiled-provisioners-", dir=score_dir)))
             for name, entries in selected:
+                context = MarkerContext(root=root, images=images, source=name)
                 compiled_entries: list[Yaml] = []
                 for entry in entries:
-                    resolved = resolve_markers(entry, root, images, name)
+                    resolved = resolve_markers(entry, context)
                     AuthoredProvisioner.model_validate(resolved)
                     if not is_mapping(resolved):
                         continue
@@ -256,21 +264,21 @@ def state_dir_name(tool: str) -> str:
     return f".{tool}"
 
 
-def resolve_markers(
-    node: Yaml, root: Path, images: dict[str, str], source: str, ancestors: tuple[Path, ...] = ()
-) -> Yaml:
+def resolve_markers(node: Yaml, context: MarkerContext) -> Yaml:
     if is_list(node):
-        return [resolve_markers(item, root, images, source, ancestors) for item in node]
+        return [resolve_markers(item, context) for item in node]
 
     if not is_mapping(node):
         return node
 
+    source = context.source
+    images = context.images
     entry = marker_entry(node, MARKERS)
     if entry is None:
         image = node.get(IMAGE_FIELD)
         if isinstance(image, str) and IMAGE_HOLE_PATTERN.search(image) is None:
             raise ValueError(f"{source}: image {image!r} must consume the lock (lock: NAME / lock-image: NAME)")
-        return {key: resolve_markers(value, root, images, source, ancestors) for key, value in node.items()}
+        return {key: resolve_markers(value, context) for key, value in node.items()}
 
     marker, value = entry
     if marker in INCLUDE_MARKERS:
@@ -279,8 +287,8 @@ def resolve_markers(
         relative = Path(value)
         if relative.is_absolute() or ".." in relative.parts:
             raise ValueError(f"{source}: include path {value!r} must anchor at the repo root")
-        path = root / relative
-        if path in ancestors:
+        path = context.root / relative
+        if path in context.ancestors:
             raise ValueError(f"{source}: include {value!r} participates in a cycle")
         if not path.is_file():
             raise ValueError(f"{source}: include {value!r} does not exist at the repo root")
@@ -293,7 +301,7 @@ def resolve_markers(
             raise ValueError(f"{source}: include {value!r} is not valid YAML: {error}") from error
         if parsed is None:
             raise ValueError(f"{source}: include {value!r} is empty")
-        return resolve_markers(parsed, root, images, source, (*ancestors, path))
+        return resolve_markers(parsed, context._replace(ancestors=(*context.ancestors, path)))
 
     if marker == LOCK_MARKER:
         if not isinstance(value, str):

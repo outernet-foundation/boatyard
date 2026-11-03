@@ -26,6 +26,7 @@ from boatyard.lock import env_entries
 from boatyard.score import (
     MARKERS,
     SECRETS_FILE,
+    MarkerContext,
     SecretsDeclaration,
     dump_yaml,
     load_workloads,
@@ -98,7 +99,7 @@ def generate_k8s(
                 if not contains_marker(document):
                     values_path = path
                 else:
-                    resolved = resolve_markers(document, config.root, images, path.as_posix())
+                    resolved = resolve_markers(document, MarkerContext(config.root, images, path.as_posix()))
                     values_path = values_dir / path.relative_to(config.root)
                     values_path.parent.mkdir(parents=True, exist_ok=True)
                     write_file(values_path, dump_yaml(resolved))
