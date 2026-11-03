@@ -178,7 +178,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 - Everything the substrate needs that score's container model doesn't carry lives in the workload file as `outernet.internal/*` annotations — `boatyard.yml` never carries a per-workload runtime fact; the shipped patch templates
   (package data in `src/boatyard/patch_templates/`) are the annotation reader — one annotation, one template, one behavior; consumer repos never author one; refusal laws live in boatyard code (templates are data and cannot
   refuse); the lens is two models — `WorkloadDocument` (strict `dict[str, str]` annotations, `metadata.name` pinned to the workload file stem) and `ComposeWorkloadDocument` (adds httpGet-requires-probe-adapter) — one parse home: `WorkloadDocument.load(path)`
-  (read + lens + `context={"source"}` stem pin; the compose lens inherits it), all readers; dev-toggles-on-k8s-only refuses in score_k8s; score propagates `metadata.annotations` into both renderings — diffs must include the annotation lines.
+  (read + lens + `context={"source"}` stem pin; the compose lens inherits it), all readers; score propagates `metadata.annotations` into both renderings — diffs must include the annotation lines.
 
 | Annotation | Behavior |
 |---|---|
@@ -186,7 +186,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 | `outernet.internal/restart` | compose enum (`no`/`always`/`on-failure`/`unless-stopped`); outside refuses |
 | `outernet.internal/probe-adapter` | `python-urllib` or `bash-http`; an httpGet probe without the annotation refuses loudly — score-compose silently drops httpGet |
 | `outernet.internal/consumer-interpolated` | declared `files:` names ride un-doubled; a name matching no declared file refuses |
-| `outernet.internal/dev-toggles` | consumed at `up --dev`; no template, no artifact change; on a k8s-only workload refuses |
+| `outernet.internal/dev-toggles` | consumed at `up --dev`; no template, no artifact change |
 
 ## This file's rules
 
