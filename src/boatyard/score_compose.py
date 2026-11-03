@@ -222,10 +222,12 @@ def generate_compose(
             if not bind_volumes:
                 continue
 
+            # Ensure the configs dict exists and the service has a configs list
             if document.configs is None:
                 document.configs = {}
             if service.configs is None:
                 service.configs = []
+
             for bind_volume in bind_volumes:
                 # Resolve state-dir sources against score_dir, others against root
                 path = (
@@ -233,10 +235,12 @@ def generate_compose(
                     if bind_volume.source.startswith(STATE_PREFIX)
                     else root / bind_volume.source
                 )
-                text = path.read_text(encoding="utf-8")
+
                 # Double every $ except on targets the workload declared consumer-interpolated
+                text = path.read_text(encoding="utf-8")
                 if workload and bind_volume.target not in workload.consumer_interpolated_targets:
                     text = double_dollars(text)
+
                 document.configs[path.name] = ComposeConfig(content=text)
                 service.configs.append(ComposeConfigReference(source=path.name, target=bind_volume.target))
 
