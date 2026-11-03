@@ -439,7 +439,7 @@ def test_generate_compose_collapses_doubled_names_with_no_binds(
 def test_generate_compose_refuses_a_rename_collision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     colliding = GENERATED_COMPOSE + "  api:\n    image: ghcr.io/org/api:2\n"
 
-    with pytest.raises(ValueError, match="both collapse to"):
+    with pytest.raises(ValueError, match="claimed by more than one"):
         _generate_compose(monkeypatch, tmp_path, colliding, _empty_secrets())
 
 
@@ -454,7 +454,7 @@ def test_generate_compose_refuses_a_container_and_residual_service_sharing_a_nam
         "    image: ghcr.io/org/sidecar:1\n"
     )
 
-    with pytest.raises(ValueError, match="both collapse to"):
+    with pytest.raises(ValueError, match="claimed by more than one"):
         _generate_compose(
             monkeypatch, tmp_path, generated, _empty_secrets(), workload="api", container="sidecar"
         )
@@ -514,7 +514,7 @@ def test_generate_compose_refuses_a_container_name_shared_across_workloads(
     )
     config.root = tmp_path
 
-    with pytest.raises(ValueError, match="both collapse to"):
+    with pytest.raises(ValueError, match="claimed by more than one"):
         score_compose_module.generate_compose(config, _lock_for_images(GATE_LOCK), {}, secrets=_empty_secrets())
 
 
@@ -577,7 +577,7 @@ def test_generate_compose_gate_names_differ_per_entry(tmp_path: Path, monkeypatc
 def test_generate_compose_refuses_a_gate_rename_collision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     colliding = GATED_COMPOSE + "  wait-for-resources-core:\n    image: ghcr.io/org/api:2\n"
 
-    with pytest.raises(ValueError, match="both collapse to"):
+    with pytest.raises(ValueError, match="claimed by more than one"):
         _generate_compose(monkeypatch, tmp_path, colliding, _alpine_secrets())
 
 

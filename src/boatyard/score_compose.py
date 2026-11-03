@@ -187,8 +187,14 @@ def generate_compose(
             gate_service.image = "${ALPINE_IMAGE:?err}"
             services_map[GATE_SERVICE] = (gate_service, None, gate)
 
+        # Refuse a collapsed name claimed twice before rekeying the document.
+        collapsed_names = [collapsed_name for _service, _workload, collapsed_name in services_map.values()]
+        if len(collapsed_names) != len(set(collapsed_names)):
+            duplicates = sorted({collapsed for collapsed in collapsed_names if collapsed_names.count(collapsed) > 1})
+            raise ValueError(f"the service names {duplicates} are each claimed by more than one rendered service")
+
         # Refuse renderings that define the reserved edge service.
-        if any(collapsed_name == EDGE_SERVICE_NAME for _service, _workload, collapsed_name in services_map.values()):
+        if EDGE_SERVICE_NAME in collapsed_names:
             raise ValueError(f"bundle {name!r} rendering defines the reserved service {EDGE_SERVICE_NAME!r}")
 
         contents: dict[str, ComposeConfig] = {}
@@ -200,17 +206,8 @@ def generate_compose(
             elif isinstance(depends_on, list) and GATE_SERVICE in depends_on:
                 service.depends_on = [gate if dependency == GATE_SERVICE else dependency for dependency in depends_on]
 
-        # Write the transformed document, refusing any name claimed twice.
-        claimed: dict[str, str] = {}
-        document_services: dict[str, ComposeService] = {}
-        for service_name, (service, _workload, collapsed_name) in services_map.items():
-            if collapsed_name in claimed:
-                raise ValueError(
-                    f"services {claimed[collapsed_name]} and {service_name} both collapse to {collapsed_name}"
-                )
-            claimed[collapsed_name] = service_name
-            document_services[collapsed_name] = service
-        document.services = document_services
+        # Write the transformed document.
+        document.services = {collapsed_name: service for service, _workload, collapsed_name in services_map.values()}
         if contents:
             document.configs = {**(document.configs or {}), **contents}
         write_generated_file(output_path, dump_compose(document.dump()))
