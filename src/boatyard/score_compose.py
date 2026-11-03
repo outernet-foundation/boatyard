@@ -209,13 +209,7 @@ def generate_compose(
                 service.depends_on = [gate if dependency == GATE_SERVICE else dependency for dependency in depends_on]
 
             # Inline every bind volume as a top-level configs entry
-            binds: list[BindVolume] = []
-            other_volumes: list[BindVolume | OtherVolume] = []
-            for volume in service.volumes or []:
-                if isinstance(volume, BindVolume):
-                    binds.append(volume)
-                else:
-                    other_volumes.append(volume)
+            binds = [volume for volume in service.volumes or [] if isinstance(volume, BindVolume)]
             if not binds:
                 continue
 
@@ -232,7 +226,7 @@ def generate_compose(
                     text = double_dollars(text)
                 document.configs[path.name] = ComposeConfig(content=text)
                 service.configs.append(ComposeConfigReference(source=path.name, target=bind.target))
-            service.volumes = other_volumes or None
+            service.volumes = [volume for volume in service.volumes or [] if not isinstance(volume, BindVolume)] or None
 
         # Write the transformed document
         write_generated_file(output_path, dump_compose(document.dump()))
