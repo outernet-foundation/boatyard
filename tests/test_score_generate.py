@@ -375,10 +375,18 @@ GENERATED_COMPOSE = (
 
 
 def _generate_compose(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, generated: str, secrets: SecretsDeclaration
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    generated: str,
+    secrets: SecretsDeclaration,
+    workload: str = "api",
+    container: str | None = None,
 ) -> Path:
+    container_name = workload if container is None else container
     (tmp_path / "stack" / "score").mkdir(parents=True)
-    (tmp_path / "stack" / "score" / "api.yaml").write_text("metadata:\n  name: api\ncontainers: {}\n", encoding="utf-8")
+    (tmp_path / "stack" / "score" / f"{workload}.yaml").write_text(
+        f"metadata:\n  name: {workload}\ncontainers:\n  {container_name}: {{}}\n", encoding="utf-8"
+    )
     (tmp_path / "workloads" / "api").mkdir(parents=True)
     (tmp_path / "workloads" / "api" / "config.yaml").write_text("key: ${FOO}\n", encoding="utf-8")
     recorder = ComposeBashRecorder(generated)
@@ -387,7 +395,7 @@ def _generate_compose(
         repository="ghcr.io/org/repo",
         project_name="example",
         platforms=["linux/amd64"],
-        services={"core": {"workloads": ["api.yaml"]}},
+        services={"core": {"workloads": [f"{workload}.yaml"]}},
     )
     config.root = tmp_path
 
@@ -417,6 +425,7 @@ def test_generate_compose_collapses_doubled_names_with_no_binds(
         tmp_path,
         "services:\n  gateway-gateway:\n    image: ghcr.io/org/gateway:1\n",
         _empty_secrets(),
+        workload="gateway",
     )
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
@@ -438,6 +447,8 @@ def test_generate_compose_leaves_undoubled_names_alone(tmp_path: Path, monkeypat
         tmp_path,
         "services:\n  tunnel-rathole-rathole-client:\n    image: ghcr.io/org/rathole-client:1\n",
         _empty_secrets(),
+        workload="tunnel-rathole",
+        container="rathole-client",
     )
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
@@ -473,7 +484,9 @@ def test_generate_compose_renames_the_gate_and_its_references_per_entry(
 
 def test_generate_compose_gate_names_differ_per_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
-    (tmp_path / "stack" / "score" / "api.yaml").write_text("metadata:\n  name: api\ncontainers: {}\n", encoding="utf-8")
+    (tmp_path / "stack" / "score" / "api.yaml").write_text(
+        "metadata:\n  name: api\ncontainers:\n  api: {}\n", encoding="utf-8"
+    )
     (tmp_path / "stack" / "score" / "edge.yaml").write_text(
         "metadata:\n  name: edge\ncontainers: {}\n", encoding="utf-8"
     )
