@@ -161,25 +161,28 @@ def generate_compose(
 
         # Parse the rendered output into the typed compose document.
         document = ComposeDocument.model_validate(yaml.safe_load(output_path.read_text(encoding="utf-8")))
-        services = document.services
 
         # Pair each rendered {workload}-{container} service with its owning workload and its collapsed container name.
         services_map: dict[str, tuple[ComposeService, ComposeWorkloadDocument | None, str]] = {
-            (service_name := f"{workload_name}-{container_name}"): (services[service_name], workload, container_name)
+            (service_name := f"{workload_name}-{container_name}"): (
+                document.services[service_name],
+                workload,
+                container_name,
+            )
             for workload_name, workload in workloads
             for container_name in workload.containers
         }
 
         # Carry services no workload owns — score-synthesized helpers and provisioner
         # services — through under their rendered names.
-        for service_name, service in services.items():
+        for service_name, service in document.services.items():
             if service_name in services_map:
                 continue
 
             # Pin the score-synthesized wait-for-resources gate to the ALPINE_IMAGE lock hole and rename it per entry,
             # since all bundle outputs merge into one compose project.
             if service_name == GATE_SERVICE:
-                gate_service = services[GATE_SERVICE]
+                gate_service = document.services[GATE_SERVICE]
                 gate_service.image = "${ALPINE_IMAGE:?err}"
                 services_map[GATE_SERVICE] = (gate_service, None, gate)
                 continue
