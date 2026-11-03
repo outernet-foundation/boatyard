@@ -142,7 +142,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
   exclusive.
 - Post-passes on compose output are typed transformations on `ComposeDocument`, dumped exactly once — pydantic's declared-fields-first order is the artifacts' deterministic key order: a workload-major pass attributes `{workload}-{container}` services per the workload's declared containers,
   collapsing each to the container name and inlining every `type: bind` volume as a top-level `configs.content` entry — zero host-filesystem references in committed artifacts; the `$`-doubling exception rides
-  the owning workload's consumer-interpolated declaration; workload-less services (synthesized, provisioners) ride through under their rendered names; per-entry gate rename `wait-for-resources` → `wait-for-resources-{entry}` pinned to the
+  the owning workload's consumer-interpolated declaration; workload-less services (synthesized, provisioners) ride through under their rendered names; per-entry barrier rename `wait-for-resources` → `wait-for-resources-{entry}` pinned to the
   `ALPINE_IMAGE` lock hole with `depends_on` following; each collapsed service name is claimed once (collision loud); the edge-reserved check.
 - The image lock is required and non-empty; the compose target requires the `ALPINE_IMAGE` entry.
 - `$`-doubling law, stated once: a literal `$` doubles whenever file text rides inside a compose document (edge Caddyfile, publish's file-sourced configs, score's bind inlining); text outside a compose document (k8s-side inclusion, k8s manifests) never doubles.
