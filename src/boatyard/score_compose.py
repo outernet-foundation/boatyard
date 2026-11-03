@@ -126,12 +126,10 @@ def generate_compose(
 ) -> list[Path]:
     # Collect the local bundles in declaration order
     bundles = config.local_service_entries()
-    if not bundles:
-        raise ValueError("the compose target requires local service entries (workloads:)")
-    root = config.root
-    score_dir = root / config.score_dir
+
+    score_dir = config.root / config.score_dir
     score_state = score_dir / STATE_PREFIX
-    images = compose_env_entries(lock, config, merged_environment(root))
+    images = compose_env_entries(lock, config, merged_environment(config.root))
     if "ALPINE_IMAGE" not in images:
         raise ValueError(f"{LOCK_PATH.as_posix()}: the image lock must carry the ALPINE_IMAGE entry")
 
@@ -145,7 +143,7 @@ def generate_compose(
 
         # Render the bundle from a clean state dir
         shutil.rmtree(score_state, ignore_errors=True)
-        output_path = compose_bundle_output_path(root, name)
+        output_path = compose_bundle_output_path(config.root, name)
         render_score(
             config,
             is_k8s=False,
@@ -233,7 +231,7 @@ def generate_compose(
                 path = (
                     score_dir / bind_volume.source
                     if bind_volume.source.startswith(STATE_PREFIX)
-                    else root / bind_volume.source
+                    else config.root / bind_volume.source
                 )
 
                 # Double every $ except on targets the workload declared consumer-interpolated

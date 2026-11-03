@@ -59,6 +59,12 @@ def generate_score(
 
     if config.k8s is None and target == "k8s":
         raise typer.BadParameter("--target k8s: this config declares no k8s section (compose-only)")
+    if config.k8s is None and target == "both":
+        raise typer.BadParameter("--target both: this config declares no k8s section; pass --target compose")
+    if not local_entries and target == "compose":
+        raise typer.BadParameter("--target compose: this config declares no local service entries (k8s-only)")
+    if not local_entries and target == "both":
+        raise typer.BadParameter("--target both: this config declares no local service entries; pass --target k8s")
     if config.k8s is None and local:
         raise typer.BadParameter("--local requires a k8s section; this config declares none")
 
@@ -112,7 +118,7 @@ def generate_score(
         outputs.extend(generate_compose(config, lock, service_shas, secrets))
 
     if target in ("both", "k8s") and config.k8s is not None:
-        outputs.append(generate_k8s(config, lock, service_shas, local, secrets))
+        outputs.append(generate_k8s(config, config.k8s, lock, service_shas, local, secrets))
 
     secrets_output = root / SECRETS_OUTPUT
     secrets_output.parent.mkdir(parents=True, exist_ok=True)

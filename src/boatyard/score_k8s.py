@@ -14,6 +14,7 @@ from pydantic import (
 
 from boatyard.config import (
     DEV_TOGGLES_ANNOTATION,
+    K8sConfig,
     WorkloadDocument,
     Yaml,
     Config,
@@ -59,19 +60,19 @@ class ManifestDocument(BaseModel):
 
 
 def generate_k8s(
-    config: Config, lock: ConfigLock, service_shas: dict[str, str], local: bool, secrets: SecretsDeclaration
+    config: Config,
+    k8s: K8sConfig,
+    lock: ConfigLock,
+    service_shas: dict[str, str],
+    local: bool,
+    secrets: SecretsDeclaration,
 ) -> Path:
-    k8s = config.k8s
-    if k8s is None:
-        raise ValueError("the k8s target requires a k8s section")
-    root = config.root
-    storage_class = LOCAL_STORAGE_CLASS if local else CLOUD_STORAGE_CLASS
-    output_path = root / (config.k8s_local_output if local else config.k8s_output)
+    output_path = config.root / (config.k8s_local_output if local else config.k8s_output)
     # Run score-k8s in the output's directory, where it writes its .score-k8s state.
     images = env_entries(lock)
     state_dir = output_path.parent / ".score-k8s"
-    score_dir = root / config.score_dir
-    rendering_vars = {**k8s.vars, STORAGE_CLASS_VAR: storage_class}
+    score_dir = config.root / config.score_dir
+    rendering_vars = {**k8s.vars, STORAGE_CLASS_VAR: LOCAL_STORAGE_CLASS if local else CLOUD_STORAGE_CLASS}
 
     compose_workloads = {workload for _, entry in config.local_service_entries() for workload in entry.workloads}
     for name in k8s.workloads:
@@ -101,14 +102,14 @@ def generate_k8s(
             values_dir = Path(values_directory)
             for chart_name in k8s.charts:
                 # Pass a marker-free values file through untouched; resolve markers into a tempdir copy.
-                path = root / config.score_dir / "k8s" / "values" / f"{chart_name}.yaml"
+                path = config.root / config.score_dir / "k8s" / "values" / f"{chart_name}.yaml"
                 document = yaml.safe_load(path.read_text(encoding="utf-8"))
 
                 if not contains_marker(document):
                     values_path = path
                 else:
-                    resolved = resolve_markers(document, root, images, path.as_posix())
-                    values_path = values_dir / path.relative_to(root)
+                    resolved = resolve_markers(document, config.root, images, path.as_posix())
+                    values_path = values_dir / path.relative_to(config.root)
                     values_path.parent.mkdir(parents=True, exist_ok=True)
                     write_file(values_path, dump_yaml(resolved))
 
@@ -130,9 +131,8 @@ def generate_k8s(
         )
 
     # Sort documents by kind, namespace, and name.
-    documents = split_documents(output_path.read_text(encoding="utf-8"))
     decorated: list[tuple[str, str, str, int, str]] = []
-    for index, block in enumerate(documents):
+    for index, block in enumerate(split_documents(output_path.read_text(encoding="utf-8"))):
         manifest = ManifestDocument.model_validate(yaml.safe_load(block) or {})
         decorated.append((manifest.kind, manifest.metadata.namespace, manifest.metadata.name, index, block))
     decorated.sort()
