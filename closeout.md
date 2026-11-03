@@ -160,17 +160,14 @@ def compute_service_shas(repo_root: Path, service_builds: dict[str, ServiceBuild
     workload_prefix = f"{next(iter(tops))}/"
 
     # The .dockerignore grammar is the allowlist: comments, one '*', '!path' re-includes.
-    entries: list[tuple[int, str]] = []
+    stars = 0
+    includes: list[str] = []
     for number, raw in enumerate((repo_root / ".dockerignore").read_text(encoding="utf-8").splitlines(), start=1):
         text = raw.strip()
-        if text and not text.startswith("#"):
-            entries.append((number, text))
-    stars = [text for _number, text in entries if text == "*"]
-    if len(stars) != 1:
-        raise ValueError(f".dockerignore: exactly one '*' line is required; found {len(stars)}")
-    includes: list[str] = []
-    for number, text in entries:
+        if not text or text.startswith("#"):
+            continue
         if text == "*":
+            stars += 1
             continue
         if not text.startswith("!"):
             raise ValueError(f".dockerignore:{number}: expected a comment, '*', or '!path'; got {text!r}")
@@ -178,6 +175,8 @@ def compute_service_shas(repo_root: Path, service_builds: dict[str, ServiceBuild
         if not path or any(character in path for character in "*?[]\\"):
             raise ValueError(f".dockerignore:{number}: re-include paths are plain paths; got {text!r}")
         includes.append(path)
+    if stars != 1:
+        raise ValueError(f".dockerignore: exactly one '*' line is required; found {stars}")
 
     # Walk the disk; a file enters the hash iff it sits under a re-include path.
     allowed: list[str] = []
