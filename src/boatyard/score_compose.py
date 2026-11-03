@@ -51,9 +51,7 @@ class ComposeDocument(BaseModel):
     def _reject_colliding_bind_basenames(self) -> Self:
         seen: dict[str, str] = {}
         for service in self.services.values():
-            for volume in service.volumes or []:
-                if not isinstance(volume, BindVolume):
-                    continue
+            for volume in service.bind_volumes:
                 source = volume.source
                 known = seen.setdefault(Path(source).name, source)
                 if known != source:
@@ -71,6 +69,14 @@ class ComposeService(BaseModel):
     depends_on: dict[str, Yaml] | list[str] | None = None
     configs: list[ComposeConfigReference] | None = None
     image: str | None = None
+
+    @property
+    def bind_volumes(self) -> list[BindVolume]:
+        return [volume for volume in self.volumes or [] if isinstance(volume, BindVolume)]
+
+    @property
+    def non_bind_volumes(self) -> list[BindVolume | OtherVolume]:
+        return [volume for volume in self.volumes or [] if not isinstance(volume, BindVolume)]
 
 
 class ComposeConfigReference(BaseModel):
@@ -209,7 +215,7 @@ def generate_compose(
                 service.depends_on = [gate if dependency == GATE_SERVICE else dependency for dependency in depends_on]
 
             # Inline every bind volume as a top-level configs entry
-            binds = [volume for volume in service.volumes or [] if isinstance(volume, BindVolume)]
+            binds = service.bind_volumes
             if not binds:
                 continue
 
@@ -226,7 +232,7 @@ def generate_compose(
                     text = double_dollars(text)
                 document.configs[path.name] = ComposeConfig(content=text)
                 service.configs.append(ComposeConfigReference(source=path.name, target=bind.target))
-            service.volumes = [volume for volume in service.volumes or [] if not isinstance(volume, BindVolume)] or None
+            service.volumes = service.non_bind_volumes or None
 
         # Write the transformed document
         write_generated_file(output_path, dump_compose(document.dump()))
