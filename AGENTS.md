@@ -65,7 +65,7 @@ Gone flags stay gone: no `--lock-only`/`--check`/`--upgrade` on `build` (the `lo
 - The Dockerfile-derived build set computes in `dockerfiles.py`'s `derive_services` (called from `Config.resolve`), never authored: Dockerfile dirs one level below a top-level dir = services (spanning several top-level dirs refuses); context edges from bare-identifier `FROM`s naming a
   sibling (stage names skipped); a literal `FROM` or slash-bearing `COPY --from=` refuses (base images ride as build args); `ARG <axis>` fans over the axis's declared values, dependents inherit the base's cells exactly (independent axes
   over fanned bases, disagreeing parents, cycles refuse); `ARG {SERVICE}_SHA` declares the stamp receiver; a genuine dev stage = an `AS dev` among several stages — single-stage `AS dev` names the published image.
-- `.dockerignore` (where images build locally) = the allowlist the sha machinery hashes over `git ls-tree HEAD`; an empty service set returns `{}` without touching git.
+- `.dockerignore` (where images build locally) = the allowlist the sha machinery hashes over a disk walk, staged per service into a temp git index (`git -c core.autocrlf=false update-index --add --stdin`, `git write-tree` minting the `tree-` OID); an empty service set returns `{}` without walking.
 
 ## Lock
 

@@ -206,23 +206,20 @@ def compute_service_shas(repo_root: Path, service_builds: dict[str, ServiceBuild
     result: dict[str, str] = {}
     for service_dir in sorted(service_dirs):
         entries_for_service = sorted(shared_paths + per_service[service_dir])
-        result[service_sha_env(PurePosixPath(service_dir).name)] = f"tree-{_hash_paths(repo_root, entries_for_service)}"
+        with TemporaryDirectory() as tmpdir:
+            index_env = {"GIT_INDEX_FILE": str(Path(tmpdir) / "index")}
+            # Conversion pinned off so blobs hash the raw disk bytes the build compiles.
+            bash(
+                "git -c core.autocrlf=false update-index --add --stdin",
+                cwd=repo_root,
+                env=index_env,
+                stdin_text="".join(f"{path}\n" for path in entries_for_service),
+            )
+            tree_hash = bash_output("git write-tree", cwd=repo_root, env=index_env).strip()
+
+        result[service_sha_env(PurePosixPath(service_dir).name)] = f"tree-{tree_hash}"
+
     return result
-
-
-def _hash_paths(repo_root: Path, paths: list[str]) -> str:
-    digest = hashlib.sha256()
-    for path in paths:
-        full = repo_root / path
-        if full.is_symlink():
-            mode = SYMLINK_MODE
-            content = full.readlink().as_posix().encode()
-        else:
-            mode = EXECUTABLE_MODE if full.stat().st_mode & 0o111 else FILE_MODE
-            content = full.read_bytes()
-        digest.update(f"{mode} {len(content)} {path}\0".encode())
-        digest.update(content)
-    return digest.hexdigest()
 ```
 
 - Pinned empirically against `docker buildx build --output type=local`
@@ -232,10 +229,15 @@ def _hash_paths(repo_root: Path, paths: list[str]) -> str:
   re-include; exec bits ride through. The golden test builds a tree in the
   real pattern shape and asserts the walk's file set (paths, symlinks, exec
   bits) equals the exported context — daemon-gated (skipif), green in CI.
-- Deterministic serialization: sorted paths, exec bit, bytes, sha256 —
-  `tree-<hex>`. No git anywhere in tag minting: enumeration is an os.walk,
-  and git buys nothing (classification was never a git capability, and
-  temp-index staging writes loose objects into `.git/objects`).
+- Deterministic serialization, and it stays git's — no hand-rolled hash anywhere:
+  enumeration is an os.walk under the grammar; the walked paths stage into a
+  fresh per-service temp index (`git -c core.autocrlf=false update-index --add
+  --stdin`; git derives modes and symlinks from disk) and `git write-tree`
+  mints `tree-{OID}`, the same tag grammar as the old code. Conversion pinned
+  off so the OID is a pure function of the raw disk bytes — the bytes the
+  build compiles. Residual vector: a declared attribute filter (none of these
+  repos declares one, and an LFS pointer is itself content-addressed, so
+  hashing it stays identity-sound).
 - Identity is content-state, not commit-state: a local dirty state mints a
   machine-local name that never leaves the daemon; clean checkouts anywhere
   reproduce the same tags from the same commit.
@@ -249,9 +251,11 @@ def _hash_paths(repo_root: Path, paths: list[str]) -> str:
   clone, `~/.cache/uv`, `.venv` / `metadata.json` / the lock at the excluded
   repo root). A drifting workspace mints drifting tags and Work 6 would bump
   versions on noise.
-- The serialization change re-keys every existing `tree-` tag at placeframe's
-  regeneration in Work 4; with no consumer computing tags on the old basis,
-  this is a non-event, not a re-key wave.
+- The OID basis is unchanged: a conforming clean checkout mints the same tags
+  as the old code (same file set, same modes), so the flip itself re-keys
+  nothing — re-keys happen only where content genuinely differs (a dirty
+  edit, a newly visible untracked file) or where the grammar forced an
+  allowlist edit (bare patterns refuse at load now).
 
 Verify: the operator signs off on the draft block above before any
 implementation; matcher golden tests diffing the hash's file set against
