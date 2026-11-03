@@ -214,7 +214,6 @@ def generate_compose(
                 continue
 
             # Leave declared consumer-interpolated targets un-doubled
-            interpolated_targets = workload.consumer_interpolated_targets if workload is not None else []
             if document.configs is None:
                 document.configs = {}
             if service.configs is None:
@@ -223,7 +222,7 @@ def generate_compose(
                 # Resolve state-dir sources against score_dir, others against root
                 path = score_dir / bind.source if bind.source.startswith(STATE_PREFIX) else root / bind.source
                 text = path.read_text(encoding="utf-8")
-                if bind.target not in interpolated_targets:
+                if workload and bind.target not in workload.consumer_interpolated_targets:
                     text = double_dollars(text)
                 document.configs[path.name] = ComposeConfig(content=text)
                 service.configs.append(ComposeConfigReference(source=path.name, target=bind.target))
