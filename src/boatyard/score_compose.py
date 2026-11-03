@@ -30,10 +30,12 @@ from boatyard.score import (
     SecretsDeclaration,
     dump_yaml,
     render_score,
+    state_dir,
+    state_dir_name,
     write_file,
 )
 
-STATE_PREFIX = ".score-compose/"
+TOOL = "score-compose"
 
 BARRIER_SERVICE = "wait-for-resources"
 HEALTHCHECK_TEMPLATE = "probe-adapter-healthchecks.tpl"
@@ -125,7 +127,7 @@ def generate_compose(
     config: Config, lock: ConfigLock, service_shas: dict[str, str], secrets: SecretsDeclaration
 ) -> list[Path]:
     score_dir = config.root / config.score_dir
-    score_state = score_dir / STATE_PREFIX
+    state_prefix = f"{state_dir_name(TOOL)}/"
     images = compose_env_entries(lock, config, merged_environment(config.root))
     if "ALPINE_IMAGE" not in images:
         raise ValueError(f"{LOCK_PATH.as_posix()}: the image lock must carry the ALPINE_IMAGE entry")
@@ -138,9 +140,11 @@ def generate_compose(
         ]
         barrier = f"{BARRIER_SERVICE}-{name}"
 
-        # Render the bundle from a clean state dir
-        shutil.rmtree(score_state, ignore_errors=True)
         output_path = compose_bundle_output_path(config.root, name)
+        tool_state = state_dir(TOOL, output_path)
+
+        # Render the bundle from a clean state dir
+        shutil.rmtree(tool_state, ignore_errors=True)
         render_score(
             config,
             is_k8s=False,
@@ -224,10 +228,10 @@ def generate_compose(
                 service.configs = []
 
             for bind_volume in bind_volumes:
-                # Resolve state-dir sources against score_dir, others against root
+                # Resolve state-dir sources against the tool's working directory, others against root
                 path = (
-                    score_dir / bind_volume.source
-                    if bind_volume.source.startswith(STATE_PREFIX)
+                    output_path.parent / bind_volume.source
+                    if bind_volume.source.startswith(state_prefix)
                     else config.root / bind_volume.source
                 )
 
@@ -244,7 +248,7 @@ def generate_compose(
         outputs.append(output_path)
 
     # Remove the compose state dir after the last entry
-    shutil.rmtree(score_state, ignore_errors=True)
+    shutil.rmtree(tool_state, ignore_errors=True)
 
     # Validate the consumed secrets against the declaration
     consumed: set[str] = set()

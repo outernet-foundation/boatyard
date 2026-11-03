@@ -152,7 +152,8 @@ def render_score(
     score_dir = root / config.score_dir
     tool = "score-k8s" if is_k8s else "score-compose"
     rendering = "k8s" if is_k8s else "compose"
-    working_dir = output.parent if is_k8s else score_dir
+    # Both tools write their state dir into the cwd; run them in the output directory.
+    working_dir = output.parent
     project_name = None if is_k8s else config.project_name
     output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -225,7 +226,7 @@ def render_score(
 
         # Pre-seed each workload's instance suffix so generated names are deterministic.
         if is_k8s:
-            state_path = working_dir / f".{tool}" / "state.yaml"
+            state_path = state_dir(tool, output) / "state.yaml"
             state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
             if not is_mapping(state):
                 state = {}
@@ -247,6 +248,14 @@ def render_score(
         # Render the expanded workload copies and run generate.
         with rendered_workloads(config, workloads, rendering_vars, images, service_shas) as rendered:
             bash(f"{tool} generate {rendered} --output {output.as_posix()}", cwd=working_dir)
+
+
+def state_dir(tool: str, output: Path) -> Path:
+    return output.parent / state_dir_name(tool)
+
+
+def state_dir_name(tool: str) -> str:
+    return f".{tool}"
 
 
 def resolve_markers(

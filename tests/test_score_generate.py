@@ -1088,7 +1088,7 @@ def test_consumer_interpolated_binds_ride_undoubled(tmp_path: Path, monkeypatch:
     (score_dir / "rathole-client.yaml").write_text(WORKLOAD_WITH_INTERPOLATED_FILE, encoding="utf-8")
     recorder = MaterializingComposeRecorder(
         INTERPOLATED_GENERATED_COMPOSE,
-        score_dir / ".score-compose/mounts/files/rathole-client-files-client.toml",
+        tmp_path / "stack/generated/compose/.score-compose/mounts/files/rathole-client-files-client.toml",
         'remote_addr = "${TUNNEL_CONTROL_ENDPOINT:?err}"\n',
     )
     monkeypatch.setattr(score_module, "bash", recorder.run)

@@ -34,6 +34,7 @@ from boatyard.score import (
     render_score,
     resolve_markers,
     split_documents,
+    state_dir,
     write_file,
 )
 
@@ -68,9 +69,8 @@ def generate_k8s(
     secrets: SecretsDeclaration,
 ) -> Path:
     output_path = config.root / (config.k8s_local_output if local else config.k8s_output)
-    # Run score-k8s in the output's directory, where it writes its .score-k8s state.
+    tool_state = state_dir("score-k8s", output_path)
     images = env_entries(lock)
-    state_dir = output_path.parent / ".score-k8s"
     score_dir = config.root / config.score_dir
     rendering_vars = {**k8s.vars, STORAGE_CLASS_VAR: LOCAL_STORAGE_CLASS if local else CLOUD_STORAGE_CLASS}
 
@@ -138,7 +138,7 @@ def generate_k8s(
     decorated.sort()
     write_file(output_path, "".join(f"---\n{block}" for *_, block in decorated))
 
-    shutil.rmtree(state_dir, ignore_errors=True)
+    shutil.rmtree(tool_state, ignore_errors=True)
 
     # Validate the consumed secrets against the declaration.
     consumed: set[str] = set()
