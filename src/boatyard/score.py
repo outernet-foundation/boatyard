@@ -173,44 +173,36 @@ def render_score(
                         referenced.add(resource_type)
 
         # Select the rendering's provisioner files that declare a referenced type.
-        names: list[str] = []
+        selected: list[tuple[str, list[Yaml]]] = []
         rendering_dir = score_dir / rendering
         if rendering_dir.is_dir():
             for path in sorted(rendering_dir.glob("*.yaml")):
                 entries = load_yaml_file(path)
-                if not is_list(entries):
-                    continue
-                if any(is_mapping(entry) and entry.get("type") in referenced for entry in entries):
-                    names.append(f"{rendering}/{path.name}")
+                if is_list(entries) and any(
+                    is_mapping(entry) and entry.get("type") in referenced for entry in entries
+                ):
+                    selected.append((f"{rendering}/{path.name}", entries))
 
         # Compile the selected provisioners into a per-run tempdir under score_dir.
         paths: list[Path] = []
-        if names:
+        if selected:
             directory = Path(stack.enter_context(TemporaryDirectory(prefix="compiled-provisioners-", dir=score_dir)))
-            for name in names:
-                document = resolve_markers(
-                    yaml.safe_load((score_dir / name).read_text(encoding="utf-8")), root, images, name
-                )
-                if not is_list(document):
-                    continue
+            for name, entries in selected:
                 compiled_entries: list[Yaml] = []
-                for entry in document:
-                    AuthoredProvisioner.model_validate(entry)
-                    if not is_mapping(entry):
+                for entry in entries:
+                    resolved = resolve_markers(entry, root, images, name)
+                    AuthoredProvisioner.model_validate(resolved)
+                    if not is_mapping(resolved):
                         continue
-
-                    # Compile each entry in authored key order.
-                    compiled: dict[str, Yaml] = {}
-                    for key, value in entry.items():
-                        if key in STRING_FORM_FIELDS:
-                            if value is not None:
-                                compiled[key] = dump_yaml(value)
-                        else:
-                            compiled[key] = value
-                    compiled_entries.append(compiled)
+                    compiled_entries.append(
+                        {
+                            key: dump_yaml(value) if key in STRING_FORM_FIELDS and value is not None else value
+                            for key, value in resolved.items()
+                        }
+                    )
                 target = directory / name
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(dump_yaml(compiled_entries), encoding="utf-8", newline="")
+                write_file(target, dump_yaml(compiled_entries))
                 paths.append(target)
 
         # Build the tool flags and run init.
