@@ -163,9 +163,8 @@ def generate_compose(
 
         # Walk each workload's declared containers: attribute the rendered
         # {workload}-{container} services, collapse the doubled container name to the
-        # workload name, and inline binds against the owning workload's declaration.
-        collapsed: dict[str, ComposeService] = {}
-        contents: dict[str, ComposeConfig] = {}
+        # workload name, and record the owning workload's un-doubled file targets.
+        services_map: dict[str, tuple[ComposeService, list[str]]] = {}
         attributed_names = {
             f"{workload_name}-{container_name}"
             for workload_name, workload in workloads
@@ -188,8 +187,7 @@ def generate_compose(
                     raise ValueError(
                         f"service rename {service_name} -> {collapsed_name} collides with an existing service"
                     )
-                collapsed[collapsed_name] = service
-                inline_binds(service, interpolated_targets, contents, score_dir, root)
+                services_map[collapsed_name] = (service, interpolated_targets)
 
         # Carry services no workload owns — score-synthesized helpers and provisioner
         # services — through with unconditional doubling; a name wearing a workload's
@@ -201,8 +199,7 @@ def generate_compose(
                 raise ValueError(
                     f"rendered service {service_name!r} carries a workload prefix but no declared container owns it"
                 )
-            collapsed[service_name] = service
-            inline_binds(service, [], contents, score_dir, root)
+            services_map[service_name] = (service, [])
 
         # score synthesizes wait-for-resources, an alpine gate the bundle's services
         # depend on so nothing starts before the stack's dependencies are ready. All
@@ -210,12 +207,12 @@ def generate_compose(
         # ALPINE_IMAGE lock hole, rename it per entry, and follow depends_on.
         gate = f"{GATE_SERVICE}-{name}"
         if GATE_SERVICE in services:
-            if gate in collapsed:
+            if gate in services_map:
                 raise ValueError(f"gate rename {GATE_SERVICE} -> {gate} collides with an existing service")
             gate_service = services[GATE_SERVICE]
             gate_service.image = "${ALPINE_IMAGE:?err}"
-            collapsed[gate] = gate_service
-            for service in collapsed.values():
+            services_map[gate] = (gate_service, [])
+            for service, _interpolated_targets in services_map.values():
                 depends_on = service.depends_on
                 if isinstance(depends_on, dict) and GATE_SERVICE in depends_on:
                     depends_on[gate] = depends_on.pop(GATE_SERVICE)
@@ -225,11 +222,16 @@ def generate_compose(
                     ]
 
         # Refuse renderings that define the reserved edge service.
-        if EDGE_SERVICE_NAME in collapsed:
+        if EDGE_SERVICE_NAME in services_map:
             raise ValueError(f"bundle {name!r} rendering defines the reserved service {EDGE_SERVICE_NAME!r}")
 
+        # Inline every bind as configs.content with $ doubled.
+        contents: dict[str, ComposeConfig] = {}
+        for service, interpolated_targets in services_map.values():
+            inline_binds(service, interpolated_targets, contents, score_dir, root)
+
         # Write the transformed document.
-        document.services = collapsed
+        document.services = {service_name: service for service_name, (service, _targets) in services_map.items()}
         if contents:
             document.configs = {**(document.configs or {}), **contents}
         write_generated_file(output_path, dump_compose(document.dump()))
