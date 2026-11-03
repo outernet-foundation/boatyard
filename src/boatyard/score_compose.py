@@ -163,18 +163,25 @@ def generate_compose(
 
         # Walk each workload's declared containers: attribute the rendered
         # {workload}-{container} services, pairing each with its owning workload and
-        # its collapsed name (the doubled container name shortens to the workload name).
+        # its collapsed name (the service name is the container name, unique across
+        # the entry's workloads and clear of every rendered name).
         services_map: dict[str, tuple[ComposeService, ComposeWorkloadDocument | None, str]] = {}
+        owners: dict[str, str] = {}
         for workload_name, workload in workloads:
             for container_name in workload.containers:
                 service_name = f"{workload_name}-{container_name}"
                 service = services[service_name]
-                collapsed_name = workload_name if container_name == workload_name else service_name
-                if collapsed_name != service_name and collapsed_name in services:
+                if container_name in owners:
                     raise ValueError(
-                        f"service rename {service_name} -> {collapsed_name} collides with an existing service"
+                        f"service rename {service_name} -> {container_name} collides with the rename "
+                        f"{owners[container_name]} -> {container_name}"
                     )
-                services_map[service_name] = (service, workload, collapsed_name)
+                if container_name in services:
+                    raise ValueError(
+                        f"service rename {service_name} -> {container_name} collides with an existing service"
+                    )
+                owners[container_name] = service_name
+                services_map[service_name] = (service, workload, container_name)
 
         # Carry services no workload owns — score-synthesized helpers and provisioner
         # services — through with unconditional doubling; a name wearing a workload's

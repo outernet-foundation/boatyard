@@ -443,7 +443,9 @@ def test_generate_compose_refuses_a_rename_collision(tmp_path: Path, monkeypatch
         _generate_compose(monkeypatch, tmp_path, colliding, _empty_secrets())
 
 
-def test_generate_compose_leaves_undoubled_names_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_generate_compose_strips_the_workload_prefix_from_differing_container_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     output = _generate_compose(
         monkeypatch,
         tmp_path,
@@ -454,7 +456,38 @@ def test_generate_compose_leaves_undoubled_names_alone(tmp_path: Path, monkeypat
     )
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
-    assert list(document["services"]) == ["tunnel-rathole-rathole-client"]
+    assert list(document["services"]) == ["rathole-client"]
+    assert document["services"]["rathole-client"]["image"] == "ghcr.io/org/rathole-client:1"
+
+
+def test_generate_compose_refuses_a_container_name_shared_across_workloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "stack" / "score").mkdir(parents=True)
+    (tmp_path / "stack" / "score" / "alpha.yaml").write_text(
+        "metadata:\n  name: alpha\ncontainers:\n  sidecar: {}\n", encoding="utf-8"
+    )
+    (tmp_path / "stack" / "score" / "beta.yaml").write_text(
+        "metadata:\n  name: beta\ncontainers:\n  sidecar: {}\n", encoding="utf-8"
+    )
+    recorder = ComposeBashRecorder(
+        "services:\n"
+        "  alpha-sidecar:\n"
+        "    image: ghcr.io/org/alpha:1\n"
+        "  beta-sidecar:\n"
+        "    image: ghcr.io/org/beta:1\n"
+    )
+    monkeypatch.setattr(score_module, "bash", recorder.run)
+    config = _root_config(
+        repository="ghcr.io/org/repo",
+        project_name="example",
+        platforms=["linux/amd64"],
+        services={"core": {"workloads": ["alpha.yaml", "beta.yaml"]}},
+    )
+    config.root = tmp_path
+
+    with pytest.raises(ValueError, match="collides with the rename"):
+        score_compose_module.generate_compose(config, _lock_for_images(GATE_LOCK), {}, secrets=_empty_secrets())
 
 
 GATED_COMPOSE = (
