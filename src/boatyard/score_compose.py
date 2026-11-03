@@ -161,45 +161,39 @@ def generate_compose(
         document = ComposeDocument.model_validate(yaml.safe_load(output_path.read_text(encoding="utf-8")))
         services = document.services or {}
 
-        # Walk each workload's declared containers: attribute the rendered
-        # {workload}-{container} services, collapse the doubled container name to the
-        # workload name, and record the owning workload's un-doubled file targets.
-        services_map: dict[str, tuple[ComposeService, list[str]]] = {}
-        attributed_names = {
-            f"{workload_name}-{container_name}"
+        # Attribute each rendered service to its declaring workload through score's
+        # {workload}-{container} naming, collapsing the doubled container name to the
+        # workload name; un-doubled targets come from the owning workload's declaration.
+        targets_by_workload = {
+            workload_name: workload.metadata.annotations[CONSUMER_INTERPOLATED_ANNOTATION].split(",")
+            if CONSUMER_INTERPOLATED_ANNOTATION in workload.metadata.annotations
+            else []
+            for workload_name, workload in workloads
+        }
+        owner_by_service_name = {
+            f"{workload_name}-{container_name}": workload_name
             for workload_name, workload in workloads
             for container_name in workload.containers
         }
-        for workload_name, workload in workloads:
-            # Declared files whose contents ride un-doubled.
-            interpolated_targets = (
-                workload.metadata.annotations[CONSUMER_INTERPOLATED_ANNOTATION].split(",")
-                if CONSUMER_INTERPOLATED_ANNOTATION in workload.metadata.annotations
-                else []
-            )
-            for container_name in workload.containers:
-                service_name = f"{workload_name}-{container_name}"
-                service = services.get(service_name)
-                if service is None:
-                    continue
-                collapsed_name = workload_name if container_name == workload_name else service_name
-                if collapsed_name != service_name and collapsed_name in services:
-                    raise ValueError(
-                        f"service rename {service_name} -> {collapsed_name} collides with an existing service"
-                    )
-                services_map[collapsed_name] = (service, interpolated_targets)
-
-        # Carry services no workload owns — score-synthesized helpers and provisioner
-        # services — through with unconditional doubling; a name wearing a workload's
-        # prefix without a declared container behind it refuses.
+        services_map: dict[str, tuple[ComposeService, list[str]]] = {}
         for service_name, service in services.items():
-            if service_name in attributed_names or service_name == GATE_SERVICE:
+            if service_name == GATE_SERVICE:
                 continue
-            if any(service_name.startswith(f"{workload_name}-") for workload_name, _workload in workloads):
-                raise ValueError(
-                    f"rendered service {service_name!r} carries a workload prefix but no declared container owns it"
-                )
-            services_map[service_name] = (service, [])
+            owner = owner_by_service_name.get(service_name)
+            if owner is None:
+                # Services no workload owns — score-synthesized helpers and provisioner
+                # services — ride through with unconditional doubling; a name wearing a
+                # workload's prefix without a declared container behind it refuses.
+                if any(service_name.startswith(f"{workload_name}-") for workload_name in targets_by_workload):
+                    raise ValueError(
+                        f"rendered service {service_name!r} carries a workload prefix but no declared container owns it"
+                    )
+                services_map[service_name] = (service, [])
+                continue
+            collapsed_name = owner if service_name == f"{owner}-{owner}" else service_name
+            if collapsed_name != service_name and collapsed_name in services:
+                raise ValueError(f"service rename {service_name} -> {collapsed_name} collides with an existing service")
+            services_map[collapsed_name] = (service, targets_by_workload[owner])
 
         # score synthesizes wait-for-resources, an alpine gate the bundle's services
         # depend on so nothing starts before the stack's dependencies are ready. All
@@ -212,23 +206,19 @@ def generate_compose(
             gate_service = services[GATE_SERVICE]
             gate_service.image = "${ALPINE_IMAGE:?err}"
             services_map[gate] = (gate_service, [])
-            for service, _interpolated_targets in services_map.values():
-                depends_on = service.depends_on
-                if isinstance(depends_on, dict) and GATE_SERVICE in depends_on:
-                    depends_on[gate] = depends_on.pop(GATE_SERVICE)
-                elif isinstance(depends_on, list) and GATE_SERVICE in depends_on:
-                    service.depends_on = [
-                        gate if dependency == GATE_SERVICE else dependency for dependency in depends_on
-                    ]
 
         # Refuse renderings that define the reserved edge service.
         if EDGE_SERVICE_NAME in services_map:
             raise ValueError(f"bundle {name!r} rendering defines the reserved service {EDGE_SERVICE_NAME!r}")
 
-        # Inline every bind as configs.content with $ doubled.
         contents: dict[str, ComposeConfig] = {}
         for service, interpolated_targets in services_map.values():
             inline_binds(service, interpolated_targets, contents, score_dir, root)
+            depends_on = service.depends_on
+            if isinstance(depends_on, dict) and GATE_SERVICE in depends_on:
+                depends_on[gate] = depends_on.pop(GATE_SERVICE)
+            elif isinstance(depends_on, list) and GATE_SERVICE in depends_on:
+                service.depends_on = [gate if dependency == GATE_SERVICE else dependency for dependency in depends_on]
 
         # Write the transformed document.
         document.services = {service_name: service for service_name, (service, _targets) in services_map.items()}
