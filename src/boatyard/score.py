@@ -207,9 +207,9 @@ def render_score(
                 )
             write_file(state_path, dump_yaml(state.model_dump()))
 
-        # Render the expanded workload copies and run generate
+        # Expand each workload's ${NAME} holes into per-run copies
         copies_directory = Path(stack.enter_context(TemporaryDirectory()))
-        # List the sources lowest-priority first so later ones overwrite earlier ones
+        # List the variable sources lowest-priority first so later ones overwrite earlier ones
         variable_values = {
             variable: value
             for source in (images, service_shas, rendering_vars)
@@ -222,6 +222,7 @@ def render_score(
             for variable, value in variable_values.items():
                 expanded = expanded.replace(f"${{{variable}}}", value)
 
+            # Refuse holes that no source fills
             leftover = PLACEHOLDER.search(expanded)
             if leftover is not None:
                 raise ValueError(
@@ -230,6 +231,8 @@ def render_score(
                 )
 
             (copies_directory / workload.file_name).write_text(expanded, "utf-8")
+
+        # Run generate over the expanded copies
         rendered = " ".join((copies_directory / workload.file_name).as_posix() for workload in workloads)
         bash(f"{tool} generate {rendered} --output {output.as_posix()}", cwd=working_dir)
 
