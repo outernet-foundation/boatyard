@@ -197,9 +197,9 @@ def generate_compose(
             raise ValueError(f"bundle {name!r} rendering defines the reserved service {EDGE_SERVICE_NAME!r}")
 
         # Transform each service in place and rekey the document by collapsed name
-        services_by_collapsed: dict[str, ComposeService] = {}
+        document.services = {}
         for service, workload, collapsed_name in services_map.values():
-            services_by_collapsed[collapsed_name] = service
+            document.services[collapsed_name] = service
 
             # Point gate references in depends_on at the renamed gate
             depends_on = service.depends_on
@@ -229,7 +229,6 @@ def generate_compose(
             service.volumes = [volume for volume in service.volumes or [] if not isinstance(volume, BindVolume)] or None
 
         # Write the transformed document
-        document.services = services_by_collapsed
         write_generated_file(output_path, dump_compose(document.dump()))
         outputs.append(output_path)
 
