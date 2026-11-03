@@ -163,20 +163,14 @@ def generate_compose(
 
         # Walk each workload's declared containers: attribute the rendered
         # {workload}-{container} services, collapse the doubled container name to the
-        # workload name, and record the owning workload's un-doubled file targets.
-        services_map: dict[str, tuple[ComposeService, list[str]]] = {}
+        # workload name, and pair each service with its owning workload.
+        services_map: dict[str, tuple[ComposeService, ComposeWorkloadDocument | None]] = {}
         attributed_names = {
             f"{workload_name}-{container_name}"
             for workload_name, workload in workloads
             for container_name in workload.containers
         }
         for workload_name, workload in workloads:
-            # Declared files whose contents ride un-doubled.
-            interpolated_targets = (
-                workload.metadata.annotations[CONSUMER_INTERPOLATED_ANNOTATION].split(",")
-                if CONSUMER_INTERPOLATED_ANNOTATION in workload.metadata.annotations
-                else []
-            )
             for container_name in workload.containers:
                 service_name = f"{workload_name}-{container_name}"
                 service = services.get(service_name)
@@ -187,7 +181,7 @@ def generate_compose(
                     raise ValueError(
                         f"service rename {service_name} -> {collapsed_name} collides with an existing service"
                     )
-                services_map[collapsed_name] = (service, interpolated_targets)
+                services_map[collapsed_name] = (service, workload)
 
         # Carry services no workload owns — score-synthesized helpers and provisioner
         # services — through with unconditional doubling; a name wearing a workload's
@@ -199,7 +193,7 @@ def generate_compose(
                 raise ValueError(
                     f"rendered service {service_name!r} carries a workload prefix but no declared container owns it"
                 )
-            services_map[service_name] = (service, [])
+            services_map[service_name] = (service, None)
 
         # score synthesizes wait-for-resources, an alpine gate the bundle's services
         # depend on so nothing starts before the stack's dependencies are ready. All
@@ -211,15 +205,15 @@ def generate_compose(
                 raise ValueError(f"gate rename {GATE_SERVICE} -> {gate} collides with an existing service")
             gate_service = services[GATE_SERVICE]
             gate_service.image = "${ALPINE_IMAGE:?err}"
-            services_map[gate] = (gate_service, [])
+            services_map[gate] = (gate_service, None)
 
         # Refuse renderings that define the reserved edge service.
         if EDGE_SERVICE_NAME in services_map:
             raise ValueError(f"bundle {name!r} rendering defines the reserved service {EDGE_SERVICE_NAME!r}")
 
         contents: dict[str, ComposeConfig] = {}
-        for service, interpolated_targets in services_map.values():
-            inline_binds(service, interpolated_targets, contents, score_dir, root)
+        for service, workload in services_map.values():
+            inline_binds(service, workload, contents, score_dir, root)
             depends_on = service.depends_on
             if isinstance(depends_on, dict) and GATE_SERVICE in depends_on:
                 depends_on[gate] = depends_on.pop(GATE_SERVICE)
@@ -227,7 +221,7 @@ def generate_compose(
                 service.depends_on = [gate if dependency == GATE_SERVICE else dependency for dependency in depends_on]
 
         # Write the transformed document.
-        document.services = {service_name: service for service_name, (service, _targets) in services_map.items()}
+        document.services = {service_name: service for service_name, (service, _workload) in services_map.items()}
         if contents:
             document.configs = {**(document.configs or {}), **contents}
         write_generated_file(output_path, dump_compose(document.dump()))
@@ -249,7 +243,7 @@ def generate_compose(
 
 def inline_binds(
     service: ComposeService,
-    interpolated_targets: list[str],
+    workload: ComposeWorkloadDocument | None,
     contents: dict[str, ComposeConfig],
     score_dir: Path,
     root: Path,
@@ -257,6 +251,12 @@ def inline_binds(
     binds = [volume for volume in service.volumes or [] if isinstance(volume, BindVolume)]
     if not binds:
         return
+    # Declared files of the owning workload whose contents ride un-doubled.
+    interpolated_targets = (
+        workload.metadata.annotations[CONSUMER_INTERPOLATED_ANNOTATION].split(",")
+        if workload is not None and CONSUMER_INTERPOLATED_ANNOTATION in workload.metadata.annotations
+        else []
+    )
     references: list[ComposeConfigReference] = []
     for bind in binds:
         # Resolve state-dir sources against score_dir, other sources against the repo root.
