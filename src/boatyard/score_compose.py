@@ -214,7 +214,7 @@ def generate_compose(
                 continue
 
             # Leave declared consumer-interpolated targets un-doubled
-            interpolated_targets = workload.consumer_interpolated_targets() if workload is not None else []
+            interpolated_targets = workload.consumer_interpolated_targets if workload is not None else []
             if document.configs is None:
                 document.configs = {}
             if service.configs is None:
