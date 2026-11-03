@@ -18,18 +18,25 @@ separate commits.
 
 - boatyard branch `refactor`: all consumer-contract work, the module-tiers
   refactor, the score unification, the boatyard rename + CLI refactors, and
-  Work 1's disk-state service-hash phase (design signed off, battery green,
-  `pathspec` dropped), qualified-selection-names phase (qualified `BUNDLES=`
-  grammar, flat vocabulary law repealed into a qualified-vocabulary collision
-  check, options identified by qualified name in bundle outputs, publish legs,
-  and selection), and ref-grammar phase (tag-only `ref:` grammar with
-  digest/`latest`/range refusals; `{QUALIFIED_NAME}_BUNDLE` lock entries
-  written by the lock verb, resolving direct via `crane digest`,
-  declaration-incremental; cross-section collision refusal; missing-entry
-  refusal naming the relock; bundle probes via crane under the
-  stderr-classification law; includes carry the lock's digest ref) are landed
-  locally, ahead of origin — unpushed. The path-form bundle-override phase is
-  Work 1's remainder. `publish.yml` is wired (`packages.boatyard`,
+  Work 1 in full — the disk-state service-hash phase (design signed off,
+  battery green, `pathspec` dropped), the qualified-selection-names phase
+  (qualified `BUNDLES=` grammar, flat vocabulary law repealed into a
+  qualified-vocabulary collision check, options identified by qualified name
+  in bundle outputs, publish legs, and selection), the ref-grammar phase
+  (tag-only `ref:` grammar with digest/`latest`/range refusals;
+  `{QUALIFIED_NAME}_BUNDLE` lock entries written by the lock verb, resolving
+  direct via `crane digest`, declaration-incremental; cross-section collision
+  refusal; missing-entry refusal naming the relock; bundle probes via crane
+  under the stderr-classification law; includes carry the lock's digest ref),
+  and the bundle-override phase (`BUNDLE_OVERRIDE_<QUALIFIED_NAME>` path and
+  `oci://` value forms over the ref tag grammar; probe and lock-entry skip;
+  path-form teeth — exists, parses, `edge` refusal, service collisions;
+  producer-lock attachment three parents up, ordered before the consumer's
+  lock env file, later `--env-file`s winning shared keys pinned against the
+  version-pinned compose binary; `producer_env_entries` selects platforms
+  from the producer lock's recorded platforms) — are landed locally, ahead
+  of origin — unpushed. Work 1 is complete; the branch is ready for Work 2's
+  operator handoff. `publish.yml` is wired (`packages.boatyard`,
   `major_minor: "0.6"`, `registry: pypi`).
 - PyPI: `boatyard` registered, nothing published. GitHub repo rename
   (docker-devkit → boatyard) is an operator item, status unverified.
