@@ -81,16 +81,16 @@ def select(config: Config, environment: Mapping[str, str]) -> Selection:
         if isinstance(entry, ServiceGroup)
         for option_name in entry.options
     }
-    riding = [name for name, entry in config.services.items() if not isinstance(entry, ServiceGroup)]
-    if not names and not riding and options:
+    bare_entries = [name for name, entry in config.services.items() if not isinstance(entry, ServiceGroup)]
+    if not names and not bare_entries and options:
         raise ValueError(
             f"{BUNDLES_VARIABLE}= selects nothing and no bare entry exists; the options are {sorted(options)}"
         )
     unknown = [name for name in names if name not in options]
     if unknown:
-        riding_note = f"; bare entries, always included: {riding}" if riding else ""
+        bare_entries_note = f"; bare entries, always included: {bare_entries}" if bare_entries else ""
         raise ValueError(
-            f"{BUNDLES_VARIABLE}= names {unknown}; the selectable options are {sorted(options)}{riding_note}"
+            f"{BUNDLES_VARIABLE}= names {unknown}; the selectable options are {sorted(options)}{bare_entries_note}"
         )
     choices: dict[str, str] = {}
     for name in names:
@@ -109,11 +109,11 @@ def select(config: Config, environment: Mapping[str, str]) -> Selection:
         for key, value in environment.items()
         if key.startswith(BUNDLE_OVERRIDE_PREFIX)
     }
-    unknown = sorted(name for name in raw_overrides if name not in options and name not in riding)
+    unknown = sorted(name for name in raw_overrides if name not in options and name not in bare_entries)
     if unknown:
-        vocabulary = sorted(options.keys() | set(riding))
+        vocabulary = sorted(options.keys() | set(bare_entries))
         raise ValueError(f"{BUNDLE_OVERRIDE_PREFIX}* names {unknown}; the bundle vocabulary is {vocabulary}")
-    selected_names = set(starmap(qualified_option_name, choices.items())) | set(riding)
+    selected_names = set(starmap(qualified_option_name, choices.items())) | set(bare_entries)
     selected_overrides = {name: value for name, value in raw_overrides.items() if name in selected_names}
 
     auth_option = choices.get(AUTH_GROUP_NAME)
