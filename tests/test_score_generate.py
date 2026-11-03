@@ -162,18 +162,24 @@ def _generate_with_chart(
     return helm
 
 
-def test_values_without_markers_pass_through_as_the_committed_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_values_without_markers_resolve_into_the_tempdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _write_values(tmp_path, "service:\n  port: 3000\n")
     config = _charts_config()
 
     helm = _generate_with_chart(monkeypatch, tmp_path, config, LOCK_IMAGES)
 
-    assert helm.commands == [
-        (f"helm template loki oci://{MIRRORED_CHART} --values {(tmp_path / VALUES_PATH).as_posix()}")
-    ]
+    argument = helm.commands[0].split("--values ")[1].split()[0]
+    assert argument != (tmp_path / VALUES_PATH).as_posix()
+    assert argument.endswith("values/loki.yaml")
     assert helm.values_contents == ["service:\n  port: 3000\n"]
+
+
+def test_values_without_markers_refuse_a_literal_image(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_values(tmp_path, "image: ghcr.io/example/app:v1\n")
+    config = _charts_config()
+
+    with pytest.raises(ValueError, match=r"loki\.yaml.*'ghcr.io/example/app:v1' must consume the lock"):
+        _generate_with_chart(monkeypatch, tmp_path, config, LOCK_IMAGES)
 
 
 def test_a_missing_chart_lock_entry_refuses_naming_the_chart(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

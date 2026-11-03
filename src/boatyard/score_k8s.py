@@ -24,13 +24,11 @@ from boatyard.config import (
 from boatyard.config_lock import ConfigLock
 from boatyard.lock import env_entries
 from boatyard.score import (
-    MARKERS,
     SECRETS_FILE,
     MarkerContext,
     SecretsDeclaration,
     dump_yaml,
     load_workloads,
-    marker_entry,
     render_score,
     resolve_markers,
     split_documents,
@@ -92,17 +90,13 @@ def generate_k8s(
         with TemporaryDirectory(prefix="resolved-values-") as values_directory:
             values_dir = Path(values_directory)
             for chart_name in k8s.charts:
-                # Pass a marker-free values file through untouched; resolve markers into a tempdir copy.
+                # Every values file rides through marker resolution, so the literal-image guard is universal.
                 path = config.root / config.score_dir / "k8s" / "values" / f"{chart_name}.yaml"
                 document = yaml.safe_load(path.read_text(encoding="utf-8"))
-
-                if not contains_marker(document):
-                    values_path = path
-                else:
-                    resolved = resolve_markers(document, MarkerContext(config.root, images, path.as_posix()))
-                    values_path = values_dir / path.relative_to(config.root)
-                    values_path.parent.mkdir(parents=True, exist_ok=True)
-                    write_file(values_path, dump_yaml(resolved))
+                resolved = resolve_markers(document, MarkerContext(config.root, images, path.as_posix()))
+                values_path = values_dir / path.relative_to(config.root)
+                values_path.parent.mkdir(parents=True, exist_ok=True)
+                write_file(values_path, dump_yaml(resolved))
 
                 # Render the chart through helm template with the values file and the locked chart reference.
                 chart_blocks.extend(
@@ -138,19 +132,6 @@ def generate_k8s(
     secrets.validate_consumed(consumed, "k8s", SECRETS_FILE.as_posix())
 
     return output_path
-
-
-def contains_marker(node: Yaml) -> bool:
-    if marker_entry(node, MARKERS) is not None:
-        return True
-
-    if is_mapping(node):
-        return any(contains_marker(value) for value in node.values())
-
-    if is_list(node):
-        return any(contains_marker(item) for item in node)
-
-    return False
 
 
 def collect_secret_keys(node: Yaml, secret_name: str, consumed: set[str]) -> None:

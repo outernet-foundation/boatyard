@@ -44,9 +44,7 @@ TEXT_MARKER = "include"
 YAML_MARKER = "include-yaml"
 LOCK_MARKER = "lock"
 LOCK_IMAGE_MARKER = "lock-image"
-INCLUDE_MARKERS = (TEXT_MARKER, YAML_MARKER)
 LOCK_MARKERS = (LOCK_MARKER, LOCK_IMAGE_MARKER)
-MARKERS = INCLUDE_MARKERS + LOCK_MARKERS
 Substrate = Literal["compose", "k8s"]
 IMAGE_FIELD = "image"
 IMAGE_HOLE_PATTERN = re.compile(r"\$\{|{{")
@@ -429,15 +427,6 @@ def split_image_reference(reference: str, source: str) -> ImageReference:
         raise ValueError(f"{source}: lock reference {reference!r} has no registry/repository split")
 
     return ImageReference(registry, repository, tag, digest)
-
-
-def marker_entry(node: Yaml, markers: tuple[str, ...]) -> tuple[str, Yaml] | None:
-    if is_mapping(node) and len(node) == 1:
-        key, value = next(iter(node.items()))
-        if key in markers:
-            return (key, value)
-
-    return None
 
 
 def _placeholder_value(

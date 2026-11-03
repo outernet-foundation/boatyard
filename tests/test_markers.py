@@ -7,7 +7,6 @@ from pydantic import ValidationError
 
 from boatyard.config import is_mapping
 from boatyard.score import MarkerContext, resolve_markers
-from boatyard.score_k8s import contains_marker
 
 RIVER = """// relay config
 loki.write "default" {
@@ -296,14 +295,3 @@ def test_image_values_with_holes_and_plain_non_image_keys_pass() -> None:
     }
 
     assert resolve_markers(node, MarkerContext(Path(), {}, "x.yaml")) == node
-
-
-def test_contains_marker_finds_nested_markers_of_every_kind() -> None:
-    assert contains_marker({"datasources": {"datasources.yaml": {"include-yaml": "d.yaml"}}})
-    assert contains_marker([{"include": "a.txt"}])
-    assert contains_marker({"manifests": [{"image": {"lock": "ALLOY_IMAGE"}}]})
-    assert contains_marker({"loki": {"image": {"lock-image": "LOKI_IMAGE"}}})
-    assert not contains_marker({"include": "a.txt", "other": 1})
-    assert not contains_marker({"lock": "ALLOY_IMAGE", "other": 1})
-    assert not contains_marker({"plain": "value"})
-    assert not contains_marker({"image": "ghcr.io/example/app:v1"})
