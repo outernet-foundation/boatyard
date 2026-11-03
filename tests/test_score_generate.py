@@ -373,6 +373,8 @@ GENERATED_COMPOSE = (
     "    image: pg:16\n"
 )
 
+API_SERVICE_RENDERING = "services:\n  api-api:\n    image: ghcr.io/org/api:1\n"
+
 
 def _generate_compose(
     monkeypatch: pytest.MonkeyPatch,
@@ -531,7 +533,7 @@ class WorkloadContentsRecorder:
                 self.workload_contents[path.name] = path.read_text(encoding="utf-8")
             output = Path(command.rsplit("--output ", 1)[1].split()[0])
             output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text("services: {}\n", encoding="utf-8")
+            output.write_text(API_SERVICE_RENDERING, encoding="utf-8")
 
 
 def test_workload_image_holes_resolve_from_the_lock_into_the_rendered_copy(
@@ -851,6 +853,7 @@ def test_adapted_probe_bearing_workloads_register_the_healthcheck_template(
         {
             "stack/score/api.yaml": WORKLOAD_WITH_READINESS,
         },
+        generated=API_SERVICE_RENDERING,
     )
 
     assert templates == [["probe-adapter-healthchecks.tpl", "restart.tpl"]]

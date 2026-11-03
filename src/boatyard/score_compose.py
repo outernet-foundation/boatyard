@@ -168,9 +168,7 @@ def generate_compose(
         for workload_name, workload in workloads:
             for container_name in workload.containers:
                 service_name = f"{workload_name}-{container_name}"
-                service = services.get(service_name)
-                if service is None:
-                    continue
+                service = services[service_name]
                 collapsed_name = workload_name if container_name == workload_name else service_name
                 if collapsed_name != service_name and collapsed_name in services:
                     raise ValueError(
