@@ -1,16 +1,17 @@
-# Closeout: publish, consumer sweep, artifact identity
+# Closeout: the 0.6.0 critical path
 
-One compaction carrying every unexecuted item from the root plan docs; the six
-consolidated files (`plan-artifact-identity.md`,
-`plan-artifact-identity-implementation.md`, `plan-consumer-contract.md`,
-`plan-consumer-contract-implementation.md`, `score-refactor-plan.md`,
-`boatyard.md`) live in git history. `AGENTS.md` is the present-truth operations
-manual for the shipped surface; this file is the remaining-work
-record. Every decision below is closed — do not re-litigate without its
-recorded flip condition. If this file and the code disagree, reconcile this
-file before touching code (spec-first). One work unit per session; verify with
-the target repo's battery; commit as you go, prose and code in separate
-commits.
+This file is the critical path only — the work that must ship imminently, in
+one release and one consumer sweep: the iteration unit (disk-state service
+hashes, qualified bundle grammar, path-form overrides), the 0.6.0 release,
+the toolkit cutover, the consumer sweep. Bang through it; when the four
+units land, delete this file. Future initiatives live in `design/` (one
+initiative per file, indexed by `design/AGENTS.md`); the six consolidated
+plan files this record absorbed live in git history. `AGENTS.md` is the
+present-truth operations manual for the shipped surface. Every decision
+below is closed — do not re-litigate without its recorded flip condition. If
+this file and the code disagree, reconcile this file before touching code
+(spec-first). One work unit per session; verify with the target repo's
+battery; commit as you go, prose and code in separate commits.
 
 ## Snapshot (verified 2026-11-02)
 
@@ -95,10 +96,6 @@ These rulings bind every work unit below.
 3  toolkit     cutover onto boatyard spellings; the SHA the wave bumps to
 4  sweep       all five consumers repin once, relock, rename, drop imports,
                adopt the iteration unit
-5  precision   attribution-based tree tags over the disk-state basis
-6  semver      per-unit image + bundle version lines (toolkit, bar, boatyard)
-7  adoption    one commit per consumer repo onto 5–6
-8  overlay     cross-repo dev overlay — trigger-gated on rebuild latency
 ```
 
 Order within a unit is strict; unit order is fixed. 1 precedes 2 deliberately:
@@ -107,10 +104,9 @@ old-basis tags there is no re-key wave at all, the world adopts disk-state
 tags from day one, old git-basis `tree-` tags freeze in ghcr, and infra's
 three `tree-` pins keep resolving as frozen digests. Nothing consumer-facing
 ships separately. 3 runs parallel to 1 (only the sweep's `uses:` bumps order
-on it). 5 precedes 6 by construction: the change gate in 6 compares tree
-tags, and tags are a trustworthy change signal only once 5 makes them
-source-precise — every over-inclusion is a spurious version bump. 6 is one
-release with its adoption in 7; consumers adopt once, never per feature.
+on it). After the sweep, the next initiative is precision attribution
+(`design/precision-attribution.md`), which precedes the semver lines by
+construction; consumers adopt that work once, never per feature.
 
 ## Work 1 — Iteration unit (build-out)
 
@@ -380,264 +376,3 @@ manifests; `up` probes pass against the mirror; every toolkit `uses:` ref
 carries one SHA and every `--lock-only`/`--gpu` mention is gone from consumer
 docs and workflows; Make-it-Sing's `up` assembles through the path override
 against a sibling placeframe checkout.
-
-## Work 5 — Precision cluster: attribution-based tree tags (boatyard)
-
-Two tag grammars, two jobs — `tree-{hash}` is content identity on every
-channel; release channels add unit versions (`{unit}-v{semver}` git tags,
-registry semver, `{base}-dev.{count}`) once Work 6 lands. Post-sweep tags are
-disk-state but over-inclusive (whole allowlist contexts), so they are not yet
-a precise change signal. Three phases, one boatyard release, one consumer
-regeneration.
-
-### Attribution parser and construct guard
-
-A pure parsing layer in `dockerfiles.py`, grown from `derive_services`,
-computes per service: the Dockerfile's `COPY`/`ADD` source paths and globs,
-its `ARG` declarations, its build mapping as the record derives it
-(dockerfile, target, platforms, rendered args, context edges — the derivation
-itself is the serialization; tag lists are not inputs), and its
-`additional_contexts` edges in `target:` form only. The Dockerfile is the
-declaration; no input declarations join `boatyard.yml` — a config-declared
-input list is a second source of truth that drifts, and verifying it against
-the Dockerfile requires the parser anyway.
-
-Every construct that can read the build context is either fully attributed or
-a loud failure: path-form `additional_contexts` rejects; `RUN
---mount=type=bind,source=…` rejects; heredoc `COPY`, unknown syntax,
-unresolvable globs reject; URL-form `ADD` rides (network channel, uncovered by
-design — same category as apt). `COPY` sources outside {own dir} ∪ {copied
-shared roots} ∪ {declared dependency outputs} reject. A bare-identifier `COPY
---from=` naming a sibling service the same file never `FROM`s refuses (it
-passes silently today — load accepts what bake then breaks on), and the
-independent-axis refusal text is corrected to match its behavior (any parented
-service, variant-bearing or not).
-
-### Attribution-based service hashes
-
-- The closure walk (union-find over the derived context edges, inside
-  `build_partitions`) lifts to a shared function in `dockerfiles.py` beside
-  the model it walks; `build_partitions` and the hasher both consume it — the
-  one-way import law holds (`dockerfiles` imports nothing from `config`).
-- `compute_service_shas` hashes, per service: the Dockerfile itself (any
-  recipe change re-keys, keeping the closure self-consistent — a new `COPY`
-  line moves the hash at the same moment the newly copied files enter the
-  resolved set); the resolved `COPY`/`ADD` set read from the working tree
-  under the allowlist (shared roots enter only when copied); the lock entries
-  whose names intersect the Dockerfile's `ARG` declarations, serialized from
-  the structured model (declared-but-unused args still hash; compose-runtime-only
-  entries drop out of build hashes entirely); the service's build mapping; and
-  each context dependency's computed tree hash embedded as a synthetic entry —
-  hash-of-hash over the DAG, no circularity.
-- `.dockerignore` is not a hash input: an edit that changes what a `COPY` glob
-  matches re-keys exactly the affected services through the resolved set; an
-  edit that matches nothing matched changed no bits, so no re-key is correct.
-- Services sharing one Dockerfile dir hash identically (the variant difference
-  is an arg inside the build mapping); a variant-arg edit re-keys both. An
-  empty service set still returns `{}` without walking.
-
-The dirty-tree guard this plan once carried is dissolved by Work 1's
-disk-state basis: the hash reads what the build compiles, dirt is content,
-nothing refuses.
-
-Verify (the negative-test battery): a lock line for an undeclared base edited
-→ unaffected services unchanged; another service's manifest arg edited → this
-service unchanged; a shared-root file no service copies edited → no re-key; a
-`.dockerignore` edit that matches nothing → no re-key; own-dir edit → re-key;
-dependency-dir edit → dependent re-keys; declared-arg lock edit → re-key. And
-one per loud failure and per attributed construct from the parser above.
-
-### Release and regeneration
-
-boatyard ships one patch release carrying the two phases above (pre-1.0;
-breaking rides the patch flow). The image-building consumers — placeframe,
-placeframe-capture-tool, Make-it-Sing — repin onto it before Work 6's change
-detection ever runs: the toolkit compares tree tags recorded by consumer CI
-builds, so those builds must compute precise tags at the certified head. The
-repin is a `uv.lock` bump — no declaration changes, no lock rewrite. placeframe
-runs one deliberate `stack/generated/**` regeneration cycle after the re-key
-(every image gets a fresh `tree-` tag at its next build; same two-commit shape
-as Work 4's cycle). Old `tree-` tags freeze in place — CI never re-pushes them,
-so existing pins convert from movable to actually-immutable; infra's three
-`tree-` pins keep resolving to frozen digests, re-pointed at leisure or at
-Work 6's version tags. Calibration-corpus rows keep their old
-`pipeline_version` values (the existing re-key hard-fail on redeploy stands).
-
-Verify: consumer CI green end-to-end; the regeneration diff committed and
-reviewed; a rebuild of an unchanged tree keeps its tag.
-
-## Work 6 — Per-unit semver image and bundle lines (toolkit + bar + boatyard)
-
-Version space: per-unit semver lines with tag-everything — every release
-aliases the full image set (changed images at their new version, unchanged at
-their existing one, a metadata no-op), so complete sets exist at every release
-and "newest tag for image X" is always its highest semver. Semver's
-compatibility contract maps to image surfaces (env holes, ports, service
-names, volume layout): major = breaking contract, minor = additive, patch =
-fix, human-asserted via `major_minor` — the packages' trust model. The CalVer
-git tag stays the release-event grouping label; apps stay on their existing
-per-app semver. Semver over CalVer was decided on ecosystem grounds
-(semver-native consumers and bump machinery — Renovate's docker manager, Flux
-`semver` policies, dependabot; org declarations already consume semver
-third-parties).
-
-Declaration surface: `publish.yml` carries `images:` — one entry per version
-line, keyed by unit name (the bake service name minus the `-cuda`/`-rocm`
-variant suffix), with required `major_minor` — and `bundles:` — name, ref(s),
-`major_minor`, and `sources` (the compose source paths, stated nowhere else —
-new information, not duplicated state; includes `boatyard.lock.yml`, so a
-runtime third-party bump changes bundle bits without any local tree moving).
-All variant repositories of a unit share the version tag and the
-`{unit}-v{semver}` git tag. placeframe: 15 services / 13 units.
-
-Change detection via the shelf — the release verb imports no boatyard: per
-unit, resolve the highest `{unit}-v*` git tag → its commit → pull that SHA's
-digest manifest from the shelf → compare the recorded `tree-` tags (recorded
-in each entry's `tags[]` by the build push) against the certified head's. Any
-variant's tree tag differs ⇒ ship and bump patch; the declared `major_minor`
-sitting above the line forces the bump; no tag yet ⇒ first release ships. The
-dev channel compares against the highest stable tag's commit, exactly like
-package path-diff. Stable ships when any package, app, image unit, or bundle
-changed; the dev gate tightens from manifest-presence to the same change-based
-gate (a docs-only landing in an images-only repo cuts nothing). Digest-based
-detection was rejected: rebuild churn re-digests unchanged trees and would
-bump versions on noise.
-
-Channels and spellings:
-
-- Stable: alias each unit's variant digests onto `{version}` and `latest`;
-  push the `{unit}-v{version}` git tag; alias the bundle's certified `{sha}`
-  artifact onto `{version}`; push the `{bundle}-v{version}` git tag.
-- Dev: alias changed units onto `{base}-dev.{count}` (npm spelling; valid tag
-  grammar); unchanged units alias nothing (their stable tag already resolves);
-  no git tags on dev.
-- PR: no image version tags, permanently — ghcr deletes tags per
-  digest-version, so any `pr-*` image tag sweep would endanger stable tags on
-  shared digests. PR bodies keep `tree-` tag links.
-- `latest` is aliased by stable only. PR builds stop pushing the derived
-  `:latest` (today it points at uncertified heads — the one cell violating
-  the PR-column principle); it becomes honestly "newest released version of
-  this image". Dev never aliases it.
-- Release notes: pr/dev/stable render from one spine; the images table is
-  `Image | Version` (the changed/unchanged pattern of the packages table); a
-  Bundle row links the ghcr version page — the human and Renovate discovery
-  surface (consumers no longer hand-copy digests at all once this lands).
-
-Aliasing mechanism (verified live against `registry:2` with the pinned oras
-1.2.2): a new primitive in build-artifact-registry beside `promote_scope`
-(org law: the toolkit owns no registry CLI code) — resolve `ref@digest` from
-the shelf manifest, `oras tag` the new tags; multiple tags per call; missing
-references fail loudly; aliases preserve digest and media type for OCI image
-indexes and single manifests alike. ghcr itself was not push-tested from the
-sandbox; `docker buildx imagetools create -t` is the documented one-line
-fallback. Push-once discipline holds under the release mutex; the shelf is
-SHA-keyed so re-runs alias identical digests.
-
-ghcr semantics to respect: ghcr's model is version-level (a version = a
-digest; tags are attributes; deleting a version kills all its tags). A stable
-release's certified digest already carries its dev spelling, so dev image tags
-can never be swept the way stable sweeps `dev-*` git releases — hence the
-no-GC law above.
-
-Delivery order:
-
-1. build-artifact-registry: the aliasing primitive. Verify: stub-registry
-   tests — index and manifest aliasing, multi-tag calls, missing-ref failure.
-2. toolkit: `images:`/`bundles:` parsing, unit-tag suffix stripping, version
-   math reuse (highest `{unit}-v*` + patch, forced publish on
-   declared-line-above-tags), tag-everything. Verify: derivation, version
-   math, schema refusals (missing `major_minor`, unknown keys).
-3. toolkit: change detection per above. Verify: stubbed shelf — changed,
-   unchanged, first-release, missing-shard; nothing-to-ship including images
-   and bundles; the bundle-gate trio (image-advanced, source-diff, lock-diff).
-4. toolkit: channels, aliasing, note surfaces. Verify: aliasing calls against
-   a stub registry; `latest` on stable only; dev aliases changed units only;
-   note rendering for the three channels.
-5. boatyard + toolkit publish-side cleanup, as boatyard's second release of
-   this effort: the bake rendering emits no derived `:latest` in push mode
-   (local load-mode builds keep theirs); `publish-compose` publishes `{sha}`
-   only — branch tags and the `--branch` flag are gone, `--plan` output
-   unchanged; the toolkit's reusable workflow stops passing `--branch`.
-   Consumers relock devkit and bump the toolkit pin in one commit (Work 7), so
-   no CI window ever passes a dead flag. Verify: bake-rendering golden tests
-   for push vs load mode; sha-only publish tests; the toolkit reusable
-   renders without the flag.
-
-## Work 7 — Adoption wave
-
-One commit per consumer repo, onto Works 5–6. The Work-4 sweep already carried
-the grammar adoption (qualified `.env`, tag-spelled refs, `_BUNDLE` lock
-entries, overrides in Make-it-Sing); the items here are strictly the Work-6
-additions.
-
-- **placeframe** — `publish.yml` gains `images:` (13 units) and `bundles:`
-  (`placeframe`, variants cuda/rocm, compose source paths); one adoption
-  commit: relock onto the Work-6 devkit release, bump the toolkit pin. The
-  unused `.dockerignore` allowlist entry `packages/generated/csharp/api-client/`
-  is removed — it re-keys nothing under precision and shrinks every build
-  context. The first release after adoption mints image and bundle versions;
-  the release body carries the `Image | Version` table and the bundle row.
-- **Make-it-Sing** — `publish.yml` gains `images:` for `livekit-token`;
-  `:latest` references gone; the yaml bundle ref flips from sha tag to
-  version tag; the `lock` verb re-resolves `PLACEFRAME_CUDA_BUNDLE` and
-  `TUNNEL_RATHOLE_BUNDLE` onto the version pins. Tag hygiene:
-  stale git releases and tags `pr-4-237`, `pr-4-238`, `pr-6-250` deleted;
-  `pr-5-248` and `pr-7-254` checked against still-open PRs first and deleted
-  if orphaned (deletion needs contents-write — hand off to the operator if
-  the session token cannot).
-- **placeframe-capture-tool** — `images:` for its workloads; `:latest`
-  removal; relock onto the Work-6 release.
-- **infra** — its three `tree-` pins switch to version tags; no deadline (the
-  frozen tree pins remain valid indefinitely).
-
-Verify: CI green per repo through the first release; versions resolvable in
-ghcr; the stale tags gone; the `packages/generated` entry gone from
-placeframe's `.dockerignore`.
-
-## Work 8 — Cross-repo dev overlay (trigger-gated)
-
-Build only when the trigger holds: the save → build → up loop's rebuild
-latency proves too slow in daily consumer-driven development (the commit
-friction is gone — Work 1 made the unit of iteration save → build). A session
-taking this work first confirms the trigger; otherwise it does not run.
-
-With a path-form override active, `up --dev` generates overlay entries from
-the producer's declaration: the producer's dev-stage services, the producer's
-repo root as the bind source (the same derivation the producer-lock
-attachment uses), and the producer's `dev-toggles` as `${NAME:-default}` holes
-— overlaid onto the consumer's assembly. `:dev` images come from the
-producer's `build --dev`.
-
-Verify: overlay generation over a producer/consumer fixture pair; toggle
-holes present; bind sources point at the producer root.
-
-## Dismissed and deferred
-
-- Image-attached contract metadata / lock-as-DAG-resolver: ruled out — beyond
-  state of practice and redundant with the compose layer, which already
-  expresses the dependency graph. Semver tags are the substrate; the lock
-  resolves tags to digests for org artifacts exactly as for third parties.
-- App CalVer conversion retired (consistent with images staying semver);
-  per-image CalVer aliases available later as free additional tags.
-
-## Open drill — GPU template collapse [LOW, operator's lead]
-
-The cuda/rocm pair: one annotation (`outernet.internal/gpu`), two compose
-templates (`gpu-cuda.tpl`, `gpu-rocm.tpl`), one registered, selected by the
-`GPU_VARIANT` build axis; the k8s analog (`gpu-pod.tpl`) is one template —
-proof the one-template shape is natural. The operator believes a consolidation
-key is unfound; the agent does not believe this collapses cleanly. Drill
-continues.
-
-Settled facts (do not re-derive): the score-compose patch-template context is
-`.Compose` + `.Workloads` only — no env, no rendering vars (sprig helpers
-available); the score-k8s context adds `.Manifests` + `.Namespace`; patch
-templates fire after conversion/provisioning, before the final file is
-written. `GPU_VARIANT` is a rendering-level variable that never enters the
-template context; the only channel to thread it in is the annotation value at
-render time (compose-only; k8s has no `GPU_VARIANT`), which couples the
-shared `rendered_workloads` to the gpu annotation — a real cost. If the key
-is found, the compose templates list becomes a fixed `[healthcheck, restart,
-gpu]` and the templates param a plain per-substrate constant; if not,
-templates stay computed at the call site, which is the landed shape — the
-unified `render_score` is correct either way.
