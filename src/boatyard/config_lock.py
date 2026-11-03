@@ -19,19 +19,26 @@ class ConfigLock(BaseModel):
 
     images: dict[str, ConfigLockEntry] = Field(default_factory=dict)
     charts: dict[str, str] = Field(default_factory=dict)
+    bundles: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _validate(self, info: ValidationInfo) -> Self:
         context: dict[str, object] = info.context or {}
-        for name, reference in self.charts.items():
-            if not reference.rpartition("@")[2].startswith("sha256:"):
-                raise ValueError(
-                    f"{context.get('path', 'the image lock')}: chart {name} is not digest-pinned ({reference!r})"
-                )
-        shared = sorted(self.images.keys() & self.charts.keys())
+        for section, entries in (("chart", self.charts), ("bundle", self.bundles)):
+            for name, reference in entries.items():
+                if not reference.rpartition("@")[2].startswith("sha256:"):
+                    raise ValueError(
+                        f"{context.get('path', 'the image lock')}: {section} {name} is not digest-pinned ({reference!r})"
+                    )
+        shared = sorted(
+            (self.images.keys() & self.charts.keys())
+            | (self.images.keys() & self.bundles.keys())
+            | (self.charts.keys() & self.bundles.keys())
+        )
         if shared:
             raise ValueError(
-                f"{context.get('path', 'the image lock')}: names {shared} must appear under images or charts, not both"
+                f"{context.get('path', 'the image lock')}: names {shared} must appear under "
+                "at most one of images, charts, bundles"
             )
         return self
 
@@ -40,6 +47,8 @@ class ConfigLock(BaseModel):
             return self.images[name].index
         if name in self.charts:
             return self.charts[name]
+        if name in self.bundles:
+            return self.bundles[name]
         raise ValueError(f"{subject}: {LOCK_PATH.as_posix()} lacks the {name} entry ({hint})")
 
 

@@ -31,6 +31,7 @@ def _write_lock(
     root: Path,
     images: dict[str, object],
     charts: dict[str, str] | None = None,
+    bundles: dict[str, str] | None = None,
 ) -> None:
     entries: dict[str, object] = {}
     for name, value in images.items():
@@ -38,6 +39,8 @@ def _write_lock(
     document: dict[str, object] = {"images": entries}
     if charts:
         document["charts"] = charts
+    if bundles:
+        document["bundles"] = bundles
     (root / LOCK_PATH).write_text(yaml.safe_dump(document), encoding="utf-8")
 
 
@@ -244,6 +247,31 @@ class TestMirrorVerb:
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
         assert "LOKI_CHART" in str(result.exception)
+
+    def test_never_enumerates_bundle_declarations(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        bundle_ref = "oci://ghcr.io/org/repo/livekit:" + "a" * 40
+        monkeypatch.chdir(tmp_path)
+        _write_config(
+            tmp_path,
+            {
+                "platforms": ["linux/amd64"],
+                "base_images": {"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"},
+                "project_name": "demo",
+                "services": {"livekit": {"ref": bundle_ref}},
+            },
+        )
+        _write_lock(
+            tmp_path,
+            {"UV_IMAGE": f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{FAKE_DIGEST}"},
+            bundles={"LIVEKIT_BUNDLE": f"ghcr.io/org/repo/livekit:{'a' * 40}@{FAKE_DIGEST}"},
+        )
+        recorder = CommandRecorder(present_refs={f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{FAKE_DIGEST}"})
+
+        result = self._invoke(tmp_path, monkeypatch, recorder)
+
+        assert result.exit_code == 0
+        assert not [command for command in recorder.commands if command.startswith("crane copy")]
+        assert "Mirrored references: 0 copied, 1 already present" in result.stdout
 
     def test_errors_without_a_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.chdir(tmp_path)

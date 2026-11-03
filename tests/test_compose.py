@@ -16,8 +16,12 @@ from boatyard.config_lock import LOCK_PATH
 MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
 FAKE_DIGEST = "sha256:" + "a" * 64
 PLATFORM_DIGEST = "sha256:" + "b" * 64
-KEYCLOAK_REF = "oci://ghcr.io/org/keycloak@" + FAKE_DIGEST
-LIVEKIT_REF = "oci://ghcr.io/org/livekit@" + FAKE_DIGEST
+LIVEKIT_SHA_TAG = "a" * 40
+LIVEKIT_REF = "oci://ghcr.io/org/livekit:" + LIVEKIT_SHA_TAG
+LIVEKIT_PINNED = f"ghcr.io/org/livekit:{LIVEKIT_SHA_TAG}@{FAKE_DIGEST}"
+KEYCLOAK_REF = "oci://ghcr.io/org/keycloak:0.3.1-dev.42"
+KEYCLOAK_PINNED = f"ghcr.io/org/keycloak:0.3.1-dev.42@{FAKE_DIGEST}"
+TUNNEL_BUNDLES = {"TUNNEL_BUNDLE": LIVEKIT_PINNED}
 PINNED_COMPOSE_VERSION = "5.6.1"
 
 LOCKED_ERROR = f"Image {MIRROR_PREFIX}/docker.io/library/alpine:3.20 (digest {FAKE_DIGEST}) is not mirrored"
@@ -28,6 +32,15 @@ ASSEMBLY_ARGUMENT_PATTERN = re.compile(r"-f (\S*devkit-assembly-\S+\.yaml)")
 LOCK_ENV_ARGUMENT_PATTERN = re.compile(r"(\S*devkit-lock-env-\S+\.env)")
 
 runner = CliRunner()
+
+
+def _skip_crane_install() -> None:
+    return None
+
+
+def _patch_up_probes(monkeypatch: pytest.MonkeyPatch, handler: object) -> None:
+    monkeypatch.setattr(up, "install_crane", _skip_crane_install)
+    monkeypatch.setattr(up, "bash_output", handler)
 
 
 @pytest.fixture(scope="session")
@@ -65,6 +78,7 @@ def _write_ref_tree(root: Path) -> None:
             "services": {"tunnel": {"ref": LIVEKIT_REF}},
         },
     )
+    _write_lock(root, entries={}, bundles=TUNNEL_BUNDLES)
 
 
 def _normalize(command: str, root: Path) -> str:
@@ -77,22 +91,30 @@ def _write_lock(
     root: Path,
     entries: dict[str, str] | None = None,
     platform_entries: dict[str, str] | None = None,
+    bundles: dict[str, str] | None = None,
 ) -> None:
     # Write one platform-manifest reference per declared platform beside the index.
-    declared = entries or {
-        "CADDY_IMAGE": MIRROR_PREFIX + "/docker.io/library/caddy:2.8.4-alpine@" + FAKE_DIGEST,
-    }
+    declared = (
+        entries
+        if entries is not None
+        else {
+            "CADDY_IMAGE": MIRROR_PREFIX + "/docker.io/library/caddy:2.8.4-alpine@" + FAKE_DIGEST,
+        }
+    )
     platforms = platform_entries or {"linux/amd64": ""}
-    root.joinpath(*LOCK_PATH.parts).write_text(
-        yaml.safe_dump({
-            "images": {
-                name: {
-                    "index": reference,
-                    "platforms": {platform: manifest or reference for platform, manifest in platforms.items()},
-                }
-                for name, reference in declared.items()
+    document: dict[str, object] = {
+        "images": {
+            name: {
+                "index": reference,
+                "platforms": {platform: manifest or reference for platform, manifest in platforms.items()},
             }
-        }),
+            for name, reference in declared.items()
+        }
+    }
+    if bundles is not None:
+        document["bundles"] = bundles
+    root.joinpath(*LOCK_PATH.parts).write_text(
+        yaml.safe_dump(document),
         encoding="utf-8",
     )
 
@@ -131,17 +153,17 @@ def _silent_handoff(_command: str) -> None:
 
 
 def _probe_present(command: str) -> str:
-    assert "imagetools inspect" in command
+    assert "imagetools inspect" in command or "crane digest" in command
     return ""
 
 
 def _probe_absent(command: str) -> str:
-    assert "imagetools inspect" in command
+    assert "imagetools inspect" in command or "crane digest" in command
     raise CalledProcessError(1, command, stderr="unexpected status from HEAD request: 404 Not Found\n")
 
 
 def _probe_unauthorized(command: str) -> str:
-    assert "imagetools inspect" in command
+    assert "imagetools inspect" in command or "crane digest" in command
     raise CalledProcessError(1, command, stderr="unauthorized: authentication required\n")
 
 
@@ -216,7 +238,7 @@ class PresentProbeAndServices:
         self.names = list(names)
 
     def run(self, command: str) -> str:
-        if "imagetools inspect" in command:
+        if "imagetools inspect" in command or "crane digest" in command:
             return ""
         assert "config --services" in command
         return "".join(f"{name}\n" for name in self.names)
@@ -227,6 +249,7 @@ class TestProfileForwarding:
         _write_ref_tree(tmp_path)
         recorder = HandoffRecorder()
         monkeypatch.setattr(compose, "bash_output", _defined_profiles)
+        _patch_up_probes(monkeypatch, _probe_present)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
         return recorder
@@ -267,6 +290,7 @@ class TestProfileForwarding:
         monkeypatch.setenv("COMPOSE_PROFILES", "tunnel-rathole")
         recorder = HandoffRecorder()
         monkeypatch.setattr(compose, "bash_output", _rathole_profiles)
+        _patch_up_probes(monkeypatch, _probe_present)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
@@ -358,7 +382,10 @@ def _write_consumer_tree(root: Path, *, bundles: str | None = "placeframe-cuda,a
             },
         },
     )
-    _write_lock(root)
+    _write_lock(
+        root,
+        bundles={"AUTH_KEYCLOAK_BUNDLE": KEYCLOAK_PINNED, "LIVEKIT_BUNDLE": LIVEKIT_PINNED},
+    )
     cuda = _write_bundle_output(root, "placeframe-cuda", ["api", "grafana"])
     _write_bundle_output(root, "placeframe-rocm", ["api", "grafana"])
     _write_workload(root, "api.yaml", "api")
@@ -382,7 +409,7 @@ class TestSelectionLaw:
         recorder = AssemblyRecorder()
         handler = PresentProbeAndServices(*services.split()).run
         monkeypatch.setattr(compose, "bash_output", handler)
-        monkeypatch.setattr(up, "bash_output", handler)
+        _patch_up_probes(monkeypatch, handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
         return recorder
@@ -395,9 +422,9 @@ class TestSelectionLaw:
         assert result.exit_code == 0, result.output
         [document] = recorder.documents
         assert document["include"] == [
-            KEYCLOAK_REF,
+            "oci://" + KEYCLOAK_PINNED,
             (tmp_path / "stack/generated/compose/compose.placeframe-cuda.yaml").resolve().as_posix(),
-            LIVEKIT_REF,
+            "oci://" + LIVEKIT_PINNED,
         ]
 
     def test_same_named_options_in_two_groups_select_together(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -423,7 +450,7 @@ class TestSelectionLaw:
         recorder = AssemblyRecorder()
         handler = PresentProbeAndServices("api", "edge").run
         monkeypatch.setattr(compose, "bash_output", handler)
-        monkeypatch.setattr(up, "bash_output", handler)
+        _patch_up_probes(monkeypatch, handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
@@ -454,13 +481,13 @@ class TestSelectionLaw:
                 },
             },
         )
-        _write_lock(tmp_path)
+        _write_lock(tmp_path, bundles={"LIVEKIT_BUNDLE": LIVEKIT_PINNED})
         (tmp_path / ".env").write_text("BUNDLES=\n", encoding="utf-8")
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
         handler = PresentProbeAndServices("livekit", "edge").run
         monkeypatch.setattr(compose, "bash_output", handler)
-        monkeypatch.setattr(up, "bash_output", handler)
+        _patch_up_probes(monkeypatch, handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
@@ -468,7 +495,7 @@ class TestSelectionLaw:
 
         assert result.exit_code == 0, result.output
         [document] = recorder.documents
-        assert document["include"] == [LIVEKIT_REF]
+        assert document["include"] == ["oci://" + LIVEKIT_PINNED]
 
     def test_an_options_only_repo_refuses_a_selection_of_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_config(
@@ -495,7 +522,7 @@ class TestSelectionLaw:
         _write_workload(tmp_path, "api.yaml", "api")
         (tmp_path / ".env").write_text("BUNDLES=\n", encoding="utf-8")
         monkeypatch.delenv("BUNDLES", raising=False)
-        monkeypatch.setattr(up, "bash_output", ServicesOutput("api", "edge").run)
+        _patch_up_probes(monkeypatch, ServicesOutput("api", "edge").run)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -597,7 +624,7 @@ class TestUpMaterialization:
         recorder = AssemblyRecorder()
         handler = PresentProbeAndServices("api", "grafana", "edge", "livekit", "keycloak").run
         monkeypatch.setattr(compose, "bash_output", handler)
-        monkeypatch.setattr(up, "bash_output", handler)
+        _patch_up_probes(monkeypatch, handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
@@ -607,9 +634,9 @@ class TestUpMaterialization:
         [document] = recorder.documents
         assert document["name"] == "demo"
         assert document["include"] == [
-            KEYCLOAK_REF,
+            "oci://" + KEYCLOAK_PINNED,
             (tmp_path / "stack/generated/compose/compose.placeframe-cuda.yaml").resolve().as_posix(),
-            LIVEKIT_REF,
+            "oci://" + LIVEKIT_PINNED,
         ]
         edge = document["services"]["edge"]
         assert edge["image"] == "${CADDY_IMAGE:?err}"
@@ -639,7 +666,7 @@ class TestUpMaterialization:
         recorder = AssemblyRecorder()
         handler = PresentProbeAndServices("api", "grafana", "edge", "livekit").run
         monkeypatch.setattr(compose, "bash_output", handler)
-        monkeypatch.setattr(up, "bash_output", handler)
+        _patch_up_probes(monkeypatch, handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
@@ -1018,12 +1045,9 @@ class TestDevOverlay:
 
 
 class TestLockRequirement:
-    def _write_lock_free_tree(self, tmp_path: Path) -> None:
+    def test_a_bundles_only_lock_attaches_no_env_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)
         (tmp_path / ".env").write_text("PUBLIC_URL=https://example.dev\n", encoding="utf-8")
-
-    def test_lock_free_repo_assembles_without_the_lock_env_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        self._write_lock_free_tree(tmp_path)
         recorder = HandoffRecorder()
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(down, "bash_handoff", recorder.run)
@@ -1036,7 +1060,8 @@ class TestLockRequirement:
         ]
 
     def test_present_lock_attaches_the_second_env_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        self._write_lock_free_tree(tmp_path)
+        _write_ref_tree(tmp_path)
+        (tmp_path / ".env").write_text("PUBLIC_URL=https://example.dev\n", encoding="utf-8")
         _write_lock(tmp_path, {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST})
         recorder = HandoffRecorder()
         monkeypatch.chdir(tmp_path)
@@ -1049,8 +1074,19 @@ class TestLockRequirement:
             "docker compose -f ASSEMBLY --project-directory ROOT --env-file .env --env-file LOCKENV down --remove-orphans"
         ]
 
-    def test_lock_free_repo_skips_the_probe(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        self._write_lock_free_tree(tmp_path)
+    def test_a_repo_without_a_lock_skips_the_probe(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        _write_config(
+            tmp_path,
+            {
+                "project_name": "demo",
+                "repository": "ghcr.io/org/demo",
+                "services": {"apps": {"options": {"core": {"workloads": ["api.yaml"]}}}},
+            },
+        )
+        _write_bundle_output(tmp_path, "apps-core", ["api"])
+        _write_workload(tmp_path, "api.yaml", "api")
+        (tmp_path / ".env").write_text("BUNDLES=apps-core\n", encoding="utf-8")
+        monkeypatch.delenv("BUNDLES", raising=False)
         monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
         recorder = HandoffRecorder()
         monkeypatch.chdir(tmp_path)
@@ -1071,7 +1107,7 @@ class TestLockEnvSynthesis:
     def _invoke_up_with_lock(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recorder: HandoffRecorder):
         monkeypatch.delenv("PLATFORM", raising=False)
         monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
-        monkeypatch.setattr(up, "bash_output", _probe_present)
+        _patch_up_probes(monkeypatch, _probe_present)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
         return runner.invoke(app, ["up"])
@@ -1081,7 +1117,9 @@ class TestLockEnvSynthesis:
     ):
         _write_ref_tree(tmp_path)
         (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
-        _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST})
+        _write_lock(
+            tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST}, TUNNEL_BUNDLES
+        )
         recorder = LockEnvRecorder()
 
         result = self._invoke_up_with_lock(tmp_path, monkeypatch, recorder)
@@ -1093,7 +1131,9 @@ class TestLockEnvSynthesis:
     def test_two_consecutive_syntheses_are_byte_identical(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)
         (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
-        _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST})
+        _write_lock(
+            tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST}, TUNNEL_BUNDLES
+        )
         recorder = LockEnvRecorder()
 
         self._invoke_up_with_lock(tmp_path, monkeypatch, recorder)
@@ -1117,6 +1157,7 @@ class TestLockEnvSynthesis:
             tmp_path,
             {"ALPINE_IMAGE": self.ALPINE_INDEX},
             {"linux/amd64": self.ALPINE_MANIFEST, "linux/arm64": arm64_manifest},
+            TUNNEL_BUNDLES,
         )
         recorder = LockEnvRecorder()
 
@@ -1137,7 +1178,7 @@ class TestLockEnvSynthesis:
             },
         )
         (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
-        _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX})
+        _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, bundles=TUNNEL_BUNDLES)
 
         result = self._invoke_up_with_lock(tmp_path, monkeypatch, HandoffRecorder())
 
@@ -1150,7 +1191,7 @@ class TestLockEnvSynthesis:
     def test_an_undeclared_platform_selection_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)
         (tmp_path / ".env").write_text("PLATFORM=linux/ppc64le\n", encoding="utf-8")
-        _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX})
+        _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, bundles=TUNNEL_BUNDLES)
 
         result = self._invoke_up_with_lock(tmp_path, monkeypatch, HandoffRecorder())
 
@@ -1167,7 +1208,7 @@ class TestLockEnvSynthesis:
         (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
         root_lock = tmp_path.joinpath(*LOCK_PATH.parts)
         root_lock.write_text(
-            yaml.safe_dump({"images": {"ALPINE_IMAGE": {"index": self.ALPINE_INDEX}}}),
+            yaml.safe_dump({"images": {"ALPINE_IMAGE": {"index": self.ALPINE_INDEX}}, "bundles": TUNNEL_BUNDLES}),
             encoding="utf-8",
         )
 
@@ -1183,10 +1224,12 @@ class TestLockEnvSynthesis:
     def test_a_failed_run_prints_and_keeps_the_env_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)
         (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
-        _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST})
+        _write_lock(
+            tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST}, TUNNEL_BUNDLES
+        )
         monkeypatch.delenv("PLATFORM", raising=False)
         monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
-        monkeypatch.setattr(up, "bash_output", _probe_absent)
+        _patch_up_probes(monkeypatch, _probe_absent)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -1203,14 +1246,14 @@ class TestMirroredLockEnforcement:
     def _write_mirrored_tree(self, tmp_path: Path, entries: dict[str, str]) -> None:
         _write_ref_tree(tmp_path)
         (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
-        _write_lock(tmp_path, entries)
+        _write_lock(tmp_path, entries, bundles=TUNNEL_BUNDLES)
 
     def test_missing_entry_fails_closed_with_the_locked_message(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._write_mirrored_tree(
             tmp_path, {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST}
         )
         monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
-        monkeypatch.setattr(up, "bash_output", _probe_absent)
+        _patch_up_probes(monkeypatch, _probe_absent)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -1225,7 +1268,7 @@ class TestMirroredLockEnforcement:
             tmp_path, {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST}
         )
         monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
-        monkeypatch.setattr(up, "bash_output", _probe_unauthorized)
+        _patch_up_probes(monkeypatch, _probe_unauthorized)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -1243,7 +1286,7 @@ class TestMirroredLockEnforcement:
         )
         monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
         recorder = HandoffRecorder()
-        monkeypatch.setattr(up, "bash_output", _probe_present)
+        _patch_up_probes(monkeypatch, _probe_present)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
@@ -1260,7 +1303,7 @@ class TestMirroredLockEnforcement:
         probe = SelectiveProbe(present)
         self._write_mirrored_tree(tmp_path, {"UV_IMAGE": present, "ALPINE_IMAGE": absent})
         monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
-        monkeypatch.setattr(up, "bash_output", probe.run)
+        _patch_up_probes(monkeypatch, probe.run)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -1279,13 +1322,14 @@ class TestMirroredLockEnforcement:
             yaml.safe_dump({
                 "images": {
                     "ALPINE_IMAGE": {"index": index, "platforms": {"linux/amd64": manifest}},
-                }
+                },
+                "bundles": TUNNEL_BUNDLES,
             }),
             encoding="utf-8",
         )
         probe = SelectiveProbe(index)
         monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
-        monkeypatch.setattr(up, "bash_output", probe.run)
+        _patch_up_probes(monkeypatch, probe.run)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -1306,7 +1350,8 @@ class TestMirroredLockEnforcement:
             yaml.safe_dump({
                 "images": {
                     "ALPINE_IMAGE": {"index": index, "platforms": {"linux/amd64": manifest}},
-                }
+                },
+                "bundles": TUNNEL_BUNDLES,
             }),
             encoding="utf-8",
         )
@@ -1320,7 +1365,7 @@ class TestMirroredLockEnforcement:
             raise CalledProcessError(1, command, stderr="unauthorized: authentication required\n")
 
         monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
-        monkeypatch.setattr(up, "bash_output", _probe_then_fail)
+        _patch_up_probes(monkeypatch, _probe_then_fail)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -1331,6 +1376,103 @@ class TestMirroredLockEnforcement:
         assert "the mirror probe failed" in message
         assert PLATFORM_DIGEST in message
         assert probed == [index, manifest]
+
+
+class TestBundleLockEnforcement:
+    def test_a_selected_ref_without_its_bundle_lock_entry_refuses_naming_the_lock(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _write_ref_tree(tmp_path)
+        (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
+        _write_lock(tmp_path, entries={}, bundles={})
+        monkeypatch.delenv("BUNDLES", raising=False)
+        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, ValueError)
+        message = str(result.exception)
+        assert "TUNNEL_BUNDLE" in message
+        assert "run boatyard lock" in message
+
+    def test_the_bundle_include_carries_the_locks_digest_not_the_yaml_tag(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _write_ref_tree(tmp_path)
+        (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
+        relocked = dict(TUNNEL_BUNDLES)
+        relocked["TUNNEL_BUNDLE"] = f"ghcr.io/org/livekit:{LIVEKIT_SHA_TAG}@{PLATFORM_DIGEST}"
+        _write_lock(tmp_path, entries={}, bundles=relocked)
+        recorder = AssemblyRecorder()
+        monkeypatch.delenv("BUNDLES", raising=False)
+        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
+        _patch_up_probes(monkeypatch, _probe_present)
+        monkeypatch.setattr(up, "bash_handoff", recorder.run)
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code == 0, result.output
+        [document] = recorder.documents
+        assert document["include"] == ["oci://" + relocked["TUNNEL_BUNDLE"]]
+
+    def test_the_bundle_probe_uses_crane_over_the_recorded_digest(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _write_ref_tree(tmp_path)
+        (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
+        probed: list[str] = []
+
+        def _record(command: str) -> str:
+            assert "crane digest" in command
+            probed.append(command.removeprefix("crane digest "))
+            return ""
+
+        monkeypatch.delenv("BUNDLES", raising=False)
+        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
+        _patch_up_probes(monkeypatch, _record)
+        monkeypatch.setattr(up, "bash_handoff", _silent_handoff)
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code == 0, result.output
+        assert probed == [LIVEKIT_PINNED]
+
+    def test_an_unpublished_bundle_fails_closed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        _write_ref_tree(tmp_path)
+        (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
+        monkeypatch.delenv("BUNDLES", raising=False)
+        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
+        _patch_up_probes(monkeypatch, _probe_absent)
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code != 0
+        assert str(result.exception) == (
+            f"Bundle ghcr.io/org/livekit:{LIVEKIT_SHA_TAG} (digest {FAKE_DIGEST}) is not published; run boatyard lock"
+        )
+
+    def test_a_bundle_probe_failure_is_not_an_unpublished_verdict(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _write_ref_tree(tmp_path)
+        (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
+        monkeypatch.delenv("BUNDLES", raising=False)
+        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
+        _patch_up_probes(monkeypatch, _probe_unauthorized)
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code != 0
+        message = str(result.exception)
+        assert "not published" not in message
+        assert "the bundle probe failed" in message
+        assert "authentication required" in message
 
 
 class TestComposePortMergeOverIncludes:

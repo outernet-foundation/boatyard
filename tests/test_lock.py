@@ -103,6 +103,7 @@ def _write_repo(
     base_images: dict[str, str] | None = None,
     charts: dict[str, str] | None = None,
     platforms: list[str] | None = None,
+    ref_services: dict[str, Any] | None = None,
 ) -> None:
     payload: dict[str, Any] = {"requires": ">=0"}
     if base_images:
@@ -114,8 +115,11 @@ def _write_repo(
             values = root / "stack" / "score" / "k8s" / "values" / f"{chart}.yaml"
             values.parent.mkdir(parents=True, exist_ok=True)
             values.write_text("chart: {}\n", encoding="utf-8")
+    if ref_services:
+        payload["project_name"] = "demo"
+        payload["services"] = ref_services
     (root / "boatyard.yml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-    if (base_images or charts) and not (root / LOCK_PATH).exists():
+    if (base_images or charts or ref_services) and not (root / LOCK_PATH).exists():
         (root / LOCK_PATH).write_text("", encoding="utf-8")
 
 
@@ -537,6 +541,136 @@ class TestChartRecording:
 
         assert result.exit_code == 0, result.output
         assert _read_lock(tmp_path) == {"charts": {"LOKI_CHART": f"{MIRROR_PREFIX}/{LOKI_UPSTREAM}:7.3.1@{DIGEST_A}"}}
+
+
+class TestBundleRecording:
+    TUNNEL_RATHOLE = "oci://ghcr.io/org/repo/tunnel-rathole:0.3.1"
+    RATHOLE_BASE = "ghcr.io/org/repo/tunnel-rathole:0.3.1"
+
+    def _invoke(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        arguments: list[str],
+        *,
+        committed: str = "",
+        ref_services: dict[str, Any] | None = None,
+    ) -> tuple[Any, DigestRecorder]:
+        recorder = DigestRecorder()
+        monkeypatch.setattr(lock_module, "resolve_bundle_digest", recorder.resolve)
+        monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
+        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.chdir(tmp_path)
+        _write_repo(
+            tmp_path,
+            ref_services=ref_services or {"tunnel": {"options": {"rathole": {"ref": self.TUNNEL_RATHOLE}}}},
+        )
+        if committed:
+            (tmp_path / LOCK_PATH).write_text(committed, encoding="utf-8")
+        return runner.invoke(app, ["lock", *arguments]), recorder
+
+    def test_an_option_ref_resolves_under_its_qualified_bundle_key(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        result, recorder = self._invoke(monkeypatch, tmp_path, [])
+
+        assert result.exit_code == 0, result.output
+        assert recorder.inspected == [self.RATHOLE_BASE]
+        assert _read_lock(tmp_path) == {"bundles": {"TUNNEL_RATHOLE_BUNDLE": f"{self.RATHOLE_BASE}@{DIGEST_A}"}}
+
+    def test_a_bare_entry_ref_resolves_under_its_own_key(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        result, _ = self._invoke(
+            monkeypatch,
+            tmp_path,
+            [],
+            ref_services={"livekit": {"ref": "oci://ghcr.io/org/repo/livekit:0.4.0-dev.3"}},
+        )
+
+        assert result.exit_code == 0, result.output
+        assert _read_lock(tmp_path) == {
+            "bundles": {"LIVEKIT_BUNDLE": "ghcr.io/org/repo/livekit:0.4.0-dev.3@" + DIGEST_A}
+        }
+
+    def test_bundle_entries_resolve_direct_never_mirror_prefixed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        result, _ = self._invoke(monkeypatch, tmp_path, [])
+
+        assert result.exit_code == 0, result.output
+        [entry] = _read_lock(tmp_path)["bundles"].values()
+        assert entry.startswith("ghcr.io/org/repo/")
+        assert not entry.startswith(MIRROR_PREFIX)
+
+    def test_an_unchanged_ref_copies_its_frozen_digest_forward(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        committed = yaml.safe_dump({"bundles": {"TUNNEL_RATHOLE_BUNDLE": f"{self.RATHOLE_BASE}@{DIGEST_B}"}})
+
+        result, recorder = self._invoke(monkeypatch, tmp_path, [], committed=committed)
+
+        assert result.exit_code == 0, result.output
+        assert recorder.inspected == []
+        assert _read_lock(tmp_path) == {"bundles": {"TUNNEL_RATHOLE_BUNDLE": f"{self.RATHOLE_BASE}@{DIGEST_B}"}}
+
+    def test_a_tag_bump_re_resolves(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        committed = yaml.safe_dump({"bundles": {"TUNNEL_RATHOLE_BUNDLE": f"{self.RATHOLE_BASE}@{DIGEST_B}"}})
+
+        result, recorder = self._invoke(
+            monkeypatch,
+            tmp_path,
+            [],
+            committed=committed,
+            ref_services={"tunnel": {"options": {"rathole": {"ref": "oci://ghcr.io/org/repo/tunnel-rathole:0.3.2"}}}},
+        )
+
+        assert result.exit_code == 0, result.output
+        assert recorder.inspected == ["ghcr.io/org/repo/tunnel-rathole:0.3.2"]
+        assert _read_lock(tmp_path)["bundles"]["TUNNEL_RATHOLE_BUNDLE"] == (
+            "ghcr.io/org/repo/tunnel-rathole:0.3.2@" + DIGEST_A
+        )
+
+    def test_upgrade_re_resolves_frozen_bundle_entries(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        committed = yaml.safe_dump({"bundles": {"TUNNEL_RATHOLE_BUNDLE": f"{self.RATHOLE_BASE}@{DIGEST_B}"}})
+
+        result, recorder = self._invoke(monkeypatch, tmp_path, ["--upgrade"], committed=committed)
+
+        assert result.exit_code == 0, result.output
+        assert recorder.inspected == [self.RATHOLE_BASE]
+        assert _read_lock(tmp_path)["bundles"]["TUNNEL_RATHOLE_BUNDLE"] == f"{self.RATHOLE_BASE}@{DIGEST_A}"
+
+    def test_entries_whose_declarations_died_prune_by_construction(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        committed = yaml.safe_dump({
+            "bundles": {
+                "GHOST_BUNDLE": f"ghcr.io/org/repo/ghost:0.1.0@{DIGEST_B}",
+                "TUNNEL_RATHOLE_BUNDLE": f"{self.RATHOLE_BASE}@{DIGEST_B}",
+            }
+        })
+
+        result, _ = self._invoke(monkeypatch, tmp_path, [], committed=committed)
+
+        assert result.exit_code == 0, result.output
+        assert _read_lock(tmp_path) == {"bundles": {"TUNNEL_RATHOLE_BUNDLE": f"{self.RATHOLE_BASE}@{DIGEST_B}"}}
+
+
+def _skip_crane_install() -> None:
+    return None
+
+
+class FixedBashOutput:
+    def __init__(self, output: str) -> None:
+        self.output = output
+
+    def __call__(self, command: str) -> str:
+        return self.output
+
+
+class TestResolveBundleDigest:
+    def test_returns_the_crane_digest(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(lock_module, "bash_output", FixedBashOutput(DIGEST_A + "\n"))
+        assert lock_module.resolve_bundle_digest("ghcr.io/org/repo/x:0.3.1") == DIGEST_A
+
+    def test_refuses_output_that_is_not_one_digest(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(lock_module, "bash_output", FixedBashOutput("Name: x\n"))
+        with pytest.raises(ValueError, match="must be one sha256 digest"):
+            lock_module.resolve_bundle_digest("ghcr.io/org/repo/x:0.3.1")
 
 
 class TestLockCheck:

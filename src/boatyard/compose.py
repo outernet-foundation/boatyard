@@ -20,18 +20,20 @@ from boatyard.config import (
     Config,
     DEV_TOGGLES_ANNOTATION,
     EDGE_SERVICE_NAME,
+    OCI_REFERENCE_PREFIX,
     PortDeclaration,
     RouteConfig,
     ServiceEntry,
     ServiceGroup,
     Yaml,
+    bundle_lock_key,
     compose_bundle_output_path,
     double_dollars,
     is_mapping,
     parse_dev_toggles,
     qualified_option_name,
 )
-from boatyard.config_lock import LOCK_PATH, parse_config_lock
+from boatyard.config_lock import LOCK_PATH, parse_config_lock, read_config_lock
 from boatyard.lock import compose_env_entries, render_env_entries
 
 ENV_FILE = Path(".env")
@@ -145,14 +147,17 @@ def select(config: Config, environment: Mapping[str, str]) -> Selection:
         else:
             entries.append((name, entry))
 
-    # Collect the include list in services declaration order.
+    # Collect the include list in services declaration order; a remote ref includes the
+    # lock's digest-pinned form, never the yaml tag directly.
+    lock = read_config_lock(root)
     includes: list[str] = []
     local_outputs: list[Path] = []
     for name, entry in entries:
         if isinstance(entry, ServiceGroup):
             continue
         if entry.ref is not None:
-            includes.append(entry.ref)
+            pinned = lock.require(bundle_lock_key(name), f"bundle {name!r}", hint="run boatyard lock")
+            includes.append(f"{OCI_REFERENCE_PREFIX}{pinned}")
             continue
         output = compose_bundle_output_path(root, name)
         if not output.is_file():
@@ -381,6 +386,9 @@ def write_lock_env_file(root: Path, config: Config, environment: Mapping[str, st
     if not lock_path.is_file():
         return None
     entries = compose_env_entries(parse_config_lock(lock_path), config, environment)
+    if not entries:
+        # A bundles-only lock carries nothing the compose environment consumes.
+        return None
     with NamedTemporaryFile("w", suffix=".env", prefix="devkit-lock-env-", delete=False, encoding="utf-8") as handle:
         handle.write(render_env_entries(entries))
         path = Path(handle.name)

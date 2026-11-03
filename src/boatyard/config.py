@@ -78,7 +78,10 @@ DECLARED_REFERENCE_PATTERN = re.compile(
 
 TEMPLATE_KEY_PATTERN = re.compile(r"\{([a-z][a-z0-9_]*)\}")
 
-CHART_REFERENCE_PREFIX = "oci://"
+# Match the range operators a ref tag must never carry; exact tags only.
+REF_TAG_OPERATOR_PATTERN = re.compile(r"[<>=!~^*]")
+
+OCI_REFERENCE_PREFIX = "oci://"
 
 # Match compose env holes: ${NAME}, ${NAME:?err}, ${NAME:-default}.
 ENV_HOLE_PATTERN = re.compile(r"^\$\{[A-Z][A-Z0-9_]*(?::[^{}]*)?\}$")
@@ -222,9 +225,10 @@ class Config(BaseModel):
 
         # Enforce the lock pairing laws.
         declared_charts = self.declared_charts
-        if (self.base_images or declared_charts) and not (root / LOCK_PATH).is_file():
+        if (self.base_images or declared_charts or self.remote_service_entries()) and not (root / LOCK_PATH).is_file():
             raise ValueError(
-                f"{LOCK_PATH.as_posix()}: base_images or k8s.charts are declared; the committed lock is required"
+                f"{LOCK_PATH.as_posix()}: base_images, k8s.charts, or service refs are declared; "
+                "the committed lock is required"
             )
         declares_routes = any(
             entry.routes
@@ -248,8 +252,8 @@ class Config(BaseModel):
     def declared_charts(self) -> dict[str, str]:
         return self.k8s.charts if self.k8s is not None else {}
 
-    def local_service_entries(self) -> list[tuple[str, ServiceEntry]]:
-        # Options ride under their qualified name; bare entries are their own root. Remote refs excluded.
+    def _flattened_service_entries(self) -> list[tuple[str, ServiceEntry]]:
+        # Options ride under their qualified name; bare entries are their own root.
         flattened = chain.from_iterable(
             (
                 ((qualified_option_name(name, option_name), option) for option_name, option in entry.options.items())
@@ -258,7 +262,13 @@ class Config(BaseModel):
             )
             for name, entry in self.services.items()
         )
-        return [(name, entry) for name, entry in flattened if not entry.remote]
+        return list(flattened)
+
+    def local_service_entries(self) -> list[tuple[str, ServiceEntry]]:
+        return [(name, entry) for name, entry in self._flattened_service_entries() if not entry.remote]
+
+    def remote_service_entries(self) -> list[tuple[str, str]]:
+        return [(name, entry.ref) for name, entry in self._flattened_service_entries() if entry.ref is not None]
 
     @field_validator("requires")
     @classmethod
@@ -418,8 +428,8 @@ class ServiceEntry(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> Self:
-        if self.ref is not None and re.fullmatch(rf"oci://\S+@{SHA256_DIGEST_REGEX}", self.ref) is None:
-            raise ValueError(f"ref {self.ref!r} must be a digest-pinned OCI include (oci://…@sha256:…)")
+        if self.ref is not None:
+            require_bundle_reference(self.ref)
         if self.ref is not None and self.workloads:
             raise ValueError("an entry declares ref: or workloads:, not both")
         if self.ref is None and not self.workloads:
@@ -486,12 +496,12 @@ class K8sConfig(BaseModel):
         for name, reference in self.charts.items():
             if not name:
                 raise ValueError("charts: names must be non-empty")
-            if not reference.startswith(CHART_REFERENCE_PREFIX):
+            if not reference.startswith(OCI_REFERENCE_PREFIX):
                 raise ValueError(
                     f"charts.{name}: {reference!r} must be an upstream-native OCI reference "
-                    f"({CHART_REFERENCE_PREFIX}host/path:tag or {CHART_REFERENCE_PREFIX}host/path@digest)"
+                    f"({OCI_REFERENCE_PREFIX}host/path:tag or {OCI_REFERENCE_PREFIX}host/path@digest)"
                 )
-            remainder = reference.removeprefix(CHART_REFERENCE_PREFIX)
+            remainder = reference.removeprefix(OCI_REFERENCE_PREFIX)
             match = DECLARED_REFERENCE_PATTERN.fullmatch(remainder)
             if match is None or not (match.group("tag") or match.group("digest")):
                 raise ValueError(f"charts.{name}: {reference!r} must carry a tag or a digest")
@@ -632,6 +642,21 @@ def require_workload_reference(name: str) -> None:
         raise ValueError(f"workload reference {name!r} must be a flat .yaml file name")
 
 
+def require_bundle_reference(value: str) -> None:
+    if not value.startswith(OCI_REFERENCE_PREFIX):
+        raise ValueError(f"ref {value!r} must be an OCI include ({OCI_REFERENCE_PREFIX}host/path:tag)")
+    remainder = value.removeprefix(OCI_REFERENCE_PREFIX)
+    if "@" in remainder:
+        raise ValueError(f"ref {value!r} pins a digest; a ref carries a published tag and the lock records the digest")
+    reference, separator, tag = remainder.rpartition(":")
+    if not separator or not reference or not tag or re.search(r"\s", remainder):
+        raise ValueError(f"ref {value!r} must carry a tag ({OCI_REFERENCE_PREFIX}host/path:tag)")
+    if tag == "latest":
+        raise ValueError(f"ref {value!r}: the tag 'latest' is mutable and never a pin; pin a stable, dev, or sha tag")
+    if REF_TAG_OPERATOR_PATTERN.search(tag) or any(part in ("x", "X") for part in tag.split(".")):
+        raise ValueError(f"ref {value!r}: the tag {tag!r} is a range; exact tags only")
+
+
 def compose_bundle_output_path(root: Path, name: str) -> Path:
     return root / COMPOSE_OUTPUT_DIR / f"compose.{name}.yaml"
 
@@ -655,6 +680,10 @@ def require_compose_stack(config: Config | None) -> Config:
 
 def chart_lock_key(name: str) -> str:
     return name.upper().replace("-", "_") + "_CHART"
+
+
+def bundle_lock_key(name: str) -> str:
+    return name.upper().replace("-", "_") + "_BUNDLE"
 
 
 def parse_dev_toggles(raw: str) -> dict[str, str]:

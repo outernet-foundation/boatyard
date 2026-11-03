@@ -13,9 +13,10 @@ from bashrun.bash import bash_output
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from boatyard.config import (
-    CHART_REFERENCE_PREFIX,
+    OCI_REFERENCE_PREFIX,
     Config,
     Yaml,
+    bundle_lock_key,
     chart_lock_key,
     is_list,
     is_mapping,
@@ -28,6 +29,7 @@ from boatyard.config_lock import (
     ConfigLock,
     ConfigLockEntry,
 )
+from boatyard.crane import install_crane
 
 DIGEST_TAIL_PATTERN = re.compile(rf"@{SHA256_DIGEST_REGEX}$")
 DIGEST_PATTERN = re.compile(r"^Digest:\s+(sha256:[a-f0-9]+)", re.MULTILINE)
@@ -76,8 +78,9 @@ def run_lock(*, upgrade: bool = False, check: bool = False) -> None:
         print("no boatyard.yml; no lock declarations to relock")
         return
     declared_charts = config.declared_charts
-    if not config.base_images and not declared_charts:
-        print("no lock declarations (neither base_images nor k8s.charts); nothing to relock")
+    remote_entries = config.remote_service_entries()
+    if not config.base_images and not declared_charts and not remote_entries:
+        print("no lock declarations (none of base_images, k8s.charts, service refs); nothing to relock")
         return
 
     if not check:
@@ -112,6 +115,11 @@ def relock(config: Config, *, upgrade: bool = False) -> ConfigLock:
 
     prefix = config.mirror_prefix
     committed = read_config_lock(config.root)
+    remote_entries = config.remote_service_entries()
+    if remote_entries:
+        # Bundle refs resolve direct via crane; the installer runs so the pin, not a preexisting
+        # binary, decides the version.
+        install_crane()
 
     images: dict[str, ConfigLockEntry] = {}
     for name, reference in config.base_images.items():
@@ -131,7 +139,7 @@ def relock(config: Config, *, upgrade: bool = False) -> ConfigLock:
     declared_charts = config.declared_charts
     for chart_name, chart_reference in declared_charts.items():
         key = chart_lock_key(chart_name)
-        reference = chart_reference.removeprefix(CHART_REFERENCE_PREFIX)
+        reference = chart_reference.removeprefix(OCI_REFERENCE_PREFIX)
         base = mirrored_ref(reference, prefix)
         if DIGEST_TAIL_PATTERN.search(reference):
             charts[key] = base
@@ -140,7 +148,17 @@ def relock(config: Config, *, upgrade: bool = False) -> ConfigLock:
         else:
             charts[key] = f"{base}@{resolve_remote_digest(reference)}"
 
-    return ConfigLock(images=images, charts=charts)
+    # First-party bundles resolve direct, never mirror-prefixed.
+    bundles: dict[str, str] = {}
+    for name, declared in remote_entries:
+        key = bundle_lock_key(name)
+        reference = declared.removeprefix(OCI_REFERENCE_PREFIX)
+        if not upgrade and key in committed.bundles and committed.bundles[key].startswith(reference + "@"):
+            bundles[key] = committed.bundles[key]
+        else:
+            bundles[key] = f"{reference}@{resolve_bundle_digest(reference)}"
+
+    return ConfigLock(images=images, charts=charts, bundles=bundles)
 
 
 def render_lock(lock: ConfigLock) -> str:
@@ -156,6 +174,8 @@ def render_lock(lock: ConfigLock) -> str:
         }
     if lock.charts:
         document["charts"] = dict(sorted(lock.charts.items()))
+    if lock.bundles:
+        document["bundles"] = dict(sorted(lock.bundles.items()))
     if not document:
         return "{}\n"
     return yaml.safe_dump(document, sort_keys=False, default_flow_style=False, width=10_000_000)
@@ -204,6 +224,15 @@ def resolve_remote_digest(reference: str) -> str:
     if match is None:
         raise ValueError(f"imagetools output for {reference} must carry a Digest line")
     return match.group(1)
+
+
+def resolve_bundle_digest(reference: str) -> str:
+    # Compose-bundle media types are not image indexes; imagetools may refuse them, crane does not.
+    print(f"Resolving digest for: {reference}")
+    output = bash_output(f"crane digest {shlex.quote(reference)}").strip()
+    if re.fullmatch(SHA256_DIGEST_REGEX, output) is None:
+        raise ValueError(f"crane digest output for {reference} must be one sha256 digest")
+    return output
 
 
 def _concrete_platform(child: OciDescriptor) -> tuple[str, str] | None:

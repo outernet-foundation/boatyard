@@ -12,8 +12,9 @@ from boatyard.verbs import up
 from boatyard.config_lock import LOCK_PATH
 
 FAKE_DIGEST = "sha256:" + "a" * 64
-LIVEKIT_REF = "oci://ghcr.io/org/livekit@" + FAKE_DIGEST
-KEYCLOAK_REF = "oci://ghcr.io/org/keycloak@" + FAKE_DIGEST
+LIVEKIT_SHA_TAG = "a" * 40
+LIVEKIT_REF = "oci://ghcr.io/org/livekit:" + LIVEKIT_SHA_TAG
+KEYCLOAK_REF = "oci://ghcr.io/org/keycloak:0.3.1"
 CADDY_LOCK_ENTRY = "ghcr.io/outernet-foundation/mirror/docker.io/library/caddy:2.8.4-alpine@" + FAKE_DIGEST
 
 ASSEMBLY_ARGUMENT_PATTERN = re.compile(r"-f (\S*devkit-assembly-\S+\.yaml)")
@@ -72,7 +73,11 @@ def _write_edge_tree(
                     "index": CADDY_LOCK_ENTRY,
                     "platforms": {"linux/amd64": CADDY_LOCK_ENTRY},
                 }
-            }
+            },
+            "bundles": {
+                "LIVEKIT_BUNDLE": f"ghcr.io/org/livekit:{LIVEKIT_SHA_TAG}@{FAKE_DIGEST}",
+                "AUTH_KEYCLOAK_BUNDLE": f"ghcr.io/org/keycloak:0.3.1@{FAKE_DIGEST}",
+            },
         }),
         encoding="utf-8",
     )
@@ -85,6 +90,7 @@ def _write_edge_tree(
     monkeypatch.delenv("PUBLIC_URL", raising=False)
     monkeypatch.delenv("GATEWAY_PORT", raising=False)
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(up, "install_crane", _skip_crane_install)
     monkeypatch.setattr(compose, "bash_output", _probe_present_and_services)
     monkeypatch.setattr(up, "bash_output", _probe_present_and_services)
 
@@ -109,8 +115,12 @@ def _assembly_document(
     return capture.document
 
 
+def _skip_crane_install() -> None:
+    return None
+
+
 def _probe_present_and_services(command: str) -> str:
-    if "imagetools inspect" in command:
+    if "imagetools inspect" in command or "crane digest" in command:
         return ""
     assert "config --services" in command
     return "livekit\nkeycloak\ngrafana\napi\nx\nedge\n"

@@ -12,10 +12,16 @@ from boatyard.config import (
     Config,
     ServiceEntry,
     ServiceGroup,
+    bundle_lock_key,
 )
 from boatyard.config_lock import LOCK_PATH, parse_config_lock
 
 DIGEST = "sha256:" + "a" * 64
+SHA_TAG = "a" * 40
+
+
+def bundle_entries(*qualified_names: str) -> dict[str, str]:
+    return {bundle_lock_key(name): f"ghcr.io/org/repo/{name}:1.0.0@" + DIGEST for name in qualified_names}
 
 
 def write_config(tmp_path: Path, payload: dict[str, object]) -> None:
@@ -24,18 +30,22 @@ def write_config(tmp_path: Path, payload: dict[str, object]) -> None:
     )
 
 
-def write_lock(tmp_path: Path, entries: dict[str, str] | None = None) -> None:
+def write_lock(tmp_path: Path, entries: dict[str, str] | None = None, bundles: dict[str, str] | None = None) -> None:
     (tmp_path / LOCK_PATH).parent.mkdir(parents=True, exist_ok=True)
-    images = entries or {"ALPINE_IMAGE": "ghcr.io/outernet-foundation/mirror/docker.io/library/alpine:3.21.0@" + DIGEST}
-    (tmp_path / LOCK_PATH).write_text(
-        yaml.safe_dump({"images": {name: {"index": reference} for name, reference in images.items()}}, sort_keys=False),
-        encoding="utf-8",
+    images = (
+        entries
+        if entries is not None
+        else {"ALPINE_IMAGE": "ghcr.io/outernet-foundation/mirror/docker.io/library/alpine:3.21.0@" + DIGEST}
     )
+    document: dict[str, object] = {"images": {name: {"index": reference} for name, reference in images.items()}}
+    if bundles is not None:
+        document["bundles"] = bundles
+    (tmp_path / LOCK_PATH).write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
 
 
-def write_edge_lock(tmp_path: Path) -> None:
+def write_edge_lock(tmp_path: Path, bundles: dict[str, str] | None = None) -> None:
     reference = "ghcr.io/outernet-foundation/mirror/docker.io/library/caddy:2.8.4-alpine@" + DIGEST
-    write_lock(tmp_path, {"CADDY_IMAGE": reference})
+    write_lock(tmp_path, {"CADDY_IMAGE": reference}, bundles=bundles)
 
 
 def write_dockerfile(tmp_path: Path, service: str, text: str, top: str = "workloads") -> None:
@@ -543,7 +553,7 @@ class TestK8sSection:
 
 class TestServices:
     def test_groups_options_and_bare_entries_load(self, tmp_path: Path) -> None:
-        write_edge_lock(tmp_path)
+        write_edge_lock(tmp_path, bundles=bundle_entries("auth-keycloak", "livekit"))
         write_config(
             tmp_path,
             {
@@ -555,7 +565,7 @@ class TestServices:
                     "auth": {
                         "options": {
                             "keycloak": {
-                                "ref": "oci://ghcr.io/org/repo/keycloak@" + DIGEST,
+                                "ref": "oci://ghcr.io/org/repo/keycloak:0.3.1",
                                 "routes": [{"path": "/auth/*", "upstream": "keycloak:8080", "strip_prefix": True}],
                             }
                         },
@@ -568,7 +578,7 @@ class TestServices:
                         "routes": [{"path": "/*", "upstream": "api:8000"}],
                     },
                     "livekit": {
-                        "ref": "oci://ghcr.io/org/repo/livekit@" + DIGEST,
+                        "ref": "oci://ghcr.io/org/repo/livekit:" + SHA_TAG,
                         "routes": [{"path": "/livekit-token/*", "upstream": "livekit-token:8000"}],
                         "ports": [
                             {
@@ -603,7 +613,7 @@ class TestServices:
                 "project_name": "example",
                 "services": {
                     "both": {
-                        "ref": "oci://ghcr.io/org/repo/x@" + DIGEST,
+                        "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
                         "workloads": ["api.yaml"],
                     }
                 },
@@ -637,7 +647,7 @@ class TestServices:
                 "services": {
                     "tunnel": {
                         "options": {"ngrok": {"workloads": ["tunnel-ngrok.yaml"]}},
-                        "ref": "oci://ghcr.io/org/repo/x@" + DIGEST,
+                        "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
                     }
                 },
             },
@@ -654,7 +664,7 @@ class TestServices:
                 "project_name": "example",
                 "services": {
                     "remote": {
-                        "ref": "oci://ghcr.io/org/repo/x@" + DIGEST,
+                        "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
                         "vars": {"GPU_VARIANT": "cuda"},
                     }
                 },
@@ -664,18 +674,87 @@ class TestServices:
         with pytest.raises(ValidationError, match="vars is not allowed with ref:"):
             Config.load(tmp_path)
 
-    def test_an_unpinned_ref_refuses(self, tmp_path: Path) -> None:
+    def test_a_digest_spelled_ref_refuses(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,
             {
                 "requires": ">=0.1",
                 "project_name": "example",
-                "services": {"remote": {"ref": "oci://ghcr.io/org/repo/x:main"}},
+                "services": {"remote": {"ref": "oci://ghcr.io/org/repo/x@" + DIGEST}},
             },
         )
 
-        with pytest.raises(ValidationError, match="digest-pinned OCI include"):
+        with pytest.raises(ValidationError, match=r"pins a digest.*the lock records the digest"):
             Config.load(tmp_path)
+
+    def test_a_latest_ref_refuses(self, tmp_path: Path) -> None:
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "project_name": "example",
+                "services": {"remote": {"ref": "oci://ghcr.io/org/repo/x:latest"}},
+            },
+        )
+
+        with pytest.raises(ValidationError, match="'latest' is mutable and never a pin"):
+            Config.load(tmp_path)
+
+    @pytest.mark.parametrize("tag", [">=0.3.1", "0.3.x", "0.3.X", "0.3.*", "~0.3", "^0.3"])
+    def test_a_range_spelled_ref_refuses(self, tag: str, tmp_path: Path) -> None:
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "project_name": "example",
+                "services": {"remote": {"ref": f"oci://ghcr.io/org/repo/x:{tag}"}},
+            },
+        )
+
+        with pytest.raises(ValidationError, match="is a range; exact tags only"):
+            Config.load(tmp_path)
+
+    def test_a_tagless_ref_refuses(self, tmp_path: Path) -> None:
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "project_name": "example",
+                "services": {"remote": {"ref": "oci://ghcr.io/org/repo/x"}},
+            },
+        )
+
+        with pytest.raises(ValidationError, match="must carry a tag"):
+            Config.load(tmp_path)
+
+    def test_a_non_oci_ref_refuses(self, tmp_path: Path) -> None:
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "project_name": "example",
+                "services": {"remote": {"ref": "ghcr.io/org/repo/x:0.3.1"}},
+            },
+        )
+
+        with pytest.raises(ValidationError, match="must be an OCI include"):
+            Config.load(tmp_path)
+
+    @pytest.mark.parametrize("tag", [SHA_TAG, "0.3.1", "0.3.1-dev.42", "main"])
+    def test_every_published_channel_spelling_loads(self, tag: str, tmp_path: Path) -> None:
+        write_lock(tmp_path, entries={}, bundles={"REMOTE_BUNDLE": f"ghcr.io/org/repo/x:{tag}@{DIGEST}"})
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "project_name": "example",
+                "services": {"remote": {"ref": f"oci://ghcr.io/org/repo/x:{tag}"}},
+            },
+        )
+
+        config = Config.load(tmp_path)
+
+        assert config is not None
 
     def test_an_empty_workloads_list_refuses(self) -> None:
         with pytest.raises(ValidationError, match="ref: or workloads: is required"):
@@ -692,7 +771,7 @@ class TestServices:
             {
                 "requires": ">=0.1",
                 "gateway": "8080",
-                "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x@" + DIGEST}},
+                "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG}},
             },
         )
 
@@ -714,7 +793,7 @@ class TestServices:
             Config.load(tmp_path)
 
     def test_remote_only_services_need_no_repository(self, tmp_path: Path) -> None:
-        write_edge_lock(tmp_path)
+        write_edge_lock(tmp_path, bundles=bundle_entries("livekit"))
         write_config(
             tmp_path,
             {
@@ -723,7 +802,7 @@ class TestServices:
                 "gateway": "8080",
                 "services": {
                     "livekit": {
-                        "ref": "oci://ghcr.io/org/repo/livekit@" + DIGEST,
+                        "ref": "oci://ghcr.io/org/repo/livekit:" + SHA_TAG,
                         "routes": [{"path": "/*", "upstream": "livekit:8000"}],
                     }
                 },
@@ -758,11 +837,12 @@ class TestQualifiedVocabulary:
         assert [name for name, _entry in config.local_service_entries()] == ["one-cuda", "two-cuda"]
 
     def test_an_option_and_a_bare_entry_sharing_a_name_load(self, tmp_path: Path) -> None:
+        write_lock(tmp_path, bundles=bundle_entries("livekit", "tunnel-livekit"))
         write_config(
             tmp_path,
             self._config({
-                "livekit": {"ref": "oci://ghcr.io/org/repo/x@" + DIGEST},
-                "tunnel": {"options": {"livekit": {"ref": "oci://ghcr.io/org/repo/y@" + DIGEST}}},
+                "livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG},
+                "tunnel": {"options": {"livekit": {"ref": "oci://ghcr.io/org/repo/y:" + SHA_TAG}}},
             }),
         )
 
@@ -784,7 +864,7 @@ class TestQualifiedVocabulary:
         write_config(
             tmp_path,
             self._config({
-                "tunnel-ngrok": {"ref": "oci://ghcr.io/org/repo/x@" + DIGEST},
+                "tunnel-ngrok": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG},
                 "tunnel": {"options": {"ngrok": {"workloads": ["api.yaml"]}}},
             }),
         )
@@ -803,12 +883,12 @@ class TestAuthGroup:
         }
 
     def test_an_auth_option_with_exactly_one_route_loads(self, tmp_path: Path) -> None:
-        write_edge_lock(tmp_path)
+        write_edge_lock(tmp_path, bundles=bundle_entries("auth-keycloak"))
         write_config(
             tmp_path,
             self._auth_config({
                 "keycloak": {
-                    "ref": "oci://ghcr.io/org/repo/keycloak@" + DIGEST,
+                    "ref": "oci://ghcr.io/org/repo/keycloak:0.3.1",
                     "routes": [{"path": "/auth/*", "upstream": "keycloak:8080", "strip_prefix": True}],
                 }
             }),
@@ -819,7 +899,7 @@ class TestAuthGroup:
     def test_an_auth_option_without_a_route_refuses(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,
-            self._auth_config({"keycloak": {"ref": "oci://ghcr.io/org/repo/keycloak@" + DIGEST}}),
+            self._auth_config({"keycloak": {"ref": "oci://ghcr.io/org/repo/keycloak:0.3.1"}}),
         )
 
         with pytest.raises(ValidationError, match="auth option declares exactly one route"):
@@ -830,7 +910,7 @@ class TestAuthGroup:
             tmp_path,
             self._auth_config({
                 "keycloak": {
-                    "ref": "oci://ghcr.io/org/repo/keycloak@" + DIGEST,
+                    "ref": "oci://ghcr.io/org/repo/keycloak:0.3.1",
                     "routes": [
                         {"path": "/auth/*", "upstream": "keycloak:8080"},
                         {"path": "/auth2/*", "upstream": "keycloak:8080"},
@@ -848,7 +928,7 @@ class TestAuthGroup:
             {
                 "requires": ">=0.1",
                 "project_name": "example",
-                "services": {"auth": {"ref": "oci://ghcr.io/org/repo/keycloak@" + DIGEST}},
+                "services": {"auth": {"ref": "oci://ghcr.io/org/repo/keycloak:0.3.1"}},
             },
         )
 
@@ -862,7 +942,7 @@ class TestRoutes:
             "requires": ">=0.1",
             "project_name": "example",
             "gateway": "8080",
-            "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x@" + DIGEST, "routes": routes}},
+            "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG, "routes": routes}},
         }
 
     def test_edge_wide_path_uniqueness_refuses_duplicates(self, tmp_path: Path) -> None:
@@ -876,7 +956,7 @@ class TestRoutes:
                     "one": {
                         "options": {
                             "a": {
-                                "ref": "oci://ghcr.io/org/repo/x@" + DIGEST,
+                                "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
                                 "routes": [{"path": "/x/*", "upstream": "x:1"}],
                             }
                         },
@@ -884,7 +964,7 @@ class TestRoutes:
                     "two": {
                         "options": {
                             "b": {
-                                "ref": "oci://ghcr.io/org/repo/y@" + DIGEST,
+                                "ref": "oci://ghcr.io/org/repo/y:" + SHA_TAG,
                                 "routes": [{"path": "/x/*", "upstream": "y:1"}],
                             }
                         },
@@ -907,7 +987,7 @@ class TestRoutes:
             Config.load(tmp_path)
 
     def test_plain_and_wildcard_paths_load(self, tmp_path: Path) -> None:
-        write_edge_lock(tmp_path)
+        write_edge_lock(tmp_path, bundles=bundle_entries("livekit"))
         write_config(
             tmp_path,
             self._routed([
@@ -936,7 +1016,7 @@ class TestRoutes:
             Config.load(tmp_path)
 
     def test_a_raw_route_loads(self, tmp_path: Path) -> None:
-        write_edge_lock(tmp_path)
+        write_edge_lock(tmp_path, bundles=bundle_entries("livekit"))
         write_config(
             tmp_path,
             self._routed([{"path": "/x/*", "upstream": "x:1", "raw": 'respond "hi" 200'}]),
@@ -949,6 +1029,7 @@ class TestRoutes:
 
 class TestGatewayKey:
     def test_a_gateway_without_the_caddy_lock_entry_refuses(self, tmp_path: Path) -> None:
+        write_lock(tmp_path, entries={}, bundles=bundle_entries("livekit"))
         write_config(
             tmp_path,
             {
@@ -957,7 +1038,7 @@ class TestGatewayKey:
                 "gateway": "8443",
                 "services": {
                     "livekit": {
-                        "ref": "oci://ghcr.io/org/repo/x@" + DIGEST,
+                        "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
                         "routes": [{"path": "/*", "upstream": "livekit:8000"}],
                     }
                 },
@@ -968,13 +1049,14 @@ class TestGatewayKey:
             Config.load(tmp_path)
 
     def test_a_routeless_stack_carries_an_inert_gateway(self, tmp_path: Path) -> None:
+        write_lock(tmp_path, bundles=bundle_entries("livekit"))
         write_config(
             tmp_path,
             {
                 "requires": ">=0.1",
                 "project_name": "example",
                 "gateway": "8080",
-                "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x@" + DIGEST}},
+                "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG}},
             },
         )
 
@@ -983,7 +1065,7 @@ class TestGatewayKey:
         assert config is not None
 
     def test_a_literal_port_loads(self, tmp_path: Path) -> None:
-        write_edge_lock(tmp_path)
+        write_edge_lock(tmp_path, bundles=bundle_entries("livekit"))
         write_config(
             tmp_path,
             {
@@ -992,7 +1074,7 @@ class TestGatewayKey:
                 "gateway": "8443",
                 "services": {
                     "livekit": {
-                        "ref": "oci://ghcr.io/org/repo/x@" + DIGEST,
+                        "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
                         "routes": [{"path": "/*", "upstream": "livekit:8000"}],
                     }
                 },
@@ -1010,7 +1092,7 @@ class TestGatewayKey:
                 "gateway": "${gateway port}",
                 "services": {
                     "livekit": {
-                        "ref": "oci://ghcr.io/org/repo/x@" + DIGEST,
+                        "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
                         "routes": [{"path": "/*", "upstream": "livekit:8000"}],
                     }
                 },
@@ -1032,12 +1114,12 @@ class TestPorts:
         }
 
     def test_the_mapping_form_defaults_protocol_to_tcp(self, tmp_path: Path) -> None:
-        write_edge_lock(tmp_path)
+        write_edge_lock(tmp_path, bundles=bundle_entries("livekit"))
         write_config(
             tmp_path,
             self._ports_config({
                 "livekit": {
-                    "ref": "oci://ghcr.io/org/repo/x@" + DIGEST,
+                    "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
                     "routes": [{"path": "/*", "upstream": "livekit:8000"}],
                     "ports": [
                         {"service": "livekit", "published": "${PORT:?err}", "target": "6178"},
@@ -1062,7 +1144,7 @@ class TestPorts:
             tmp_path,
             self._ports_config({
                 "livekit": {
-                    "ref": "oci://ghcr.io/org/repo/x@" + DIGEST,
+                    "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
                     "routes": [{"path": "/*", "upstream": "livekit:8000"}],
                     "ports": ["6179/6179/udp"],
                 }
@@ -1079,7 +1161,7 @@ class TestPorts:
             self._ports_config({
                 "tunnel": {"options": None, "ports": [{"service": "ngrok", "published": "4040", "target": "4040"}]},
                 "livekit": {
-                    "ref": "oci://ghcr.io/org/repo/x@" + DIGEST,
+                    "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
                     "routes": [{"path": "/*", "upstream": "livekit:8000"}],
                 },
             }),
@@ -1090,7 +1172,7 @@ class TestPorts:
             Config.load(tmp_path)
 
     def test_the_mapping_form_spells_the_owning_service_and_host_ip(self, tmp_path: Path) -> None:
-        write_edge_lock(tmp_path)
+        write_edge_lock(tmp_path, bundles=bundle_entries("livekit"))
         write_config(
             tmp_path,
             self._ports_config({
@@ -1106,7 +1188,7 @@ class TestPorts:
                     ],
                 },
                 "livekit": {
-                    "ref": "oci://ghcr.io/org/repo/x@" + DIGEST,
+                    "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
                     "routes": [{"path": "/*", "upstream": "livekit:8000"}],
                 },
             }),
@@ -1121,7 +1203,7 @@ class TestPorts:
             tmp_path,
             self._ports_config({
                 "livekit": {
-                    "ref": "oci://ghcr.io/org/repo/x@" + DIGEST,
+                    "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
                     "routes": [{"path": "/*", "upstream": "livekit:8000"}],
                     "ports": [{"service": "livekit", "published": "eight", "target": "5678"}],
                 }
@@ -1236,13 +1318,28 @@ class TestLockPairing:
 
         assert Config.load(tmp_path) is not None
 
-    def test_no_declarations_need_no_lock(self, tmp_path: Path) -> None:
+    def test_refs_without_lock_refuse(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,
             {
                 "requires": ">=0.1",
                 "gateway": "8080",
-                "services": {"livekit": {"ref": "oci://ghcr.io/x/y@" + DIGEST}},
+                "services": {"livekit": {"ref": "oci://ghcr.io/x/y:" + SHA_TAG}},
+                "project_name": "example",
+            },
+        )
+
+        with pytest.raises(ValueError, match="service refs are declared; the committed lock is required"):
+            Config.load(tmp_path)
+
+    def test_no_declarations_need_no_lock(self, tmp_path: Path) -> None:
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "repository": "ghcr.io/org/repo",
+                "gateway": "8080",
+                "services": {"core": {"workloads": ["api.yaml"]}},
                 "project_name": "example",
             },
         )
@@ -1285,6 +1382,7 @@ def test_direct_model_construction_is_valid_for_tests(tmp_path: Path) -> None:
 
 
 def test_local_service_entries_flatten_in_declaration_order_skipping_refs(tmp_path: Path) -> None:
+    write_lock(tmp_path, bundles=bundle_entries("identity-keycloak", "livekit"))
     write_config(
         tmp_path,
         {
@@ -1292,14 +1390,14 @@ def test_local_service_entries_flatten_in_declaration_order_skipping_refs(tmp_pa
             "repository": "ghcr.io/org/repo",
             "project_name": "example",
             "services": {
-                "identity": {"options": {"keycloak": {"ref": "oci://ghcr.io/org/repo/keycloak@" + DIGEST}}},
+                "identity": {"options": {"keycloak": {"ref": "oci://ghcr.io/org/repo/keycloak:0.3.1"}}},
                 "placeframe": {
                     "options": {
                         "cuda": {"workloads": ["api.yaml"]},
                         "rocm": {"workloads": ["api.yaml"]},
                     },
                 },
-                "livekit": {"ref": "oci://ghcr.io/org/repo/livekit@" + DIGEST},
+                "livekit": {"ref": "oci://ghcr.io/org/repo/livekit:" + SHA_TAG},
                 "solo": {"workloads": ["solo.yaml"]},
             },
         },
@@ -1369,6 +1467,12 @@ class TestConfigLockParse:
         with pytest.raises(ValueError, match="chart LOKI_CHART is not digest-pinned"):
             parse_config_lock(lock)
 
+    def test_a_non_digest_pinned_bundle_refuses(self, tmp_path: Path) -> None:
+        lock = _write_raw_lock(tmp_path, "bundles:\n  LIVEKIT_BUNDLE: ghcr.io/x/livekit:0.3.1\n")
+
+        with pytest.raises(ValueError, match="bundle LIVEKIT_BUNDLE is not digest-pinned"):
+            parse_config_lock(lock)
+
     def test_a_malformed_platform_key_refuses(self, tmp_path: Path) -> None:
         lock = _write_raw_lock(
             tmp_path,
@@ -1379,13 +1483,23 @@ class TestConfigLockParse:
         with pytest.raises(ValueError, match="os/arch pair"):
             parse_config_lock(lock)
 
-    def test_a_name_in_both_sections_refuses(self, tmp_path: Path) -> None:
+    def test_a_name_in_two_sections_refuses(self, tmp_path: Path) -> None:
         lock = _write_raw_lock(
             tmp_path,
             f"images:\n  A_IMAGE:\n    index: ghcr.io/x/a:1@{DIGEST}\ncharts:\n  A_IMAGE: ghcr.io/x/a:1@{DIGEST}\n",
         )
 
-        with pytest.raises(ValueError, match=r"images or charts, not both"):
+        with pytest.raises(ValueError, match=r"at most one of images, charts, bundles"):
+            parse_config_lock(lock)
+
+    def test_a_bundle_name_colliding_with_base_images_keys_refuses(self, tmp_path: Path) -> None:
+        lock = _write_raw_lock(
+            tmp_path,
+            f"images:\n  LIVEKIT_BUNDLE:\n    index: ghcr.io/x/a:1@{DIGEST}\n"
+            f"bundles:\n  LIVEKIT_BUNDLE: ghcr.io/x/livekit:0.3.1@{DIGEST}\n",
+        )
+
+        with pytest.raises(ValueError, match=r"at most one of images, charts, bundles"):
             parse_config_lock(lock)
 
     def test_require_answers_the_index_for_images_and_the_flat_entry_for_charts(self, tmp_path: Path) -> None:
@@ -1393,12 +1507,14 @@ class TestConfigLockParse:
             _write_raw_lock(
                 tmp_path,
                 f"images:\n  A_IMAGE:\n    index: ghcr.io/x/a:1@{DIGEST}\n"
-                f"charts:\n  LOKI_CHART: ghcr.io/x/loki:7.3.0@{DIGEST}\n",
+                f"charts:\n  LOKI_CHART: ghcr.io/x/loki:7.3.0@{DIGEST}\n"
+                f"bundles:\n  LIVEKIT_BUNDLE: ghcr.io/x/livekit:0.3.1@{DIGEST}\n",
             )
         )
 
         assert lock.require("A_IMAGE", "subject") == f"ghcr.io/x/a:1@{DIGEST}"
         assert lock.require("LOKI_CHART", "subject") == f"ghcr.io/x/loki:7.3.0@{DIGEST}"
+        assert lock.require("LIVEKIT_BUNDLE", "subject") == f"ghcr.io/x/livekit:0.3.1@{DIGEST}"
 
     def test_require_refuses_naming_the_lock_verb(self, tmp_path: Path) -> None:
         lock = parse_config_lock(_write_raw_lock(tmp_path, "{}\n"))

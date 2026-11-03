@@ -21,6 +21,7 @@ from boatyard.compose import (
 )
 from boatyard.config import Config, require_compose_stack
 from boatyard.config_lock import read_config_lock
+from boatyard.crane import install_crane
 
 app = typer.Typer()
 
@@ -106,3 +107,18 @@ def _probe_lock_entries(config: Config) -> None:
             raise ValueError(
                 f"Image {reference or value} (digest {digest or 'unknown'}): the mirror probe failed: {stderr}"
             )
+
+    if not lock.bundles:
+        return
+    # Compose-bundle media types are not image indexes; imagetools may refuse them, so bundle
+    # entries probe via crane under the same stderr-classification law.
+    install_crane()
+    for value in sorted(set(lock.bundles.values())):
+        reference, _, digest = value.rpartition("@")
+        try:
+            bash_output(f"crane digest {shlex.quote(value)}")
+        except CalledProcessError as error:
+            stderr = (error.stderr or str(error)).strip()
+            if re.search(r"\b404\b|not found|manifest unknown", stderr, re.IGNORECASE):
+                raise ValueError(f"Bundle {reference} (digest {digest}) is not published; run boatyard lock")
+            raise ValueError(f"Bundle {reference} (digest {digest}): the bundle probe failed: {stderr}")
