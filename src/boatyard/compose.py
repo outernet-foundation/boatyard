@@ -75,13 +75,8 @@ def select(config: Config, environment: Mapping[str, str]) -> Selection:
     names = split_names(environment.get(BUNDLES_VARIABLE, ""))
     root = config.root
 
-    options = {
-        qualified_option_name(name, option_name): (name, option_name)
-        for name, entry in config.services.items()
-        if isinstance(entry, ServiceGroup)
-        for option_name in entry.options
-    }
-    bare_entries = [name for name, entry in config.services.items() if not isinstance(entry, ServiceGroup)]
+    options = config.selectable_options
+    bare_entries = config.bare_entries
     if not names and not bare_entries and options:
         raise ValueError(
             f"{BUNDLES_VARIABLE}= selects nothing and no bare entry exists; the options are {sorted(options)}"

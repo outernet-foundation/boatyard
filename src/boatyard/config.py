@@ -252,6 +252,19 @@ class Config(BaseModel):
     def declared_charts(self) -> dict[str, str]:
         return self.k8s.charts if self.k8s is not None else {}
 
+    @property
+    def selectable_options(self) -> dict[str, tuple[str, str]]:
+        return {
+            qualified_option_name(name, option_name): (name, option_name)
+            for name, entry in self.services.items()
+            if isinstance(entry, ServiceGroup)
+            for option_name in entry.options
+        }
+
+    @property
+    def bare_entries(self) -> list[str]:
+        return [name for name, entry in self.services.items() if not isinstance(entry, ServiceGroup)]
+
     def _flattened_service_entries(self) -> list[tuple[str, ServiceEntry]]:
         # Options ride under their qualified name; bare entries are their own root.
         flattened = chain.from_iterable(
