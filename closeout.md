@@ -180,8 +180,12 @@ Per-repo:
   (`INITIALIZE_S3_IMAGE`) becomes a plain YAML platform selection
   (`images.INITIALIZE_S3_IMAGE.platforms[linux/amd64]`); the two score test
   modules rewrite to assert against committed artifacts (freshness is already
-  gated by `boatyard generate-score --check` in CI); the stale
-  `compute_service_shas` comments in `workloads/{reconstructor,localizer}`
+  gated by `boatyard generate-score --check` in CI); the `image: {lock: NAME}`
+  markers in the workload files `keycloak.yaml` and `ngrok.yaml` flip to
+  `image: ${NAME}` holes — the workload lens refuses the marker spelling, and
+  generation resolves the hole from the lock, so digests still land inline in
+  both renderings (provisioner and chart-values markers are unchanged); the
+  stale `compute_service_shas` comments in `workloads/{reconstructor,localizer}`
   Dockerfiles and the `stack/AGENTS.md` "devkit's built-in gate-pin template"
   line (the gate pin moved into `generate_compose`) go in the docs pass. After
   the relock: one deliberate `stack/generated/**` regeneration cycle — the
