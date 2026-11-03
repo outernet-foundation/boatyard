@@ -19,7 +19,7 @@ from boatyard.compose import (
     select,
     split_names,
 )
-from boatyard.config import Config, require_compose_stack
+from boatyard.config import Config, bundle_lock_key, require_compose_stack
 from boatyard.config_lock import read_config_lock
 from boatyard.crane import install_crane
 
@@ -61,8 +61,9 @@ def up(
         selection = select(config, environment)
         invocation = render(root, config, environment, selection, stack, dev=dev)
 
-        # Probe every lock entry before bring-up.
-        _probe_lock_entries(config)
+        # Probe every lock entry before bring-up; an overridden bundle skips its probe —
+        # testing a bundle not published at any digest yet is the override's point.
+        _probe_lock_entries(config, {override.name for override in selection.overrides})
 
         # Build local images; --dev builds both shapes.
         if build:
@@ -77,6 +78,7 @@ def up(
             *(argument for profile in invocation.profiles for argument in ("--profile", profile)),
             "up",
             lock_env_file=invocation.lock_env_file,
+            extra_env_files=invocation.extra_env_files,
         )
         if not build:
             up_command += " --pull missing"
@@ -88,7 +90,7 @@ def up(
         bash_handoff(up_command)
 
 
-def _probe_lock_entries(config: Config) -> None:
+def _probe_lock_entries(config: Config, overridden: set[str]) -> None:
     lock = read_config_lock(config.root)
     references = sorted(
         set(
@@ -108,12 +110,14 @@ def _probe_lock_entries(config: Config) -> None:
                 f"Image {reference or value} (digest {digest or 'unknown'}): the mirror probe failed: {stderr}"
             )
 
-    if not lock.bundles:
+    skip = {bundle_lock_key(name) for name in overridden}
+    bundle_references = sorted({value for key, value in lock.bundles.items() if key not in skip})
+    if not bundle_references:
         return
     # Compose-bundle media types are not image indexes; imagetools may refuse them, so bundle
     # entries probe via crane under the same stderr-classification law.
     install_crane()
-    for value in sorted(set(lock.bundles.values())):
+    for value in bundle_references:
         reference, _, digest = value.rpartition("@")
         try:
             bash_output(f"crane digest {shlex.quote(value)}")

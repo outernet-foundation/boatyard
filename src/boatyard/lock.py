@@ -253,7 +253,9 @@ def _child_digest(child: OciDescriptor, subject: str) -> str:
 def compose_env_entries(lock: ConfigLock, config: Config, environment: Mapping[str, str]) -> dict[str, str]:
     selected = environment.get(PLATFORM_VARIABLE, "").strip()
     if selected:
-        if selected not in config.platforms:
+        # A platforms-less repo has nothing of its own to validate PLATFORM= against; the
+        # producer lock's recorded platforms police it instead.
+        if config.platforms and selected not in config.platforms:
             raise ValueError(
                 f"{PLATFORM_VARIABLE}={selected!r} must be one of the declared platforms {config.platforms}"
             )
@@ -266,6 +268,21 @@ def compose_env_entries(lock: ConfigLock, config: Config, environment: Mapping[s
         raise ValueError(f"platforms {config.platforms} are declared; {PLATFORM_VARIABLE}= must be named in .env")
     if platform is None and lock.images:
         raise ValueError(f"{LOCK_PATH.as_posix()}: records image entries but boatyard.yml declares no platforms")
+    return env_entries(lock, platform)
+
+
+def producer_env_entries(lock: ConfigLock, environment: Mapping[str, str]) -> dict[str, str]:
+    # A foreign lock has no consumer-side config; its own recorded platforms are the declaration.
+    selected = environment.get(PLATFORM_VARIABLE, "").strip()
+    recorded = {platform for entry in lock.images.values() for platform in entry.platforms}
+    if selected:
+        platform: str | None = selected
+    elif len(recorded) == 1:
+        platform = next(iter(recorded))
+    elif not recorded:
+        platform = None
+    else:
+        raise ValueError(f"the producer lock records platforms {sorted(recorded)}; {PLATFORM_VARIABLE}= must name one")
     return env_entries(lock, platform)
 
 

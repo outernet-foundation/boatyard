@@ -3,7 +3,7 @@ from __future__ import annotations
 import shlex
 from collections.abc import Mapping
 from contextlib import ExitStack
-from itertools import combinations, groupby
+from itertools import combinations, groupby, starmap
 from os import environ
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -30,22 +30,33 @@ from boatyard.config import (
     compose_bundle_output_path,
     double_dollars,
     is_mapping,
+    load_yaml_file,
     parse_dev_toggles,
     qualified_option_name,
+    require_bundle_reference,
 )
 from boatyard.config_lock import LOCK_PATH, parse_config_lock, read_config_lock
-from boatyard.lock import compose_env_entries, render_env_entries
+from boatyard.lock import compose_env_entries, producer_env_entries, render_env_entries
 
 ENV_FILE = Path(".env")
 BUNDLES_VARIABLE = "BUNDLES"
+BUNDLE_OVERRIDE_PREFIX = "BUNDLE_OVERRIDE_"
 
 EDGE_LISTEN_PORT = 8443
 EDGE_CONFIG_NAME = "devkit-edge-caddyfile"
+
+OVERRIDE_LAYOUT = ("stack", "generated", "compose")
 
 
 class DevFacts(NamedTuple):
     services: list[str]
     toggles: dict[str, dict[str, str]]
+
+
+class BundleOverride(NamedTuple):
+    name: str
+    reference: str | None
+    path: Path | None
 
 
 class Selection(NamedTuple):
@@ -57,11 +68,13 @@ class Selection(NamedTuple):
     profiles: list[str]
     output_services: set[str]
     dev_facts: DevFacts
+    overrides: list[BundleOverride]
 
 
 class Invocation(NamedTuple):
     compose_files: list[Path]
     lock_env_file: Path | None
+    extra_env_files: list[Path]
     profiles: list[str]
 
 
@@ -118,6 +131,20 @@ def select(config: Config, environment: Mapping[str, str]) -> Selection:
             )
         choices[group] = option_name
 
+    # Local bundle overrides ride .env per machine: BUNDLE_OVERRIDE_<QUALIFIED_NAME> = a path
+    # into the fixed stack/generated/compose/ layout or an oci:// tag of any channel.
+    raw_overrides = {
+        key.removeprefix(BUNDLE_OVERRIDE_PREFIX).lower().replace("_", "-"): value
+        for key, value in environment.items()
+        if key.startswith(BUNDLE_OVERRIDE_PREFIX)
+    }
+    vocabulary = sorted(options.keys() | set(riding))
+    unknown = sorted(name for name in raw_overrides if name not in options and name not in riding)
+    if unknown:
+        raise ValueError(f"{BUNDLE_OVERRIDE_PREFIX}* names {unknown}; the bundle vocabulary is {vocabulary}")
+    selected_names = set(starmap(qualified_option_name, choices.items())) | set(riding)
+    selected_overrides = {name: value for name, value in raw_overrides.items() if name in selected_names}
+
     auth_option = choices.get(AUTH_GROUP_NAME)
 
     profiles = split_names(environment.get("COMPOSE_PROFILES", ""))
@@ -152,8 +179,31 @@ def select(config: Config, environment: Mapping[str, str]) -> Selection:
     lock = read_config_lock(root)
     includes: list[str] = []
     local_outputs: list[Path] = []
+    overrides: list[BundleOverride] = []
     for name, entry in entries:
         if isinstance(entry, ServiceGroup):
+            continue
+        if name in selected_overrides:
+            variable = BUNDLE_OVERRIDE_PREFIX + name.upper().replace("-", "_")
+            value = selected_overrides[name].strip()
+            if not value:
+                raise ValueError(f"{variable}: empty; a value is a filesystem path or an oci:// reference")
+            if value.startswith(OCI_REFERENCE_PREFIX):
+                require_bundle_reference(value)
+                overrides.append(BundleOverride(name=name, reference=value, path=None))
+                includes.append(value)
+                continue
+            candidate = Path(value)
+            path = (candidate if candidate.is_absolute() else root / candidate).resolve()
+            if path.parts[-4:-1] != OVERRIDE_LAYOUT:
+                raise ValueError(
+                    f"{variable}: {value!r} must point into a stack/generated/compose/ bundle output layout"
+                )
+            if not path.is_file():
+                raise ValueError(f"{variable}: {path.as_posix()} does not exist")
+            overrides.append(BundleOverride(name=name, reference=None, path=path))
+            includes.append(path.as_posix())
+            local_outputs.append(path)
             continue
         if entry.ref is not None:
             pinned = lock.require(bundle_lock_key(name), f"bundle {name!r}", hint="run boatyard lock")
@@ -171,7 +221,7 @@ def select(config: Config, environment: Mapping[str, str]) -> Selection:
     file_services: list[tuple[Path, set[str]]] = []
     for path in local_outputs:
         # Extract the service names only.
-        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        loaded = load_yaml_file(path)
         document_services = loaded.get("services") if is_mapping(loaded) else None
         file_services.append((path, set(document_services) if is_mapping(document_services) else set()))
     for (path, service_names), (other_path, other_service_names) in combinations(file_services, 2):
@@ -179,6 +229,12 @@ def select(config: Config, environment: Mapping[str, str]) -> Selection:
         if shared:
             raise ValueError(f"{path.as_posix()} and {other_path.as_posix()} both define service(s) {shared}")
     output_services = {name for _path, names in file_services for name in names}
+    override_paths = {override.path for override in overrides if override.path is not None}
+    for path, service_names in file_services:
+        if path in override_paths and EDGE_SERVICE_NAME in service_names:
+            raise ValueError(
+                f"{path.as_posix()}: the bundle override defines the reserved service {EDGE_SERVICE_NAME!r}"
+            )
 
     # Gather the routes, ports, and the selected auth route.
     routes = [route for _, entry in entries for route in entry.routes]
@@ -214,6 +270,7 @@ def select(config: Config, environment: Mapping[str, str]) -> Selection:
         profiles=profiles,
         output_services=output_services,
         dev_facts=DevFacts(services=dev_services, toggles=dev_toggles),
+        overrides=overrides,
     )
 
 
@@ -227,6 +284,7 @@ def render(
 ) -> Invocation:
     # Materialize the per-run files.
     lock_env_file = write_lock_env_file(root, config, environment, stack)
+    producer_env_files = write_producer_env_files(selection.overrides, environment, stack)
     compose_files: list[Path] = []
 
     # Render the per-run root compose file.
@@ -317,7 +375,11 @@ def render(
 
     if selection.routes or selection.ports:
         # Validate every route upstream and port owner against compose's own resolution.
-        resolved = set(_compose_config(root, compose_files, "--services", lock_env_file=lock_env_file))
+        resolved = set(
+            _compose_config(
+                root, compose_files, "--services", lock_env_file=lock_env_file, extra_env_files=producer_env_files
+            )
+        )
         for route in selection.routes:
             upstream = route.upstream.partition(":")[0]
             if upstream not in resolved:
@@ -329,7 +391,9 @@ def render(
                 raise ValueError(f"ports for service {port.service!r} resolve to no service in the selected assembly")
     if selection.profiles:
         # Refuse profile names the compose files do not define.
-        defined = _compose_config(root, compose_files, "--profiles", lock_env_file=lock_env_file)
+        defined = _compose_config(
+            root, compose_files, "--profiles", lock_env_file=lock_env_file, extra_env_files=producer_env_files
+        )
         unknown = [profile for profile in selection.profiles if profile not in defined]
         if unknown:
             raise ValueError(
@@ -337,7 +401,12 @@ def render(
                 f"profiles defined by the compose files: {defined}"
             )
 
-    return Invocation(compose_files=compose_files, lock_env_file=lock_env_file, profiles=selection.profiles)
+    return Invocation(
+        compose_files=compose_files,
+        lock_env_file=lock_env_file,
+        extra_env_files=producer_env_files,
+        profiles=selection.profiles,
+    )
 
 
 def require_env_file(root: Path) -> None:
@@ -360,23 +429,39 @@ def merged_environment(root: Path) -> dict[str, str]:
 
 
 def _compose_config(
-    root: Path, compose_files: list[Path], *arguments: str, lock_env_file: Path | None = None
+    root: Path,
+    compose_files: list[Path],
+    *arguments: str,
+    lock_env_file: Path | None = None,
+    extra_env_files: list[Path] | None = None,
 ) -> list[str]:
     return [
         line.strip()
         for line in bash_output(
-            compose_command(root, compose_files, "config", *arguments, lock_env_file=lock_env_file)
+            compose_command(
+                root, compose_files, "config", *arguments, lock_env_file=lock_env_file, extra_env_files=extra_env_files
+            )
         ).splitlines()
         if line.strip()
     ]
 
 
-def compose_command(root: Path, compose_files: list[Path], *arguments: str, lock_env_file: Path | None = None) -> str:
+def compose_command(
+    root: Path,
+    compose_files: list[Path],
+    *arguments: str,
+    lock_env_file: Path | None = None,
+    extra_env_files: list[Path] | None = None,
+) -> str:
     quoted_arguments = [shlex.quote(argument) for argument in arguments]
     files_arguments = " ".join(f"-f {shlex.quote(str(compose_file))}" for compose_file in compose_files)
+    # Later --env-file entries win shared keys (pinned against the compose binary in tests), so
+    # producer lock env files attach before the consumer's own lock env file.
+    extra_arguments = "".join(f" --env-file {shlex.quote(str(extra))}" for extra in extra_env_files or [])
     lock_argument = f" --env-file {shlex.quote(str(lock_env_file))}" if lock_env_file is not None else ""
     prefix = (
-        f"docker compose {files_arguments} --project-directory {shlex.quote(str(root))} --env-file .env{lock_argument}"
+        f"docker compose {files_arguments} --project-directory {shlex.quote(str(root))} "
+        f"--env-file .env{extra_arguments}{lock_argument}"
     )
     return " ".join([prefix, *quoted_arguments])
 
@@ -394,6 +479,31 @@ def write_lock_env_file(root: Path, config: Config, environment: Mapping[str, st
         path = Path(handle.name)
     stack.enter_context(LockEnvUnwind(path))
     return path
+
+
+def write_producer_env_files(
+    overrides: list[BundleOverride], environment: Mapping[str, str], stack: ExitStack
+) -> list[Path]:
+    # A path-form override's bundle output interpolates its producer's third-party holes; the
+    # producer's committed lock fills them, derived from the fixed output layout three parents up.
+    files: list[Path] = []
+    for override in overrides:
+        if override.path is None:
+            continue
+        producer_lock = override.path.parents[3] / LOCK_PATH
+        if not producer_lock.is_file():
+            continue
+        entries = producer_env_entries(parse_config_lock(producer_lock), environment)
+        if not entries:
+            continue
+        with NamedTemporaryFile(
+            "w", suffix=".env", prefix="devkit-producer-env-", delete=False, encoding="utf-8"
+        ) as handle:
+            handle.write(render_env_entries(entries))
+            path = Path(handle.name)
+        stack.enter_context(LockEnvUnwind(path))
+        files.append(path)
+    return files
 
 
 def keep_lock_env_file(path: Path | None) -> None:

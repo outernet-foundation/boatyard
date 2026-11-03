@@ -16,6 +16,11 @@ from boatyard.config_lock import LOCK_PATH
 MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
 FAKE_DIGEST = "sha256:" + "a" * 64
 PLATFORM_DIGEST = "sha256:" + "b" * 64
+LOKI_AMD64_DIGEST = "sha256:" + "c" * 64
+LOKI_ARM64_DIGEST = "sha256:" + "d" * 64
+CONSUMER_ALPINE_DIGEST = "sha256:" + "e" * 64
+PRODUCER_ALPINE_DIGEST = "sha256:" + "f" * 64
+OTHER_SHA_TAG = "b" * 40
 LIVEKIT_SHA_TAG = "a" * 40
 LIVEKIT_REF = "oci://ghcr.io/org/livekit:" + LIVEKIT_SHA_TAG
 LIVEKIT_PINNED = f"ghcr.io/org/livekit:{LIVEKIT_SHA_TAG}@{FAKE_DIGEST}"
@@ -30,6 +35,7 @@ DEV_TOGGLES = "outernet.internal/dev-toggles"
 OVERLAY_ARGUMENT_PATTERN = re.compile(r"-f (\S*devkit-dev-overlay-\S+\.yaml)")
 ASSEMBLY_ARGUMENT_PATTERN = re.compile(r"-f (\S*devkit-assembly-\S+\.yaml)")
 LOCK_ENV_ARGUMENT_PATTERN = re.compile(r"(\S*devkit-lock-env-\S+\.env)")
+PRODUCER_ENV_ARGUMENT_PATTERN = re.compile(r"(\S*devkit-producer-env-\S+\.env)")
 
 runner = CliRunner()
 
@@ -84,6 +90,7 @@ def _write_ref_tree(root: Path) -> None:
 def _normalize(command: str, root: Path) -> str:
     command = re.sub(r"\S*devkit-assembly-\S+\.yaml", "ASSEMBLY", command)
     command = re.sub(r"\S*devkit-lock-env-\S+\.env", "LOCKENV", command)
+    command = re.sub(r"\S*devkit-producer-env-\S+\.env", "PRODUCERENV", command)
     return command.replace(str(root), "ROOT")
 
 
@@ -127,6 +134,78 @@ def _write_bundle_output(root: Path, name: str, services: list[str]) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+def _write_producer(root: Path, services: list[str], lock: dict[str, object] | None = None) -> Path:
+    # A sibling producer checkout carrying the fixed stack/generated/compose/ output layout.
+    output = root / "producer" / "stack" / "generated" / "compose" / "compose.placeframe-cuda.yaml"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        yaml.safe_dump({"services": {service: {"image": f"demo/{service}:1"} for service in services}}),
+        encoding="utf-8",
+    )
+    if lock is not None:
+        (root / "producer").joinpath(*LOCK_PATH.parts).write_text(yaml.safe_dump(lock), encoding="utf-8")
+    return output
+
+
+def _producer_lock(platforms: list[str]) -> dict[str, object]:
+    loki_manifests = {
+        platform: f"{MIRROR_PREFIX}/docker.io/library/loki:3.0@{digest}"
+        for platform, digest in (("linux/amd64", LOKI_AMD64_DIGEST), ("linux/arm64", LOKI_ARM64_DIGEST))
+        if platform in platforms
+    }
+    alpine_manifests = dict.fromkeys(
+        platforms, f"{MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}"
+    )
+    return {
+        "images": {
+            "LOKI_IMAGE": {
+                "index": f"{MIRROR_PREFIX}/docker.io/library/loki:3.0@{FAKE_DIGEST}",
+                "platforms": loki_manifests,
+            },
+            "ALPINE_IMAGE": {
+                "index": f"{MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}",
+                "platforms": alpine_manifests,
+            },
+        }
+    }
+
+
+def _write_override_consumer(
+    root: Path,
+    environment_lines: list[str],
+    *,
+    platforms: list[str] | None = None,
+    lock_images: dict[str, str] | None = None,
+    services_extra: dict[str, object] | None = None,
+) -> None:
+    # The consumer's own placeframe-cuda output is deliberately never written; the override
+    # replaces its source.
+    services: dict[str, object] = {
+        "placeframe": {
+            "options": {
+                "cuda": {"workloads": ["api.yaml"]},
+                "rocm": {"workloads": ["api.yaml"]},
+            }
+        },
+    }
+    if services_extra is not None:
+        services.update(services_extra)
+    payload: dict[str, object] = {
+        "project_name": "demo",
+        "repository": "ghcr.io/org/demo",
+        "services": services,
+    }
+    if platforms is not None:
+        payload["platforms"] = platforms
+    _write_config(root, payload)
+    _write_lock(root, entries=dict(lock_images) if lock_images is not None else {})
+    _write_workload(root, "api.yaml", "api")
+    (root / ".env").write_text(
+        "BUNDLES=placeframe-cuda\n" + "".join(f"{line}\n" for line in environment_lines),
+        encoding="utf-8",
+    )
 
 
 def _write_workload(root: Path, name: str, service_name: str, annotations: dict[str, str] | None = None) -> None:
@@ -222,6 +301,21 @@ class LockEnvRecorder(HandoffRecorder):
         match = LOCK_ENV_ARGUMENT_PATTERN.search(command)
         if match is not None:
             self.env_contents.append(Path(match.group(1)).read_text(encoding="utf-8"))
+
+
+class ProducerEnvRecorder(AssemblyRecorder):
+    def __init__(self) -> None:
+        super().__init__()
+        self.env_contents: list[str] = []
+        self.lock_env_contents: list[str] = []
+
+    def run(self, command: str) -> None:
+        super().run(command)
+        for match in PRODUCER_ENV_ARGUMENT_PATTERN.finditer(command):
+            self.env_contents.append(Path(match.group(1)).read_text(encoding="utf-8"))
+        lock_match = LOCK_ENV_ARGUMENT_PATTERN.search(command)
+        if lock_match is not None:
+            self.lock_env_contents.append(Path(lock_match.group(1)).read_text(encoding="utf-8"))
 
 
 class ServicesOutput:
@@ -1473,6 +1567,300 @@ class TestBundleLockEnforcement:
         assert "not published" not in message
         assert "the bundle probe failed" in message
         assert "authentication required" in message
+
+
+OVERRIDE_PATH = "../producer/stack/generated/compose/compose.placeframe-cuda.yaml"
+
+
+class TestBundleOverrides:
+    def _invoke_up(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        root: Path,
+        services: str = "api grafana",
+        handler: object | None = None,
+    ) -> ProducerEnvRecorder:
+        recorder = ProducerEnvRecorder()
+        resolved = handler if handler is not None else PresentProbeAndServices(*services.split()).run
+        monkeypatch.setattr(compose, "bash_output", resolved)
+        _patch_up_probes(monkeypatch, resolved)
+        monkeypatch.setattr(up, "bash_handoff", recorder.run)
+        monkeypatch.chdir(root)
+        monkeypatch.delenv("BUNDLES", raising=False)
+        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
+        monkeypatch.delenv("PLATFORM", raising=False)
+        return recorder
+
+    def test_the_path_form_replaces_the_include_and_attaches_the_producer_lock_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        consumer = tmp_path / "consumer"
+        consumer.mkdir()
+        output = _write_producer(tmp_path, ["api", "grafana"], _producer_lock(["linux/amd64"]))
+        _write_override_consumer(
+            consumer,
+            [f"BUNDLE_OVERRIDE_PLACEFRAME_CUDA={OVERRIDE_PATH}"],
+            platforms=["linux/amd64"],
+            lock_images={"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + CONSUMER_ALPINE_DIGEST},
+        )
+        recorder = self._invoke_up(monkeypatch, consumer)
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code == 0, result.output
+        [document] = recorder.documents
+        assert document["include"] == [output.resolve().as_posix()]
+        assert [_normalize(command, consumer) for command in recorder.commands] == [
+            (
+                "docker compose -f ASSEMBLY --project-directory ROOT --env-file .env "
+                "--env-file PRODUCERENV --env-file LOCKENV up --pull missing -d"
+            )
+        ]
+        assert recorder.env_contents == [
+            (
+                f"ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
+                f"LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
+            )
+        ]
+        assert recorder.lock_env_contents == [
+            f"ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{CONSUMER_ALPINE_DIGEST}\n"
+        ]
+
+    def test_the_producer_lock_selects_the_named_platform(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        consumer = tmp_path / "consumer"
+        consumer.mkdir()
+        _write_producer(tmp_path, ["api", "grafana"], _producer_lock(["linux/amd64", "linux/arm64"]))
+        _write_override_consumer(
+            consumer,
+            [f"BUNDLE_OVERRIDE_PLACEFRAME_CUDA={OVERRIDE_PATH}", "PLATFORM=linux/arm64"],
+        )
+        recorder = self._invoke_up(monkeypatch, consumer)
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code == 0, result.output
+        assert recorder.env_contents == [
+            (
+                f"ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
+                f"LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_ARM64_DIGEST}\n"
+            )
+        ]
+
+    def test_a_multi_platform_producer_lock_without_a_selection_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        consumer = tmp_path / "consumer"
+        consumer.mkdir()
+        _write_producer(tmp_path, ["api", "grafana"], _producer_lock(["linux/amd64", "linux/arm64"]))
+        _write_override_consumer(consumer, [f"BUNDLE_OVERRIDE_PLACEFRAME_CUDA={OVERRIDE_PATH}"])
+        self._invoke_up(monkeypatch, consumer)
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, ValueError)
+        message = str(result.exception)
+        assert "the producer lock records platforms" in message
+        assert "linux/amd64" in message and "linux/arm64" in message
+
+    def test_the_ref_form_skips_the_lock_entry_requirement(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        _write_ref_tree(tmp_path)
+        _write_lock(tmp_path, entries={}, bundles={})
+        (tmp_path / ".env").write_text(
+            f"BUNDLE_OVERRIDE_TUNNEL=oci://ghcr.io/org/livekit:{OTHER_SHA_TAG}\n", encoding="utf-8"
+        )
+        recorder = self._invoke_up(monkeypatch, tmp_path, services="tunnel")
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code == 0, result.output
+        [document] = recorder.documents
+        assert document["include"] == [f"oci://ghcr.io/org/livekit:{OTHER_SHA_TAG}"]
+
+    def test_the_ref_form_skips_the_bundle_probe(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        _write_ref_tree(tmp_path)
+        (tmp_path / ".env").write_text(
+            f"BUNDLE_OVERRIDE_TUNNEL=oci://ghcr.io/org/livekit:{OTHER_SHA_TAG}\n", encoding="utf-8"
+        )
+        self._invoke_up(monkeypatch, tmp_path, services="tunnel", handler=_probe_absent)
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code == 0, result.output
+
+    def test_the_ref_form_attaches_no_producer_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        _write_ref_tree(tmp_path)
+        (tmp_path / ".env").write_text(
+            f"BUNDLE_OVERRIDE_TUNNEL=oci://ghcr.io/org/livekit:{OTHER_SHA_TAG}\n", encoding="utf-8"
+        )
+        recorder = self._invoke_up(monkeypatch, tmp_path, services="tunnel")
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code == 0, result.output
+        assert [_normalize(command, tmp_path) for command in recorder.commands] == [
+            "docker compose -f ASSEMBLY --project-directory ROOT --env-file .env up --pull missing -d"
+        ]
+
+    @pytest.mark.parametrize(
+        ("value", "fragment"),
+        [
+            ("oci://ghcr.io/org/livekit@" + FAKE_DIGEST, "pins a digest"),
+            ("oci://ghcr.io/org/livekit:latest", "the tag 'latest'"),
+            ("oci://ghcr.io/org/livekit:0.3.x", "is a range"),
+        ],
+    )
+    def test_the_ref_form_carries_the_tag_grammar_teeth(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str, fragment: str
+    ):
+        _write_ref_tree(tmp_path)
+        (tmp_path / ".env").write_text(f"BUNDLE_OVERRIDE_TUNNEL={value}\n", encoding="utf-8")
+        self._invoke_up(monkeypatch, tmp_path, services="tunnel")
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, ValueError)
+        assert fragment in str(result.exception)
+
+    def test_an_empty_override_value_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        _write_ref_tree(tmp_path)
+        (tmp_path / ".env").write_text("BUNDLE_OVERRIDE_TUNNEL=\n", encoding="utf-8")
+        self._invoke_up(monkeypatch, tmp_path, services="tunnel")
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, ValueError)
+        assert "empty" in str(result.exception)
+
+    def test_an_unknown_override_name_refuses_listing_the_vocabulary(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        consumer = tmp_path / "consumer"
+        consumer.mkdir()
+        _write_override_consumer(consumer, ["BUNDLE_OVERRIDE_GHOST=oci://ghcr.io/org/ghost:1.0.0"])
+        self._invoke_up(monkeypatch, consumer)
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, ValueError)
+        message = str(result.exception)
+        assert "BUNDLE_OVERRIDE_* names ['ghost']" in message
+        assert "placeframe-cuda" in message
+
+    def test_an_unselected_override_is_inert(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        consumer = tmp_path / "consumer"
+        consumer.mkdir()
+        _write_producer(tmp_path, ["grafana"])
+        cuda = _write_bundle_output(consumer, "placeframe-cuda", ["api"])
+        _write_override_consumer(
+            consumer,
+            ["BUNDLE_OVERRIDE_PLACEFRAME_ROCM=../producer/stack/generated/compose/compose.placeframe-rocm.yaml"],
+        )
+        recorder = self._invoke_up(monkeypatch, consumer, services="api")
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code == 0, result.output
+        [document] = recorder.documents
+        assert document["include"] == [cuda.resolve().as_posix()]
+        assert recorder.env_contents == []
+
+    def test_a_missing_override_path_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        consumer = tmp_path / "consumer"
+        consumer.mkdir()
+        _write_override_consumer(consumer, [f"BUNDLE_OVERRIDE_PLACEFRAME_CUDA={OVERRIDE_PATH}"])
+        self._invoke_up(monkeypatch, consumer)
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, ValueError)
+        assert "does not exist" in str(result.exception)
+
+    def test_an_override_outside_the_compose_output_layout_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        consumer = tmp_path / "consumer"
+        consumer.mkdir()
+        _write_producer(tmp_path, ["api"])
+        stray = tmp_path / "producer" / "compose.placeframe-cuda.yaml"
+        stray.write_text(yaml.safe_dump({"services": {"api": {"image": "demo/api:1"}}}), encoding="utf-8")
+        _write_override_consumer(consumer, ["BUNDLE_OVERRIDE_PLACEFRAME_CUDA=../producer/compose.placeframe-cuda.yaml"])
+        self._invoke_up(monkeypatch, consumer)
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, ValueError)
+        assert "stack/generated/compose/" in str(result.exception)
+
+    def test_an_override_defining_the_edge_service_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        consumer = tmp_path / "consumer"
+        consumer.mkdir()
+        _write_producer(tmp_path, ["api", "edge"], _producer_lock(["linux/amd64"]))
+        _write_override_consumer(consumer, [f"BUNDLE_OVERRIDE_PLACEFRAME_CUDA={OVERRIDE_PATH}"])
+        self._invoke_up(monkeypatch, consumer)
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, ValueError)
+        assert "reserved service 'edge'" in str(result.exception)
+
+    def test_an_override_colliding_with_another_selected_output_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        consumer = tmp_path / "consumer"
+        consumer.mkdir()
+        _write_producer(tmp_path, ["api", "grafana"], _producer_lock(["linux/amd64"]))
+        _write_override_consumer(
+            consumer,
+            [f"BUNDLE_OVERRIDE_PLACEFRAME_CUDA={OVERRIDE_PATH}"],
+            services_extra={"extra": {"workloads": ["grafana.yaml"]}},
+        )
+        _write_workload(consumer, "grafana.yaml", "grafana")
+        _write_bundle_output(consumer, "extra", ["api"])
+        self._invoke_up(monkeypatch, consumer)
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, ValueError)
+        message = str(result.exception)
+        assert "compose.placeframe-cuda.yaml" in message and "compose.extra.yaml" in message
+        assert "api" in message
+
+
+class TestEnvFilePrecedence:
+    def test_later_env_files_win_shared_keys(self, tmp_path: Path, pinned_compose: str) -> None:
+        # Pin the ordering law the producer attachment rides: compose resolves shared keys
+        # from the last --env-file, so the consumer's own lock env file attaches last.
+        first = tmp_path / "first.env"
+        first.write_text("SHARED=first\nONLY_FIRST=1\n", encoding="utf-8")
+        second = tmp_path / "second.env"
+        second.write_text("SHARED=second\n", encoding="utf-8")
+        compose_file = tmp_path / "compose.yaml"
+        compose_file.write_text(
+            "services:\n"
+            "  svc:\n"
+            "    image: docker.io/library/alpine:3.20\n"
+            "    environment:\n"
+            "      - SHARED=${SHARED}\n"
+            "      - ONLY_FIRST=${ONLY_FIRST:-unset}\n",
+            encoding="utf-8",
+        )
+
+        rendered = bash_output(
+            f"{pinned_compose} -f {compose_file} --project-directory {tmp_path} "
+            f"--env-file {first} --env-file {second} config --format json"
+        )
+        document = yaml.safe_load(rendered)
+        environment = document["services"]["svc"]["environment"]
+        assert environment["SHARED"] == "second"
+        assert environment["ONLY_FIRST"] == "1"
 
 
 class TestComposePortMergeOverIncludes:
