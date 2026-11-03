@@ -188,24 +188,13 @@ def compute_service_shas(repo_root: Path, service_builds: dict[str, ServiceBuild
             path = f"{prefix}{name}"
             if any(path == include or path.startswith(include + "/") for include in includes):
                 allowed.append(path)
-    allowed.sort()
 
-    shared_paths: list[str] = []
-    per_service: dict[str, list[str]] = {directory: [] for directory in service_dirs}
-
-    # Sort entries into shared and per-service paths, dropping workload-root files owned by no service.
-    for path in allowed:
-        if path.startswith(workload_prefix):
-            for service_dir in service_dirs:
-                if path.startswith(service_dir + "/"):
-                    per_service[service_dir].append(path)
-                    break
-        else:
-            shared_paths.append(path)
+    # Partition into shared and per-service paths, dropping workload-root files owned by no service.
+    shared_paths = [path for path in allowed if not path.startswith(workload_prefix)]
+    per_service = {d: [p for p in allowed if p.startswith(d + "/")] for d in service_dirs}
 
     result: dict[str, str] = {}
     for service_dir in sorted(service_dirs):
-        entries_for_service = sorted(shared_paths + per_service[service_dir])
         with TemporaryDirectory() as tmpdir:
             index_env = {"GIT_INDEX_FILE": str(Path(tmpdir) / "index")}
             # Conversion pinned off so blobs hash the raw disk bytes the build compiles.
@@ -213,7 +202,7 @@ def compute_service_shas(repo_root: Path, service_builds: dict[str, ServiceBuild
                 "git -c core.autocrlf=false update-index --add --stdin",
                 cwd=repo_root,
                 env=index_env,
-                stdin_text="".join(f"{path}\n" for path in entries_for_service),
+                stdin_text="".join(f"{path}\n" for path in shared_paths + per_service[service_dir]),
             )
             tree_hash = bash_output("git write-tree", cwd=repo_root, env=index_env).strip()
 
