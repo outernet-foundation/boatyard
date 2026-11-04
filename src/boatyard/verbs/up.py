@@ -186,6 +186,18 @@ def up(
     filled = {variable for variable, value in {**os.environ, **environment.variables, **entries}.items() if value}
     _refuse_unfilled_requirements(requirements, filled)
 
+    # Require PUBLIC_URL and derive the forwarded environment under the auth option.
+    auth_service = next((service for service in services if service.auth), None)
+    forwarded = None
+    if auth_service is not None:
+        if environment.public_url is None:
+            raise ValueError("an auth option is selected; PUBLIC_URL is required")
+        forwarded = environment.public_url.forwarded
+
+    # Probe every lock entry before any per-run file materializes; an overridden bundle skips
+    # its probe — testing a bundle not published at any digest yet is the override's point.
+    _probe_lock_entries(lock, overridden)
+
     # Namespace the routes and ports under their declaring entries.
     routes = [
         route.model_copy(update={"upstream": f"{service.name}-{route.upstream}"})
@@ -202,14 +214,6 @@ def up(
     document_services: dict[str, Yaml] = {}
     caddyfile: str | None = None
     if routes:
-        # Require PUBLIC_URL and derive the forwarded environment under the auth option.
-        auth_service = next((service for service in services if service.auth), None)
-        forwarded = None
-        if auth_service is not None:
-            if environment.public_url is None:
-                raise ValueError("an auth option is selected; PUBLIC_URL is required")
-            forwarded = environment.public_url.forwarded
-
         edge: dict[str, Yaml] = {
             "image": f"${{{CADDY_IMAGE}:?err}}",
             "configs": [{"source": EDGE_CONFIG_NAME, "target": "/etc/caddy/Caddyfile"}],
@@ -256,10 +260,6 @@ def up(
         document["services"] = document_services
     if caddyfile is not None:
         document["configs"] = {EDGE_CONFIG_NAME: {"content": caddyfile}}
-
-    # Probe every lock entry before any per-run file materializes; an overridden bundle skips
-    # its probe — testing a bundle not published at any digest yet is the override's point.
-    _probe_lock_entries(lock, overridden)
 
     # Materialize the per-run files and hand off; the handoff execs, so a successful run never unwinds.
     with ExitStack() as stack:
