@@ -20,6 +20,7 @@ from boatyard.config import (
     Config,
     EDGE_SERVICE_NAME,
     OCI_REFERENCE_PREFIX,
+    ResolvedService,
     Yaml,
     bundle_lock_key,
     compose_bundle_output_path,
@@ -122,7 +123,7 @@ def up(
     for service in services:
         name = service.name
 
-        # Refuse a missing override path or one that defines the reserved edge service.
+        # Refuse a missing override path; the scan teeth cover names, requirements, and the edge service.
         if name in environment.path_overrides:
             candidate = environment.path_overrides[name]
             path = (candidate if candidate.is_absolute() else config.root / candidate).resolve()
@@ -130,20 +131,7 @@ def up(
                 raise ValueError(
                     f"{BUNDLE_OVERRIDE_PREFIX + name.upper().replace('-', '_')}: {path.as_posix()} does not exist"
                 )
-            loaded = load_yaml_file(path)
-            loaded_services = loaded.get("services") if is_mapping(loaded) else None
-            if is_mapping(loaded_services) and EDGE_SERVICE_NAME in loaded_services:
-                raise ValueError(
-                    f"{path.as_posix()}: the bundle override defines the reserved service {EDGE_SERVICE_NAME!r}"
-                )
-            refuse_unresolved_references(
-                name,
-                service.routes,
-                service.ports,
-                set(loaded_services) if is_mapping(loaded_services) else set(),
-                prefix=f"{name}-",
-            )
-            requirements[name] = sorted(required_compose_holes(path.read_text(encoding="utf-8")))
+            requirements[name] = _scan_local_bundle(name, service, path, refuse_edge=True)
             includes.append(path.as_posix())
             overridden.add(name)
             # Fill the override's namespaced holes from its producer's lock, three parents up
@@ -167,17 +155,7 @@ def up(
             raise ValueError(
                 f"selected entry {name!r} has no bundle output {output.as_posix()}; generate-score writes it"
             )
-        output_text = output.read_text(encoding="utf-8")
-        loaded_output = yaml.safe_load(output_text)
-        output_services = loaded_output.get("services") if is_mapping(loaded_output) else None
-        refuse_unresolved_references(
-            name,
-            service.routes,
-            service.ports,
-            set(output_services) if is_mapping(output_services) else set(),
-            prefix=f"{name}-",
-        )
-        requirements[name] = sorted(required_compose_holes(output_text))
+        requirements[name] = _scan_local_bundle(name, service, output, refuse_edge=False)
         includes.append(output.resolve().as_posix())
         entries.update({lock_key_prefix(name) + key: value for key, value in consumer_entries.items()})
 
@@ -300,6 +278,21 @@ def up(
             up_command += " -d"
 
         bash_handoff(up_command)
+
+
+def _scan_local_bundle(name: str, service: ResolvedService, path: Path, *, refuse_edge: bool) -> list[str]:
+    loaded = load_yaml_file(path)
+    loaded_services = loaded.get("services") if is_mapping(loaded) else None
+    if refuse_edge and is_mapping(loaded_services) and EDGE_SERVICE_NAME in loaded_services:
+        raise ValueError(f"{path.as_posix()}: the bundle override defines the reserved service {EDGE_SERVICE_NAME!r}")
+    refuse_unresolved_references(
+        name,
+        service.routes,
+        service.ports,
+        set(loaded_services) if is_mapping(loaded_services) else set(),
+        prefix=f"{name}-",
+    )
+    return sorted(required_compose_holes(path.read_text(encoding="utf-8")))
 
 
 def _refuse_unfilled_requirements(requirements: dict[str, list[str]], filled: set[str]) -> None:
