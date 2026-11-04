@@ -42,9 +42,8 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
 - Load refusals (`Config.resolve`): Dockerfile services or local entries without `repository`; `base_images`/`k8s.charts`/service `ref:`s without the committed lock; a declared chart without `stack/score/k8s/values/{chart}.yaml`; routes without `CADDY_IMAGE` in the lock.
 - `mirrored_ref(reference, prefix)` = the only prefix join — injects the prefix, rejects an already-prefixed reference.
 - Derivation shape law: `Config` carries authored data and validation; a member may hold real derivation logic (`local_service_entries`, `declared_charts`, `resolve_services`), but a member that only delegates to another module's function is a
-  pass-through — call the function at the consumer, `compute_service_shas` module-qualified (test seam); `root` defaults to the working directory, `resolve` injects the load root, excluded, never-authored;
-  `parse_dev_toggles` = the one dev-toggles parser (ALL_CAPS, non-empty defaults, no duplicates).
-- `.env` carries `BUNDLES=`, `BUNDLE_OVERRIDE_*`, `COMPOSE_PROFILES`, `PLATFORM=`, `PUBLIC_URL`, dev-toggle overrides, the consumer's interpolation variables; `Environment.load` (`environment.py`) carves the five consumed spellings into
+  pass-through — call the function at the consumer, `compute_service_shas` module-qualified (test seam); `root` defaults to the working directory, `resolve` injects the load root, excluded, never-authored.
+- `.env` carries `BUNDLES=`, `BUNDLE_OVERRIDE_*`, `COMPOSE_PROFILES`, `PLATFORM=`, `PUBLIC_URL`, the consumer's interpolation variables; `Environment.load` (`environment.py`) carves the five consumed spellings into
   typed fields (`bundles`, `oci_overrides`/`path_overrides` with dash-normalized names — the oci/path spelling split, ref grammar, and `stack/generated/compose/` layout refuse at load, paths stay unresolved, resolution
   is `select()`'s against the repo root; `profiles`, `public_url`, `platform`) plus the `variables` pass-through — consumed spellings never ride `variables`; syntactic refusals (scheme-less `PUBLIC_URL`,
   empty override values, override grammar and layout) are pydantic `ValidationError`s at load, selection law stays `ValueError` in `select()`.
@@ -53,7 +52,7 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
 
 - The Dockerfile-derived build set computes in `dockerfiles.py`'s `derive_services`, never authored: Dockerfile dirs one level below a top-level dir = services (spanning several top-level dirs refuses); context edges from bare-identifier `FROM`s naming a
   sibling (stage names skipped); a literal `FROM` or slash-bearing `COPY --from=` refuses (base images ride as build args); `ARG <axis>` fans over the axis's declared values, dependents inherit the base's cells exactly (independent axes
-  over fanned bases, disagreeing parents, cycles refuse); `ARG {SERVICE}_SHA` declares the stamp receiver; a genuine dev stage = an `AS dev` among several stages — single-stage `AS dev` names the published image.
+  over fanned bases, disagreeing parents, cycles refuse); `ARG {SERVICE}_SHA` declares the stamp receiver.
 - `.dockerignore` = the allowlist the sha machinery hashes over a disk walk, staged per service into a temp git index (`git -c core.autocrlf=false update-index --add --stdin`, `git write-tree` minting the `tree-` OID); an empty service set returns `{}` without walking.
 
 ## Lock
@@ -97,7 +96,7 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
   merges parent ports into included services and honors `!reset` — the merge needs compose ≥ 2.40.
 - Namespacing law: score renders every bundle resource under `{entry}-` (services, configs keys) on a per-bundle network carrying the bare name as a service alias — include collisions are structurally impossible,
   rendered hostnames still resolve, and accidental cross-bundle DNS fails instead of silently resolving: a bundle references only its own services; cross-bundle coupling rides the consumer's declared surface
-  (env holes, route upstreams). `select()` composes `{entry}-` onto authored route upstreams, port owners, and dev keys; `boatyard.yml` stays bare.
+  (env holes, route upstreams). `select()` composes `{entry}-` onto authored route upstreams and port owners; `boatyard.yml` stays bare.
 - Validation teeth, in `render()`: with routes or ports, `docker compose config --services` must list every route upstream + every port's owning service; selected profiles must appear in `config --profiles`; a selected
   bundle output that does not exist refuses naming generate-score.
 - Edge stanza: `image: ${CADDY_IMAGE:?err}` (the lock hole), the Caddyfile configs entry, `gateway:` as published port, `FORWARDED_PROTO`/`FORWARDED_PORT` derived from `PUBLIC_URL` under a selected auth option (refusing when absent); the
@@ -108,18 +107,16 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
   print and keep; a missing `.env` reads as empty so score generation runs on fresh checkouts (`Environment.load` in `environment.py`); the lock env file materializes the
   selected-platform entries as a per-run `--env-file` (empty entries attach none — a bundles-only lock carries nothing compose consumes); `compose_command` = the one docker compose invocation spelling; `down` never reads the selection, never resolves an include — a name-only root + `--remove-orphans` removes
   every container the project ever created; a config-less or `services:`-less repo refuses loudly on both verbs.
-- Dev overlay under `--dev`: a selected bundle service with a genuine dev stage (keyed `{entry}-{service}`, image tagged `{service}:dev`) gets the repo-root → `/app:ro` bind; dev-toggles pairs become `${NAME:-default}` environment holes (`.env` overrides
-  apply only under `--dev`); overlay keys outside the selected local outputs are filtered; `--dev` without a dev shape refuses.
 
 ## Build
 
 - `run_build` renders the deterministic per-run bake file (authored key order, byte-identical for identical configs; bake validates its own input — no document model); it takes the already-loaded `config` — the build verb owns its flag refusals; a failed bake re-raises with the rendered content attached.
 - Push axis: `--push` (bool) pushes for the config's `repository`; `--push-to <addr>` re-roots tags + cache refs under that registry; the flags together refuse; an address with a scheme, trailing slash, or host
-  carrying neither `.` nor `:` refuses; `--push` without a declared `repository` refuses; `--dev` with either push flag refuses (dev stages are local-only).
+  carrying neither `.` nor `:` refuses; `--push` without a declared `repository` refuses.
 - `host_platform()` = the one host fact left: default targets are every service's default cell restricted to this machine's arch, and an empty default set refuses naming the arch + `--targets` (bake with no target arguments builds every
   service, silently defeating the selection); `--targets`: bare name = default cell, `name/cell`, suffixed target name; unknown names/cells refuse listing the vocabulary.
-- Per target: dockerfile by convention; `target: dev` only under `--dev`; platforms collapse to the host arch in load mode (a single declared platform rides through); args — every `base_images` key as `${KEY:-}` on every service, the axis
-  ARG at its cell value, `{SERVICE}_SHA` as `${…:?err}`; tags `{namespace}/{target}:latest` + `:${SERVICE_SHA}` (dev builds tag `:dev`, never SHA-tagged); `target:`-prefixed `additional_contexts`; registry cache refs under `{namespace}/build-cache:{target}` in push mode.
+- Per target: dockerfile by convention; platforms collapse to the host arch in load mode (a single declared platform rides through); args — every `base_images` key as `${KEY:-}` on every service, the axis
+  ARG at its cell value, `{SERVICE}_SHA` as `${…:?err}`; tags `{namespace}/{target}:latest` + `:${SERVICE_SHA}`; `target:`-prefixed `additional_contexts`; registry cache refs under `{namespace}/build-cache:{target}` in push mode.
 - The incremental lock write rides every building run (the `uv sync` shape — anyone who builds also locks), landing only after target selection + its refusals; bake reads the fresh entries as environment (index form); a building run with
   zero derived services refuses naming the lock verb.
 - `metadata.json`: cwd-stable, unlinked before the run, coverage-checked against the requested targets after; local default-target builds run the daemon
@@ -180,7 +177,6 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
 | `outernet.internal/restart` | compose enum (`no`/`always`/`on-failure`/`unless-stopped`); outside refuses |
 | `outernet.internal/probe-adapter` | `python-urllib` or `bash-http`; an httpGet probe without the annotation refuses loudly — score-compose silently drops httpGet |
 | `outernet.internal/consumer-interpolated` | declared `files:` names ride un-doubled; a name matching no declared file refuses |
-| `outernet.internal/dev-toggles` | consumed at `up --dev`; no template, no artifact change |
 
 ## This file's rules
 
