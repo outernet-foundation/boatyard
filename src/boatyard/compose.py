@@ -46,11 +46,14 @@ class Invocation(NamedTuple):
 
 
 def render_compose(config: Config, environment: Environment, stack: ExitStack) -> Invocation:
+    # Refuse an empty selection in an options-only repo.
     if not environment.bundles and not config.bare_entries and config.selectable_options:
         raise ValueError(
             f"{BUNDLES_VARIABLE}= selects nothing and no bare entry exists; "
             f"the options are {sorted(config.selectable_options)}"
         )
+
+    # Refuse bundle names outside the selectable options.
     unknown = [name for name in environment.bundles if name not in config.selectable_options]
     if unknown:
         bare_entries_note = f"; bare entries, always included: {config.bare_entries}" if config.bare_entries else ""
@@ -58,6 +61,8 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
             f"{BUNDLES_VARIABLE}= names {unknown}; "
             f"the selectable options are {sorted(config.selectable_options)}{bare_entries_note}"
         )
+
+    # Fold the selected names into at most one option per group.
     choices: dict[str, str] = {}
     for name in environment.bundles:
         group, option_name = config.selectable_options[name]
@@ -68,6 +73,7 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
             )
         choices[group] = option_name
 
+    # Refuse override names outside the bundle vocabulary.
     unknown = sorted(
         name
         for name in environment.oci_overrides.keys() | environment.path_overrides.keys()
@@ -77,8 +83,10 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
         vocabulary = sorted(config.selectable_options.keys() | set(config.bare_entries))
         raise ValueError(f"{BUNDLE_OVERRIDE_PREFIX}* names {unknown}; the bundle vocabulary is {vocabulary}")
 
+    # Resolve the chosen options into leaf services.
     services = config.resolve_services(choices)
 
+    # Require PUBLIC_URL and derive the forwarded environment under the auth option.
     auth_service = next((service for service in services if service.auth), None)
     forwarded = None
     if auth_service is not None:
@@ -86,9 +94,7 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
             raise ValueError("an auth option is selected; PUBLIC_URL is required")
         forwarded = environment.public_url.forwarded
 
-    # Collect the include list in services declaration order; a remote ref includes the
-    # lock's digest-pinned form, never the yaml tag directly. Each service answers one row:
-    # its include string and an optional bundle override.
+    # Collect each service's include string and optional bundle override in declaration order.
     lock = read_config_lock(config.root)
     includes: list[str] = []
     overrides: list[BundleOverride] = []
@@ -96,11 +102,13 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
     for service in services:
         name = service.name
 
+        # Include the oci override in place of the locked ref.
         if name in environment.oci_overrides:
             includes.append(environment.oci_overrides[name])
             overrides.append(BundleOverride(name=name, path=None))
             continue
 
+        # Refuse a missing override path or one that defines the reserved edge service.
         if name in environment.path_overrides:
             candidate = environment.path_overrides[name]
             path = (candidate if candidate.is_absolute() else config.root / candidate).resolve()
@@ -117,11 +125,13 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
             overrides.append(BundleOverride(name=name, path=path))
             continue
 
+        # Include a remote ref as its lock-pinned digest.
         if service.entry.ref is not None:
             pinned = lock.require(bundle_lock_key(name), f"bundle {name!r}", hint="run boatyard lock")
             includes.append(f"{OCI_REFERENCE_PREFIX}{pinned}")
             continue
 
+        # Include a local entry through its generated bundle output.
         output = compose_bundle_output_path(config.root, name)
         if not output.is_file():
             raise ValueError(
@@ -129,13 +139,15 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
             )
         includes.append(output.resolve().as_posix())
 
+    # Namespace the routes and ports under their declaring entries.
     routes = [namespaced_route(service.name, route) for service in services for route in service.routes]
     ports = [
         port.model_copy(update={"service": f"{service.name}-{port.service}"})
         for service in services
         for port in service.ports
     ]
-    # Pick the auth route from the flattened list so the caddyfile's identity check sees the same copy.
+
+    # Pick the auth route from the flattened list so the identity check sees that copy.
     auth_route = (
         None if auth_service is None else next(route for route in routes if route.path == auth_service.routes[0].path)
     )
@@ -147,6 +159,8 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
 
     # Render the per-run root compose file.
     document_services: dict[str, Yaml] = {}
+
+    # Emit the edge service when any route rides.
     if routes:
         if config.gateway is None:
             raise ValueError("routes are declared; gateway is required")
@@ -160,6 +174,8 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
         if forwarded is not None:
             edge["environment"] = {key: value for key, value in forwarded.items()}
         document_services[EDGE_SERVICE_NAME] = edge
+
+    # Group the namespaced ports into per-service stanzas.
     document_services.update(
         {
             service: {
@@ -178,6 +194,7 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
             )
         }
     )
+    # Assemble the root document.
     document: dict[str, Yaml] = {"name": config.project_name}
     if includes:
         document["include"] = [include for include in includes]
@@ -207,8 +224,8 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
         }
     compose_files.append(write_temp_compose_file(stack, document, "devkit-assembly-"))
 
+    # Validate every route upstream and port owner against compose's own resolution.
     if routes or ports:
-        # Validate every route upstream and port owner against compose's own resolution.
         resolved = set(_compose_config(config.root, compose_files, "--services", env_file=env_file))
         for route in routes:
             upstream = route.upstream.partition(":")[0]
@@ -219,8 +236,8 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
         for port in ports:
             if port.service not in resolved:
                 raise ValueError(f"ports for service {port.service!r} resolve to no service in the selected assembly")
+    # Refuse profile names the compose files do not define.
     if profiles:
-        # Refuse profile names the compose files do not define.
         defined = _compose_config(config.root, compose_files, "--profiles", env_file=env_file)
         unknown = [profile for profile in profiles if profile not in defined]
         if unknown:
@@ -247,6 +264,7 @@ def namespaced_route(entry: str, route: RouteConfig) -> RouteConfig:
 
 
 def _compose_config(root: Path, compose_files: list[Path], *arguments: str, env_file: Path | None) -> list[str]:
+    # Run compose config and collect its non-empty output lines.
     return [
         line.strip()
         for line in bash_output(
@@ -262,6 +280,7 @@ def compose_command(
     *arguments: str,
     env_file: Path | None = None,
 ) -> str:
+    # Spell the one docker compose invocation.
     quoted_arguments = [shlex.quote(argument) for argument in arguments]
     files_arguments = " ".join(f"-f {shlex.quote(str(compose_file))}" for compose_file in compose_files)
     env_argument = f" --env-file {shlex.quote(str(env_file))}" if env_file is not None else ""
@@ -271,6 +290,7 @@ def compose_command(
 
 @contextmanager
 def lock_env_unwind(path: Path) -> Generator[None]:
+    # Print and keep the env file on failure, unlink it on success.
     try:
         yield
     except BaseException:
@@ -282,6 +302,7 @@ def lock_env_unwind(path: Path) -> Generator[None]:
 
 
 def write_env_file(entries: Mapping[str, str], prefix: str, stack: ExitStack) -> Path:
+    # Write the rendered entries to a per-run temp file.
     with NamedTemporaryFile("w", suffix=".env", prefix=prefix, delete=False, encoding="utf-8") as handle:
         handle.write(render_env_entries(entries))
         path = Path(handle.name)
@@ -295,12 +316,13 @@ def write_assembly_env_file(
     platform: str | None,
     stack: ExitStack,
 ) -> Path | None:
+    # Collect the consumer's own lock entries first.
     lock_path = config.root / LOCK_PATH
     sources: list[tuple[Path, dict[str, str]]] = []
     if lock_path.is_file():
         sources.append((lock_path, compose_env_entries(parse_config_lock(lock_path), config, platform)))
-    # A path-form override's bundle output interpolates its producer's third-party holes; the
-    # producer's committed lock fills them, derived from the fixed output layout three parents up.
+
+    # Fill each path override's third-party holes from its producer's lock, three parents up.
     for override in overrides:
         if override.path is None:
             continue
@@ -308,6 +330,7 @@ def write_assembly_env_file(
         if producer_lock.is_file():
             sources.append((producer_lock, producer_env_entries(parse_config_lock(producer_lock), platform)))
 
+    # Merge the sources, refusing a lock key filled by two locks.
     entries: dict[str, str] = {}
     filled_by: dict[str, Path] = {}
     for source_lock, filled in sources:
@@ -321,13 +344,14 @@ def write_assembly_env_file(
             filled_by[key] = source_lock
             entries[key] = value
 
+    # Attach no env file when no lock carries compose-consumed entries.
     if not entries:
-        # A bundles-only lock carries nothing the compose environment consumes.
         return None
     return write_env_file(entries, "devkit-lock-env-", stack)
 
 
 def write_temp_compose_file(stack: ExitStack, document: Mapping[str, Yaml], prefix: str) -> Path:
+    # Dump the document to a per-run temp yaml file.
     with NamedTemporaryFile("w", suffix=".yaml", prefix=prefix, delete=False, encoding="utf-8") as handle:
         handle.write(yaml.safe_dump(document, sort_keys=False, default_flow_style=False))
         path = Path(handle.name)
