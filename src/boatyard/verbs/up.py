@@ -66,18 +66,18 @@ def up(
             raise ValueError(f"{BUNDLES_VARIABLE}= is set but this repo declares no services")
         config = require_compose_stack(config)
 
-    # Refuse --build in a repo with no build declarations.
+    # Refuse --build without build declarations
     if build and not (config.repository or config.base_images):
         raise typer.BadParameter("--build requires build declarations (repository or base_images) in boatyard.yml")
 
-    # Refuse an empty selection in an options-only repo.
+    # Refuse an empty selection in an options-only repo
     if not environment.bundles and not config.bare_entries and config.selectable_options:
         raise ValueError(
             f"{BUNDLES_VARIABLE}= selects nothing and no bare entry exists; "
             f"the options are {sorted(config.selectable_options)}"
         )
 
-    # Refuse bundle names outside the selectable options.
+    # Refuse bundle names outside the selectable options
     unknown = [name for name in environment.bundles if name not in config.selectable_options]
     if unknown:
         bare_entries_note = f"; bare entries, always included: {config.bare_entries}" if config.bare_entries else ""
@@ -86,7 +86,7 @@ def up(
             f"the selectable options are {sorted(config.selectable_options)}{bare_entries_note}"
         )
 
-    # Fold the selected names into at most one option per group.
+    # Fold the selection into at most one option per group
     choices: dict[str, str] = {}
     for name in environment.bundles:
         group, option_name = config.selectable_options[name]
@@ -97,7 +97,7 @@ def up(
             )
         choices[group] = option_name
 
-    # Refuse override names outside the bundle vocabulary.
+    # Refuse override names outside the bundle vocabulary
     unknown = sorted(
         name
         for name in environment.path_overrides
@@ -109,7 +109,7 @@ def up(
             f"the bundle vocabulary is {sorted(config.selectable_options.keys() | set(config.bare_entries))}"
         )
 
-    # Refuse overrides naming local entries; an override replaces a ref entry's registry source.
+    # Refuse overrides naming local entries
     remote_names = {name for name, _reference in config.remote_service_entries()}
     local_names = sorted(name for name in environment.path_overrides if name not in remote_names)
     if local_names:
@@ -118,10 +118,10 @@ def up(
             f"the ref entries are {sorted(remote_names)}"
         )
 
-    # Resolve the chosen options into leaf services.
+    # Resolve the chosen options into leaf services
     services = config.resolve_services(choices)
 
-    # Collect each service's include, override, and per-run lock env entries in declaration order.
+    # Collect each entry's include and env entries in declaration order
     lock = read_config_lock(config.root)
     consumer_entries = compose_env_entries(lock, config, environment.platform)
     entries: dict[str, str] = dict(consumer_entries)
@@ -132,7 +132,7 @@ def up(
     for service in services:
         name = service.name
 
-        # Include a local entry through its generated bundle output.
+        # Include a local entry through its generated output
         if service.entry.ref is None:
             output = compose_bundle_output_path(config.root, name)
             if not output.is_file():
@@ -144,7 +144,7 @@ def up(
             entries.update({lock_key_prefix(name) + key: value for key, value in consumer_entries.items()})
             continue
 
-        # Refuse a missing override path; the scan teeth cover names, requirements, and the edge service.
+        # Include an overridden ref through its local path
         if name in environment.path_overrides:
             candidate = environment.path_overrides[name]
             path = (candidate if candidate.is_absolute() else config.root / candidate).resolve()
@@ -155,25 +155,24 @@ def up(
             requirements[name] = _scan_local_bundle(name, service, path, refuse_edge=True)
             includes.append(path.as_posix())
             overridden.add(name)
-            # Fill the override's namespaced holes from its producer's lock, three parents up
+            # Fill the override's holes from the producer lock three parents up
             producer_lock = path.parents[3] / LOCK_PATH
             if producer_lock.is_file():
                 producer_entries = producer_env_entries(parse_config_lock(producer_lock), environment.platform)
                 entries.update({lock_key_prefix(name) + key: value for key, value in producer_entries.items()})
             continue
 
-        # Include a remote ref as its lock-pinned digest; the lock's recorded requires is the contract.
+        # Include a remote ref as its lock-pinned digest
         key = bundle_lock_key(name)
         pinned = lock.require(key, f"bundle {name!r}", hint="run boatyard lock")
         requirements[name] = lock.bundles[key].requires
         includes.append(f"{OCI_REFERENCE_PREFIX}{pinned}")
 
-    # Refuse selected bundles whose required interpolation no environment source fills; lock-key
-    # holes are satisfied by construction through the per-run env file's entries.
+    # Refuse bundles whose requirements no environment source fills
     filled = {variable for variable, value in {**os.environ, **environment.variables, **entries}.items() if value}
     _refuse_unfilled_requirements(requirements, filled)
 
-    # Require PUBLIC_URL and derive the forwarded environment under the auth option.
+    # Derive the forwarded environment from PUBLIC_URL under the auth option
     auth_service = next((service for service in services if service.auth), None)
     forwarded = None
     if auth_service is not None:
@@ -181,11 +180,10 @@ def up(
             raise ValueError("an auth option is selected; PUBLIC_URL is required")
         forwarded = environment.public_url.forwarded
 
-    # Probe every lock entry before any per-run file materializes; an overridden bundle skips
-    # its probe — testing a bundle not published at any digest yet is the override's point.
+    # Probe every lock entry before materializing per-run files
     _probe_lock_entries(lock, overridden)
 
-    # Namespace the routes and ports under their declaring entries.
+    # Namespace routes and ports under their declaring entries
     routes = [
         route.model_copy(update={"upstream": f"{service.name}-{route.upstream}"})
         for service in services
@@ -197,7 +195,7 @@ def up(
         for port in service.ports
     ]
 
-    # Render the edge service and its Caddyfile when any route rides.
+    # Render the edge and its Caddyfile when a route rides
     document_services: dict[str, Yaml] = {}
     caddyfile: str | None = None
     if routes:
@@ -205,14 +203,14 @@ def up(
             "image": f"${{{CADDY_IMAGE}:?err}}",
             "configs": [{"source": EDGE_CONFIG_NAME, "target": "/etc/caddy/Caddyfile"}],
             "ports": [{"target": str(EDGE_LISTEN_PORT), "published": config.gateway, "protocol": "tcp"}],
-            # Attach the edge to every selected bundle's network.
+            # Attach the edge to every selected bundle's network
             "networks": dict.fromkeys(f"{service.name}-net" for service in services),
         }
         if forwarded is not None:
             edge["environment"] = forwarded
         document_services[EDGE_SERVICE_NAME] = edge
 
-        # Render one site with one handle block per route in declaration order.
+        # Render one handle block per route in declaration order
         lines = [f":{EDGE_LISTEN_PORT} {{"]
         for route in routes:
             matcher = "" if route.path == "/*" else f" {route.path}"
@@ -232,14 +230,14 @@ def up(
         lines.append("}")
         caddyfile = double_dollars("\n".join(lines) + "\n")
 
-    # Group the namespaced ports into per-service stanzas.
+    # Group the namespaced ports into per-service stanzas
     document_services.update({
         service: {"ports": [port.model_dump(exclude={"service"}, exclude_none=True) for port in service_ports]}
         for service, service_ports in groupby(
             sorted(ports, key=lambda port: port.service), key=lambda port: port.service
         )
     })
-    # Assemble the root document.
+    # Assemble the root document
     document: dict[str, Yaml] = {"name": config.project_name}
     if includes:
         document["include"] = includes
@@ -248,9 +246,9 @@ def up(
     if caddyfile is not None:
         document["configs"] = {EDGE_CONFIG_NAME: {"content": caddyfile}}
 
-    # Materialize the per-run files and hand off; the handoff execs, so a successful run never unwinds.
+    # Materialize the per-run files and hand off
     with ExitStack() as stack:
-        # Write the per-run lock env file.
+        # Write the per-run lock env file
         env_file: Path | None = None
         if entries:
             with NamedTemporaryFile(
@@ -268,11 +266,11 @@ def up(
         stack.callback(assembly.unlink, missing_ok=True)
         compose_files = [assembly]
 
-        # Build local images.
+        # Build local images
         if build:
             run_build(config=config)
 
-        # Hand off to docker compose up.
+        # Hand off to docker compose
         up_command = compose_command(
             root,
             compose_files,
@@ -336,8 +334,7 @@ def _probe_lock_entries(lock: ConfigLock, overridden: set[str]) -> None:
     bundle_references = sorted({bundle.reference for key, bundle in lock.bundles.items() if key not in skip})
     if not bundle_references:
         return
-    # Compose-bundle media types are not image indexes; imagetools may refuse them, so bundle
-    # entries probe via crane under the same stderr-classification law.
+    # Probe bundles via crane since compose-bundle media types are not image indexes
     install_crane()
     for value in bundle_references:
         reference, _, digest = value.rpartition("@")
