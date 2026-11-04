@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 import yaml
-from bashrun.bash import CalledProcessError, bash, bash_output
+from bashrun.bash import bash, bash_output
 from typer.testing import CliRunner
 
 from boatyard.cli import app
@@ -30,21 +30,10 @@ PLACEFRAME_ROCM_REF = "oci://ghcr.io/org/placeframe:1.2.3-rocm"
 TUNNEL_BUNDLES = {"TUNNEL_BUNDLE": LIVEKIT_PINNED}
 PINNED_COMPOSE_VERSION = "5.6.1"
 
-LOCKED_ERROR = f"Image {MIRROR_PREFIX}/docker.io/library/alpine:3.20 (digest {FAKE_DIGEST}) is not mirrored"
-
 ASSEMBLY_ARGUMENT_PATTERN = re.compile(r"-f (\S*devkit-assembly-\S+\.yaml)")
 LOCK_ENV_ARGUMENT_PATTERN = re.compile(r"(\S*devkit-lock-env-\S+\.env)")
 
 runner = CliRunner()
-
-
-def _skip_crane_install() -> None:
-    return None
-
-
-def _patch_up_probes(monkeypatch: pytest.MonkeyPatch, handler: object) -> None:
-    monkeypatch.setattr(up, "install_crane", _skip_crane_install)
-    monkeypatch.setattr(up, "bash_output", handler)
 
 
 @pytest.fixture(scope="session")
@@ -237,34 +226,6 @@ def _failing_handoff(_command: str) -> None:
     raise RuntimeError("compose failed")
 
 
-def _probe_present(command: str) -> str:
-    assert "imagetools inspect" in command or "crane digest" in command
-    return ""
-
-
-def _probe_absent(command: str) -> str:
-    assert "imagetools inspect" in command or "crane digest" in command
-    raise CalledProcessError(1, command, stderr="unexpected status from HEAD request: 404 Not Found\n")
-
-
-def _probe_unauthorized(command: str) -> str:
-    assert "imagetools inspect" in command or "crane digest" in command
-    raise CalledProcessError(1, command, stderr="unauthorized: authentication required\n")
-
-
-class SelectiveProbe:
-    def __init__(self, present: str) -> None:
-        self.present = present
-        self.probed: list[str] = []
-
-    def run(self, command: str) -> str:
-        reference = command.rpartition("inspect ")[2]
-        self.probed.append(reference)
-        if reference == self.present:
-            return ""
-        raise CalledProcessError(1, command, stderr="unexpected status from HEAD request: 404 Not Found")
-
-
 class HandoffRecorder:
     def __init__(self) -> None:
         self.commands: list[str] = []
@@ -307,13 +268,6 @@ class ProducerEnvRecorder(AssemblyRecorder):
         match = LOCK_ENV_ARGUMENT_PATTERN.search(command)
         if match is not None:
             self.env_contents.append(Path(match.group(1)).read_text(encoding="utf-8"))
-
-
-class PresentProbe:
-    def run(self, command: str) -> str:
-        if "imagetools inspect" in command or "crane digest" in command:
-            return ""
-        raise AssertionError(f"unexpected command: {command}")
 
 
 def _write_consumer_tree(root: Path, *, bundles: str | None = "placeframe-cuda,auth-keycloak") -> Path:
@@ -382,7 +336,6 @@ class TestSelectionLaw:
         _write_consumer_tree(tmp_path, bundles=bundles)
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
-        _patch_up_probes(monkeypatch, PresentProbe().run)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
         return recorder
@@ -421,8 +374,6 @@ class TestSelectionLaw:
         (tmp_path / ".env").write_text("BUNDLES=one-cuda,two-cuda\n", encoding="utf-8")
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
-        handler = PresentProbe().run
-        _patch_up_probes(monkeypatch, handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
@@ -457,8 +408,6 @@ class TestSelectionLaw:
         (tmp_path / ".env").write_text("BUNDLES=\n", encoding="utf-8")
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
-        handler = PresentProbe().run
-        _patch_up_probes(monkeypatch, handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
@@ -493,7 +442,6 @@ class TestSelectionLaw:
         _write_workload(tmp_path, "api.yaml", "api")
         (tmp_path / ".env").write_text("BUNDLES=\n", encoding="utf-8")
         monkeypatch.delenv("BUNDLES", raising=False)
-        _patch_up_probes(monkeypatch, PresentProbe().run)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -593,8 +541,6 @@ class TestUpMaterialization:
         _write_consumer_tree(tmp_path)
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
-        handler = PresentProbe().run
-        _patch_up_probes(monkeypatch, handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
@@ -639,8 +585,6 @@ class TestUpMaterialization:
         _write_consumer_tree(tmp_path, bundles="placeframe-cuda")
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
-        handler = PresentProbe().run
-        _patch_up_probes(monkeypatch, handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
@@ -685,7 +629,6 @@ class TestUpValidation:
     def _invoke_up(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv("BUNDLES", raising=False)
         monkeypatch.setattr(up, "bash_handoff", _silent_handoff)
-        _patch_up_probes(monkeypatch, PresentProbe().run)
         monkeypatch.chdir(tmp_path)
         return runner.invoke(app, ["up"])
 
@@ -835,8 +778,6 @@ class TestSharedNames:
         (tmp_path / ".env").write_text("BUNDLES=left-a,right-b\n", encoding="utf-8")
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
-        handler = PresentProbe().run
-        _patch_up_probes(monkeypatch, handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
@@ -1023,7 +964,6 @@ class TestLockEnvSynthesis:
 
     def _invoke_up_with_lock(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recorder: HandoffRecorder):
         monkeypatch.delenv("PLATFORM", raising=False)
-        _patch_up_probes(monkeypatch, _probe_present)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
         return runner.invoke(app, ["up"])
@@ -1171,7 +1111,6 @@ class TestLockEnvSynthesis:
             tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST}, TUNNEL_BUNDLES
         )
         monkeypatch.delenv("PLATFORM", raising=False)
-        _patch_up_probes(monkeypatch, _probe_present)
         monkeypatch.setattr(up, "bash_handoff", _failing_handoff)
         monkeypatch.chdir(tmp_path)
 
@@ -1183,154 +1122,6 @@ class TestLockEnvSynthesis:
         ]
         assert len(kept) == 1
         assert kept[0].read_text(encoding="utf-8") == f"ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
-
-    def test_a_probe_failure_refuses_before_any_per_run_file_exists(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("", encoding="utf-8")
-        _write_lock(
-            tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST}, TUNNEL_BUNDLES
-        )
-        monkeypatch.delenv("PLATFORM", raising=False)
-        _patch_up_probes(monkeypatch, _probe_absent)
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(app, ["up"])
-
-        assert result.exit_code != 0
-        assert isinstance(result.exception, ValueError)
-        assert "kept for inspection" not in result.output
-
-
-class TestMirroredLockEnforcement:
-    def _write_mirrored_tree(self, tmp_path: Path, entries: dict[str, str]) -> None:
-        _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("", encoding="utf-8")
-        _write_lock(tmp_path, entries, bundles=TUNNEL_BUNDLES)
-
-    def test_missing_entry_fails_closed_with_the_locked_message(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        self._write_mirrored_tree(
-            tmp_path, {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST}
-        )
-        _patch_up_probes(monkeypatch, _probe_absent)
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(app, ["up"])
-
-        assert result.exit_code != 0
-        assert str(result.exception) == LOCKED_ERROR
-
-    def test_probe_failure_is_not_reported_as_an_unmirrored_image(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        self._write_mirrored_tree(
-            tmp_path, {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST}
-        )
-        _patch_up_probes(monkeypatch, _probe_unauthorized)
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(app, ["up"])
-
-        assert result.exit_code != 0
-        message = str(result.exception)
-        assert "not mirrored" not in message
-        assert "the mirror probe failed" in message
-        assert "authentication required" in message
-        assert "alpine" in message
-
-    def test_present_entries_proceed_to_bring_up(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        self._write_mirrored_tree(
-            tmp_path, {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST}
-        )
-        recorder = HandoffRecorder()
-        _patch_up_probes(monkeypatch, _probe_present)
-        monkeypatch.setattr(up, "bash_handoff", recorder.run)
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(app, ["up"])
-
-        assert result.exit_code == 0, result.output
-        assert [_normalize(command, tmp_path) for command in recorder.commands] == [
-            "docker compose -f ASSEMBLY --project-directory ROOT --env-file .env --env-file LOCKENV up --pull missing -d"
-        ]
-
-    def test_reports_the_first_missing_entry_deterministically(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        present = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{FAKE_DIGEST}"
-        absent = f"{MIRROR_PREFIX}/docker.io/library/alpine:3.20@{FAKE_DIGEST}"
-        probe = SelectiveProbe(present)
-        self._write_mirrored_tree(tmp_path, {"UV_IMAGE": present, "ALPINE_IMAGE": absent})
-        _patch_up_probes(monkeypatch, probe.run)
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(app, ["up"])
-
-        assert result.exit_code != 0
-        assert "alpine" in str(result.exception)
-        assert probe.probed == [absent]
-
-    def test_a_missing_platform_manifest_digest_fails_closed_naming_it(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        index = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST
-        manifest = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + PLATFORM_DIGEST
-        self._write_mirrored_tree(tmp_path, {"ALPINE_IMAGE": index})
-        tmp_path.joinpath(*LOCK_PATH.parts).write_text(
-            yaml.safe_dump({
-                "images": {
-                    "ALPINE_IMAGE": {"index": index, "platforms": {"linux/amd64": manifest}},
-                },
-                "bundles": {name: {"reference": reference} for name, reference in TUNNEL_BUNDLES.items()},
-            }),
-            encoding="utf-8",
-        )
-        probe = SelectiveProbe(index)
-        _patch_up_probes(monkeypatch, probe.run)
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(app, ["up"])
-
-        assert result.exit_code != 0
-        assert str(result.exception) == (
-            f"Image {MIRROR_PREFIX}/docker.io/library/alpine:3.20 (digest {PLATFORM_DIGEST}) is not mirrored"
-        )
-        assert probe.probed == [index, manifest]
-
-    def test_a_probe_failure_over_a_platform_manifest_is_not_an_unmirrored_verdict(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        index = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST
-        manifest = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + PLATFORM_DIGEST
-        self._write_mirrored_tree(tmp_path, {"ALPINE_IMAGE": index})
-        tmp_path.joinpath(*LOCK_PATH.parts).write_text(
-            yaml.safe_dump({
-                "images": {
-                    "ALPINE_IMAGE": {"index": index, "platforms": {"linux/amd64": manifest}},
-                },
-                "bundles": {name: {"reference": reference} for name, reference in TUNNEL_BUNDLES.items()},
-            }),
-            encoding="utf-8",
-        )
-        probed: list[str] = []
-
-        def _probe_then_fail(command: str) -> str:
-            reference = command.rpartition("inspect ")[2]
-            probed.append(reference)
-            if reference == index:
-                return ""
-            raise CalledProcessError(1, command, stderr="unauthorized: authentication required\n")
-
-        _patch_up_probes(monkeypatch, _probe_then_fail)
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(app, ["up"])
-
-        assert result.exit_code != 0
-        message = str(result.exception)
-        assert "not mirrored" not in message
-        assert "the mirror probe failed" in message
-        assert PLATFORM_DIGEST in message
-        assert probed == [index, manifest]
 
 
 class TestBundleLockEnforcement:
@@ -1361,7 +1152,6 @@ class TestBundleLockEnforcement:
         _write_lock(tmp_path, entries={}, bundles=relocked)
         recorder = AssemblyRecorder()
         monkeypatch.delenv("BUNDLES", raising=False)
-        _patch_up_probes(monkeypatch, _probe_present)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
@@ -1371,72 +1161,13 @@ class TestBundleLockEnforcement:
         [document] = recorder.documents
         assert document["include"] == ["oci://" + relocked["TUNNEL_BUNDLE"]]
 
-    def test_the_bundle_probe_uses_crane_over_the_recorded_digest(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("", encoding="utf-8")
-        probed: list[str] = []
-
-        def _record(command: str) -> str:
-            assert "crane digest" in command
-            probed.append(command.removeprefix("crane digest "))
-            return ""
-
-        monkeypatch.delenv("BUNDLES", raising=False)
-        _patch_up_probes(monkeypatch, _record)
-        monkeypatch.setattr(up, "bash_handoff", _silent_handoff)
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(app, ["up"])
-
-        assert result.exit_code == 0, result.output
-        assert probed == [LIVEKIT_PINNED]
-
-    def test_an_unpublished_bundle_fails_closed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("", encoding="utf-8")
-        monkeypatch.delenv("BUNDLES", raising=False)
-        _patch_up_probes(monkeypatch, _probe_absent)
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(app, ["up"])
-
-        assert result.exit_code != 0
-        assert str(result.exception) == (
-            f"Bundle ghcr.io/org/livekit:{LIVEKIT_SHA_TAG} (digest {FAKE_DIGEST}) is not published; run boatyard lock"
-        )
-
-    def test_a_bundle_probe_failure_is_not_an_unpublished_verdict(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("", encoding="utf-8")
-        monkeypatch.delenv("BUNDLES", raising=False)
-        _patch_up_probes(monkeypatch, _probe_unauthorized)
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(app, ["up"])
-
-        assert result.exit_code != 0
-        message = str(result.exception)
-        assert "not published" not in message
-        assert "the bundle probe failed" in message
-        assert "authentication required" in message
-
 
 OVERRIDE_PATH = "../producer/stack/generated/compose/compose.placeframe-cuda.yaml"
 
 
 class TestBundleOverrides:
-    def _invoke_up(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        root: Path,
-        handler: object | None = None,
-    ) -> ProducerEnvRecorder:
+    def _invoke_up(self, monkeypatch: pytest.MonkeyPatch, root: Path) -> ProducerEnvRecorder:
         recorder = ProducerEnvRecorder()
-        _patch_up_probes(monkeypatch, handler if handler is not None else PresentProbe().run)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(root)
         monkeypatch.delenv("BUNDLES", raising=False)

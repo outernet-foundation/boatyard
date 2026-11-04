@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import os
-import re
-import shlex
 from contextlib import ExitStack
 from itertools import groupby
 from pathlib import Path
@@ -11,7 +9,7 @@ from typing import Annotated
 
 import typer
 import yaml
-from bashrun.bash import CalledProcessError, bash_handoff, bash_output
+from bashrun.bash import bash_handoff
 
 from boatyard.bake import run_build
 from boatyard.compose import compose_command, lock_env_unwind, require_env_file
@@ -33,8 +31,7 @@ from boatyard.config import (
     require_compose_stack,
     required_compose_holes,
 )
-from boatyard.config_lock import LOCK_PATH, ConfigLock, parse_config_lock, read_config_lock
-from boatyard.crane import install_crane
+from boatyard.config_lock import LOCK_PATH, parse_config_lock, read_config_lock
 from boatyard.environment import BUNDLES_VARIABLE, BUNDLE_OVERRIDE_PREFIX, Environment
 from boatyard.lock import compose_env_entries, producer_env_entries, render_env_entries
 
@@ -126,7 +123,6 @@ def up(
     consumer_entries = compose_env_entries(lock, config, environment.platform)
     entries: dict[str, str] = dict(consumer_entries)
     includes: list[Yaml] = []
-    overridden: set[str] = set()
     requirements: dict[str, list[str]] = {}
 
     for service in services:
@@ -154,7 +150,6 @@ def up(
                 )
             requirements[name] = _scan_local_bundle(name, service, path, refuse_edge=True)
             includes.append(path.as_posix())
-            overridden.add(name)
             # Fill the override's holes from the producer lock three parents up
             producer_lock = path.parents[3] / LOCK_PATH
             if producer_lock.is_file():
@@ -179,9 +174,6 @@ def up(
         if environment.public_url is None:
             raise ValueError("an auth option is selected; PUBLIC_URL is required")
         forwarded = environment.public_url.forwarded
-
-    # Probe every lock entry before materializing per-run files
-    _probe_lock_entries(lock, overridden)
 
     # Namespace routes and ports under their declaring entries
     routes = [
@@ -309,39 +301,3 @@ def _refuse_unfilled_requirements(requirements: dict[str, list[str]], filled: se
         raise ValueError(
             f"bundle {name!r} requires {absent}, which no environment source sets (shell, .env, or the lock env file)"
         )
-
-
-def _probe_lock_entries(lock: ConfigLock, overridden: set[str]) -> None:
-    references = sorted(
-        set(
-            [reference for entry in lock.images.values() for reference in entry.recorded_digests]
-            + list(lock.charts.values())
-        )
-    )
-    for value in references:
-        reference, _, digest = value.rpartition("@")
-        try:
-            bash_output(f"docker buildx imagetools inspect {shlex.quote(value)}")
-        except CalledProcessError as error:
-            stderr = (error.stderr or str(error)).strip()
-            if re.search(r"\b404\b|not found|manifest unknown", stderr, re.IGNORECASE):
-                raise ValueError(f"Image {reference or value} (digest {digest or 'unknown'}) is not mirrored")
-            raise ValueError(
-                f"Image {reference or value} (digest {digest or 'unknown'}): the mirror probe failed: {stderr}"
-            )
-
-    skip = {bundle_lock_key(name) for name in overridden}
-    bundle_references = sorted({bundle.reference for key, bundle in lock.bundles.items() if key not in skip})
-    if not bundle_references:
-        return
-    # Probe bundles via crane since compose-bundle media types are not image indexes
-    install_crane()
-    for value in bundle_references:
-        reference, _, digest = value.rpartition("@")
-        try:
-            bash_output(f"crane digest {shlex.quote(value)}")
-        except CalledProcessError as error:
-            stderr = (error.stderr or str(error)).strip()
-            if re.search(r"\b404\b|not found|manifest unknown", stderr, re.IGNORECASE):
-                raise ValueError(f"Bundle {reference} (digest {digest}) is not published; run boatyard lock")
-            raise ValueError(f"Bundle {reference} (digest {digest}): the bundle probe failed: {stderr}")

@@ -89,8 +89,6 @@ def _write_edge_tree(
     monkeypatch.delenv("PUBLIC_URL", raising=False)
     monkeypatch.delenv("GATEWAY_PORT", raising=False)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(up, "install_crane", _skip_crane_install)
-    monkeypatch.setattr(up, "bash_output", _probe_present_and_services)
 
 
 def _assembly_document(
@@ -111,16 +109,6 @@ def _assembly_document(
     assert result.exit_code == 0, result.output
     assert capture.document is not None
     return capture.document
-
-
-def _skip_crane_install() -> None:
-    return None
-
-
-def _probe_present_and_services(command: str) -> str:
-    if "imagetools inspect" in command or "crane digest" in command:
-        return ""
-    raise AssertionError(f"unexpected command: {command}")
 
 
 def _caddyfile(document: dict[str, Any]) -> str:
