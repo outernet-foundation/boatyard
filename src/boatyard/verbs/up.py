@@ -35,10 +35,6 @@ def up(
         bool,
         typer.Option("--build", help="Build all images locally before bringing the stack up; skips pulling"),
     ] = False,
-    dev: Annotated[
-        bool,
-        typer.Option("--dev", help="Layer the generated dev overlay (dev-stage images, repo bind, .env toggle holes)."),
-    ] = False,
 ) -> None:
     root = Path.cwd()
     config = Config.load(root)
@@ -57,17 +53,15 @@ def up(
     # Select, render, and validate the invocation.
     with ExitStack() as stack:
         selection = select(config, environment)
-        invocation = render(config, environment.platform, selection, stack, dev=dev)
+        invocation = render(config, environment.platform, selection, stack)
 
         # Probe every lock entry before bring-up; an overridden bundle skips its probe —
         # testing a bundle not published at any digest yet is the override's point.
         _probe_lock_entries(config, {override.name for override in selection.overrides})
 
-        # Build local images; --dev builds both shapes.
+        # Build local images.
         if build:
             run_build(config=config)
-            if dev:
-                run_build(config=config, dev=True)
 
         # Hand off to docker compose up.
         up_command = compose_command(

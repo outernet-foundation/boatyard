@@ -91,7 +91,6 @@ PORT_PATTERN = re.compile(r"^[0-9]+$")
 AUTH_GROUP_NAME = "auth"
 EDGE_SERVICE_NAME = "edge"
 CADDY_IMAGE = "CADDY_IMAGE"
-DEV_TOGGLES_ANNOTATION = "outernet.internal/dev-toggles"
 
 COMPOSE_OUTPUT_DIR = Path("stack/generated/compose")
 
@@ -650,11 +649,6 @@ class WorkloadDocument(BaseModel):
                         f"{CONSUMER_INTERPOLATED_ANNOTATION} entry {entry!r} names no declared files: path"
                     )
 
-        if annotations.get(DEV_TOGGLES_ANNOTATION) is not None:
-            if not annotations[DEV_TOGGLES_ANNOTATION].strip():
-                raise ValueError(f"{DEV_TOGGLES_ANNOTATION} must be a comma-separated NAME=default string")
-            parse_dev_toggles(annotations[DEV_TOGGLES_ANNOTATION])
-
         return self
 
     @property
@@ -725,22 +719,6 @@ def chart_lock_key(name: str) -> str:
 
 def bundle_lock_key(name: str) -> str:
     return name.upper().replace("-", "_") + "_BUNDLE"
-
-
-def parse_dev_toggles(raw: str) -> dict[str, str]:
-    toggles: dict[str, str] = {}
-    for item in raw.split(","):
-        toggle_name, separator, default = item.strip().partition("=")
-        if not separator:
-            raise ValueError(f"{DEV_TOGGLES_ANNOTATION} entry {item.strip()!r} must be NAME=default")
-        if ENV_NAME_PATTERN.fullmatch(toggle_name) is None:
-            raise ValueError(f"{DEV_TOGGLES_ANNOTATION} name {toggle_name!r} must be ALL_CAPS")
-        if not default:
-            raise ValueError(f"{DEV_TOGGLES_ANNOTATION} default for {toggle_name} is empty")
-        if toggle_name in toggles:
-            raise ValueError(f"{DEV_TOGGLES_ANNOTATION} names {toggle_name} twice")
-        toggles[toggle_name] = default
-    return toggles
 
 
 def mirrored_ref(reference: str, prefix: str) -> str:

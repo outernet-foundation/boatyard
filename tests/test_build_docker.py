@@ -61,9 +61,6 @@ def _write_repo(
 EXTERNAL = "ARG PY_IMAGE\nFROM ${PY_IMAGE}\n"
 FANNED = "ARG PY_IMAGE\nARG TORCH_DEVICE\nFROM ${PY_IMAGE}\n"
 DEPENDENT = "FROM neural-networks-base\n"
-DEV_STAGE = "ARG PY_IMAGE\nFROM ${PY_IMAGE} AS base\nFROM base AS dev\n"
-DEV_DEPENDENT = "FROM neural-networks-base AS base\nFROM base AS dev\n"
-LYING_DEV_STAGE = "ARG PY_IMAGE\nFROM ${PY_IMAGE} AS dev\n"
 
 DEFAULT_DOCKERFILES: dict[str, str] = {
     "api": EXTERNAL,
@@ -326,99 +323,6 @@ class TestBuildKeysGuard:
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
         assert "no Dockerfile service derives" in str(result.exception)
-
-
-class TestDevBuilds:
-    def test_dev_builds_only_dev_stage_services(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        recorder = _prepare(monkeypatch, tmp_path, ["--dev"], dockerfiles={"api": DEV_STAGE, "postgres": EXTERNAL})
-
-        assert _bake_targets(recorder.commands) == ["api"]
-
-    def test_dev_builds_the_default_cell_of_fanned_services(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        recorder = _prepare(
-            monkeypatch,
-            tmp_path,
-            ["--dev"],
-            dockerfiles={"neural-networks-base": FANNED, "localizer": DEV_DEPENDENT},
-            variants=TORCH_AXIS,
-        )
-
-        assert _bake_targets(recorder.commands) == ["localizer-cuda"]
-
-    def test_dev_selects_cells_by_address(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        recorder = _prepare(
-            monkeypatch,
-            tmp_path,
-            ["--dev", "--targets", "localizer/rocm"],
-            dockerfiles={"neural-networks-base": FANNED, "localizer": DEV_DEPENDENT},
-            variants=TORCH_AXIS,
-        )
-
-        assert _bake_targets(recorder.commands) == ["localizer-rocm"]
-
-    def test_dev_renders_target_dev_under_the_service_dev_tag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        recorder = _prepare(monkeypatch, tmp_path, ["--dev"], dockerfiles={"api": DEV_STAGE, "postgres": EXTERNAL})
-        build_block = yaml.safe_load(recorder.rendered)["services"]["api"]["build"]
-
-        assert build_block["target"] == "dev"
-        assert build_block["tags"] == [f"{REPOSITORY}/api:dev"]
-        assert "cache_to" not in build_block
-
-    def test_fanned_dev_targets_share_one_service_dev_tag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        recorder = _prepare(
-            monkeypatch,
-            tmp_path,
-            ["--dev", "--targets", "localizer/rocm", "--targets", "localizer/cuda"],
-            dockerfiles={"neural-networks-base": FANNED, "localizer": DEV_DEPENDENT},
-            variants=TORCH_AXIS,
-        )
-        services = yaml.safe_load(recorder.rendered)["services"]
-
-        assert services["localizer-cuda"]["build"]["tags"] == [f"{REPOSITORY}/localizer:dev"]
-        assert services["localizer-rocm"]["build"]["tags"] == [f"{REPOSITORY}/localizer:dev"]
-
-    def test_dev_refuses_push(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
-        monkeypatch.chdir(tmp_path)
-        _write_repo(tmp_path, dockerfiles={"api": DEV_STAGE})
-
-        result = runner.invoke(app, ["build", "--dev", "--push"])
-
-        assert result.exit_code != 0
-        assert "local-only" in result.output
-
-    def test_dev_refuses_a_push_destination(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
-        monkeypatch.chdir(tmp_path)
-        _write_repo(tmp_path, dockerfiles={"api": DEV_STAGE})
-
-        result = runner.invoke(app, ["build", "--dev", "--push-to", LOCAL_REGISTRY])
-
-        assert result.exit_code != 0
-        assert "local-only" in result.output
-
-    def test_dev_without_any_dev_stage_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
-        monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
-        monkeypatch.chdir(tmp_path)
-        _write_repo(tmp_path, dockerfiles={"api": EXTERNAL, "liar": LYING_DEV_STAGE})
-
-        result = runner.invoke(app, ["build", "--dev"])
-
-        assert result.exit_code != 0
-        assert isinstance(result.exception, ValueError)
-        assert "no service declares a dev stage" in str(result.exception)
-
-    def test_dev_explicit_target_without_dev_stage_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
-        monkeypatch.chdir(tmp_path)
-        _write_repo(tmp_path, dockerfiles={"api": EXTERNAL, "auth": DEV_STAGE})
-
-        result = runner.invoke(app, ["build", "--dev", "--targets", "api"])
-
-        assert result.exit_code != 0
-        assert "no dev stage" in result.output
 
 
 class TestBakeFailure:
@@ -762,30 +666,6 @@ class TestRenderBakeCache:
 
         assert "cache_to" not in services["api"]["build"]
         assert "cache_from" not in services["api"]["build"]
-
-
-class TestRenderBakeDev:
-    def test_dev_targets_the_dev_stage_under_one_service_dev_tag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        recorder = _prepare(monkeypatch, tmp_path, ["--dev"], dockerfiles={"api": DEV_STAGE})
-
-        services = _rendered_services(recorder.rendered)
-
-        assert services["api"]["build"]["target"] == "dev"
-        assert services["api"]["build"]["tags"] == [f"{REPOSITORY}/api:dev"]
-
-    def test_axis_cells_share_the_service_dev_tag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        recorder = _prepare(
-            monkeypatch,
-            tmp_path,
-            ["--dev"],
-            dockerfiles={"localizer": "ARG PY_IMAGE\nARG TORCH_DEVICE\nFROM ${PY_IMAGE} AS base\nFROM base AS dev\n"},
-            variants=TORCH_AXIS,
-        )
-
-        services = _rendered_services(recorder.rendered)
-
-        assert services["localizer-cuda"]["build"]["tags"] == [f"{REPOSITORY}/localizer:dev"]
-        assert services["localizer-rocm"]["build"]["tags"] == [f"{REPOSITORY}/localizer:dev"]
 
 
 class TestRenderBakePlatforms:

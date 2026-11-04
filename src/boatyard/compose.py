@@ -14,9 +14,7 @@ from bashrun.bash import bash_output
 from boatyard.config import (
     AUTH_GROUP_NAME,
     CADDY_IMAGE,
-    ComposeWorkloadDocument,
     Config,
-    DEV_TOGGLES_ANNOTATION,
     EDGE_SERVICE_NAME,
     OCI_REFERENCE_PREFIX,
     PortDeclaration,
@@ -27,7 +25,6 @@ from boatyard.config import (
     double_dollars,
     is_mapping,
     load_yaml_file,
-    parse_dev_toggles,
     qualified_option_name,
 )
 from boatyard.config_lock import LOCK_PATH, parse_config_lock, read_config_lock
@@ -51,8 +48,6 @@ class Selection(NamedTuple):
     auth_route: RouteConfig | None
     forwarded: dict[str, str] | None
     profiles: list[str]
-    dev_services: list[tuple[str, str]]
-    dev_toggles: dict[str, dict[str, str]]
     overrides: list[BundleOverride]
 
 
@@ -118,11 +113,9 @@ def select(config: Config, environment: Environment) -> Selection:
 
     # Collect the include list in services declaration order; a remote ref includes the
     # lock's digest-pinned form, never the yaml tag directly. Each service answers one row:
-    # its include string, an optional local output whose service names are scanned, and an
-    # optional bundle override.
+    # its include string and an optional bundle override.
     lock = read_config_lock(config.root)
     includes: list[str] = []
-    local_outputs: list[Path] = []
     overrides: list[BundleOverride] = []
 
     for service in services:
@@ -146,7 +139,6 @@ def select(config: Config, environment: Environment) -> Selection:
                     f"{path.as_posix()}: the bundle override defines the reserved service {EDGE_SERVICE_NAME!r}"
                 )
             includes.append(path.as_posix())
-            local_outputs.append(path)
             overrides.append(BundleOverride(name=name, path=path))
             continue
 
@@ -161,36 +153,6 @@ def select(config: Config, environment: Environment) -> Selection:
                 f"selected entry {name!r} has no bundle output {output.as_posix()}; generate-score writes it"
             )
         includes.append(output.resolve().as_posix())
-        local_outputs.append(output)
-
-    # Gather the service names the selected local outputs define.
-    output_services: set[str] = set()
-    for path in local_outputs:
-        loaded = load_yaml_file(path)
-        document_services = loaded.get("services") if is_mapping(loaded) else None
-        if is_mapping(document_services):
-            output_services.update(document_services)
-
-    # Dev facts: dev-stage services inside the selection, plus the workload-declared dev toggles.
-    # Pair each dev-stage build with its entry-namespaced compose service.
-    dev_services = [
-        (f"{service.name}-{name}", name)
-        for service in services
-        for name, build in config.service_builds.items()
-        if build.dev_stage and f"{service.name}-{name}" in output_services
-    ]
-    dev_toggles: dict[str, dict[str, str]] = {}
-    score_dir = config.root / config.score_dir
-    for service in services:
-        if service.entry.remote:
-            continue
-        for workload in service.entry.workloads:
-            annotations = ComposeWorkloadDocument.load(score_dir / workload).metadata.annotations
-            raw = annotations.get(DEV_TOGGLES_ANNOTATION)
-            compose_name = f"{service.name}-{Path(workload).stem}"
-            if raw is None or compose_name not in output_services:
-                continue
-            dev_toggles[compose_name] = parse_dev_toggles(raw)
 
     routes = [namespaced_route(service.name, route) for service in services for route in service.routes]
 
@@ -209,8 +171,6 @@ def select(config: Config, environment: Environment) -> Selection:
         else next(route for route in routes if route.path == auth_service.routes[0].path),
         forwarded=forwarded,
         profiles=profiles,
-        dev_services=dev_services,
-        dev_toggles=dev_toggles,
         overrides=overrides,
     )
 
@@ -220,7 +180,6 @@ def render(
     platform: str | None,
     selection: Selection,
     stack: ExitStack,
-    dev: bool,
 ) -> Invocation:
     # Materialize the per-run files.
     lock_env_file = write_lock_env_file(config, platform, stack)
@@ -286,34 +245,6 @@ def render(
             EDGE_CONFIG_NAME: {"content": double_dollars("\n".join(lines) + "\n")},
         }
     compose_files.append(write_temp_compose_file(stack, document, "devkit-assembly-"))
-
-    if dev:
-        # Render the dev overlay.
-        overlay_services: dict[str, Yaml] = {}
-        for compose_name, build_name in selection.dev_services:
-            overlay_services[compose_name] = {
-                "image": f"{config.repository}/{build_name}:dev",
-                "volumes": [
-                    {
-                        "type": "bind",
-                        "source": config.root.resolve().as_posix(),
-                        "target": "/app",
-                        "read_only": True,
-                    }
-                ],
-            }
-        for service_name, toggles in selection.dev_toggles.items():
-            service = overlay_services.get(service_name)
-            if not is_mapping(service):
-                service = {}
-                overlay_services[service_name] = service
-            service["environment"] = {key: f"${{{key}:-{value}}}" for key, value in toggles.items()}
-        if not overlay_services:
-            raise ValueError(
-                f"--dev requires a dev shape: a service Dockerfile declaring a dev stage "
-                f"or a workload carrying {DEV_TOGGLES_ANNOTATION}"
-            )
-        compose_files.append(write_temp_compose_file(stack, {"services": overlay_services}, "devkit-dev-overlay-"))
 
     if selection.routes or selection.ports:
         # Validate every route upstream and port owner against compose's own resolution.

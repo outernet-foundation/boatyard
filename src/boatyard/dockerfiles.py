@@ -25,7 +25,6 @@ class ServiceBuild(BaseModel):
     axis: str | None = None
     variants: list[str] = Field(default_factory=list)
     sha_args: list[str] = Field(default_factory=list)
-    dev_stage: bool = False
 
     @model_validator(mode="after")
     def _validate(self) -> Self:
@@ -101,7 +100,6 @@ def derive_services(root: Path, axes: dict[str, list[str]]) -> dict[str, Service
             axis=axis_arg,
             variants=list(axes[axis_arg]) if axis_arg is not None else [],
             sha_args=sorted({arg for arg in args if arg.endswith("_SHA")}),
-            dev_stage="dev" in stages and len(stages) > 1,
         )
 
     effective_axes = {name: _effective_axis(name, builds, ()) for name in builds}

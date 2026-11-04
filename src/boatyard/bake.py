@@ -91,7 +91,6 @@ def run_build(
     push_to: str | None = None,
     targets: list[str] | None = None,
     no_cache: bool = False,
-    dev: bool = False,
 ) -> None:
     pushing = push or push_to is not None
     destination = push_to
@@ -111,15 +110,6 @@ def run_build(
     target_variants = {
         target: variant for service in config.service_builds.values() for target, variant in service.target_variants
     }
-    dev_targets = {
-        target
-        for service in config.service_builds.values()
-        if service.dev_stage
-        for target, _variant in service.target_variants
-    }
-
-    if dev and not dev_targets:
-        raise ValueError("no service declares a dev stage (a multi-stage Dockerfile carrying an AS dev stage)")
 
     if targets:
         resolved_targets: list[str] = []
@@ -149,15 +139,11 @@ def run_build(
                 )
             if target not in resolved_targets:
                 resolved_targets.append(target)
-        if dev:
-            undeclared = sorted(set(resolved_targets) - dev_targets)
-            if undeclared:
-                raise typer.BadParameter(f"--dev: no dev stage for {undeclared}")
     else:
         # Select the default targets for this machine's arch.
         defaults = {service.target_variants[0][0] for service in config.service_builds.values()}
         resolved_targets = (
-            sorted(defaults & dev_targets if dev else defaults)
+            sorted(defaults)
             if not config.platforms or host in config.platforms
             else []
         )
@@ -182,20 +168,14 @@ def run_build(
                 args[axis] = variant
             args.update({sha: f"${{{sha}:?err}}" for sha in service.sha_args})
             build: dict[str, BakeValue] = {"dockerfile": service.dockerfile}
-            if dev:
-                build["target"] = "dev"
             if config.platforms:
                 # Collapse multi-arch declarations to the host arch in load mode.
                 build["platforms"] = [host] if not pushing and len(config.platforms) > 1 else list(config.platforms)
             build["args"] = args
-            if dev:
-                # Tag dev builds per service, not per target.
-                build["tags"] = [f"{namespace}/{service.name}:dev"]
-            else:
-                build["tags"] = [
-                    f"{namespace}/{target}:latest",
-                    f"{namespace}/{target}:${{{service_sha_env(service.name)}}}",
-                ]
+            build["tags"] = [
+                f"{namespace}/{target}:latest",
+                f"{namespace}/{target}:${{{service_sha_env(service.name)}}}",
+            ]
             if service.contexts:
                 build["additional_contexts"] = {
                     context: f"target:{context}-{variant}" if variant is not None else f"target:{context}"

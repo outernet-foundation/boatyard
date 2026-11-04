@@ -96,20 +96,6 @@ class TestDeriveServices:
 
         assert services["api"].contexts == []
 
-    def test_multi_stage_dockerfile_declares_a_dev_stage(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "api", "ARG PY_IMAGE\nFROM ${PY_IMAGE} AS base\nFROM base AS dev\n")
-
-        services = _derive(tmp_path)
-
-        assert services["api"].dev_stage
-
-    def test_single_stage_dev_label_is_not_a_dev_stage(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "api", "ARG PY_IMAGE\nFROM ${PY_IMAGE} AS dev\n")
-
-        services = _derive(tmp_path)
-
-        assert not services["api"].dev_stage
-
     def test_bare_identifier_naming_no_sibling_refuses(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "FROM python\n")
 

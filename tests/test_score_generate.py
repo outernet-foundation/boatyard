@@ -978,27 +978,6 @@ def test_bare_literal_workload_image_refuses(tmp_path: Path, monkeypatch: pytest
         )
 
 
-def _toggles_workload(annotation: object, name: str = "api") -> str:
-    return f"metadata:\n  name: {name}\n  annotations:\n    outernet.internal/dev-toggles: {annotation!r}\ncontainers: {{}}\n"
-
-
-def test_dev_toggles_spelling_refuses_at_generation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config = _bundle_config()
-
-    for annotation in ("RELOAD", "reload=true", "RELOAD=", "RELOAD=true,RELOAD=false"):
-        with pytest.raises(ValueError, match=r"dev-toggles"):
-            _compose_init_templates(
-                monkeypatch, tmp_path, config, {}, {"stack/score/api.yaml": _toggles_workload(annotation)}
-            )
-
-
-def test_a_non_string_dev_toggles_annotation_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config = _bundle_config()
-
-    with pytest.raises(ValidationError, match=r"annotations.*dev-toggles"):
-        _compose_init_templates(monkeypatch, tmp_path, config, {}, {"stack/score/api.yaml": _toggles_workload(True)})
-
-
 def test_a_workload_without_metadata_name_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _bundle_config()
 

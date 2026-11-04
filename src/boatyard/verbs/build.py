@@ -27,9 +27,6 @@ def build(
         ),
     ] = None,
     no_cache: Annotated[bool, typer.Option("--no-cache", help="Force rebuild by disabling cache usage.")] = False,
-    dev: Annotated[
-        bool, typer.Option("--dev", help="Build each Dockerfile-declared dev stage under the :dev tag (local-only).")
-    ] = False,
 ) -> None:
     root = Path.cwd()
     config = Config.load(root)
@@ -40,9 +37,6 @@ def build(
         raise typer.BadParameter(
             "--push and --push-to are mutually exclusive: --push targets the config's repository, --push-to targets that address"
         )
-
-    if dev and (push or push_to is not None):
-        raise typer.BadParameter("--dev builds local-only images; --push/--push-to are not allowed")
 
     if push_to is not None:
         registry_host = push_to.partition("/")[0]
@@ -56,4 +50,4 @@ def build(
         raise typer.BadParameter("--push targets the config's repository; repository is required")
 
     targets = [address for value in targets or [] for address in value.split()] or None
-    run_build(config=config, push=push, push_to=push_to, targets=targets, no_cache=no_cache, dev=dev)
+    run_build(config=config, push=push, push_to=push_to, targets=targets, no_cache=no_cache)

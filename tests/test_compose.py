@@ -31,8 +31,6 @@ PINNED_COMPOSE_VERSION = "5.6.1"
 
 LOCKED_ERROR = f"Image {MIRROR_PREFIX}/docker.io/library/alpine:3.20 (digest {FAKE_DIGEST}) is not mirrored"
 
-DEV_TOGGLES = "outernet.internal/dev-toggles"
-OVERLAY_ARGUMENT_PATTERN = re.compile(r"-f (\S*devkit-dev-overlay-\S+\.yaml)")
 ASSEMBLY_ARGUMENT_PATTERN = re.compile(r"-f (\S*devkit-assembly-\S+\.yaml)")
 LOCK_ENV_ARGUMENT_PATTERN = re.compile(r"(\S*devkit-lock-env-\S+\.env)")
 PRODUCER_ENV_ARGUMENT_PATTERN = re.compile(r"(\S*devkit-producer-env-\S+\.env)")
@@ -228,13 +226,10 @@ def _write_override_consumer(
     )
 
 
-def _write_workload(root: Path, name: str, service_name: str, annotations: dict[str, str] | None = None) -> None:
+def _write_workload(root: Path, name: str, service_name: str) -> None:
     path = root / "stack" / "score" / name
     path.parent.mkdir(parents=True, exist_ok=True)
-    metadata: dict[str, object] = {"name": service_name}
-    if annotations is not None:
-        metadata["annotations"] = annotations
-    path.write_text(yaml.safe_dump({"metadata": metadata}), encoding="utf-8")
+    path.write_text(yaml.safe_dump({"metadata": {"name": service_name}}), encoding="utf-8")
 
 
 def _defined_profiles(command: str) -> str:
@@ -295,18 +290,6 @@ class AssemblyRecorder(HandoffRecorder):
     def run(self, command: str) -> None:
         super().run(command)
         match = ASSEMBLY_ARGUMENT_PATTERN.search(command)
-        if match is not None:
-            self.documents.append(yaml.safe_load(Path(match.group(1)).read_text(encoding="utf-8")))
-
-
-class OverlayRecorder(HandoffRecorder):
-    def __init__(self) -> None:
-        super().__init__()
-        self.documents: list[dict[str, Any]] = []
-
-    def run(self, command: str) -> None:
-        super().run(command)
-        match = OVERLAY_ARGUMENT_PATTERN.search(command)
         if match is not None:
             self.documents.append(yaml.safe_load(Path(match.group(1)).read_text(encoding="utf-8")))
 
@@ -1030,162 +1013,6 @@ class TestDownTeardown:
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
         assert "must exist and declare services" in str(result.exception)
-
-
-def _write_dev_tree(
-    root: Path,
-    *,
-    dockerfile: str,
-    api_annotations: dict[str, str] | None = None,
-    edge_annotations: dict[str, str] | None = None,
-) -> None:
-    _write_config(
-        root,
-        {
-            "project_name": "demo",
-            "repository": "ghcr.io/org/demo",
-            "services": {
-                "apps": {
-                    "options": {
-                        "core": {"workloads": ["api.yaml"]},
-                        "edge": {"workloads": ["edge.yaml"]},
-                    }
-                }
-            },
-        },
-    )
-    service_directory = root / "workloads" / "api"
-    service_directory.mkdir(parents=True, exist_ok=True)
-    (service_directory / "Dockerfile").write_text(dockerfile, encoding="utf-8")
-    _write_bundle_output(root, "apps-core", ["api"])
-    _write_bundle_output(root, "apps-edge", ["edge"])
-    _write_workload(root, "api.yaml", "api", api_annotations)
-    _write_workload(root, "edge.yaml", "edge", edge_annotations)
-    (root / ".env").write_text("BUNDLES=apps-core\n", encoding="utf-8")
-
-
-MULTI_STAGE_DOCKERFILE = "ARG BASE_IMAGE\nFROM ${BASE_IMAGE} AS dev\nFROM dev AS runtime\n"
-SINGLE_STAGE_DOCKERFILE = "ARG BASE_IMAGE\nFROM ${BASE_IMAGE} AS dev\n"
-
-
-class TestDevOverlay:
-    def test_dev_stage_service_gets_dev_image_repo_bind_and_toggle_holes(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        _write_dev_tree(
-            tmp_path,
-            dockerfile=MULTI_STAGE_DOCKERFILE,
-            api_annotations={DEV_TOGGLES: "RELOAD=true,DEBUG_API=false"},
-        )
-        monkeypatch.delenv("BUNDLES", raising=False)
-        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
-        recorder = OverlayRecorder()
-        monkeypatch.setattr(up, "bash_handoff", recorder.run)
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(app, ["up", "--dev"])
-
-        assert result.exit_code == 0, result.output
-        [document] = recorder.documents
-        assert document == {
-            "services": {
-                "apps-core-api": {
-                    "image": "ghcr.io/org/demo/api:dev",
-                    "volumes": [
-                        {
-                            "type": "bind",
-                            "source": tmp_path.resolve().as_posix(),
-                            "target": "/app",
-                            "read_only": True,
-                        }
-                    ],
-                    "environment": {"RELOAD": "${RELOAD:-true}", "DEBUG_API": "${DEBUG_API:-false}"},
-                }
-            }
-        }
-
-    def test_toggle_only_service_gets_environment_holes_without_an_image(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        _write_dev_tree(tmp_path, dockerfile=SINGLE_STAGE_DOCKERFILE, api_annotations={DEV_TOGGLES: "RELOAD=true"})
-        monkeypatch.delenv("BUNDLES", raising=False)
-        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
-        recorder = OverlayRecorder()
-        monkeypatch.setattr(up, "bash_handoff", recorder.run)
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(app, ["up", "--dev"])
-
-        assert result.exit_code == 0, result.output
-        [document] = recorder.documents
-        assert document == {"services": {"apps-core-api": {"environment": {"RELOAD": "${RELOAD:-true}"}}}}
-
-    def test_overlay_targets_only_services_the_selection_defines(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        _write_dev_tree(
-            tmp_path,
-            dockerfile=MULTI_STAGE_DOCKERFILE,
-            api_annotations={DEV_TOGGLES: "RELOAD=true"},
-            edge_annotations={DEV_TOGGLES: "DEBUG_EDGE=false"},
-        )
-        (tmp_path / ".env").write_text("BUNDLES=apps-edge\n", encoding="utf-8")
-        monkeypatch.delenv("BUNDLES", raising=False)
-        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
-        recorder = OverlayRecorder()
-        monkeypatch.setattr(up, "bash_handoff", recorder.run)
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(app, ["up", "--dev"])
-
-        assert result.exit_code == 0, result.output
-        [document] = recorder.documents
-        assert document == {"services": {"apps-edge-edge": {"environment": {"DEBUG_EDGE": "${DEBUG_EDGE:-false}"}}}}
-
-    def test_up_dev_without_dev_shape_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        _write_dev_tree(tmp_path, dockerfile=SINGLE_STAGE_DOCKERFILE)
-        monkeypatch.delenv("BUNDLES", raising=False)
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(app, ["up", "--dev"])
-
-        assert result.exit_code != 0
-        assert isinstance(result.exception, ValueError)
-        assert "requires a dev shape" in str(result.exception)
-
-    def test_up_dev_builds_both_shapes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        _write_dev_tree(tmp_path, dockerfile=MULTI_STAGE_DOCKERFILE)
-        monkeypatch.delenv("BUNDLES", raising=False)
-        builds: list[dict[str, object]] = []
-
-        def _record_build(**kwargs: object) -> None:
-            builds.append(dict(kwargs))
-
-        monkeypatch.setattr(up, "run_build", _record_build)
-        monkeypatch.setattr(up, "bash_handoff", _silent_handoff)
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(app, ["up", "--build", "--dev"])
-
-        assert result.exit_code == 0, result.output
-        assert [set(build) for build in builds] == [{"config"}, {"config", "dev"}]
-        assert builds[0]["config"] is builds[1]["config"]
-
-    def test_up_dev_layers_and_cleans_the_overlay(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        _write_dev_tree(
-            tmp_path,
-            dockerfile=MULTI_STAGE_DOCKERFILE,
-            api_annotations={DEV_TOGGLES: "RELOAD=true"},
-        )
-        monkeypatch.delenv("BUNDLES", raising=False)
-        recorder = HandoffRecorder()
-        monkeypatch.setattr(up, "bash_handoff", recorder.run)
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(app, ["up", "--dev"])
-
-        assert result.exit_code == 0, result.output
-        overlay_match = OVERLAY_ARGUMENT_PATTERN.search(recorder.commands[0])
-        assert overlay_match is not None
-        assert not Path(overlay_match.group(1)).exists()
 
 
 class TestLockRequirement:
