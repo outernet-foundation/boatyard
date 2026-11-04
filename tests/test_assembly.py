@@ -86,7 +86,6 @@ def _write_edge_tree(
         encoding="utf-8",
     )
     monkeypatch.delenv("BUNDLES", raising=False)
-    monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
     monkeypatch.delenv("PUBLIC_URL", raising=False)
     monkeypatch.delenv("GATEWAY_PORT", raising=False)
     monkeypatch.chdir(tmp_path)

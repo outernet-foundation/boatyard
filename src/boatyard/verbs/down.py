@@ -27,7 +27,7 @@ def down(
     require_env_file(root)
     config = require_compose_stack(Config.load(root))
 
-    # Tear down by project name, covering every selection and profile.
+    # Tear down by project name, covering every selection.
     with ExitStack() as stack:
         environment = Environment.load(root)
         entries = compose_env_entries(read_config_lock(root), config, environment.platform)

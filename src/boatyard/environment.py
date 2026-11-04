@@ -10,7 +10,6 @@ from boatyard.config import OCI_REFERENCE_PREFIX, Yaml, is_mapping, require_bund
 ENV_FILE = Path(".env")
 BUNDLES_VARIABLE = "BUNDLES"
 BUNDLE_OVERRIDE_PREFIX = "BUNDLE_OVERRIDE_"
-PROFILES_VARIABLE = "COMPOSE_PROFILES"
 PLATFORM_VARIABLE = "PLATFORM"
 PUBLIC_URL_VARIABLE = "PUBLIC_URL"
 
@@ -49,7 +48,6 @@ class Environment(BaseModel):
     bundles: list[str]
     oci_overrides: dict[str, str]
     path_overrides: dict[str, Path]
-    profiles: list[str]
     public_url: PublicUrl | None
     platform: str | None
     variables: dict[str, str]
@@ -104,7 +102,7 @@ class Environment(BaseModel):
                 key, _, value = line.partition("=")
                 merged[key.strip()] = value.strip().strip("'\"")
         merged.update(environ)
-        consumed = {BUNDLES_VARIABLE, PROFILES_VARIABLE, PLATFORM_VARIABLE, PUBLIC_URL_VARIABLE}
+        consumed = {BUNDLES_VARIABLE, PLATFORM_VARIABLE, PUBLIC_URL_VARIABLE}
         return cls.model_validate({
             "bundles": _split_names(merged.get(BUNDLES_VARIABLE, "")),
             "overrides": {
@@ -112,7 +110,6 @@ class Environment(BaseModel):
                 for key, value in merged.items()
                 if key.startswith(BUNDLE_OVERRIDE_PREFIX)
             },
-            "profiles": _split_names(merged.get(PROFILES_VARIABLE, "")),
             "public_url": merged.get(PUBLIC_URL_VARIABLE, "").strip() or None,
             "platform": merged.get(PLATFORM_VARIABLE, "").strip() or None,
             "variables": {

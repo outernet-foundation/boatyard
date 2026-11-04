@@ -39,9 +39,6 @@ EDGE_LISTEN_PORT = 8443
 EDGE_CONFIG_NAME = "devkit-edge-caddyfile"
 ROUTE_UNRESOLVED_REFUSAL = "route {path} upstream {name} resolves to no service in the selected assembly"
 PORT_UNRESOLVED_REFUSAL = "ports for service {name!r} resolve to no service in the selected assembly"
-PROFILE_UNKNOWN_REFUSAL = (
-    "COMPOSE_PROFILES selects unknown profile(s) {unknown}; profiles defined by the compose files: {defined}"
-)
 
 app = typer.Typer()
 
@@ -180,8 +177,6 @@ def up(
         for port in service.ports
     ]
 
-    profiles = environment.profiles
-
     # Render the edge service and its Caddyfile when any route rides.
     document_services: dict[str, Yaml] = {}
     caddyfile: str | None = None
@@ -274,13 +269,6 @@ def up(
                 resolved,
                 PORT_UNRESOLVED_REFUSAL,
             )
-        # Refuse profile names the compose files do not define.
-        if profiles:
-            _refuse_unknown(
-                {profile: profile for profile in profiles},
-                _compose_config(config.root, compose_files, "--profiles", env_file=env_file),
-                PROFILE_UNKNOWN_REFUSAL,
-            )
 
         # Probe every lock entry before bring-up; an overridden bundle skips its probe —
         # testing a bundle not published at any digest yet is the override's point.
@@ -294,7 +282,6 @@ def up(
         up_command = compose_command(
             root,
             compose_files,
-            *(argument for profile in profiles for argument in ("--profile", profile)),
             "up",
             env_file=env_file,
         )

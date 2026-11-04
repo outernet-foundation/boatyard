@@ -325,111 +325,6 @@ class PresentProbeAndServices:
         return "".join(f"{name}\n" for name in self.names)
 
 
-class PresentProbeAndProfiles:
-    def __init__(self, *profiles: str) -> None:
-        self.profiles = list(profiles)
-
-    def run(self, command: str) -> str:
-        if "imagetools inspect" in command or "crane digest" in command:
-            return ""
-        assert "config --profiles" in command
-        return "".join(f"{profile}\n" for profile in self.profiles)
-
-
-class TestProfileForwarding:
-    def _invoke_up(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> HandoffRecorder:
-        _write_ref_tree(tmp_path)
-        recorder = HandoffRecorder()
-        _patch_up_probes(monkeypatch, PresentProbeAndProfiles("keycloak", "tunnel-ngrok").run)
-        monkeypatch.setattr(up, "bash_handoff", recorder.run)
-        monkeypatch.chdir(tmp_path)
-        return recorder
-
-    def test_forwards_profiles_declared_in_the_env_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
-        (tmp_path / ".env").write_text("COMPOSE_PROFILES=tunnel-ngrok\n", encoding="utf-8")
-        recorder = self._invoke_up(monkeypatch, tmp_path)
-
-        result = runner.invoke(app, ["up"])
-
-        assert result.exit_code == 0, result.output
-        assert [_normalize(command, tmp_path) for command in recorder.commands] == [
-            (
-                "docker compose -f ASSEMBLY --project-directory ROOT --env-file .env "
-                "--profile tunnel-ngrok up --pull missing -d"
-            )
-        ]
-
-    def test_splits_commas_strips_whitespace_and_deduplicates(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
-        (tmp_path / ".env").write_text('COMPOSE_PROFILES=" keycloak , , tunnel-ngrok ,keycloak"\n', encoding="utf-8")
-        recorder = self._invoke_up(monkeypatch, tmp_path)
-
-        result = runner.invoke(app, ["up"])
-
-        assert result.exit_code == 0, result.output
-        assert [_normalize(command, tmp_path) for command in recorder.commands] == [
-            (
-                "docker compose -f ASSEMBLY --project-directory ROOT --env-file .env "
-                "--profile keycloak --profile tunnel-ngrok up --pull missing -d"
-            )
-        ]
-
-    def test_shell_environment_overrides_the_env_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("COMPOSE_PROFILES=tunnel-ngrok\n", encoding="utf-8")
-        monkeypatch.setenv("COMPOSE_PROFILES", "tunnel-rathole")
-        recorder = HandoffRecorder()
-        _patch_up_probes(monkeypatch, PresentProbeAndProfiles("tunnel-rathole").run)
-        monkeypatch.setattr(up, "bash_handoff", recorder.run)
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(app, ["up"])
-
-        assert result.exit_code == 0, result.output
-        assert [_normalize(command, tmp_path) for command in recorder.commands] == [
-            (
-                "docker compose -f ASSEMBLY --project-directory ROOT --env-file .env "
-                "--profile tunnel-rathole up --pull missing -d"
-            )
-        ]
-
-    def test_empty_value_forwards_no_flags(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
-        (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
-        recorder = self._invoke_up(monkeypatch, tmp_path)
-
-        result = runner.invoke(app, ["up"])
-
-        assert result.exit_code == 0, result.output
-        assert [_normalize(command, tmp_path) for command in recorder.commands] == [
-            "docker compose -f ASSEMBLY --project-directory ROOT --env-file .env up --pull missing -d"
-        ]
-
-    def test_unknown_profile_fails_loudly(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
-        (tmp_path / ".env").write_text("COMPOSE_PROFILES=keycloak,ghost\n", encoding="utf-8")
-        self._invoke_up(monkeypatch, tmp_path)
-
-        result = runner.invoke(app, ["up"])
-
-        assert result.exit_code != 0
-        assert isinstance(result.exception, ValueError)
-        assert "ghost" in str(result.exception)
-
-    def test_absent_profiles_forward_no_flags(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
-        (tmp_path / ".env").write_text("PUBLIC_URL=https://example.dev\n", encoding="utf-8")
-        recorder = self._invoke_up(monkeypatch, tmp_path)
-
-        result = runner.invoke(app, ["up"])
-
-        assert result.exit_code == 0, result.output
-        assert [_normalize(command, tmp_path) for command in recorder.commands] == [
-            "docker compose -f ASSEMBLY --project-directory ROOT --env-file .env up --pull missing -d"
-        ]
-
-
 def _write_consumer_tree(root: Path, *, bundles: str | None = "placeframe-cuda,auth-keycloak") -> Path:
     # Write the canonical consumer tree; bundles=None writes no BUNDLES line.
     _write_config(
@@ -1045,7 +940,6 @@ class TestLockRequirement:
         _write_workload(tmp_path, "api.yaml", "api")
         (tmp_path / ".env").write_text("BUNDLES=apps-core\n", encoding="utf-8")
         monkeypatch.delenv("BUNDLES", raising=False)
-        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
         recorder = HandoffRecorder()
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
@@ -1064,7 +958,6 @@ class TestLockEnvSynthesis:
 
     def _invoke_up_with_lock(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recorder: HandoffRecorder):
         monkeypatch.delenv("PLATFORM", raising=False)
-        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
         _patch_up_probes(monkeypatch, _probe_present)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -1074,7 +967,7 @@ class TestLockEnvSynthesis:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
+        (tmp_path / ".env").write_text("", encoding="utf-8")
         _write_lock(
             tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST}, TUNNEL_BUNDLES
         )
@@ -1112,7 +1005,7 @@ class TestLockEnvSynthesis:
 
     def test_two_consecutive_syntheses_are_byte_identical(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
+        (tmp_path / ".env").write_text("", encoding="utf-8")
         _write_lock(
             tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST}, TUNNEL_BUNDLES
         )
@@ -1159,7 +1052,7 @@ class TestLockEnvSynthesis:
                 "services": {"tunnel": {"ref": LIVEKIT_REF}},
             },
         )
-        (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
+        (tmp_path / ".env").write_text("", encoding="utf-8")
         _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, bundles=TUNNEL_BUNDLES)
 
         result = self._invoke_up_with_lock(tmp_path, monkeypatch, HandoffRecorder())
@@ -1187,7 +1080,7 @@ class TestLockEnvSynthesis:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
+        (tmp_path / ".env").write_text("", encoding="utf-8")
         root_lock = tmp_path.joinpath(*LOCK_PATH.parts)
         root_lock.write_text(
             yaml.safe_dump({"images": {"ALPINE_IMAGE": {"index": self.ALPINE_INDEX}}, "bundles": TUNNEL_BUNDLES}),
@@ -1205,12 +1098,11 @@ class TestLockEnvSynthesis:
 
     def test_a_failed_run_prints_and_keeps_the_env_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
+        (tmp_path / ".env").write_text("", encoding="utf-8")
         _write_lock(
             tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST}, TUNNEL_BUNDLES
         )
         monkeypatch.delenv("PLATFORM", raising=False)
-        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
         _patch_up_probes(monkeypatch, _probe_absent)
         monkeypatch.chdir(tmp_path)
 
@@ -1227,14 +1119,13 @@ class TestLockEnvSynthesis:
 class TestMirroredLockEnforcement:
     def _write_mirrored_tree(self, tmp_path: Path, entries: dict[str, str]) -> None:
         _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
+        (tmp_path / ".env").write_text("", encoding="utf-8")
         _write_lock(tmp_path, entries, bundles=TUNNEL_BUNDLES)
 
     def test_missing_entry_fails_closed_with_the_locked_message(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._write_mirrored_tree(
             tmp_path, {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST}
         )
-        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
         _patch_up_probes(monkeypatch, _probe_absent)
         monkeypatch.chdir(tmp_path)
 
@@ -1249,7 +1140,6 @@ class TestMirroredLockEnforcement:
         self._write_mirrored_tree(
             tmp_path, {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST}
         )
-        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
         _patch_up_probes(monkeypatch, _probe_unauthorized)
         monkeypatch.chdir(tmp_path)
 
@@ -1266,7 +1156,6 @@ class TestMirroredLockEnforcement:
         self._write_mirrored_tree(
             tmp_path, {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST}
         )
-        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
         recorder = HandoffRecorder()
         _patch_up_probes(monkeypatch, _probe_present)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
@@ -1284,7 +1173,6 @@ class TestMirroredLockEnforcement:
         absent = f"{MIRROR_PREFIX}/docker.io/library/alpine:3.20@{FAKE_DIGEST}"
         probe = SelectiveProbe(present)
         self._write_mirrored_tree(tmp_path, {"UV_IMAGE": present, "ALPINE_IMAGE": absent})
-        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
         _patch_up_probes(monkeypatch, probe.run)
         monkeypatch.chdir(tmp_path)
 
@@ -1310,7 +1198,6 @@ class TestMirroredLockEnforcement:
             encoding="utf-8",
         )
         probe = SelectiveProbe(index)
-        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
         _patch_up_probes(monkeypatch, probe.run)
         monkeypatch.chdir(tmp_path)
 
@@ -1346,7 +1233,6 @@ class TestMirroredLockEnforcement:
                 return ""
             raise CalledProcessError(1, command, stderr="unauthorized: authentication required\n")
 
-        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
         _patch_up_probes(monkeypatch, _probe_then_fail)
         monkeypatch.chdir(tmp_path)
 
@@ -1365,10 +1251,9 @@ class TestBundleLockEnforcement:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
+        (tmp_path / ".env").write_text("", encoding="utf-8")
         _write_lock(tmp_path, entries={}, bundles={})
         monkeypatch.delenv("BUNDLES", raising=False)
-        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -1383,13 +1268,12 @@ class TestBundleLockEnforcement:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
+        (tmp_path / ".env").write_text("", encoding="utf-8")
         relocked = dict(TUNNEL_BUNDLES)
         relocked["TUNNEL_BUNDLE"] = f"ghcr.io/org/livekit:{LIVEKIT_SHA_TAG}@{PLATFORM_DIGEST}"
         _write_lock(tmp_path, entries={}, bundles=relocked)
         recorder = AssemblyRecorder()
         monkeypatch.delenv("BUNDLES", raising=False)
-        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
         _patch_up_probes(monkeypatch, _probe_present)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -1404,7 +1288,7 @@ class TestBundleLockEnforcement:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
+        (tmp_path / ".env").write_text("", encoding="utf-8")
         probed: list[str] = []
 
         def _record(command: str) -> str:
@@ -1413,7 +1297,6 @@ class TestBundleLockEnforcement:
             return ""
 
         monkeypatch.delenv("BUNDLES", raising=False)
-        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
         _patch_up_probes(monkeypatch, _record)
         monkeypatch.setattr(up, "bash_handoff", _silent_handoff)
         monkeypatch.chdir(tmp_path)
@@ -1425,9 +1308,8 @@ class TestBundleLockEnforcement:
 
     def test_an_unpublished_bundle_fails_closed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
+        (tmp_path / ".env").write_text("", encoding="utf-8")
         monkeypatch.delenv("BUNDLES", raising=False)
-        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
         _patch_up_probes(monkeypatch, _probe_absent)
         monkeypatch.chdir(tmp_path)
 
@@ -1442,9 +1324,8 @@ class TestBundleLockEnforcement:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
+        (tmp_path / ".env").write_text("", encoding="utf-8")
         monkeypatch.delenv("BUNDLES", raising=False)
-        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
         _patch_up_probes(monkeypatch, _probe_unauthorized)
         monkeypatch.chdir(tmp_path)
 
@@ -1474,7 +1355,6 @@ class TestBundleOverrides:
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(root)
         monkeypatch.delenv("BUNDLES", raising=False)
-        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
         monkeypatch.delenv("PLATFORM", raising=False)
         return recorder
 
