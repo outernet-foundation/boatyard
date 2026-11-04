@@ -25,6 +25,8 @@ LIVEKIT_REF = "oci://ghcr.io/org/livekit:" + LIVEKIT_SHA_TAG
 LIVEKIT_PINNED = f"ghcr.io/org/livekit:{LIVEKIT_SHA_TAG}@{FAKE_DIGEST}"
 KEYCLOAK_REF = "oci://ghcr.io/org/keycloak:0.3.1-dev.42"
 KEYCLOAK_PINNED = f"ghcr.io/org/keycloak:0.3.1-dev.42@{FAKE_DIGEST}"
+PLACEFRAME_CUDA_REF = "oci://ghcr.io/org/placeframe:1.2.3"
+PLACEFRAME_ROCM_REF = "oci://ghcr.io/org/placeframe:1.2.3-rocm"
 TUNNEL_BUNDLES = {"TUNNEL_BUNDLE": LIVEKIT_PINNED}
 PINNED_COMPOSE_VERSION = "5.6.1"
 
@@ -195,13 +197,12 @@ def _write_override_consumer(
     lock_images: dict[str, str] | None = None,
     services_extra: dict[str, object] | None = None,
 ) -> None:
-    # The consumer's own placeframe-cuda output is deliberately never written; the override
-    # replaces its source.
+    # The overridden placeframe-cuda ref gets no lock entry; the override replaces its registry source.
     services: dict[str, object] = {
         "placeframe": {
             "options": {
-                "cuda": {"workloads": ["api.yaml"]},
-                "rocm": {"workloads": ["api.yaml"]},
+                "cuda": {"ref": PLACEFRAME_CUDA_REF},
+                "rocm": {"ref": PLACEFRAME_ROCM_REF},
             }
         },
     }
@@ -216,7 +217,6 @@ def _write_override_consumer(
         payload["platforms"] = platforms
     _write_config(root, payload)
     _write_lock(root, entries=dict(lock_images) if lock_images is not None else {})
-    _write_workload(root, "api.yaml", "api")
     (root / ".env").write_text(
         "BUNDLES=placeframe-cuda\n" + "".join(f"{line}\n" for line in environment_lines),
         encoding="utf-8",
@@ -1575,14 +1575,36 @@ class TestBundleOverrides:
         assert "BUNDLE_OVERRIDE_* names ['ghost']" in message
         assert "placeframe-cuda" in message
 
+    def test_an_override_naming_a_local_entry_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        consumer = tmp_path / "consumer"
+        consumer.mkdir()
+        _write_override_consumer(
+            consumer,
+            ["BUNDLE_OVERRIDE_EXTRA=../producer/stack/generated/compose/compose.extra.yaml"],
+            services_extra={"extra": {"workloads": ["extra.yaml"]}},
+        )
+        _write_workload(consumer, "extra.yaml", "extra")
+        self._invoke_up(monkeypatch, consumer)
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, ValueError)
+        message = str(result.exception)
+        assert "BUNDLE_OVERRIDE_* names ['extra']" in message
+        assert "an override targets a ref entry" in message
+        assert "placeframe-cuda" in message
+
     def test_an_unselected_override_is_inert(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         consumer = tmp_path / "consumer"
         consumer.mkdir()
-        _write_producer(tmp_path, ["grafana"])
-        cuda = _write_bundle_output(consumer, "placeframe-cuda", ["api"])
+        output = _write_producer(tmp_path, ["grafana"])
         _write_override_consumer(
             consumer,
-            ["BUNDLE_OVERRIDE_PLACEFRAME_ROCM=../producer/stack/generated/compose/compose.placeframe-rocm.yaml"],
+            [
+                f"BUNDLE_OVERRIDE_PLACEFRAME_CUDA={OVERRIDE_PATH}",
+                "BUNDLE_OVERRIDE_PLACEFRAME_ROCM=../producer/stack/generated/compose/compose.placeframe-rocm.yaml",
+            ],
         )
         recorder = self._invoke_up(monkeypatch, consumer)
 
@@ -1590,7 +1612,7 @@ class TestBundleOverrides:
 
         assert result.exit_code == 0, result.output
         [document] = recorder.documents
-        assert document["include"] == [cuda.resolve().as_posix()]
+        assert document["include"] == [output.resolve().as_posix()]
         assert recorder.env_contents == []
 
     def test_a_missing_override_path_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

@@ -109,6 +109,15 @@ def up(
             f"the bundle vocabulary is {sorted(config.selectable_options.keys() | set(config.bare_entries))}"
         )
 
+    # Refuse overrides naming local entries; an override replaces a ref entry's registry source.
+    remote_names = {name for name, _reference in config.remote_service_entries()}
+    local_names = sorted(name for name in environment.path_overrides if name not in remote_names)
+    if local_names:
+        raise ValueError(
+            f"{BUNDLE_OVERRIDE_PREFIX}* names {local_names}; an override targets a ref entry; "
+            f"the ref entries are {sorted(remote_names)}"
+        )
+
     # Resolve the chosen options into leaf services.
     services = config.resolve_services(choices)
 
@@ -122,6 +131,18 @@ def up(
 
     for service in services:
         name = service.name
+
+        # Include a local entry through its generated bundle output.
+        if service.entry.ref is None:
+            output = compose_bundle_output_path(config.root, name)
+            if not output.is_file():
+                raise ValueError(
+                    f"selected entry {name!r} has no bundle output {output.as_posix()}; generate-score writes it"
+                )
+            requirements[name] = _scan_local_bundle(name, service, output, refuse_edge=False)
+            includes.append(output.resolve().as_posix())
+            entries.update({lock_key_prefix(name) + key: value for key, value in consumer_entries.items()})
+            continue
 
         # Refuse a missing override path; the scan teeth cover names, requirements, and the edge service.
         if name in environment.path_overrides:
@@ -142,22 +163,10 @@ def up(
             continue
 
         # Include a remote ref as its lock-pinned digest; the lock's recorded requires is the contract.
-        if service.entry.ref is not None:
-            key = bundle_lock_key(name)
-            pinned = lock.require(key, f"bundle {name!r}", hint="run boatyard lock")
-            requirements[name] = lock.bundles[key].requires
-            includes.append(f"{OCI_REFERENCE_PREFIX}{pinned}")
-            continue
-
-        # Include a local entry through its generated bundle output.
-        output = compose_bundle_output_path(config.root, name)
-        if not output.is_file():
-            raise ValueError(
-                f"selected entry {name!r} has no bundle output {output.as_posix()}; generate-score writes it"
-            )
-        requirements[name] = _scan_local_bundle(name, service, output, refuse_edge=False)
-        includes.append(output.resolve().as_posix())
-        entries.update({lock_key_prefix(name) + key: value for key, value in consumer_entries.items()})
+        key = bundle_lock_key(name)
+        pinned = lock.require(key, f"bundle {name!r}", hint="run boatyard lock")
+        requirements[name] = lock.bundles[key].requires
+        includes.append(f"{OCI_REFERENCE_PREFIX}{pinned}")
 
     # Refuse selected bundles whose required interpolation no environment source fills; lock-key
     # holes are satisfied by construction through the per-run env file's entries.
