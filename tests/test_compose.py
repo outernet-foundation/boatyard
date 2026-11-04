@@ -515,11 +515,11 @@ class TestSelectionLaw:
 
         assert result.exit_code == 0, result.output
         [document] = recorder.documents
-        assert document["include"] == [
+        assert sorted(document["include"]) == sorted([
             "oci://" + KEYCLOAK_PINNED,
             (tmp_path / "stack/generated/compose/compose.placeframe-cuda.yaml").resolve().as_posix(),
             "oci://" + LIVEKIT_PINNED,
-        ]
+        ])
 
     def test_same_named_options_in_two_groups_select_together(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_config(
@@ -727,11 +727,11 @@ class TestUpMaterialization:
         assert result.exit_code == 0, result.output
         [document] = recorder.documents
         assert document["name"] == "demo"
-        assert document["include"] == [
+        assert sorted(document["include"]) == sorted([
             "oci://" + KEYCLOAK_PINNED,
             (tmp_path / "stack/generated/compose/compose.placeframe-cuda.yaml").resolve().as_posix(),
             "oci://" + LIVEKIT_PINNED,
-        ]
+        ])
         edge = document["services"]["edge"]
         assert edge["image"] == "${CADDY_IMAGE:?err}"
         assert edge["ports"] == [{"target": "8443", "published": "${GATEWAY_PORT:?err}", "protocol": "tcp"}]

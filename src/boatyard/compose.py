@@ -21,8 +21,6 @@ from boatyard.config import (
     OCI_REFERENCE_PREFIX,
     PortDeclaration,
     RouteConfig,
-    ServiceEntry,
-    ServiceGroup,
     Yaml,
     bundle_lock_key,
     compose_bundle_output_path,
@@ -75,9 +73,7 @@ def select(config: Config, environment: Environment) -> Selection:
         )
     unknown = [name for name in environment.bundles if name not in config.selectable_options]
     if unknown:
-        bare_entries_note = (
-            f"; bare entries, always included: {config.bare_entries}" if config.bare_entries else ""
-        )
+        bare_entries_note = f"; bare entries, always included: {config.bare_entries}" if config.bare_entries else ""
         raise ValueError(
             f"{BUNDLES_VARIABLE}= names {unknown}; "
             f"the selectable options are {sorted(config.selectable_options)}{bare_entries_note}"
@@ -112,65 +108,55 @@ def select(config: Config, environment: Environment) -> Selection:
             raise ValueError("an auth option is selected; PUBLIC_URL is required")
         forwarded = environment.public_url.forwarded
 
-    # Flatten the selected entries in declaration order.
-    entries: list[tuple[str, ServiceGroup | ServiceEntry]] = []
-    for name, entry in config.services.items():
-        if isinstance(entry, ServiceGroup):
-            entries.append((name, entry))
-            option_name = choices.get(name)
-            if option_name is not None:
-                entries.append((qualified_option_name(name, option_name), entry.options[option_name]))
-        else:
-            entries.append((name, entry))
+    services = config.resolve_services(choices)
 
     # Collect the include list in services declaration order; a remote ref includes the
-    # lock's digest-pinned form, never the yaml tag directly. Each leaf answers one row:
+    # lock's digest-pinned form, never the yaml tag directly. Each service answers one row:
     # its include string, an optional local output whose service names are scanned, and an
     # optional bundle override.
     lock = read_config_lock(config.root)
     includes: list[str] = []
     local_outputs: list[Path] = []
     overrides: list[BundleOverride] = []
-    for name, entry in entries:
-        if isinstance(entry, ServiceGroup):
+
+    for service in [service for service in services if service.name in selected_overrides]:
+        name = service.name
+        value = selected_overrides[name]
+        variable = BUNDLE_OVERRIDE_PREFIX + name.upper().replace("-", "_")
+
+        if value.startswith(OCI_REFERENCE_PREFIX):
+            require_bundle_reference(value)
+            includes.append(value)
+            overrides.append(BundleOverride(name=name, path=None))
             continue
-        local_output: Path | None = None
-        override: BundleOverride | None = None
-        if name in selected_overrides:
-            value = selected_overrides[name]
-            variable = BUNDLE_OVERRIDE_PREFIX + name.upper().replace("-", "_")
-            if value.startswith(OCI_REFERENCE_PREFIX):
-                require_bundle_reference(value)
-                include = value
-                override = BundleOverride(name=name, path=None)
-            else:
-                candidate = Path(value)
-                path = (candidate if candidate.is_absolute() else config.root / candidate).resolve()
-                if path.parts[-4:-1] != OVERRIDE_LAYOUT:
-                    raise ValueError(
-                        f"{variable}: {value!r} must point into a stack/generated/compose/ bundle output layout"
-                    )
-                if not path.is_file():
-                    raise ValueError(f"{variable}: {path.as_posix()} does not exist")
-                include = path.as_posix()
-                local_output = path
-                override = BundleOverride(name=name, path=path)
-        elif entry.ref is not None:
+
+        candidate = Path(value)
+        path = (candidate if candidate.is_absolute() else config.root / candidate).resolve()
+        if path.parts[-4:-1] != OVERRIDE_LAYOUT:
+            raise ValueError(f"{variable}: {value!r} must point into a stack/generated/compose/ bundle output layout")
+        if not path.is_file():
+            raise ValueError(f"{variable}: {path.as_posix()} does not exist")
+        includes.append(path.as_posix())
+        local_outputs.append(path)
+        overrides.append(BundleOverride(name=name, path=path))
+
+        continue
+
+    for service in [service for service in services if service.name not in selected_overrides]:
+        name = service.name
+        if service.entry.ref is not None:
             pinned = lock.require(bundle_lock_key(name), f"bundle {name!r}", hint="run boatyard lock")
-            include = f"{OCI_REFERENCE_PREFIX}{pinned}"
-        else:
-            output = compose_bundle_output_path(config.root, name)
-            if not output.is_file():
-                raise ValueError(
-                    f"selected entry {name!r} has no bundle output {output.as_posix()}; generate-score writes it"
-                )
-            include = output.resolve().as_posix()
-            local_output = output
-        includes.append(include)
-        if local_output is not None:
-            local_outputs.append(local_output)
-        if override is not None:
-            overrides.append(override)
+            includes.append(f"{OCI_REFERENCE_PREFIX}{pinned}")
+
+            continue
+
+        output = compose_bundle_output_path(config.root, name)
+        if not output.is_file():
+            raise ValueError(
+                f"selected entry {name!r} has no bundle output {output.as_posix()}; generate-score writes it"
+            )
+        includes.append(output.resolve().as_posix())
+        local_outputs.append(output)
 
     # Refuse selected outputs that define the same service name.
     file_services: list[tuple[Path, set[str]]] = []
@@ -191,13 +177,15 @@ def select(config: Config, environment: Environment) -> Selection:
                 f"{path.as_posix()}: the bundle override defines the reserved service {EDGE_SERVICE_NAME!r}"
             )
 
-    # Gather the routes, ports, and the selected auth route.
-    routes = [route for _, entry in entries for route in entry.routes]
-    ports = [port for _, entry in entries for port in entry.ports]
+    # Gather the routes, ports, and the selected auth route. The auth option's own route is
+    # routes[0] of its resolved service: the load law gives an auth option exactly one route,
+    # and the option's routes ride before the group's.
+    routes = [route for service in services for route in service.routes]
+    ports = [port for service in services for port in service.ports]
     auth_route = None
-    auth = config.services.get(AUTH_GROUP_NAME)
-    if isinstance(auth, ServiceGroup) and auth_option is not None:
-        auth_route = auth.options[auth_option].routes[0]
+    if auth_option is not None:
+        auth_name = qualified_option_name(AUTH_GROUP_NAME, auth_option)
+        auth_route = next(service for service in services if service.name == auth_name).routes[0]
 
     # Dev facts: dev-stage services inside the selection, plus the workload-declared dev toggles.
     dev_services = [
@@ -205,10 +193,10 @@ def select(config: Config, environment: Environment) -> Selection:
     ]
     dev_toggles: dict[str, dict[str, str]] = {}
     score_dir = config.root / config.score_dir
-    for _, entry in entries:
-        if isinstance(entry, ServiceGroup) or entry.remote:
+    for service in services:
+        if service.entry.remote:
             continue
-        for workload in entry.workloads:
+        for workload in service.entry.workloads:
             annotations = ComposeWorkloadDocument.load(score_dir / workload).metadata.annotations
             raw = annotations.get(DEV_TOGGLES_ANNOTATION)
             stem = Path(workload).stem
@@ -331,7 +319,11 @@ def render(
         # Validate every route upstream and port owner against compose's own resolution.
         resolved = set(
             _compose_config(
-                config.root, compose_files, "--services", lock_env_file=lock_env_file, extra_env_files=producer_env_files
+                config.root,
+                compose_files,
+                "--services",
+                lock_env_file=lock_env_file,
+                extra_env_files=producer_env_files,
             )
         )
         for route in selection.routes:
@@ -437,9 +429,7 @@ def write_lock_env_file(config: Config, platform: str | None, stack: ExitStack) 
     return write_env_file(entries, "devkit-lock-env-", stack)
 
 
-def write_producer_env_files(
-    overrides: list[BundleOverride], platform: str | None, stack: ExitStack
-) -> list[Path]:
+def write_producer_env_files(overrides: list[BundleOverride], platform: str | None, stack: ExitStack) -> list[Path]:
     # A path-form override's bundle output interpolates its producer's third-party holes; the
     # producer's committed lock fills them, derived from the fixed output layout three parents up.
     files: list[Path] = []

@@ -3,9 +3,10 @@ from __future__ import annotations
 import importlib.metadata
 import re
 import tomllib
+from collections.abc import Mapping
 from itertools import chain
 from pathlib import Path
-from typing import Annotated, Literal, Self, TypeIs
+from typing import Annotated, Literal, NamedTuple, Self, TypeIs
 
 from packaging.specifiers import SpecifierSet
 from pydantic import (
@@ -283,6 +284,28 @@ class Config(BaseModel):
     def remote_service_entries(self) -> list[tuple[str, str]]:
         return [(name, entry.ref) for name, entry in self._flattened_service_entries() if entry.ref is not None]
 
+    def resolve_services(self, choices: Mapping[str, str]) -> list[ResolvedService]:
+        resolved: list[ResolvedService] = []
+        for name, member in self.services.items():
+            if isinstance(member, ServiceGroup):
+                option_name = choices.get(name)
+                if option_name is None:
+                    continue
+                option = member.options[option_name]
+                resolved.append(
+                    ResolvedService(
+                        name=qualified_option_name(name, option_name),
+                        entry=option,
+                        routes=option.routes + member.routes,
+                        ports=option.ports + member.ports,
+                    )
+                )
+            else:
+                resolved.append(
+                    ResolvedService(name=name, entry=member, routes=member.routes, ports=member.ports)
+                )
+        return resolved
+
     @field_validator("requires")
     @classmethod
     def _validate_requires(cls, value: str) -> str:
@@ -493,6 +516,13 @@ class PortDeclaration(BaseModel):
     target: PortOrHole
     protocol: Literal["tcp", "udp"] = "tcp"
     host_ip: str | None = None
+
+
+class ResolvedService(NamedTuple):
+    name: str
+    entry: ServiceEntry
+    routes: list[RouteConfig]
+    ports: list[PortDeclaration]
 
 
 class K8sConfig(BaseModel):
