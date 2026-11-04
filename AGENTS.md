@@ -25,7 +25,8 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
   `publish.py` publish preparation; `crane.py` pinned crane installer; `verbs/up.py` selection + rendering inlined in `up`; `verbs/*` one module per command. Model modules run root → leaves: root record first
   (`RootModel` subscripts quote forward refs; the one inversion is a parent whose field default constructs the child), functions callers-before-callees; imports absolute; `config_lock`/`dockerfiles` ← `config` one-way. Also in `config.py` (the shared leaf): `Yaml`,
   `is_mapping`/`is_list`, `double_dollars` (the one `$`-doubling home), `PLACEHOLDER`/`COMPOSE_HOLE`/`ENV_NAME_PATTERN`, `EDGE_SERVICE_NAME`, `lock_key_prefix`, `chart_lock_key`, `bundle_lock_key`, `load_yaml_file`,
-  `compose_bundle_output_path` (the one compose-output path join), `qualified_option_name` (the one qualified-name join).
+  `compose_bundle_output_path` (the one compose-output path join), `qualified_option_name` (the one qualified-name join), `required_compose_holes` (the odd-parity hole scan), `refuse_unresolved_references`
+  (the shared route/port refusal; `prefix` composes the `{entry}-` namespace).
 
 ## Config schema
 
@@ -57,7 +58,8 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
 
 ## Lock
 
-- Format: `images:` name → `{index, platforms: {os/arch: reference}}`; `charts:`/`bundles:` name → flat digest-pinned reference; `bundles:` keys are `{QUALIFIED_NAME}_BUNDLE` (qualified selection name upper-cased + `_BUNDLE`; a bare entry is its own name), arch-neutral; written only by the `lock` verb and
+- Format: `images:` name → `{index, platforms: {os/arch: reference}}`; `charts:` name → flat digest-pinned reference; `bundles:` name → `{reference, requires}` — digest-pinned reference plus the
+  bundle's odd-parity `${NAME}` holes minus `:-`-defaulted ones, recorded at fresh resolution and copied forward while the digest freezes (the artifact is immutable); `bundles:` keys are `{QUALIFIED_NAME}_BUNDLE` (qualified selection name upper-cased + `_BUNDLE`; a bare entry is its own name), arch-neutral; written only by the `lock` verb and
   `build`'s incremental freeze (`relock`/`write_lock`), over declared names only — built-image digests are unrepresentable, orphans prune by construction; never hand-authored.
 - `parse_config_lock` = the only parser (path:line errors; duplicate keys, non-digest-pinned entries, cross-section name collisions reject; empty lock legal); `read_config_lock` = the only reader of the committed file (a missing file reads as the empty lock); `ConfigLock.require` = the one "lock lacks NAME" refusal.
 - `relock` computes per `base_images` entry the mirror-prefixed reference resolved into the index digest + one platform-manifest digest per declared platform (`crane copy` byte-identity holds both digests); `@digest`
@@ -98,8 +100,10 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
   (env holes, route upstreams). `up` composes `{entry}-` onto authored route upstreams and port owners; `boatyard.yml` stays bare. Local-output lock-key holes (the lock's key set draws the line)
   rewrite under `lock_key_prefix(entry)` in the same spelling (`{ENTRY}_ALPINE_IMAGE`-style); consumer-surface holes (edge image, gateway/ports, secrets, consumer-interpolated files) stay bare; publish fans
   its bake substitution keys with the prefix mechanically.
-- Validation teeth, in `up`: with routes or ports, `docker compose config --services` must list every route upstream + every port's owning service; a selected
-  bundle output that does not exist refuses naming generate-score.
+- Validation teeth: relock reads every route/port-declaring or freshly resolved bundle's content (`read_compose_bundle` — the compose files ride as inline base64 layer data in `crane manifest`, `crane blob` the
+  fallback) and refuses any namespaced `{entry}-` route upstream or port owner that resolves to no service in the bundle; `up` applies the same refusal to local outputs and path overrides by scanning the local
+  file (oci:// overrides read nothing — the escape hatch skips reference and requirement checks); `up` refuses a selected bundle whose recorded `requires` no environment source fills (shell, `.env`, or the
+  lock-derived env file; lock-key holes are satisfied by construction); a selected bundle output that does not exist refuses naming generate-score; `up` never invokes `docker compose config`.
 - Edge stanza: `image: ${CADDY_IMAGE:?err}` (the lock hole), the Caddyfile configs entry, `gateway:` as published port, `FORWARDED_PROTO`/`FORWARDED_PORT` derived from `PUBLIC_URL` under a selected auth option (refusing when absent); the
   edge does no token validation — re-protection is a bundle-shipped oauth2-proxy sidecar treaty; the service name `edge` is reserved.
 - Caddyfile: one site on internal `:8443`; `handle` blocks mutually exclusive (caddy sorts longest-path-first, declaration order cannot shadow); `handle_path` for `strip_prefix`; `header_up X-Forwarded-*` only on the auth route; `raw:`
