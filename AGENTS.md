@@ -19,7 +19,7 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
 
 ## Modules
 
-`config.py` schema + load; `dockerfiles.py` Dockerfile declarations + sha machinery (`ServiceBuild`, `derive_services`); `config_lock.py` lock schema + parsers; `environment.py` the `.env`-over-shell typed view
+`config.py` schema + load; `Config.resolve_services(choices)` folds a selection into leaf services; `dockerfiles.py` Dockerfile declarations + sha machinery (`ServiceBuild`, `derive_services`); `config_lock.py` lock schema + parsers; `environment.py` the `.env`-over-shell typed view
   (`Environment.load`, `PublicUrl`); `lock.py` lock engine + projections; `compose.py` compose invocation
   (`select`/`render`); `bake.py` build pipeline; `markers.py` marker resolution; `score.py` score shared base; `score_compose.py`/`score_k8s.py` rendering pipelines; `verbs/score.py` the score verb + `ensure_tools`;
   `publish.py` publish preparation; `crane.py` pinned crane installer; `verbs/*` one module per command. Model modules run root → leaves: root record first
@@ -41,7 +41,7 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
 - `k8s`: `workloads`, `vars`, `charts` name → `oci://…:tag|@digest`; the map key IS the `{NAME}_CHART` lock key; a section declaring neither workloads nor charts refuses.
 - Load refusals (`Config.resolve`): Dockerfile services or local entries without `repository`; `base_images`/`k8s.charts`/service `ref:`s without the committed lock; a declared chart without `stack/score/k8s/values/{chart}.yaml`; routes without `CADDY_IMAGE` in the lock.
 - `mirrored_ref(reference, prefix)` = the only prefix join — injects the prefix, rejects an already-prefixed reference.
-- Derivation shape law: `Config` carries authored data and validation; a member may hold real derivation logic (`local_service_entries`, `declared_charts`), but a member that only delegates to another module's function is a
+- Derivation shape law: `Config` carries authored data and validation; a member may hold real derivation logic (`local_service_entries`, `declared_charts`, `resolve_services`), but a member that only delegates to another module's function is a
   pass-through — call the function at the consumer, `compute_service_shas` module-qualified (test seam); `root` defaults to the working directory, `resolve` injects the load root, excluded, never-authored;
   `parse_dev_toggles` = the one dev-toggles parser (ALL_CAPS, non-empty defaults, no duplicates).
 - `.env` carries `BUNDLES=`, `BUNDLE_OVERRIDE_*`, `COMPOSE_PROFILES`, `PLATFORM=`, `PUBLIC_URL`, dev-toggle overrides, the consumer's interpolation variables; `Environment.load` (`environment.py`) carves the five consumed spellings into
@@ -86,6 +86,7 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
 - Selection law: `BUNDLES=` names options only, by qualified `group-dash-option` spelling (a bare entry's name refuses as unselectable); ≤ one option per group; zero options legal exactly when riders or routes carry the assembly (omitting the auth pick = the anonymous edge); an options-only
   repo with an empty selection refuses; unknown names refuse listing the qualified vocabulary; the `up` entry gate refuses a set `BUNDLES=` in a repo without `services:`; `select()` owns the selection laws. `COMPOSE_PROFILES`: shell-env-over-`.env`, comma-split, deduped, forwarded
   as `--profile` flags. Membership law: everything about the docker compose invocation — selection, rendering, invocation spelling, staged inputs — lives in `compose.py`; nothing else lands there.
+- Leaf-service law: `Config.resolve_services(choices)` answers uniform leaf services — the option's routes/ports ride before its group's (so the auth option's own route is `routes[0]`), and an unselected group rides nothing; `select()` consumes only these.
 - Bundle overrides ride `.env` per machine: `BUNDLE_OVERRIDE_<QUALIFIED_NAME>` = a `stack/generated/compose/`-layout path (relative to the repo root) or an `oci://` tag under the ref tag grammar; unknown names refuse listing
   the vocabulary, unselected names are inert; an overridden entry skips its lock-entry requirement and probe; the path form carries the local-output teeth (exists, parses, no `edge` service, collisions) and attaches
   the producer's `boatyard.lock.yml` — three parents up — as a `--env-file` before the consumer's (later `--env-file`s win shared keys, pinned), platforms from its recorded platforms
