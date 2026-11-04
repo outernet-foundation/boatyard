@@ -12,9 +12,8 @@ from bashrun.bash import CalledProcessError, bash_handoff, bash_output
 from boatyard.bake import run_build
 from boatyard.compose import (
     compose_command,
-    render,
+    render_compose,
     require_env_file,
-    select,
 )
 from boatyard.config import Config, bundle_lock_key, require_compose_stack
 from boatyard.config_lock import read_config_lock
@@ -50,14 +49,13 @@ def up(
     if build and not (config.repository or config.base_images):
         raise typer.BadParameter("--build requires build declarations (repository or base_images) in boatyard.yml")
 
-    # Select, render, and validate the invocation.
+    # Render and validate the invocation.
     with ExitStack() as stack:
-        selection = select(config, environment)
-        invocation = render(config, environment.platform, selection, stack)
+        invocation = render_compose(config, environment, stack)
 
         # Probe every lock entry before bring-up; an overridden bundle skips its probe —
         # testing a bundle not published at any digest yet is the override's point.
-        _probe_lock_entries(config, {override.name for override in selection.overrides})
+        _probe_lock_entries(config, {override.name for override in invocation.overrides})
 
         # Build local images.
         if build:

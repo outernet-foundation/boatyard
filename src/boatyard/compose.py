@@ -16,7 +16,6 @@ from boatyard.config import (
     Config,
     EDGE_SERVICE_NAME,
     OCI_REFERENCE_PREFIX,
-    PortDeclaration,
     RouteConfig,
     Yaml,
     bundle_lock_key,
@@ -39,25 +38,15 @@ class BundleOverride(NamedTuple):
     path: Path | None
 
 
-class Selection(NamedTuple):
-    includes: list[str]
-    bundle_networks: list[str]
-    routes: list[RouteConfig]
-    ports: list[PortDeclaration]
-    auth_route: RouteConfig | None
-    forwarded: dict[str, str] | None
-    profiles: list[str]
-    overrides: list[BundleOverride]
-
-
 class Invocation(NamedTuple):
     compose_files: list[Path]
     lock_env_file: Path | None
     extra_env_files: list[Path]
     profiles: list[str]
+    overrides: list[BundleOverride]
 
 
-def select(config: Config, environment: Environment) -> Selection:
+def render_compose(config: Config, environment: Environment, stack: ExitStack) -> Invocation:
     if not environment.bundles and not config.bare_entries and config.selectable_options:
         raise ValueError(
             f"{BUNDLES_VARIABLE}= selects nothing and no bare entry exists; "
@@ -120,8 +109,8 @@ def select(config: Config, environment: Environment) -> Selection:
             if not path.is_file():
                 raise ValueError(f"{variable}: {path.as_posix()} does not exist")
             loaded = load_yaml_file(path)
-            document_services = loaded.get("services") if is_mapping(loaded) else None
-            if is_mapping(document_services) and EDGE_SERVICE_NAME in document_services:
+            loaded_services = loaded.get("services") if is_mapping(loaded) else None
+            if is_mapping(loaded_services) and EDGE_SERVICE_NAME in loaded_services:
                 raise ValueError(
                     f"{path.as_posix()}: the bundle override defines the reserved service {EDGE_SERVICE_NAME!r}"
                 )
@@ -142,40 +131,25 @@ def select(config: Config, environment: Environment) -> Selection:
         includes.append(output.resolve().as_posix())
 
     routes = [namespaced_route(service.name, route) for service in services for route in service.routes]
-
-    return Selection(
-        includes=includes,
-        bundle_networks=[f"{service.name}-net" for service in services],
-        routes=routes,
-        ports=[
-            port.model_copy(update={"service": f"{service.name}-{port.service}"})
-            for service in services
-            for port in service.ports
-        ],
-        # Pick the auth route from the flattened list so render's identity check sees the same copy.
-        auth_route=None
-        if auth_service is None
-        else next(route for route in routes if route.path == auth_service.routes[0].path),
-        forwarded=forwarded,
-        profiles=environment.profiles,
-        overrides=overrides,
+    ports = [
+        port.model_copy(update={"service": f"{service.name}-{port.service}"})
+        for service in services
+        for port in service.ports
+    ]
+    # Pick the auth route from the flattened list so the caddyfile's identity check sees the same copy.
+    auth_route = (
+        None if auth_service is None else next(route for route in routes if route.path == auth_service.routes[0].path)
     )
+    profiles = environment.profiles
 
-
-def render(
-    config: Config,
-    platform: str | None,
-    selection: Selection,
-    stack: ExitStack,
-) -> Invocation:
     # Materialize the per-run files.
-    lock_env_file = write_lock_env_file(config, platform, stack)
-    producer_env_files = write_producer_env_files(selection.overrides, platform, stack)
+    lock_env_file = write_lock_env_file(config, environment.platform, stack)
+    producer_env_files = write_producer_env_files(overrides, environment.platform, stack)
     compose_files: list[Path] = []
 
     # Render the per-run root compose file.
-    services: dict[str, Yaml] = {}
-    if selection.routes:
+    document_services: dict[str, Yaml] = {}
+    if routes:
         if config.gateway is None:
             raise ValueError("routes are declared; gateway is required")
         edge: dict[str, Yaml] = {
@@ -183,12 +157,12 @@ def render(
             "configs": [{"source": EDGE_CONFIG_NAME, "target": "/etc/caddy/Caddyfile"}],
             "ports": [{"target": str(EDGE_LISTEN_PORT), "published": config.gateway, "protocol": "tcp"}],
             # Attach the edge to every selected bundle's network.
-            "networks": dict.fromkeys(selection.bundle_networks),
+            "networks": dict.fromkeys(f"{service.name}-net" for service in services),
         }
-        if selection.forwarded is not None:
-            edge["environment"] = {key: value for key, value in selection.forwarded.items()}
-        services[EDGE_SERVICE_NAME] = edge
-    services.update(
+        if forwarded is not None:
+            edge["environment"] = {key: value for key, value in forwarded.items()}
+        document_services[EDGE_SERVICE_NAME] = edge
+    document_services.update(
         {
             service: {
                 "ports": [
@@ -202,23 +176,23 @@ def render(
                 ]
             }
             for service, service_ports in groupby(
-                sorted(selection.ports, key=lambda port: port.service), key=lambda port: port.service
+                sorted(ports, key=lambda port: port.service), key=lambda port: port.service
             )
         }
     )
     document: dict[str, Yaml] = {"name": config.project_name}
-    if selection.includes:
-        document["include"] = [include for include in selection.includes]
-    if services:
-        document["services"] = services
-    if selection.routes:
+    if includes:
+        document["include"] = [include for include in includes]
+    if document_services:
+        document["services"] = document_services
+    if routes:
         # Render one site with one handle block per route in declaration order.
         lines = [f":{EDGE_LISTEN_PORT} {{"]
-        for route in selection.routes:
+        for route in routes:
             matcher = "" if route.path == "/*" else f" {route.path}"
             if route.raw is not None:
                 block = ["\t\t" + line for line in route.raw.splitlines()]
-            elif route is selection.auth_route:
+            elif route is auth_route:
                 block = [
                     f"\t\treverse_proxy {route.upstream} {{",
                     "\t\t\theader_up X-Forwarded-Proto {$FORWARDED_PROTO}",
@@ -235,7 +209,7 @@ def render(
         }
     compose_files.append(write_temp_compose_file(stack, document, "devkit-assembly-"))
 
-    if selection.routes or selection.ports:
+    if routes or ports:
         # Validate every route upstream and port owner against compose's own resolution.
         resolved = set(
             _compose_config(
@@ -246,21 +220,21 @@ def render(
                 extra_env_files=producer_env_files,
             )
         )
-        for route in selection.routes:
+        for route in routes:
             upstream = route.upstream.partition(":")[0]
             if upstream not in resolved:
                 raise ValueError(
                     f"route {route.path} upstream {upstream} resolves to no service in the selected assembly"
                 )
-        for port in selection.ports:
+        for port in ports:
             if port.service not in resolved:
                 raise ValueError(f"ports for service {port.service!r} resolve to no service in the selected assembly")
-    if selection.profiles:
+    if profiles:
         # Refuse profile names the compose files do not define.
         defined = _compose_config(
             config.root, compose_files, "--profiles", lock_env_file=lock_env_file, extra_env_files=producer_env_files
         )
-        unknown = [profile for profile in selection.profiles if profile not in defined]
+        unknown = [profile for profile in profiles if profile not in defined]
         if unknown:
             raise ValueError(
                 f"COMPOSE_PROFILES selects unknown profile(s) {unknown}; "
@@ -271,7 +245,8 @@ def render(
         compose_files=compose_files,
         lock_env_file=lock_env_file,
         extra_env_files=producer_env_files,
-        profiles=selection.profiles,
+        profiles=profiles,
+        overrides=overrides,
     )
 
 
