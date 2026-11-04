@@ -106,8 +106,10 @@ def up(
         if name not in config.selectable_options and name not in config.bare_entries
     )
     if unknown:
-        vocabulary = sorted(config.selectable_options.keys() | set(config.bare_entries))
-        raise ValueError(f"{BUNDLE_OVERRIDE_PREFIX}* names {unknown}; the bundle vocabulary is {vocabulary}")
+        raise ValueError(
+            f"{BUNDLE_OVERRIDE_PREFIX}* names {unknown}; "
+            f"the bundle vocabulary is {sorted(config.selectable_options.keys() | set(config.bare_entries))}"
+        )
 
     # Resolve the chosen options into leaf services.
     services = config.resolve_services(choices)
@@ -132,9 +134,10 @@ def up(
         if name in environment.path_overrides:
             candidate = environment.path_overrides[name]
             path = (candidate if candidate.is_absolute() else config.root / candidate).resolve()
-            variable = BUNDLE_OVERRIDE_PREFIX + name.upper().replace("-", "_")
             if not path.is_file():
-                raise ValueError(f"{variable}: {path.as_posix()} does not exist")
+                raise ValueError(
+                    f"{BUNDLE_OVERRIDE_PREFIX + name.upper().replace('-', '_')}: {path.as_posix()} does not exist"
+                )
             loaded = load_yaml_file(path)
             loaded_services = loaded.get("services") if is_mapping(loaded) else None
             if is_mapping(loaded_services) and EDGE_SERVICE_NAME in loaded_services:
@@ -147,8 +150,7 @@ def up(
             producer_lock = path.parents[3] / LOCK_PATH
             if producer_lock.is_file():
                 producer_entries = producer_env_entries(parse_config_lock(producer_lock), environment.platform)
-                prefix = lock_key_prefix(name)
-                entries.update({prefix + key: value for key, value in producer_entries.items()})
+                entries.update({lock_key_prefix(name) + key: value for key, value in producer_entries.items()})
             continue
 
         # Include a remote ref as its lock-pinned digest.
@@ -164,8 +166,7 @@ def up(
                 f"selected entry {name!r} has no bundle output {output.as_posix()}; generate-score writes it"
             )
         includes.append(output.resolve().as_posix())
-        prefix = lock_key_prefix(name)
-        entries.update({prefix + key: value for key, value in consumer_entries.items()})
+        entries.update({lock_key_prefix(name) + key: value for key, value in consumer_entries.items()})
 
     # Namespace the routes and ports under their declaring entries.
     routes = [
