@@ -136,6 +136,12 @@ def select(config: Config, environment: Environment) -> Selection:
             raise ValueError(f"{variable}: {value!r} must point into a stack/generated/compose/ bundle output layout")
         if not path.is_file():
             raise ValueError(f"{variable}: {path.as_posix()} does not exist")
+        loaded = load_yaml_file(path)
+        document_services = loaded.get("services") if is_mapping(loaded) else None
+        if is_mapping(document_services) and EDGE_SERVICE_NAME in document_services:
+            raise ValueError(
+                f"{path.as_posix()}: the bundle override defines the reserved service {EDGE_SERVICE_NAME!r}"
+            )
         includes.append(path.as_posix())
         local_outputs.append(path)
         overrides.append(BundleOverride(name=name, path=path))
@@ -170,22 +176,6 @@ def select(config: Config, environment: Environment) -> Selection:
         if shared:
             raise ValueError(f"{path.as_posix()} and {other_path.as_posix()} both define service(s) {shared}")
     output_services = {name for _path, names in file_services for name in names}
-    override_paths = {override.path for override in overrides if override.path is not None}
-    for path, service_names in file_services:
-        if path in override_paths and EDGE_SERVICE_NAME in service_names:
-            raise ValueError(
-                f"{path.as_posix()}: the bundle override defines the reserved service {EDGE_SERVICE_NAME!r}"
-            )
-
-    # Gather the routes, ports, and the selected auth route. The auth option's own route is
-    # routes[0] of its resolved service: the load law gives an auth option exactly one route,
-    # and the option's routes ride before the group's.
-    routes = [route for service in services for route in service.routes]
-    ports = [port for service in services for port in service.ports]
-    auth_route = None
-    if auth_option is not None:
-        auth_name = qualified_option_name(AUTH_GROUP_NAME, auth_option)
-        auth_route = next(service for service in services if service.name == auth_name).routes[0]
 
     # Dev facts: dev-stage services inside the selection, plus the workload-declared dev toggles.
     dev_services = [
@@ -206,9 +196,13 @@ def select(config: Config, environment: Environment) -> Selection:
 
     return Selection(
         includes=includes,
-        routes=routes,
-        ports=ports,
-        auth_route=auth_route,
+        routes=[route for service in services for route in service.routes],
+        ports=[port for service in services for port in service.ports],
+        auth_route=None
+        if auth_option is None
+        else next(
+            service for service in services if service.name == qualified_option_name(AUTH_GROUP_NAME, auth_option)
+        ).routes[0],
         forwarded=forwarded,
         profiles=profiles,
         dev_services=dev_services,
