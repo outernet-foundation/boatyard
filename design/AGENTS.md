@@ -20,3 +20,5 @@ Parked:
 - apt-hermeticity.md — hermetic apt in image builds
 - mirror-digest-retention.md — mirror digest retention policy
 - gpu-template-collapse.md — open drill, operator's lead
+- bundle-manifest-contract.md — derived bundle manifests in the lock; name
+  and env validation moves to load; up's compose checks deleted
