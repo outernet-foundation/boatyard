@@ -147,15 +147,10 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
         for port in service.ports
     ]
 
-    # Pick the auth route from the flattened list so the identity check sees that copy.
-    auth_route = (
-        None if auth_service is None else next(route for route in routes if route.path == auth_service.routes[0].path)
-    )
     profiles = environment.profiles
 
     # Materialize the per-run files.
     env_file = write_assembly_env_file(config, overrides, environment.platform, stack)
-    compose_files: list[Path] = []
 
     # Render the per-run root compose file.
     document_services: dict[str, Yaml] = {}
@@ -172,23 +167,14 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
             "networks": dict.fromkeys(f"{service.name}-net" for service in services),
         }
         if forwarded is not None:
+            # The comprehension form lets the checker infer dict[str, Yaml]; a bare dict[str, str] is invariant.
             edge["environment"] = {key: value for key, value in forwarded.items()}
         document_services[EDGE_SERVICE_NAME] = edge
 
     # Group the namespaced ports into per-service stanzas.
     document_services.update(
         {
-            service: {
-                "ports": [
-                    {
-                        "target": port.target,
-                        "published": port.published,
-                        "protocol": port.protocol,
-                        **({"host_ip": port.host_ip} if port.host_ip is not None else {}),
-                    }
-                    for port in service_ports
-                ]
-            }
+            service: {"ports": [port.model_dump(exclude={"service"}, exclude_none=True) for port in service_ports]}
             for service, service_ports in groupby(
                 sorted(ports, key=lambda port: port.service), key=lambda port: port.service
             )
@@ -197,6 +183,7 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
     # Assemble the root document.
     document: dict[str, Yaml] = {"name": config.project_name}
     if includes:
+        # The comprehension form lets the checker infer list[Yaml]; a bare list[str] is invariant.
         document["include"] = [include for include in includes]
     if document_services:
         document["services"] = document_services
@@ -207,7 +194,7 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
             matcher = "" if route.path == "/*" else f" {route.path}"
             if route.raw is not None:
                 block = ["\t\t" + line for line in route.raw.splitlines()]
-            elif route is auth_route:
+            elif auth_service is not None and route.path == auth_service.routes[0].path:
                 block = [
                     f"\t\treverse_proxy {route.upstream} {{",
                     "\t\t\theader_up X-Forwarded-Proto {$FORWARDED_PROTO}",
@@ -222,7 +209,7 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
         document["configs"] = {
             EDGE_CONFIG_NAME: {"content": double_dollars("\n".join(lines) + "\n")},
         }
-    compose_files.append(write_temp_compose_file(stack, document, "devkit-assembly-"))
+    compose_files = [write_temp_compose_file(stack, document, "devkit-assembly-")]
 
     # Validate every route upstream and port owner against compose's own resolution.
     if routes or ports:
