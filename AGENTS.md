@@ -35,11 +35,11 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
 - `base_images`: ALL_CAPS keys become build args; upstream-native `path:tag`/`path@digest` values; `{uv}`/`{python}` templates over toolchain pins (`{uv}` from `tool.uv.required-version`, exact `==` pin only; `{python}` from
   `.python-version`); a literal value in place of a template = the deliberate-skew escape hatch.
 - `variants`: ALL_CAPS axis → bare lowercase values, first = the default cell; declared, never probed. `platforms` required exactly when `base_images` is; charts arch-neutral, exempt.
-- `project_name` required iff `services`; `gateway` is optional — it refuses at assembly only when routes need it.
+- `project_name` required iff `services`; `gateway` is optional until any route is declared (entry, group, or option) — then load refuses without it.
 - `services`: groups (`options:` mutually exclusive) + bare riding entries; every entry/option is `ref:` (tag-pinned OCI include — digest/`latest`/range spellings refuse at load; any published channel spelling pins) or `workloads:`/`vars:`; workload references are flat `*.yaml` names (both sections; `metadata.name` pins on stems); an option's name outside its group is its
   qualified `group-dash-option` name; the vocabulary (qualified + bare spellings) refuses duplicates at load; `auth` reserved — options declare exactly one route; routes `/`-rooted, edge-wide unique, `strip_prefix` requires a wildcard; ports use the mapping form (service, published, target).
 - `k8s`: `workloads`, `vars`, `charts` name → `oci://…:tag|@digest`; the map key IS the `{NAME}_CHART` lock key; a section declaring neither workloads nor charts refuses.
-- Load refusals (`Config.resolve`): Dockerfile services or local entries without `repository`; `base_images`/`k8s.charts`/service `ref:`s without the committed lock; a declared chart without `stack/score/k8s/values/{chart}.yaml`; routes without `CADDY_IMAGE` in the lock.
+- Load refusals (`Config.resolve`): Dockerfile services or local entries without `repository`; `base_images`/`k8s.charts`/service `ref:`s without the committed lock; a declared chart without `stack/score/k8s/values/{chart}.yaml`; routes without `CADDY_IMAGE` in the lock or without `gateway`.
 - `mirrored_ref(reference, prefix)` = the only prefix join — injects the prefix, rejects an already-prefixed reference.
 - Derivation shape law: `Config` carries authored data and validation; a member may hold real derivation logic (`local_service_entries`, `declared_charts`, `resolve_services`), but a member that only delegates to another module's function is a
   pass-through — call the function at the consumer, `compute_service_shas` module-qualified (test seam); `root` defaults to the working directory, `resolve` injects the load root, excluded, never-authored.
@@ -105,9 +105,9 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
 - Caddyfile: one site on internal `:8443`; `handle` blocks mutually exclusive (caddy sorts longest-path-first, declaration order cannot shadow); `handle_path` for `strip_prefix`; `header_up X-Forwarded-*` only on the auth route; `raw:`
   content rides verbatim (escape hatch, review flag); the whole file rides inline as `configs.content` with every `$` doubled.
 - Per-run files: lifetimes ride the caller-owned `ExitStack`, never an exception handler; the handoff execs — a successful run never unwinds, the files ride out in the OS temp dir; on failure the compose files unlink, the env file
-  prints and keeps; a missing `.env` reads as empty so score generation runs on fresh checkouts (`Environment.load` in `environment.py`); `write_assembly_env_file` fills one per-run `--env-file` from the
-  consumer's lock bare (the root document's holes) plus a fan under every selected local entry's prefix, and each path-override producer's lock under the overridden entry's prefix (producer pins win; empty
-  entries attach none — a bundles-only lock carries nothing compose consumes);
+  prints and keeps (`lock_env_unwind`); a missing `.env` reads as empty so score generation runs on fresh checkouts (`Environment.load` in `environment.py`); `render_compose` fills one per-run `--env-file` in its
+  include loop from the consumer's lock bare (the root document's holes) plus a fan under every selected local entry's prefix, and each path-override producer's lock under the overridden entry's prefix (producer
+  pins win; empty entries attach none — a bundles-only lock carries nothing compose consumes);
   `compose_command` = the one docker compose invocation spelling; `down` never reads the selection, never resolves an include — a name-only root + `--remove-orphans` removes
   every container the project ever created; a config-less or `services:`-less repo refuses loudly on both verbs.
 
