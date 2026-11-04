@@ -5,7 +5,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from boatyard.config import OCI_REFERENCE_PREFIX, is_mapping, require_bundle_reference
+from boatyard.config import OCI_REFERENCE_PREFIX, Yaml, is_mapping, require_bundle_reference
 
 ENV_FILE = Path(".env")
 BUNDLES_VARIABLE = "BUNDLES"
@@ -39,7 +39,7 @@ class PublicUrl(BaseModel):
         return {"forwarded_proto": scheme, "forwarded_port": forwarded_port}
 
     @property
-    def forwarded(self) -> dict[str, str]:
+    def forwarded(self) -> dict[str, Yaml]:
         return {"FORWARDED_PROTO": self.forwarded_proto, "FORWARDED_PORT": self.forwarded_port}
 
 

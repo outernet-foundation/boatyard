@@ -16,7 +16,6 @@ from boatyard.config import (
     Config,
     EDGE_SERVICE_NAME,
     OCI_REFERENCE_PREFIX,
-    RouteConfig,
     Yaml,
     bundle_lock_key,
     compose_bundle_output_path,
@@ -92,19 +91,12 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
     # Resolve the chosen options into leaf services.
     services = config.resolve_services(choices)
 
-    # Require PUBLIC_URL and derive the forwarded environment under the auth option.
-    auth_service = next((service for service in services if service.auth), None)
-    forwarded = None
-    if auth_service is not None:
-        if environment.public_url is None:
-            raise ValueError("an auth option is selected; PUBLIC_URL is required")
-        forwarded = environment.public_url.forwarded
-
-    # Collect each service's include string and optional bundle override in declaration order.
+    # Collect each service's include, override, and per-run lock env entries in declaration order.
     lock = read_config_lock(config.root)
-    includes: list[str] = []
+    consumer_entries = compose_env_entries(lock, config, environment.platform)
+    entries: dict[str, str] = dict(consumer_entries)
+    includes: list[Yaml] = []
     overrides: list[BundleOverride] = []
-    local_entries: list[str] = []
 
     for service in services:
         name = service.name
@@ -130,6 +122,12 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
                 )
             includes.append(path.as_posix())
             overrides.append(BundleOverride(name=name, path=path))
+            # Fill the override's namespaced holes from its producer's lock, three parents up
+            producer_lock = path.parents[3] / LOCK_PATH
+            if producer_lock.is_file():
+                producer_entries = producer_env_entries(parse_config_lock(producer_lock), environment.platform)
+                prefix = lock_key_prefix(name)
+                entries.update({prefix + key: value for key, value in producer_entries.items()})
             continue
 
         # Include a remote ref as its lock-pinned digest.
@@ -145,10 +143,15 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
                 f"selected entry {name!r} has no bundle output {output.as_posix()}; generate-score writes it"
             )
         includes.append(output.resolve().as_posix())
-        local_entries.append(name)
+        prefix = lock_key_prefix(name)
+        entries.update({prefix + key: value for key, value in consumer_entries.items()})
 
     # Namespace the routes and ports under their declaring entries.
-    routes = [namespaced_route(service.name, route) for service in services for route in service.routes]
+    routes = [
+        route.model_copy(update={"upstream": f"{service.name}-{route.upstream}"})
+        for service in services
+        for route in service.routes
+    ]
     ports = [
         port.model_copy(update={"service": f"{service.name}-{port.service}"})
         for service in services
@@ -157,16 +160,28 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
 
     profiles = environment.profiles
 
-    # Materialize the per-run files.
-    env_file = write_assembly_env_file(config, local_entries, overrides, environment.platform, stack)
+    # Write the per-run lock env file.
+    env_file: Path | None = None
+    if entries:
+        with NamedTemporaryFile(
+            "w", suffix=".env", prefix="devkit-lock-env-", delete=False, encoding="utf-8"
+        ) as handle:
+            handle.write(render_env_entries(entries))
+            env_file = Path(handle.name)
+        stack.enter_context(lock_env_unwind(env_file))
 
-    # Render the per-run root compose file.
+    # Render the edge service and its Caddyfile when any route rides.
     document_services: dict[str, Yaml] = {}
-
-    # Emit the edge service when any route rides.
+    caddyfile: str | None = None
     if routes:
-        if config.gateway is None:
-            raise ValueError("routes are declared; gateway is required")
+        # Require PUBLIC_URL and derive the forwarded environment under the auth option.
+        auth_service = next((service for service in services if service.auth), None)
+        forwarded = None
+        if auth_service is not None:
+            if environment.public_url is None:
+                raise ValueError("an auth option is selected; PUBLIC_URL is required")
+            forwarded = environment.public_url.forwarded
+
         edge: dict[str, Yaml] = {
             "image": f"${{{CADDY_IMAGE}:?err}}",
             "configs": [{"source": EDGE_CONFIG_NAME, "target": "/etc/caddy/Caddyfile"}],
@@ -175,25 +190,9 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
             "networks": dict.fromkeys(f"{service.name}-net" for service in services),
         }
         if forwarded is not None:
-            # The comprehension form lets the checker infer dict[str, Yaml]; a bare dict[str, str] is invariant.
-            edge["environment"] = {key: value for key, value in forwarded.items()}
+            edge["environment"] = forwarded
         document_services[EDGE_SERVICE_NAME] = edge
 
-    # Group the namespaced ports into per-service stanzas.
-    document_services.update({
-        service: {"ports": [port.model_dump(exclude={"service"}, exclude_none=True) for port in service_ports]}
-        for service, service_ports in groupby(
-            sorted(ports, key=lambda port: port.service), key=lambda port: port.service
-        )
-    })
-    # Assemble the root document.
-    document: dict[str, Yaml] = {"name": config.project_name}
-    if includes:
-        # The comprehension form lets the checker infer list[Yaml]; a bare list[str] is invariant.
-        document["include"] = [include for include in includes]
-    if document_services:
-        document["services"] = document_services
-    if routes:
         # Render one site with one handle block per route in declaration order.
         lines = [f":{EDGE_LISTEN_PORT} {{"]
         for route in routes:
@@ -212,10 +211,28 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
             head = "\thandle_path" if route.strip_prefix else "\thandle"
             lines.extend((f"{head}{matcher} {{", *block, "\t}"))
         lines.append("}")
-        document["configs"] = {
-            EDGE_CONFIG_NAME: {"content": double_dollars("\n".join(lines) + "\n")},
-        }
-    compose_files = [write_temp_compose_file(stack, document, "devkit-assembly-")]
+        caddyfile = double_dollars("\n".join(lines) + "\n")
+
+    # Group the namespaced ports into per-service stanzas.
+    document_services.update({
+        service: {"ports": [port.model_dump(exclude={"service"}, exclude_none=True) for port in service_ports]}
+        for service, service_ports in groupby(
+            sorted(ports, key=lambda port: port.service), key=lambda port: port.service
+        )
+    })
+    # Assemble and write the root document.
+    document: dict[str, Yaml] = {"name": config.project_name}
+    if includes:
+        document["include"] = includes
+    if document_services:
+        document["services"] = document_services
+    if caddyfile is not None:
+        document["configs"] = {EDGE_CONFIG_NAME: {"content": caddyfile}}
+    with NamedTemporaryFile("w", suffix=".yaml", prefix="devkit-assembly-", delete=False, encoding="utf-8") as handle:
+        handle.write(yaml.safe_dump(document, sort_keys=False, default_flow_style=False))
+    assembly = Path(handle.name)
+    stack.callback(assembly.unlink, missing_ok=True)
+    compose_files = [assembly]
 
     # Validate every route upstream and port owner against compose's own resolution.
     if routes or ports:
@@ -249,10 +266,6 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
 def require_env_file(root: Path) -> None:
     if not (root / ENV_FILE).exists():
         raise ValueError(".env is required")
-
-
-def namespaced_route(entry: str, route: RouteConfig) -> RouteConfig:
-    return route.model_copy(update={"upstream": f"{entry}-{route.upstream}"})
 
 
 def _compose_config(root: Path, compose_files: list[Path], *arguments: str, env_file: Path | None) -> list[str]:
@@ -304,54 +317,3 @@ def lock_env_unwind(path: Path) -> Generator[None]:
         raise
 
     path.unlink(missing_ok=True)
-
-
-def write_env_file(entries: Mapping[str, str], prefix: str, stack: ExitStack) -> Path:
-    # Write the rendered entries to a per-run temp file.
-    with NamedTemporaryFile("w", suffix=".env", prefix=prefix, delete=False, encoding="utf-8") as handle:
-        handle.write(render_env_entries(entries))
-        path = Path(handle.name)
-    stack.enter_context(lock_env_unwind(path))
-    return path
-
-
-def write_assembly_env_file(
-    config: Config,
-    local_entries: list[str],
-    overrides: list[BundleOverride],
-    platform: str | None,
-    stack: ExitStack,
-) -> Path | None:
-    # Fill the root document's bare holes from the consumer's lock
-    entries: dict[str, str] = {}
-    lock_path = config.root / LOCK_PATH
-    if lock_path.is_file():
-        consumer_entries = compose_env_entries(parse_config_lock(lock_path), config, platform)
-        entries.update(consumer_entries)
-        for name in local_entries:
-            prefix = lock_key_prefix(name)
-            entries.update({prefix + key: value for key, value in consumer_entries.items()})
-
-    # Fill each path override's holes from its producer's lock, three parents up
-    for override in overrides:
-        if override.path is None:
-            continue
-        producer_lock = override.path.parents[3] / LOCK_PATH
-        if producer_lock.is_file():
-            producer_entries = producer_env_entries(parse_config_lock(producer_lock), platform)
-            prefix = lock_key_prefix(override.name)
-            entries.update({prefix + key: value for key, value in producer_entries.items()})
-
-    # Attach no env file when no lock carries compose-consumed entries.
-    if not entries:
-        return None
-    return write_env_file(entries, "devkit-lock-env-", stack)
-
-
-def write_temp_compose_file(stack: ExitStack, document: Mapping[str, Yaml], prefix: str) -> Path:
-    # Dump the document to a per-run temp yaml file.
-    with NamedTemporaryFile("w", suffix=".yaml", prefix=prefix, delete=False, encoding="utf-8") as handle:
-        handle.write(yaml.safe_dump(document, sort_keys=False, default_flow_style=False))
-        path = Path(handle.name)
-    stack.callback(path.unlink, missing_ok=True)
-    return path

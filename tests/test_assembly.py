@@ -242,7 +242,7 @@ class TestEdgeStanza:
 
         assert document["services"]["edge"]["ports"] == [{"target": "8443", "published": "8080", "protocol": "tcp"}]
 
-    def test_routes_without_a_gateway_refuse_at_assembly(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_routes_without_a_gateway_refuse_at_load(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _write_edge_tree(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], gateway=None)
 
         result = runner.invoke(app, ["up"])

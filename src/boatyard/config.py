@@ -236,6 +236,8 @@ class Config(BaseModel):
             for entry in self.services.values()
         )
         if declares_routes:
+            if self.gateway is None:
+                raise ValueError("routes are declared; gateway is required")
             read_config_lock(root).require(
                 CADDY_IMAGE,
                 "routes are declared",
