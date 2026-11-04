@@ -331,9 +331,7 @@ def write_assembly_env_file(
             sources.append((producer_lock, producer_env_entries(parse_config_lock(producer_lock), platform)))
 
     # Merge the sources, refusing a lock key filled by two locks: one env file fills every
-    # bare hole in the assembly, so two authorities on one name are unresolvable. The parked
-    # design/namespaced-bundle-pins.md namespaces hole names per entry; implementing it makes
-    # this collision structurally impossible and deletes this check.
+    # bare hole in the assembly, so two authorities on one name cannot both be honored.
     entries: dict[str, str] = {}
     filled_by: dict[str, Path] = {}
     for source_lock, filled in sources:
