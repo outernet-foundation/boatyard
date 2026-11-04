@@ -85,12 +85,11 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
 - Selection law: `BUNDLES=` names options only, by qualified `group-dash-option` spelling (a bare entry's name refuses as unselectable); ≤ one option per group; zero options legal exactly when riders or routes carry the assembly (omitting the auth pick = the anonymous edge); an options-only
   repo with an empty selection refuses; unknown names refuse listing the qualified vocabulary; the `up` entry gate refuses a set `BUNDLES=` in a repo without `services:`; `render_compose()` owns the selection laws. `COMPOSE_PROFILES`: shell-env-over-`.env`, comma-split, deduped, forwarded
   as `--profile` flags. Membership law: everything about the docker compose invocation — selection, rendering, invocation spelling, staged inputs — lives in `compose.py`; nothing else lands there.
-- Leaf-service law: `Config.resolve_services(choices)` answers uniform leaf services — the option's routes/ports ride before its group's (so the auth option's own route is `routes[0]`),   the selected auth-group option's service carries `auth: True` (compose never reconstructs the group name), and an unselected group rides nothing; `render_compose()` consumes only these.
+- Leaf-service law: `Config.resolve_services(choices)` answers leaf services — the option's routes/ports ride before its group's (the auth option's route is `routes[0]`), its resolved service carries `auth: True`, an unselected group rides nothing; `render_compose()` consumes only these.
 - Bundle overrides ride `.env` per machine: `BUNDLE_OVERRIDE_<QUALIFIED_NAME>` = a `stack/generated/compose/`-layout path (relative to the repo root) or an `oci://` tag under the ref tag grammar, carved into
   `Environment`'s typed `oci_overrides`/`path_overrides` at load; unknown names refuse listing
-  the vocabulary, unselected names are inert; an overridden entry skips its lock-entry requirement and probe; the path form carries the local-output teeth (exists, parses, no `edge` service) and attaches
-  the producer's `boatyard.lock.yml` — three parents up — as a `--env-file` before the consumer's (later `--env-file`s win shared keys, pinned), platforms from its recorded platforms
-  (`producer_env_entries`); the ref form attaches nothing.
+  the vocabulary, unselected names are inert; an overridden entry skips its lock-entry requirement and probe; the path form carries the local-output teeth (exists, parses, no `edge` service) and contributes
+  the producer's `boatyard.lock.yml` entries — three parents up, platforms from its recorded platforms (`producer_env_entries`) — to the per-run env file; the ref form contributes nothing.
 - The materialized root carries the project `name:`, the `include:` list (remote entries as `oci://` + the lock's `{NAME}_BUNDLE` digest ref — the yaml tag never rides an include; a selected ref lacking its entry refuses naming
   `boatyard lock`; local outputs by absolute path; `services:` declaration order), the emitted edge (iff any route rides, attached to every selected bundle's `{entry}-net` network), parent-file port stanzas; compose
   merges parent ports into included services and honors `!reset` — the merge needs compose ≥ 2.40.
@@ -103,9 +102,10 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
   edge does no token validation — re-protection is a bundle-shipped oauth2-proxy sidecar treaty; the service name `edge` is reserved.
 - Caddyfile: one site on internal `:8443`; `handle` blocks mutually exclusive (caddy sorts longest-path-first, declaration order cannot shadow); `handle_path` for `strip_prefix`; `header_up X-Forwarded-*` only on the auth route; `raw:`
   content rides verbatim (escape hatch, review flag); the whole file rides inline as `configs.content` with every `$` doubled.
-- Per-run files: lifetimes ride the caller-owned `ExitStack`, never an exception handler; the handoff execs — a successful run never unwinds, the files ride out in the OS temp dir; on failure the compose files unlink, the env files
-  print and keep; a missing `.env` reads as empty so score generation runs on fresh checkouts (`Environment.load` in `environment.py`); the lock env file materializes the
-  selected-platform entries as a per-run `--env-file` (empty entries attach none — a bundles-only lock carries nothing compose consumes); `compose_command` = the one docker compose invocation spelling; `down` never reads the selection, never resolves an include — a name-only root + `--remove-orphans` removes
+- Per-run files: lifetimes ride the caller-owned `ExitStack`, never an exception handler; the handoff execs — a successful run never unwinds, the files ride out in the OS temp dir; on failure the compose files unlink, the env file
+  prints and keeps; a missing `.env` reads as empty so score generation runs on fresh checkouts (`Environment.load` in `environment.py`); `write_assembly_env_file` merges the consumer's lock and every path-override
+  producer's lock into one per-run `--env-file` (a lock key filled by two locks refuses naming both; empty entries attach none — a bundles-only lock carries nothing compose consumes);
+  `compose_command` = the one docker compose invocation spelling; `down` never reads the selection, never resolves an include — a name-only root + `--remove-orphans` removes
   every container the project ever created; a config-less or `services:`-less repo refuses loudly on both verbs.
 
 ## Build
