@@ -7,7 +7,7 @@ import yaml
 from typer.testing import CliRunner
 
 from boatyard.cli import app
-from boatyard import compose
+from boatyard import compose, environment
 from boatyard.verbs import up
 from boatyard.config_lock import LOCK_PATH
 
@@ -247,7 +247,7 @@ class TestEdgeStanza:
         assert "routes are declared; gateway is required" in str(result.exception)
 
 
-class TestMergedEnvironment:
+class TestEnvironmentLoad:
     def test_parses_assignments_skipping_comments_and_blanks(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -255,10 +255,9 @@ class TestMergedEnvironment:
             "# comment\n\nBUNDLES=core-cuda,gateway-open\nGATEWAY_PORT='8443'\nRELOAD=\"true\"\nnot-an-assignment\n",
             encoding="utf-8",
         )
-        monkeypatch.setattr(compose, "environ", {})
+        monkeypatch.setattr(environment, "environ", {})
 
-        assert compose.merged_environment(tmp_path) == {
-            "BUNDLES": "core-cuda,gateway-open",
-            "GATEWAY_PORT": "8443",
-            "RELOAD": "true",
-        }
+        parsed = environment.Environment.load(tmp_path)
+
+        assert parsed.bundles == ["core-cuda", "gateway-open"]
+        assert parsed.variables == {"GATEWAY_PORT": "8443", "RELOAD": "true"}

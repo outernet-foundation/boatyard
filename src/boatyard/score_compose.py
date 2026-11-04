@@ -13,7 +13,6 @@ from pydantic import (
     model_validator,
 )
 
-from boatyard.compose import merged_environment
 from boatyard.config import (
     COMPOSE_HOLE,
     ComposeWorkloadDocument,
@@ -25,6 +24,7 @@ from boatyard.config import (
     Config,
 )
 from boatyard.config_lock import LOCK_PATH, ConfigLock
+from boatyard.environment import Environment
 from boatyard.lock import compose_env_entries
 from boatyard.score import (
     SECRETS_FILE,
@@ -128,7 +128,7 @@ def generate_compose(
 ) -> list[Path]:
     score_dir = config.root / config.score_dir
     state_prefix = f".{TOOL}/"
-    images = compose_env_entries(lock, config, merged_environment(config.root))
+    images = compose_env_entries(lock, config, Environment.load(config.root).platform)
 
     if "ALPINE_IMAGE" not in images:
         raise ValueError(f"{LOCK_PATH.as_posix()}: the image lock must carry the ALPINE_IMAGE entry")

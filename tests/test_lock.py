@@ -777,7 +777,7 @@ class TestComposeProjection:
     def test_compose_entries_select_platform_manifests_over_the_declared_singleton(self) -> None:
         config = _selection_config(platforms=["linux/amd64"])
 
-        entries = lock_module.compose_env_entries(_selection_lock(), config, {})
+        entries = lock_module.compose_env_entries(_selection_lock(), config, None)
 
         assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_B}")
         assert entries["GRAFANA_CHART"].endswith(f"@{DIGEST_A}")
@@ -785,7 +785,7 @@ class TestComposeProjection:
     def test_compose_entries_select_the_platform_the_environment_names(self) -> None:
         config = _selection_config(platforms=["linux/amd64", "linux/arm64"])
 
-        entries = lock_module.compose_env_entries(_selection_lock(), config, {"PLATFORM": "linux/arm64"})
+        entries = lock_module.compose_env_entries(_selection_lock(), config, "linux/arm64")
 
         assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_C}")
 
@@ -793,10 +793,10 @@ class TestComposeProjection:
         config = _selection_config()
 
         with pytest.raises(ValueError, match=r"records image entries but boatyard\.yml declares no platforms"):
-            lock_module.compose_env_entries(_selection_lock(), config, {})
+            lock_module.compose_env_entries(_selection_lock(), config, None)
 
     def test_the_env_render_is_sorted_and_stable(self) -> None:
-        entries = lock_module.compose_env_entries(_selection_lock(), _selection_config(platforms=["linux/amd64"]), {})
+        entries = lock_module.compose_env_entries(_selection_lock(), _selection_config(platforms=["linux/amd64"]), None)
 
         rendered = lock_module.render_env_entries(entries)
 
@@ -809,14 +809,14 @@ class TestPlatformSelectionLaw:
     def test_a_singleton_selects_itself_without_reading_the_environment(self) -> None:
         config = _selection_config(platforms=["linux/amd64"])
 
-        entries = lock_module.compose_env_entries(_selection_lock(), config, {"PLATFORM": ""})
+        entries = lock_module.compose_env_entries(_selection_lock(), config, None)
 
         assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_B}")
 
     def test_a_multi_platform_repo_selects_the_named_platform(self) -> None:
         config = _selection_config(platforms=["linux/amd64", "linux/arm64"])
 
-        entries = lock_module.compose_env_entries(_selection_lock(), config, {"PLATFORM": "linux/arm64"})
+        entries = lock_module.compose_env_entries(_selection_lock(), config, "linux/arm64")
 
         assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_C}")
 
@@ -826,7 +826,7 @@ class TestPlatformSelectionLaw:
         with pytest.raises(
             ValueError, match=r"platforms \['linux/amd64', 'linux/arm64'\] are declared.*PLATFORM= must be named"
         ):
-            lock_module.compose_env_entries(_selection_lock(), config, {})
+            lock_module.compose_env_entries(_selection_lock(), config, None)
 
     def test_an_undeclared_selection_refuses_listing_declared(self) -> None:
         config = _selection_config(platforms=["linux/amd64"])
@@ -835,13 +835,13 @@ class TestPlatformSelectionLaw:
             ValueError,
             match=r"PLATFORM='linux/arm64' must be one of the declared platforms \['linux/amd64'\]",
         ):
-            lock_module.compose_env_entries(_selection_lock(), config, {"PLATFORM": "linux/arm64"})
+            lock_module.compose_env_entries(_selection_lock(), config, "linux/arm64")
 
     def test_a_platform_less_declaring_repo_answers_none(self) -> None:
         charts_only = lock_module.ConfigLock(
             charts={"GRAFANA_CHART": f"{MIRROR_PREFIX}/ghcr.io/grafana/chart@{DIGEST_A}"}
         )
 
-        entries = lock_module.compose_env_entries(charts_only, _selection_config(), {})
+        entries = lock_module.compose_env_entries(charts_only, _selection_config(), None)
 
         assert entries == {"GRAFANA_CHART": f"{MIRROR_PREFIX}/ghcr.io/grafana/chart@{DIGEST_A}"}

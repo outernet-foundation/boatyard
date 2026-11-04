@@ -11,17 +11,15 @@ from bashrun.bash import CalledProcessError, bash_handoff, bash_output
 
 from boatyard.bake import run_build
 from boatyard.compose import (
-    BUNDLES_VARIABLE,
     compose_command,
-    merged_environment,
     render,
     require_env_file,
     select,
-    split_names,
 )
 from boatyard.config import Config, bundle_lock_key, require_compose_stack
 from boatyard.config_lock import read_config_lock
 from boatyard.crane import install_crane
+from boatyard.environment import BUNDLES_VARIABLE, Environment
 
 app = typer.Typer()
 
@@ -46,9 +44,9 @@ def up(
     config = Config.load(root)
 
     require_env_file(root)
-    environment = merged_environment(root)
+    environment = Environment.load(root)
     if config is None or not config.services:
-        if split_names(environment.get(BUNDLES_VARIABLE, "")):
+        if environment.bundles:
             raise ValueError(f"{BUNDLES_VARIABLE}= is set but this repo declares no services")
         config = require_compose_stack(config)
 
@@ -59,7 +57,7 @@ def up(
     # Select, render, and validate the invocation.
     with ExitStack() as stack:
         selection = select(config, environment)
-        invocation = render(config, environment, selection, stack, dev=dev)
+        invocation = render(config, environment.platform, selection, stack, dev=dev)
 
         # Probe every lock entry before bring-up; an overridden bundle skips its probe —
         # testing a bundle not published at any digest yet is the override's point.
