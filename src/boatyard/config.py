@@ -297,6 +297,7 @@ class Config(BaseModel):
                         entry=option,
                         routes=option.routes + member.routes,
                         ports=option.ports + member.ports,
+                        auth=name == AUTH_GROUP_NAME,
                     )
                 )
             else:
@@ -520,6 +521,7 @@ class ResolvedService(NamedTuple):
     entry: ServiceEntry
     routes: list[RouteConfig]
     ports: list[PortDeclaration]
+    auth: bool = False
 
 
 class K8sConfig(BaseModel):

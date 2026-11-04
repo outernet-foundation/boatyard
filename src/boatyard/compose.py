@@ -3,7 +3,7 @@ from __future__ import annotations
 import shlex
 from collections.abc import Generator, Mapping
 from contextlib import ExitStack, contextmanager
-from itertools import groupby, starmap
+from itertools import groupby
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import NamedTuple
@@ -12,7 +12,6 @@ import yaml
 from bashrun.bash import bash_output
 
 from boatyard.config import (
-    AUTH_GROUP_NAME,
     CADDY_IMAGE,
     Config,
     EDGE_SERVICE_NAME,
@@ -81,35 +80,23 @@ def select(config: Config, environment: Environment) -> Selection:
             )
         choices[group] = option_name
 
-    override_names = environment.oci_overrides.keys() | environment.path_overrides.keys()
     unknown = sorted(
-        name for name in override_names if name not in config.selectable_options and name not in config.bare_entries
+        name
+        for name in environment.oci_overrides.keys() | environment.path_overrides.keys()
+        if name not in config.selectable_options and name not in config.bare_entries
     )
     if unknown:
         vocabulary = sorted(config.selectable_options.keys() | set(config.bare_entries))
         raise ValueError(f"{BUNDLE_OVERRIDE_PREFIX}* names {unknown}; the bundle vocabulary is {vocabulary}")
-    selected_names = set(starmap(qualified_option_name, choices.items())) | set(config.bare_entries)
-    selected_oci = {name for name in environment.oci_overrides if name in selected_names}
-    selected_paths = {name for name in environment.path_overrides if name in selected_names}
-
-    auth_option = choices.get(AUTH_GROUP_NAME)
-
-    profiles = environment.profiles
-    forwarded = None
-    if auth_option is not None:
-        if environment.public_url is None:
-            raise ValueError("an auth option is selected; PUBLIC_URL is required")
-        forwarded = environment.public_url.forwarded
 
     services = config.resolve_services(choices)
 
-    auth_service = (
-        None
-        if auth_option is None
-        else next(
-            service for service in services if service.name == qualified_option_name(AUTH_GROUP_NAME, auth_option)
-        )
-    )
+    auth_service = next((service for service in services if service.auth), None)
+    forwarded = None
+    if auth_service is not None:
+        if environment.public_url is None:
+            raise ValueError("an auth option is selected; PUBLIC_URL is required")
+        forwarded = environment.public_url.forwarded
 
     # Collect the include list in services declaration order; a remote ref includes the
     # lock's digest-pinned form, never the yaml tag directly. Each service answers one row:
@@ -121,12 +108,12 @@ def select(config: Config, environment: Environment) -> Selection:
     for service in services:
         name = service.name
 
-        if name in selected_oci:
+        if name in environment.oci_overrides:
             includes.append(environment.oci_overrides[name])
             overrides.append(BundleOverride(name=name, path=None))
             continue
 
-        if name in selected_paths:
+        if name in environment.path_overrides:
             candidate = environment.path_overrides[name]
             path = (candidate if candidate.is_absolute() else config.root / candidate).resolve()
             variable = BUNDLE_OVERRIDE_PREFIX + name.upper().replace("-", "_")
@@ -170,7 +157,7 @@ def select(config: Config, environment: Environment) -> Selection:
         if auth_service is None
         else next(route for route in routes if route.path == auth_service.routes[0].path),
         forwarded=forwarded,
-        profiles=profiles,
+        profiles=environment.profiles,
         overrides=overrides,
     )
 
@@ -201,22 +188,24 @@ def render(
         if selection.forwarded is not None:
             edge["environment"] = {key: value for key, value in selection.forwarded.items()}
         services[EDGE_SERVICE_NAME] = edge
-    ordered_ports = sorted(selection.ports, key=lambda port: port.service)
-    port_services: dict[str, Yaml] = {
-        service: {
-            "ports": [
-                {
-                    "target": port.target,
-                    "published": port.published,
-                    "protocol": port.protocol,
-                    **({"host_ip": port.host_ip} if port.host_ip is not None else {}),
-                }
-                for port in service_ports
-            ]
+    services.update(
+        {
+            service: {
+                "ports": [
+                    {
+                        "target": port.target,
+                        "published": port.published,
+                        "protocol": port.protocol,
+                        **({"host_ip": port.host_ip} if port.host_ip is not None else {}),
+                    }
+                    for port in service_ports
+                ]
+            }
+            for service, service_ports in groupby(
+                sorted(selection.ports, key=lambda port: port.service), key=lambda port: port.service
+            )
         }
-        for service, service_ports in groupby(ordered_ports, key=lambda port: port.service)
-    }
-    services.update(port_services)
+    )
     document: dict[str, Yaml] = {"name": config.project_name}
     if selection.includes:
         document["include"] = [include for include in selection.includes]
