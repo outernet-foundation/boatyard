@@ -90,7 +90,7 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
 - Leaf-service law: `Config.resolve_services(choices)` answers leaf services — the option's routes/ports ride before its group's (the auth option's route is `routes[0]`), its resolved service carries `auth: True`, an unselected group rides nothing; `up` consumes only these.
 - Bundle overrides ride `.env` per machine: `BUNDLE_OVERRIDE_<QUALIFIED_NAME>` = a `stack/generated/compose/`-layout path (relative to the repo root), carved into
   `Environment`'s typed `path_overrides` at load; unknown names refuse listing
-  the vocabulary, unselected names are inert; an overridden entry skips its lock-entry requirement and probe; the override carries the local-output teeth (exists, parses, no `edge` service, names and
+  the vocabulary, unselected names are inert, and a name must resolve to a `ref:` entry — a local-entry name refuses listing the ref entries; an overridden ref skips its lock-entry requirement and probe; the override carries the local-output teeth (exists, parses, no `edge` service, names and
   requirements validated against the file) and contributes
   the producer's `boatyard.lock.yml` entries — three parents up, platforms from its recorded platforms (`producer_env_entries`) — to the per-run env file under the entry prefix.
 - The materialized root carries the project `name:`, the `include:` list (remote entries as `oci://` + the lock's `{NAME}_BUNDLE` digest ref — the yaml tag never rides an include; a selected ref lacking its entry refuses naming
