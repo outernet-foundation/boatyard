@@ -21,7 +21,7 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
 
 `config.py` schema + load; `Config.resolve_services(choices)` folds a selection into leaf services; `dockerfiles.py` Dockerfile declarations + sha machinery (`ServiceBuild`, `derive_services`); `config_lock.py` lock schema + parsers; `environment.py` the `.env`-over-shell typed view
   (`Environment.load`, `PublicUrl`); `lock.py` lock engine + projections; `compose.py` compose invocation
-  (`select`/`render`); `bake.py` build pipeline; `markers.py` marker resolution; `score.py` score shared base; `score_compose.py`/`score_k8s.py` rendering pipelines; `verbs/score.py` the score verb + `ensure_tools`;
+  (`render_compose`); `bake.py` build pipeline; `markers.py` marker resolution; `score.py` score shared base; `score_compose.py`/`score_k8s.py` rendering pipelines; `verbs/score.py` the score verb + `ensure_tools`;
   `publish.py` publish preparation; `crane.py` pinned crane installer; `verbs/*` one module per command. Model modules run root → leaves: root record first
   (`RootModel` subscripts quote forward refs; the one inversion is a parent whose field default constructs the child), functions callers-before-callees; imports absolute; `config_lock`/`dockerfiles` ← `config` one-way. Also in `config.py` (the shared leaf): `Yaml`,
   `is_mapping`/`is_list`, `double_dollars` (the one `$`-doubling home), `PLACEHOLDER`/`COMPOSE_HOLE`/`ENV_NAME_PATTERN`, `EDGE_SERVICE_NAME`, `chart_lock_key`, `bundle_lock_key`, `load_yaml_file`,
@@ -45,8 +45,8 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
   pass-through — call the function at the consumer, `compute_service_shas` module-qualified (test seam); `root` defaults to the working directory, `resolve` injects the load root, excluded, never-authored.
 - `.env` carries `BUNDLES=`, `BUNDLE_OVERRIDE_*`, `COMPOSE_PROFILES`, `PLATFORM=`, `PUBLIC_URL`, the consumer's interpolation variables; `Environment.load` (`environment.py`) carves the five consumed spellings into
   typed fields (`bundles`, `oci_overrides`/`path_overrides` with dash-normalized names — the oci/path spelling split, ref grammar, and `stack/generated/compose/` layout refuse at load, paths stay unresolved, resolution
-  is `select()`'s against the repo root; `profiles`, `public_url`, `platform`) plus the `variables` pass-through — consumed spellings never ride `variables`; syntactic refusals (scheme-less `PUBLIC_URL`,
-  empty override values, override grammar and layout) are pydantic `ValidationError`s at load, selection law stays `ValueError` in `select()`.
+  is `render_compose()`'s against the repo root; `profiles`, `public_url`, `platform`) plus the `variables` pass-through — consumed spellings never ride `variables`; syntactic refusals (scheme-less `PUBLIC_URL`,
+  empty override values, override grammar and layout) are pydantic `ValidationError`s at load, selection law stays `ValueError` in `render_compose()`.
 
 ## Service derivation
 
@@ -83,9 +83,9 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
 ## Compose assembly and BUNDLES=
 
 - Selection law: `BUNDLES=` names options only, by qualified `group-dash-option` spelling (a bare entry's name refuses as unselectable); ≤ one option per group; zero options legal exactly when riders or routes carry the assembly (omitting the auth pick = the anonymous edge); an options-only
-  repo with an empty selection refuses; unknown names refuse listing the qualified vocabulary; the `up` entry gate refuses a set `BUNDLES=` in a repo without `services:`; `select()` owns the selection laws. `COMPOSE_PROFILES`: shell-env-over-`.env`, comma-split, deduped, forwarded
+  repo with an empty selection refuses; unknown names refuse listing the qualified vocabulary; the `up` entry gate refuses a set `BUNDLES=` in a repo without `services:`; `render_compose()` owns the selection laws. `COMPOSE_PROFILES`: shell-env-over-`.env`, comma-split, deduped, forwarded
   as `--profile` flags. Membership law: everything about the docker compose invocation — selection, rendering, invocation spelling, staged inputs — lives in `compose.py`; nothing else lands there.
-- Leaf-service law: `Config.resolve_services(choices)` answers uniform leaf services — the option's routes/ports ride before its group's (so the auth option's own route is `routes[0]`), the selected auth-group option's service carries `auth: True` (compose never reconstructs the group name), and an unselected group rides nothing; `select()` consumes only these.
+- Leaf-service law: `Config.resolve_services(choices)` answers uniform leaf services — the option's routes/ports ride before its group's (so the auth option's own route is `routes[0]`),   the selected auth-group option's service carries `auth: True` (compose never reconstructs the group name), and an unselected group rides nothing; `render_compose()` consumes only these.
 - Bundle overrides ride `.env` per machine: `BUNDLE_OVERRIDE_<QUALIFIED_NAME>` = a `stack/generated/compose/`-layout path (relative to the repo root) or an `oci://` tag under the ref tag grammar, carved into
   `Environment`'s typed `oci_overrides`/`path_overrides` at load; unknown names refuse listing
   the vocabulary, unselected names are inert; an overridden entry skips its lock-entry requirement and probe; the path form carries the local-output teeth (exists, parses, no `edge` service) and attaches
@@ -96,8 +96,8 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
   merges parent ports into included services and honors `!reset` — the merge needs compose ≥ 2.40.
 - Namespacing law: score renders every bundle resource under `{entry}-` (services, configs keys) on a per-bundle network carrying the bare name as a service alias — include collisions are structurally impossible,
   rendered hostnames still resolve, and accidental cross-bundle DNS fails instead of silently resolving: a bundle references only its own services; cross-bundle coupling rides the consumer's declared surface
-  (env holes, route upstreams). `select()` composes `{entry}-` onto authored route upstreams and port owners; `boatyard.yml` stays bare.
-- Validation teeth, in `render()`: with routes or ports, `docker compose config --services` must list every route upstream + every port's owning service; selected profiles must appear in `config --profiles`; a selected
+  (env holes, route upstreams). `render_compose()` composes `{entry}-` onto authored route upstreams and port owners; `boatyard.yml` stays bare.
+- Validation teeth, in `render_compose()`: with routes or ports, `docker compose config --services` must list every route upstream + every port's owning service; selected profiles must appear in `config --profiles`; a selected
   bundle output that does not exist refuses naming generate-score.
 - Edge stanza: `image: ${CADDY_IMAGE:?err}` (the lock hole), the Caddyfile configs entry, `gateway:` as published port, `FORWARDED_PROTO`/`FORWARDED_PORT` derived from `PUBLIC_URL` under a selected auth option (refusing when absent); the
   edge does no token validation — re-protection is a bundle-shipped oauth2-proxy sidecar treaty; the service name `edge` is reserved.
