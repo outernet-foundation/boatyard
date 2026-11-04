@@ -19,17 +19,16 @@ class ConfigLock(BaseModel):
 
     images: dict[str, ConfigLockEntry] = Field(default_factory=dict)
     charts: dict[str, str] = Field(default_factory=dict)
-    bundles: dict[str, str] = Field(default_factory=dict)
+    bundles: dict[str, ConfigLockBundle] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _validate(self, info: ValidationInfo) -> Self:
         context: dict[str, object] = info.context or {}
-        for section, entries in (("chart", self.charts), ("bundle", self.bundles)):
-            for name, reference in entries.items():
-                if not reference.rpartition("@")[2].startswith("sha256:"):
-                    raise ValueError(
-                        f"{context.get('path', 'the image lock')}: {section} {name} is not digest-pinned ({reference!r})"
-                    )
+        for name, reference in self.charts.items():
+            if not reference.rpartition("@")[2].startswith("sha256:"):
+                raise ValueError(
+                    f"{context.get('path', 'the image lock')}: chart {name} is not digest-pinned ({reference!r})"
+                )
         shared = sorted(
             (self.images.keys() & self.charts.keys())
             | (self.images.keys() & self.bundles.keys())
@@ -48,7 +47,7 @@ class ConfigLock(BaseModel):
         if name in self.charts:
             return self.charts[name]
         if name in self.bundles:
-            return self.bundles[name]
+            return self.bundles[name].reference
         raise ValueError(f"{subject}: {LOCK_PATH.as_posix()} lacks the {name} entry ({hint})")
 
 
@@ -73,6 +72,19 @@ class ConfigLockEntry(BaseModel):
     @property
     def recorded_digests(self) -> list[str]:
         return [self.index, *self.platforms.values()]
+
+
+class ConfigLockBundle(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reference: str
+    requires: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _require_digest_pin(self) -> Self:
+        if not self.reference.rpartition("@")[2].startswith("sha256:"):
+            raise ValueError(f"bundle entry is not digest-pinned ({self.reference!r})")
+        return self
 
 
 def read_config_lock(root: Path) -> ConfigLock:

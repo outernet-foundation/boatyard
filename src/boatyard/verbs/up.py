@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import os
 import re
 import shlex
-from collections.abc import Collection, Mapping
 from contextlib import ExitStack
 from itertools import groupby
 from pathlib import Path
@@ -28,7 +28,9 @@ from boatyard.config import (
     load_yaml_file,
     lock_key_prefix,
     qualified_option_name,
+    refuse_unresolved_references,
     require_compose_stack,
+    required_compose_holes,
 )
 from boatyard.config_lock import LOCK_PATH, parse_config_lock, read_config_lock
 from boatyard.crane import install_crane
@@ -37,8 +39,6 @@ from boatyard.lock import compose_env_entries, producer_env_entries, render_env_
 
 EDGE_LISTEN_PORT = 8443
 EDGE_CONFIG_NAME = "devkit-edge-caddyfile"
-ROUTE_UNRESOLVED_REFUSAL = "route {path} upstream {name} resolves to no service in the selected assembly"
-PORT_UNRESOLVED_REFUSAL = "ports for service {name!r} resolve to no service in the selected assembly"
 
 app = typer.Typer()
 
@@ -117,11 +117,13 @@ def up(
     entries: dict[str, str] = dict(consumer_entries)
     includes: list[Yaml] = []
     overridden: set[str] = set()
+    requirements: dict[str, list[str]] = {}
 
     for service in services:
         name = service.name
 
-        # Include the oci override in place of the locked ref.
+        # Include the oci override in place of the locked ref; its content is unreadable without
+        # a network fetch against a mutable tag, so no reference or requirement checks ride.
         if name in environment.oci_overrides:
             includes.append(environment.oci_overrides[name])
             overridden.add(name)
@@ -141,6 +143,14 @@ def up(
                 raise ValueError(
                     f"{path.as_posix()}: the bundle override defines the reserved service {EDGE_SERVICE_NAME!r}"
                 )
+            refuse_unresolved_references(
+                name,
+                service.routes,
+                service.ports,
+                set(loaded_services) if is_mapping(loaded_services) else set(),
+                prefix=f"{name}-",
+            )
+            requirements[name] = sorted(required_compose_holes(path.read_text(encoding="utf-8")))
             includes.append(path.as_posix())
             overridden.add(name)
             # Fill the override's namespaced holes from its producer's lock, three parents up
@@ -150,9 +160,11 @@ def up(
                 entries.update({lock_key_prefix(name) + key: value for key, value in producer_entries.items()})
             continue
 
-        # Include a remote ref as its lock-pinned digest.
+        # Include a remote ref as its lock-pinned digest; the lock's recorded requires is the contract.
         if service.entry.ref is not None:
-            pinned = lock.require(bundle_lock_key(name), f"bundle {name!r}", hint="run boatyard lock")
+            key = bundle_lock_key(name)
+            pinned = lock.require(key, f"bundle {name!r}", hint="run boatyard lock")
+            requirements[name] = lock.bundles[key].requires
             includes.append(f"{OCI_REFERENCE_PREFIX}{pinned}")
             continue
 
@@ -162,8 +174,24 @@ def up(
             raise ValueError(
                 f"selected entry {name!r} has no bundle output {output.as_posix()}; generate-score writes it"
             )
+        output_text = output.read_text(encoding="utf-8")
+        loaded_output = yaml.safe_load(output_text)
+        output_services = loaded_output.get("services") if is_mapping(loaded_output) else None
+        refuse_unresolved_references(
+            name,
+            service.routes,
+            service.ports,
+            set(output_services) if is_mapping(output_services) else set(),
+            prefix=f"{name}-",
+        )
+        requirements[name] = sorted(required_compose_holes(output_text))
         includes.append(output.resolve().as_posix())
         entries.update({lock_key_prefix(name) + key: value for key, value in consumer_entries.items()})
+
+    # Refuse selected bundles whose required interpolation no environment source fills; lock-key
+    # holes are satisfied by construction through the per-run env file's entries.
+    filled = {variable for variable, value in {**os.environ, **environment.variables, **entries}.items() if value}
+    _refuse_unfilled_requirements(requirements, filled)
 
     # Namespace the routes and ports under their declaring entries.
     routes = [
@@ -256,20 +284,6 @@ def up(
         stack.callback(assembly.unlink, missing_ok=True)
         compose_files = [assembly]
 
-        # Validate every route upstream and port owner against compose's own resolution.
-        if routes or ports:
-            resolved = set(_compose_config(config.root, compose_files, "--services", env_file=env_file))
-            _refuse_unknown(
-                {route.upstream.partition(":")[0]: route.path for route in routes},
-                resolved,
-                ROUTE_UNRESOLVED_REFUSAL,
-            )
-            _refuse_unknown(
-                {port.service: port.service for port in ports},
-                resolved,
-                PORT_UNRESOLVED_REFUSAL,
-            )
-
         # Probe every lock entry before bring-up; an overridden bundle skips its probe —
         # testing a bundle not published at any digest yet is the override's point.
         _probe_lock_entries(config, overridden)
@@ -295,25 +309,12 @@ def up(
         bash_handoff(up_command)
 
 
-def _compose_config(root: Path, compose_files: list[Path], *arguments: str, env_file: Path | None) -> list[str]:
-    # Run compose config and collect its non-empty output lines.
-    return [
-        line.strip()
-        for line in bash_output(
-            compose_command(root, compose_files, "config", *arguments, env_file=env_file)
-        ).splitlines()
-        if line.strip()
-    ]
-
-
-def _refuse_unknown(names: Mapping[str, str], defined: Collection[str], message: str) -> None:
-    # Refuse the first name missing from the defined set; the template formats
-    # name, path (the declaration site naming it), unknown (every missing name), and defined.
-    unknown = [(name, site) for name, site in names.items() if name not in defined]
-    if unknown:
-        name, path = unknown[0]
+def _refuse_unfilled_requirements(requirements: dict[str, list[str]], filled: set[str]) -> None:
+    missing = {name: sorted(set(required) - filled) for name, required in requirements.items() if set(required) - filled}
+    if missing:
+        name, absent = min(missing.items())
         raise ValueError(
-            message.format(name=name, path=path, unknown=[missing for missing, _ in unknown], defined=defined)
+            f"bundle {name!r} requires {absent}, which no environment source sets (shell, .env, or the lock env file)"
         )
 
 
@@ -338,7 +339,7 @@ def _probe_lock_entries(config: Config, overridden: set[str]) -> None:
             )
 
     skip = {bundle_lock_key(name) for name in overridden}
-    bundle_references = sorted({value for key, value in lock.bundles.items() if key not in skip})
+    bundle_references = sorted({bundle.reference for key, bundle in lock.bundles.items() if key not in skip})
     if not bundle_references:
         return
     # Compose-bundle media types are not image indexes; imagetools may refuse them, so bundle

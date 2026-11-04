@@ -104,8 +104,11 @@ def _write_repo(
     charts: dict[str, str] | None = None,
     platforms: list[str] | None = None,
     ref_services: dict[str, Any] | None = None,
+    gateway: str | None = None,
 ) -> None:
     payload: dict[str, Any] = {"requires": ">=0"}
+    if gateway is not None:
+        payload["gateway"] = gateway
     if base_images:
         payload["platforms"] = platforms or ["linux/amd64"]
         payload["base_images"] = base_images
@@ -555,31 +558,57 @@ class TestBundleRecording:
         *,
         committed: str = "",
         ref_services: dict[str, Any] | None = None,
-    ) -> tuple[Any, DigestRecorder]:
+        bundle_text: str = "services:\n  tunnel-rathole-rathole:\n    image: busybox:1.36\n",
+        declares_routes: bool = False,
+    ) -> tuple[Any, DigestRecorder, list[str]]:
         recorder = DigestRecorder()
+        read_references: list[str] = []
         monkeypatch.setattr(lock_module, "resolve_bundle_digest", recorder.resolve)
+
+        def _read(reference: str) -> list[str]:
+            read_references.append(reference)
+            return [bundle_text]
+
+        monkeypatch.setattr(lock_module, "read_compose_bundle", _read)
         monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
         monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
-        _write_repo(
-            tmp_path,
-            ref_services=ref_services or {"tunnel": {"options": {"rathole": {"ref": self.TUNNEL_RATHOLE}}}},
-        )
+        services = ref_services or {"tunnel": {"options": {"rathole": {"ref": self.TUNNEL_RATHOLE}}}}
+        if declares_routes:
+            caddy_declaration = "docker.io/library/caddy:2.8.4-alpine@" + DIGEST_A
+            caddy_base = MIRROR_PREFIX + "/" + caddy_declaration
+            _write_repo(
+                tmp_path,
+                gateway="8080",
+                platforms=["linux/amd64"],
+                base_images={"CADDY_IMAGE": caddy_declaration},
+                ref_services=services,
+            )
+            if not committed:
+                committed = yaml.safe_dump({
+                    "images": {
+                        "CADDY_IMAGE": {"index": caddy_base, "platforms": {"linux/amd64": caddy_base}}
+                    }
+                })
+        else:
+            _write_repo(tmp_path, ref_services=services)
         if committed:
             (tmp_path / LOCK_PATH).write_text(committed, encoding="utf-8")
-        return runner.invoke(app, ["lock", *arguments]), recorder
+        return runner.invoke(app, ["lock", *arguments]), recorder, read_references
 
     def test_an_option_ref_resolves_under_its_qualified_bundle_key(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        result, recorder = self._invoke(monkeypatch, tmp_path, [])
+        result, recorder, _ = self._invoke(monkeypatch, tmp_path, [])
 
         assert result.exit_code == 0, result.output
         assert recorder.inspected == [self.RATHOLE_BASE]
-        assert _read_lock(tmp_path) == {"bundles": {"TUNNEL_RATHOLE_BUNDLE": f"{self.RATHOLE_BASE}@{DIGEST_A}"}}
+        assert _read_lock(tmp_path) == {
+            "bundles": {"TUNNEL_RATHOLE_BUNDLE": {"reference": f"{self.RATHOLE_BASE}@{DIGEST_A}"}}
+        }
 
     def test_a_bare_entry_ref_resolves_under_its_own_key(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        result, _ = self._invoke(
+        result, _, _ = self._invoke(
             monkeypatch,
             tmp_path,
             [],
@@ -588,30 +617,135 @@ class TestBundleRecording:
 
         assert result.exit_code == 0, result.output
         assert _read_lock(tmp_path) == {
-            "bundles": {"LIVEKIT_BUNDLE": "ghcr.io/org/repo/livekit:0.4.0-dev.3@" + DIGEST_A}
+            "bundles": {"LIVEKIT_BUNDLE": {"reference": "ghcr.io/org/repo/livekit:0.4.0-dev.3@" + DIGEST_A}}
         }
 
     def test_bundle_entries_resolve_direct_never_mirror_prefixed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        result, _ = self._invoke(monkeypatch, tmp_path, [])
+        result, _, _ = self._invoke(monkeypatch, tmp_path, [])
 
         assert result.exit_code == 0, result.output
         [entry] = _read_lock(tmp_path)["bundles"].values()
-        assert entry.startswith("ghcr.io/org/repo/")
-        assert not entry.startswith(MIRROR_PREFIX)
+        assert entry["reference"].startswith("ghcr.io/org/repo/")
+        assert not entry["reference"].startswith(MIRROR_PREFIX)
 
-    def test_an_unchanged_ref_copies_its_frozen_digest_forward(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        committed = yaml.safe_dump({"bundles": {"TUNNEL_RATHOLE_BUNDLE": f"{self.RATHOLE_BASE}@{DIGEST_B}"}})
+    def test_required_holes_record_sorted_under_the_bundle_key(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        bundle_text = (
+            "services:\n  rathole:\n    image: busybox:1.36\n"
+            "    environment:\n"
+            "      Z_VAR: ${Z_REQUIRED}\n"
+            "      A_VAR: ${A_REQUIRED}\n"
+            "      O_VAR: ${OPTIONAL:-x}\n"
+            "      E_VAR: $$ESCAPED\n"
+            "    configs:\n"
+            "      - source: conf\n        target: /etc/conf\n"
+            "configs:\n  conf:\n    content: |\n      hole=${Z_REQUIRED}\n"
+        )
 
-        result, recorder = self._invoke(monkeypatch, tmp_path, [], committed=committed)
+        result, _, _ = self._invoke(monkeypatch, tmp_path, [], bundle_text=bundle_text)
+
+        assert result.exit_code == 0, result.output
+        [entry] = _read_lock(tmp_path)["bundles"].values()
+        assert entry["requires"] == ["A_REQUIRED", "Z_REQUIRED"]
+
+    def test_an_unresolved_route_upstream_refuses_naming_the_declaration(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        result, _, read_references = self._invoke(
+            monkeypatch,
+            tmp_path,
+            [],
+            declares_routes=True,
+            ref_services={
+                "tunnel": {
+                    "options": {
+                        "rathole": {
+                            "ref": self.TUNNEL_RATHOLE,
+                            "routes": [{"path": "/*", "upstream": "webapp:3000"}],
+                        }
+                    }
+                }
+            },
+        )
+
+        assert result.exit_code == 1
+        assert "references 'tunnel-rathole-webapp'" in str(result.exception) + result.output
+        assert "'/*'" in str(result.exception) + result.output
+        assert read_references == [f"{self.RATHOLE_BASE}@{DIGEST_A}"]
+
+    def test_an_unresolved_port_owner_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        result, _, _ = self._invoke(
+            monkeypatch,
+            tmp_path,
+            [],
+            declares_routes=True,
+            ref_services={
+                "tunnel": {
+                    "options": {
+                        "rathole": {
+                            "ref": self.TUNNEL_RATHOLE,
+                            "ports": [{"service": "database", "published": "5432", "target": "5432"}],
+                        }
+                    }
+                }
+            },
+        )
+
+        assert result.exit_code == 1
+        assert "references 'tunnel-rathole-database'" in str(result.exception) + result.output
+
+    def test_a_frozen_digest_with_declared_routes_still_reads_and_validates(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        caddy_declaration = "docker.io/library/caddy:2.8.4-alpine@" + DIGEST_B
+        caddy_base = MIRROR_PREFIX + "/" + caddy_declaration
+        committed = yaml.safe_dump({
+            "images": {"CADDY_IMAGE": {"index": caddy_base, "platforms": {"linux/amd64": caddy_base}}},
+            "bundles": {"TUNNEL_RATHOLE_BUNDLE": {"reference": f"{self.RATHOLE_BASE}@{DIGEST_B}"}},
+        })
+
+        result, recorder, read_references = self._invoke(
+            monkeypatch,
+            tmp_path,
+            [],
+            committed=committed,
+            declares_routes=True,
+            ref_services={
+                "tunnel": {
+                    "options": {
+                        "rathole": {
+                            "ref": self.TUNNEL_RATHOLE,
+                            "routes": [{"path": "/*", "upstream": "rathole:8000"}],
+                        }
+                    }
+                }
+            },
+        )
 
         assert result.exit_code == 0, result.output
         assert recorder.inspected == []
-        assert _read_lock(tmp_path) == {"bundles": {"TUNNEL_RATHOLE_BUNDLE": f"{self.RATHOLE_BASE}@{DIGEST_B}"}}
+        assert read_references == [f"{self.RATHOLE_BASE}@{DIGEST_B}"]
+        assert _read_lock(tmp_path)["bundles"] == {
+            "TUNNEL_RATHOLE_BUNDLE": {"reference": f"{self.RATHOLE_BASE}@{DIGEST_B}"}
+        }
+
+    def test_an_unchanged_ref_copies_its_frozen_digest_forward(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        committed = yaml.safe_dump({"bundles": {"TUNNEL_RATHOLE_BUNDLE": {"reference": f"{self.RATHOLE_BASE}@{DIGEST_B}"}}})
+
+        result, recorder, read_references = self._invoke(monkeypatch, tmp_path, [], committed=committed)
+
+        assert result.exit_code == 0, result.output
+        assert recorder.inspected == []
+        assert read_references == []
+        assert _read_lock(tmp_path) == {
+            "bundles": {"TUNNEL_RATHOLE_BUNDLE": {"reference": f"{self.RATHOLE_BASE}@{DIGEST_B}"}}
+        }
 
     def test_a_tag_bump_re_resolves(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        committed = yaml.safe_dump({"bundles": {"TUNNEL_RATHOLE_BUNDLE": f"{self.RATHOLE_BASE}@{DIGEST_B}"}})
+        committed = yaml.safe_dump({"bundles": {"TUNNEL_RATHOLE_BUNDLE": {"reference": f"{self.RATHOLE_BASE}@{DIGEST_B}"}}})
 
-        result, recorder = self._invoke(
+        result, recorder, _ = self._invoke(
             monkeypatch,
             tmp_path,
             [],
@@ -621,33 +755,35 @@ class TestBundleRecording:
 
         assert result.exit_code == 0, result.output
         assert recorder.inspected == ["ghcr.io/org/repo/tunnel-rathole:0.3.2"]
-        assert _read_lock(tmp_path)["bundles"]["TUNNEL_RATHOLE_BUNDLE"] == (
+        assert _read_lock(tmp_path)["bundles"]["TUNNEL_RATHOLE_BUNDLE"]["reference"] == (
             "ghcr.io/org/repo/tunnel-rathole:0.3.2@" + DIGEST_A
         )
 
     def test_upgrade_re_resolves_frozen_bundle_entries(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        committed = yaml.safe_dump({"bundles": {"TUNNEL_RATHOLE_BUNDLE": f"{self.RATHOLE_BASE}@{DIGEST_B}"}})
+        committed = yaml.safe_dump({"bundles": {"TUNNEL_RATHOLE_BUNDLE": {"reference": f"{self.RATHOLE_BASE}@{DIGEST_B}"}}})
 
-        result, recorder = self._invoke(monkeypatch, tmp_path, ["--upgrade"], committed=committed)
+        result, recorder, _ = self._invoke(monkeypatch, tmp_path, ["--upgrade"], committed=committed)
 
         assert result.exit_code == 0, result.output
         assert recorder.inspected == [self.RATHOLE_BASE]
-        assert _read_lock(tmp_path)["bundles"]["TUNNEL_RATHOLE_BUNDLE"] == f"{self.RATHOLE_BASE}@{DIGEST_A}"
+        assert _read_lock(tmp_path)["bundles"]["TUNNEL_RATHOLE_BUNDLE"]["reference"] == f"{self.RATHOLE_BASE}@{DIGEST_A}"
 
     def test_entries_whose_declarations_died_prune_by_construction(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         committed = yaml.safe_dump({
             "bundles": {
-                "GHOST_BUNDLE": f"ghcr.io/org/repo/ghost:0.1.0@{DIGEST_B}",
-                "TUNNEL_RATHOLE_BUNDLE": f"{self.RATHOLE_BASE}@{DIGEST_B}",
+                "GHOST_BUNDLE": {"reference": f"ghcr.io/org/repo/ghost:0.1.0@{DIGEST_B}"},
+                "TUNNEL_RATHOLE_BUNDLE": {"reference": f"{self.RATHOLE_BASE}@{DIGEST_B}"},
             }
         })
 
-        result, _ = self._invoke(monkeypatch, tmp_path, [], committed=committed)
+        result, _, _ = self._invoke(monkeypatch, tmp_path, [], committed=committed)
 
         assert result.exit_code == 0, result.output
-        assert _read_lock(tmp_path) == {"bundles": {"TUNNEL_RATHOLE_BUNDLE": f"{self.RATHOLE_BASE}@{DIGEST_B}"}}
+        assert _read_lock(tmp_path) == {
+            "bundles": {"TUNNEL_RATHOLE_BUNDLE": {"reference": f"{self.RATHOLE_BASE}@{DIGEST_B}"}}
+        }
 
 
 def _skip_crane_install() -> None:

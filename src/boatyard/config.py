@@ -285,6 +285,13 @@ class Config(BaseModel):
     def remote_service_entries(self) -> list[tuple[str, str]]:
         return [(name, entry.ref) for name, entry in self._flattened_service_entries() if entry.ref is not None]
 
+    def remote_declared_entries(self) -> list[tuple[str, str, ServiceEntry]]:
+        return [
+            (name, entry.ref.removeprefix(OCI_REFERENCE_PREFIX), entry)
+            for name, entry in self._flattened_service_entries()
+            if entry.ref is not None
+        ]
+
     def resolve_services(self, choices: Mapping[str, str]) -> list[ResolvedService]:
         resolved: list[ResolvedService] = []
         for name, member in self.services.items():
@@ -727,6 +734,34 @@ def chart_lock_key(name: str) -> str:
 
 def bundle_lock_key(name: str) -> str:
     return lock_key_prefix(name) + "BUNDLE"
+
+
+def required_compose_holes(text: str) -> set[str]:
+    # Odd $-parity holes are interpolation the consumer must fill; a :- default spells optional
+    # and $$-escaped literals are not holes at all.
+    return {
+        match.group(2)
+        for match in COMPOSE_HOLE.finditer(text)
+        if len(match.group(1)) % 2 == 1 and not (match.group(3) or "").startswith(":-")
+    }
+
+
+def refuse_unresolved_references(
+    entry_name: str,
+    routes: list[RouteConfig],
+    ports: list[PortDeclaration],
+    service_names: set[str],
+    prefix: str = "",
+) -> None:
+    references = {f"{prefix}{route.upstream.partition(':')[0]}": route.path for route in routes}
+    references.update({f"{prefix}{port.service}": str(port.published) for port in ports})
+    unknown = sorted(name for name in references if name not in service_names)
+    if unknown:
+        name = unknown[0]
+        raise ValueError(
+            f"services entry {entry_name!r}: {references[name]!r} references {name!r}, "
+            f"which resolves to no service in the bundle (services: {sorted(service_names)})"
+        )
 
 
 def mirrored_ref(reference: str, prefix: str) -> str:

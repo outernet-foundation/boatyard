@@ -114,7 +114,7 @@ def _write_lock(
         }
     }
     if bundles is not None:
-        document["bundles"] = bundles
+        document["bundles"] = {name: {"reference": reference} for name, reference in bundles.items()}
     root.joinpath(*LOCK_PATH.parts).write_text(
         yaml.safe_dump(document),
         encoding="utf-8",
@@ -305,24 +305,11 @@ class ProducerEnvRecorder(AssemblyRecorder):
             self.env_contents.append(Path(match.group(1)).read_text(encoding="utf-8"))
 
 
-class ServicesOutput:
-    def __init__(self, *names: str) -> None:
-        self.names = list(names)
-
-    def run(self, command: str) -> str:
-        assert "config --services" in command
-        return "".join(f"{name}\n" for name in self.names)
-
-
-class PresentProbeAndServices:
-    def __init__(self, *names: str) -> None:
-        self.names = list(names)
-
+class PresentProbe:
     def run(self, command: str) -> str:
         if "imagetools inspect" in command or "crane digest" in command:
             return ""
-        assert "config --services" in command
-        return "".join(f"{name}\n" for name in self.names)
+        raise AssertionError(f"unexpected command: {command}")
 
 
 def _write_consumer_tree(root: Path, *, bundles: str | None = "placeframe-cuda,auth-keycloak") -> Path:
@@ -387,16 +374,11 @@ class TestSelectionLaw:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         bundles: str | None = "placeframe-cuda,auth-keycloak",
-        services: str = (
-            "placeframe-cuda-api placeframe-cuda-grafana placeframe-rocm-api placeframe-rocm-grafana "
-            "edge livekit-livekit auth-keycloak-keycloak"
-        ),
     ) -> AssemblyRecorder:
         _write_consumer_tree(tmp_path, bundles=bundles)
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
-        handler = PresentProbeAndServices(*services.split()).run
-        _patch_up_probes(monkeypatch, handler)
+        _patch_up_probes(monkeypatch, PresentProbe().run)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
         return recorder
@@ -435,7 +417,7 @@ class TestSelectionLaw:
         (tmp_path / ".env").write_text("BUNDLES=one-cuda,two-cuda\n", encoding="utf-8")
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
-        handler = PresentProbeAndServices("api", "edge").run
+        handler = PresentProbe().run
         _patch_up_probes(monkeypatch, handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -471,7 +453,7 @@ class TestSelectionLaw:
         (tmp_path / ".env").write_text("BUNDLES=\n", encoding="utf-8")
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
-        handler = PresentProbeAndServices("livekit-livekit", "edge").run
+        handler = PresentProbe().run
         _patch_up_probes(monkeypatch, handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -507,7 +489,7 @@ class TestSelectionLaw:
         _write_workload(tmp_path, "api.yaml", "api")
         (tmp_path / ".env").write_text("BUNDLES=\n", encoding="utf-8")
         monkeypatch.delenv("BUNDLES", raising=False)
-        _patch_up_probes(monkeypatch, ServicesOutput("api", "edge").run)
+        _patch_up_probes(monkeypatch, PresentProbe().run)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -607,9 +589,7 @@ class TestUpMaterialization:
         _write_consumer_tree(tmp_path)
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
-        handler = PresentProbeAndServices(
-            "placeframe-cuda-api", "placeframe-cuda-grafana", "edge", "livekit-livekit", "auth-keycloak-keycloak"
-        ).run
+        handler = PresentProbe().run
         _patch_up_probes(monkeypatch, handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -655,9 +635,7 @@ class TestUpMaterialization:
         _write_consumer_tree(tmp_path, bundles="placeframe-cuda")
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
-        handler = PresentProbeAndServices(
-            "placeframe-cuda-api", "placeframe-cuda-grafana", "edge", "livekit-livekit"
-        ).run
+        handler = PresentProbe().run
         _patch_up_probes(monkeypatch, handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -700,46 +678,129 @@ class TestUpMaterialization:
 
 
 class TestUpValidation:
-    def _invoke_up(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, services: str):
-        _write_consumer_tree(tmp_path)
+    def _invoke_up(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv("BUNDLES", raising=False)
         monkeypatch.setattr(up, "bash_handoff", _silent_handoff)
-        monkeypatch.setattr(up, "bash_output", ServicesOutput(*services.split()).run)
+        _patch_up_probes(monkeypatch, PresentProbe().run)
         monkeypatch.chdir(tmp_path)
         return runner.invoke(app, ["up"])
 
-    def test_a_route_upstream_absent_from_the_assembly_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        result = self._invoke_up(
+    def test_a_local_route_upstream_absent_from_the_output_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _write_consumer_tree(tmp_path)
+        _write_bundle_output(tmp_path, "placeframe-cuda", ["api"])
+
+        result = self._invoke_up(tmp_path, monkeypatch)
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, ValueError)
+        message = str(result.exception)
+        assert "services entry 'placeframe-cuda'" in message
+        assert "'/grafana/*' references 'placeframe-cuda-grafana'" in message
+
+    def test_a_local_port_owner_absent_from_the_output_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _write_bundle_output(tmp_path, "placeframe-cuda", ["api"])
+        _write_config(
             tmp_path,
-            monkeypatch,
-            "placeframe-cuda-api edge livekit-livekit auth-keycloak-keycloak",
+            {
+                "project_name": "demo",
+                "repository": "ghcr.io/org/demo",
+                "platforms": ["linux/amd64"],
+                "gateway": "8080",
+                "services": {
+                    "placeframe": {
+                        "options": {
+                            "cuda": {
+                                "workloads": ["api.yaml"],
+                                "ports": [{"service": "grafana", "published": "3306", "target": "3306"}],
+                            }
+                        }
+                    }
+                },
+            },
         )
+        _write_workload(tmp_path, "api.yaml", "api")
+        _write_lock(tmp_path, entries={})
+        (tmp_path / ".env").write_text("BUNDLES=placeframe-cuda\n", encoding="utf-8")
+
+        result = self._invoke_up(tmp_path, monkeypatch)
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "/grafana/* upstream placeframe-cuda-grafana" in str(result.exception)
+        assert "'3306' references 'placeframe-cuda-grafana'" in str(result.exception)
 
-    def test_the_selected_auth_upstream_absent_from_the_assembly_refuses(
+    def test_a_local_output_hole_no_environment_source_fills_refuses(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        result = self._invoke_up(
-            tmp_path, monkeypatch, "placeframe-cuda-api placeframe-cuda-grafana edge livekit-livekit"
+        _write_consumer_tree(tmp_path)
+        cuda = tmp_path / "stack" / "generated" / "compose" / "compose.placeframe-cuda.yaml"
+        cuda.write_text(
+            "services:\n"
+            "  placeframe-cuda-api:\n"
+            "    image: demo/api:1\n"
+            "    environment:\n"
+            "      TOKEN: ${API_TOKEN}\n"
+            "    networks:\n"
+            "      placeframe-cuda-net:\n"
+            "        aliases:\n"
+            "          - api\n"
+            "  placeframe-cuda-grafana:\n"
+            "    image: demo/grafana:1\n"
+            "    networks:\n"
+            "      placeframe-cuda-net:\n"
+            "        aliases:\n"
+            "          - grafana\n"
+            "networks:\n"
+            "  placeframe-cuda-net: null\n",
+            encoding="utf-8",
         )
+
+        result = self._invoke_up(tmp_path, monkeypatch)
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "route /auth/* upstream auth-keycloak-keycloak" in str(result.exception)
+        assert "bundle 'placeframe-cuda' requires ['API_TOKEN']" in str(result.exception)
 
-    def test_a_port_owning_service_absent_from_the_assembly_refuses(
+    def test_a_lock_recorded_requirement_no_environment_source_fills_refuses(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        result = self._invoke_up(
-            tmp_path, monkeypatch, "placeframe-cuda-api placeframe-cuda-grafana edge auth-keycloak-keycloak"
+        _write_consumer_tree(tmp_path)
+        root_lock = tmp_path.joinpath(*LOCK_PATH.parts)
+        root_lock.write_text(
+            root_lock.read_text(encoding="utf-8").replace(
+                f"  LIVEKIT_BUNDLE:\n    reference: {LIVEKIT_PINNED}",
+                f"  LIVEKIT_BUNDLE:\n    reference: {LIVEKIT_PINNED}\n    requires:\n      - LIVEKIT_TOKEN",
+            ),
+            encoding="utf-8",
         )
+
+        result = self._invoke_up(tmp_path, monkeypatch)
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "livekit-livekit" in str(result.exception)
+        assert "bundle 'livekit' requires ['LIVEKIT_TOKEN']" in str(result.exception)
+
+    def test_a_requirement_filled_by_the_env_file_passes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        _write_consumer_tree(tmp_path)
+        root_lock = tmp_path.joinpath(*LOCK_PATH.parts)
+        root_lock.write_text(
+            root_lock.read_text(encoding="utf-8").replace(
+                f"  LIVEKIT_BUNDLE:\n    reference: {LIVEKIT_PINNED}",
+                f"  LIVEKIT_BUNDLE:\n    reference: {LIVEKIT_PINNED}\n    requires:\n      - LIVEKIT_TOKEN",
+            ),
+            encoding="utf-8",
+        )
+        (tmp_path / ".env").write_text(
+            (tmp_path / ".env").read_text(encoding="utf-8") + "LIVEKIT_TOKEN=set\n",
+            encoding="utf-8",
+        )
+
+        result = self._invoke_up(tmp_path, monkeypatch)
+
+        assert result.exit_code == 0, result.output
 
 
 class TestSharedNames:
@@ -770,7 +831,7 @@ class TestSharedNames:
         (tmp_path / ".env").write_text("BUNDLES=left-a,right-b\n", encoding="utf-8")
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
-        handler = PresentProbeAndServices("left-a-api", "right-b-api", "edge").run
+        handler = PresentProbe().run
         _patch_up_probes(monkeypatch, handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -1083,7 +1144,10 @@ class TestLockEnvSynthesis:
         (tmp_path / ".env").write_text("", encoding="utf-8")
         root_lock = tmp_path.joinpath(*LOCK_PATH.parts)
         root_lock.write_text(
-            yaml.safe_dump({"images": {"ALPINE_IMAGE": {"index": self.ALPINE_INDEX}}, "bundles": TUNNEL_BUNDLES}),
+            yaml.safe_dump({
+                "images": {"ALPINE_IMAGE": {"index": self.ALPINE_INDEX}},
+                "bundles": {name: {"reference": reference} for name, reference in TUNNEL_BUNDLES.items()},
+            }),
             encoding="utf-8",
         )
 
@@ -1193,7 +1257,7 @@ class TestMirroredLockEnforcement:
                 "images": {
                     "ALPINE_IMAGE": {"index": index, "platforms": {"linux/amd64": manifest}},
                 },
-                "bundles": TUNNEL_BUNDLES,
+                "bundles": {name: {"reference": reference} for name, reference in TUNNEL_BUNDLES.items()},
             }),
             encoding="utf-8",
         )
@@ -1220,7 +1284,7 @@ class TestMirroredLockEnforcement:
                 "images": {
                     "ALPINE_IMAGE": {"index": index, "platforms": {"linux/amd64": manifest}},
                 },
-                "bundles": TUNNEL_BUNDLES,
+                "bundles": {name: {"reference": reference} for name, reference in TUNNEL_BUNDLES.items()},
             }),
             encoding="utf-8",
         )
@@ -1346,12 +1410,10 @@ class TestBundleOverrides:
         self,
         monkeypatch: pytest.MonkeyPatch,
         root: Path,
-        services: str = "placeframe-cuda-api placeframe-cuda-grafana",
         handler: object | None = None,
     ) -> ProducerEnvRecorder:
         recorder = ProducerEnvRecorder()
-        resolved = handler if handler is not None else PresentProbeAndServices(*services.split()).run
-        _patch_up_probes(monkeypatch, resolved)
+        _patch_up_probes(monkeypatch, handler if handler is not None else PresentProbe().run)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(root)
         monkeypatch.delenv("BUNDLES", raising=False)
@@ -1454,7 +1516,7 @@ class TestBundleOverrides:
         (tmp_path / ".env").write_text(
             f"BUNDLE_OVERRIDE_TUNNEL=oci://ghcr.io/org/livekit:{OTHER_SHA_TAG}\n", encoding="utf-8"
         )
-        recorder = self._invoke_up(monkeypatch, tmp_path, services="tunnel")
+        recorder = self._invoke_up(monkeypatch, tmp_path)
 
         result = runner.invoke(app, ["up"])
 
@@ -1467,7 +1529,7 @@ class TestBundleOverrides:
         (tmp_path / ".env").write_text(
             f"BUNDLE_OVERRIDE_TUNNEL=oci://ghcr.io/org/livekit:{OTHER_SHA_TAG}\n", encoding="utf-8"
         )
-        self._invoke_up(monkeypatch, tmp_path, services="tunnel", handler=_probe_absent)
+        self._invoke_up(monkeypatch, tmp_path, handler=_probe_absent)
 
         result = runner.invoke(app, ["up"])
 
@@ -1478,7 +1540,7 @@ class TestBundleOverrides:
         (tmp_path / ".env").write_text(
             f"BUNDLE_OVERRIDE_TUNNEL=oci://ghcr.io/org/livekit:{OTHER_SHA_TAG}\n", encoding="utf-8"
         )
-        recorder = self._invoke_up(monkeypatch, tmp_path, services="tunnel")
+        recorder = self._invoke_up(monkeypatch, tmp_path)
 
         result = runner.invoke(app, ["up"])
 
@@ -1500,7 +1562,7 @@ class TestBundleOverrides:
     ):
         _write_ref_tree(tmp_path)
         (tmp_path / ".env").write_text(f"BUNDLE_OVERRIDE_TUNNEL={value}\n", encoding="utf-8")
-        self._invoke_up(monkeypatch, tmp_path, services="tunnel")
+        self._invoke_up(monkeypatch, tmp_path)
 
         result = runner.invoke(app, ["up"])
 
@@ -1511,7 +1573,7 @@ class TestBundleOverrides:
     def test_an_empty_override_value_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)
         (tmp_path / ".env").write_text("BUNDLE_OVERRIDE_TUNNEL=\n", encoding="utf-8")
-        self._invoke_up(monkeypatch, tmp_path, services="tunnel")
+        self._invoke_up(monkeypatch, tmp_path)
 
         result = runner.invoke(app, ["up"])
 
@@ -1544,7 +1606,7 @@ class TestBundleOverrides:
             consumer,
             ["BUNDLE_OVERRIDE_PLACEFRAME_ROCM=../producer/stack/generated/compose/compose.placeframe-rocm.yaml"],
         )
-        recorder = self._invoke_up(monkeypatch, consumer, services="api")
+        recorder = self._invoke_up(monkeypatch, consumer)
 
         result = runner.invoke(app, ["up"])
 
@@ -1615,9 +1677,7 @@ class TestBundleOverrides:
         )
         _write_workload(consumer, "grafana.yaml", "grafana")
         _write_bundle_output(consumer, "extra", ["api"])
-        recorder = self._invoke_up(
-            monkeypatch, consumer, services="placeframe-cuda-api placeframe-cuda-grafana extra-api"
-        )
+        recorder = self._invoke_up(monkeypatch, consumer)
 
         result = runner.invoke(app, ["up"])
 

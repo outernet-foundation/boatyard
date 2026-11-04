@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import difflib
 import json
 import re
@@ -21,12 +22,15 @@ from boatyard.config import (
     is_list,
     is_mapping,
     mirrored_ref,
+    refuse_unresolved_references,
+    required_compose_holes,
 )
 from boatyard.config_lock import (
     LOCK_PATH,
     read_config_lock,
     SHA256_DIGEST_REGEX,
     ConfigLock,
+    ConfigLockBundle,
     ConfigLockEntry,
 )
 from boatyard.crane import install_crane
@@ -34,6 +38,7 @@ from boatyard.environment import PLATFORM_VARIABLE
 
 DIGEST_TAIL_PATTERN = re.compile(rf"@{SHA256_DIGEST_REGEX}$")
 DIGEST_PATTERN = re.compile(r"^Digest:\s+(sha256:[a-f0-9]+)", re.MULTILINE)
+COMPOSE_FILE_MEDIA_TYPE = "application/vnd.docker.compose.file+yaml"
 
 
 class UpstreamManifests(NamedTuple):
@@ -52,6 +57,8 @@ class OciDescriptor(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     digest: str = ""
+    media_type: str | None = None
+    data: str | None = None
     platform: OciPlatform | None = None
     annotations: dict[str, str] = Field(default_factory=dict)
 
@@ -69,6 +76,12 @@ class OciIndex(BaseModel):
         if is_list(value):
             return [child for child in value if is_mapping(child)]
         return value
+
+
+class OciArtifactManifest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    layers: list[OciDescriptor] = Field(default_factory=list)
 
 
 def run_lock(*, upgrade: bool = False, check: bool = False) -> None:
@@ -147,15 +160,29 @@ def relock(config: Config, *, upgrade: bool = False) -> ConfigLock:
         else:
             charts[key] = f"{base}@{resolve_remote_digest(reference)}"
 
-    # First-party bundles resolve direct, never mirror-prefixed.
-    bundles: dict[str, str] = {}
-    for name, declared in remote_entries:
+    # First-party bundles resolve direct, never mirror-prefixed. A frozen digest's artifact is
+    # immutable, so its recorded requires copies forward; declaring entries re-read the content
+    # to validate their authored references against the bundle's actual services.
+    bundles: dict[str, ConfigLockBundle] = {}
+    for name, declared, entry in config.remote_declared_entries():
         key = bundle_lock_key(name)
-        reference = declared.removeprefix(OCI_REFERENCE_PREFIX)
-        if not upgrade and key in committed.bundles and committed.bundles[key].startswith(reference + "@"):
+        reference = declared
+        frozen = not upgrade and key in committed.bundles and committed.bundles[key].reference.startswith(
+            reference + "@"
+        )
+        if frozen and not entry.routes and not entry.ports:
             bundles[key] = committed.bundles[key]
-        else:
-            bundles[key] = f"{reference}@{resolve_bundle_digest(reference)}"
+            continue
+        pinned = committed.bundles[key].reference if frozen else f"{reference}@{resolve_bundle_digest(reference)}"
+        content = read_compose_bundle(pinned)
+        bundles[key] = (
+            committed.bundles[key]
+            if frozen
+            else ConfigLockBundle(reference=pinned, requires=sorted(required_compose_holes("\n".join(content))))
+        )
+        refuse_unresolved_references(
+            name, entry.routes, entry.ports, _bundle_service_names(content), prefix=f"{name}-"
+        )
 
     return ConfigLock(images=images, charts=charts, bundles=bundles)
 
@@ -174,10 +201,18 @@ def render_lock(lock: ConfigLock) -> str:
     if lock.charts:
         document["charts"] = dict(sorted(lock.charts.items()))
     if lock.bundles:
-        document["bundles"] = dict(sorted(lock.bundles.items()))
+        document["bundles"] = {name: _bundle_record(bundle) for name, bundle in sorted(lock.bundles.items())}
     if not document:
         return "{}\n"
     return yaml.safe_dump(document, sort_keys=False, default_flow_style=False, width=10_000_000)
+
+
+def _bundle_record(bundle: ConfigLockBundle) -> Yaml:
+    record: dict[str, Yaml] = {"reference": bundle.reference}
+    if bundle.requires:
+        requires: list[Yaml] = list(bundle.requires)
+        record["requires"] = requires
+    return record
 
 
 def resolve_remote_manifests(reference: str, platforms: list[str], subject: str) -> UpstreamManifests:
@@ -232,6 +267,41 @@ def resolve_bundle_digest(reference: str) -> str:
     if re.fullmatch(SHA256_DIGEST_REGEX, output) is None:
         raise ValueError(f"crane digest output for {reference} must be one sha256 digest")
     return output
+
+
+def read_compose_bundle(reference: str) -> list[str]:
+    # Compose bundles are OCI artifacts whose compose files ride as inline base64 layer data;
+    # export cannot read them, the manifest data and the blob fallback can.
+    print(f"Reading bundle content for: {reference}")
+    manifest = OciArtifactManifest.model_validate(json.loads(bash_output(f"crane manifest {shlex.quote(reference)}")))
+    texts = [
+        base64.b64decode(layer.data).decode("utf-8")
+        if layer.data is not None
+        else bash_output(f"crane blob {shlex.quote(_blob_repository(reference) + '@' + layer.digest)}")
+        for layer in manifest.layers
+        if layer.media_type == COMPOSE_FILE_MEDIA_TYPE
+    ]
+    if not texts:
+        raise ValueError(f"{reference}: the compose bundle carries no compose file layer")
+    return texts
+
+
+def _blob_repository(reference: str) -> str:
+    # A colon is a tag only when no slash follows it; earlier colons are registry ports.
+    base = reference.rpartition("@")[0]
+    slash = base.rfind("/")
+    colon = base.rfind(":")
+    return base[:colon] if colon > slash else base
+
+
+def _bundle_service_names(texts: list[str]) -> set[str]:
+    names: set[str] = set()
+    for text in texts:
+        document = yaml.safe_load(text)
+        services = document.get("services") if is_mapping(document) else None
+        if is_mapping(services):
+            names.update(services)
+    return names
 
 
 def _concrete_platform(child: OciDescriptor) -> tuple[str, str] | None:

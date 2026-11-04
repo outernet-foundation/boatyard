@@ -20,8 +20,8 @@ DIGEST = "sha256:" + "a" * 64
 SHA_TAG = "a" * 40
 
 
-def bundle_entries(*qualified_names: str) -> dict[str, str]:
-    return {bundle_lock_key(name): f"ghcr.io/org/repo/{name}:1.0.0@" + DIGEST for name in qualified_names}
+def bundle_entries(*qualified_names: str) -> dict[str, dict[str, object]]:
+    return {bundle_lock_key(name): {"reference": f"ghcr.io/org/repo/{name}:1.0.0@" + DIGEST} for name in qualified_names}
 
 
 def write_config(tmp_path: Path, payload: dict[str, object]) -> None:
@@ -30,7 +30,11 @@ def write_config(tmp_path: Path, payload: dict[str, object]) -> None:
     )
 
 
-def write_lock(tmp_path: Path, entries: dict[str, str] | None = None, bundles: dict[str, str] | None = None) -> None:
+def write_lock(
+    tmp_path: Path,
+    entries: dict[str, str] | None = None,
+    bundles: dict[str, dict[str, object]] | None = None,
+) -> None:
     (tmp_path / LOCK_PATH).parent.mkdir(parents=True, exist_ok=True)
     images = (
         entries
@@ -43,7 +47,7 @@ def write_lock(tmp_path: Path, entries: dict[str, str] | None = None, bundles: d
     (tmp_path / LOCK_PATH).write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
 
 
-def write_edge_lock(tmp_path: Path, bundles: dict[str, str] | None = None) -> None:
+def write_edge_lock(tmp_path: Path, bundles: dict[str, dict[str, object]] | None = None) -> None:
     reference = "ghcr.io/outernet-foundation/mirror/docker.io/library/caddy:2.8.4-alpine@" + DIGEST
     write_lock(tmp_path, {"CADDY_IMAGE": reference}, bundles=bundles)
 
@@ -742,7 +746,7 @@ class TestServices:
 
     @pytest.mark.parametrize("tag", [SHA_TAG, "0.3.1", "0.3.1-dev.42", "main"])
     def test_every_published_channel_spelling_loads(self, tag: str, tmp_path: Path) -> None:
-        write_lock(tmp_path, entries={}, bundles={"REMOTE_BUNDLE": f"ghcr.io/org/repo/x:{tag}@{DIGEST}"})
+        write_lock(tmp_path, entries={}, bundles={"REMOTE_BUNDLE": {"reference": f"ghcr.io/org/repo/x:{tag}@{DIGEST}"}})
         write_config(
             tmp_path,
             {
@@ -1468,9 +1472,9 @@ class TestConfigLockParse:
             parse_config_lock(lock)
 
     def test_a_non_digest_pinned_bundle_refuses(self, tmp_path: Path) -> None:
-        lock = _write_raw_lock(tmp_path, "bundles:\n  LIVEKIT_BUNDLE: ghcr.io/x/livekit:0.3.1\n")
+        lock = _write_raw_lock(tmp_path, "bundles:\n  LIVEKIT_BUNDLE:\n    reference: ghcr.io/x/livekit:0.3.1\n")
 
-        with pytest.raises(ValueError, match="bundle LIVEKIT_BUNDLE is not digest-pinned"):
+        with pytest.raises(ValueError, match="bundle entry is not digest-pinned"):
             parse_config_lock(lock)
 
     def test_a_malformed_platform_key_refuses(self, tmp_path: Path) -> None:
@@ -1496,7 +1500,7 @@ class TestConfigLockParse:
         lock = _write_raw_lock(
             tmp_path,
             f"images:\n  LIVEKIT_BUNDLE:\n    index: ghcr.io/x/a:1@{DIGEST}\n"
-            f"bundles:\n  LIVEKIT_BUNDLE: ghcr.io/x/livekit:0.3.1@{DIGEST}\n",
+            f"bundles:\n  LIVEKIT_BUNDLE:\n    reference: ghcr.io/x/livekit:0.3.1@{DIGEST}\n",
         )
 
         with pytest.raises(ValueError, match=r"at most one of images, charts, bundles"):
@@ -1508,7 +1512,7 @@ class TestConfigLockParse:
                 tmp_path,
                 f"images:\n  A_IMAGE:\n    index: ghcr.io/x/a:1@{DIGEST}\n"
                 f"charts:\n  LOKI_CHART: ghcr.io/x/loki:7.3.0@{DIGEST}\n"
-                f"bundles:\n  LIVEKIT_BUNDLE: ghcr.io/x/livekit:0.3.1@{DIGEST}\n",
+                f"bundles:\n  LIVEKIT_BUNDLE:\n    reference: ghcr.io/x/livekit:0.3.1@{DIGEST}\n",
             )
         )
 

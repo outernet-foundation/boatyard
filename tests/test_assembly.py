@@ -75,8 +75,8 @@ def _write_edge_tree(
                 }
             },
             "bundles": {
-                "LIVEKIT_BUNDLE": f"ghcr.io/org/livekit:{LIVEKIT_SHA_TAG}@{FAKE_DIGEST}",
-                "AUTH_KEYCLOAK_BUNDLE": f"ghcr.io/org/keycloak:0.3.1@{FAKE_DIGEST}",
+                "LIVEKIT_BUNDLE": {"reference": f"ghcr.io/org/livekit:{LIVEKIT_SHA_TAG}@{FAKE_DIGEST}"},
+                "AUTH_KEYCLOAK_BUNDLE": {"reference": f"ghcr.io/org/keycloak:0.3.1@{FAKE_DIGEST}"},
             },
         }),
         encoding="utf-8",
@@ -120,8 +120,7 @@ def _skip_crane_install() -> None:
 def _probe_present_and_services(command: str) -> str:
     if "imagetools inspect" in command or "crane digest" in command:
         return ""
-    assert "config --services" in command
-    return "livekit-livekit\nauth-keycloak-keycloak\nlivekit-grafana\nlivekit-x\nedge\n"
+    raise AssertionError(f"unexpected command: {command}")
 
 
 def _caddyfile(document: dict[str, Any]) -> str:
