@@ -233,6 +233,10 @@ def _silent_handoff(_command: str) -> None:
     return None
 
 
+def _failing_handoff(_command: str) -> None:
+    raise RuntimeError("compose failed")
+
+
 def _probe_present(command: str) -> str:
     assert "imagetools inspect" in command or "crane digest" in command
     return ""
@@ -1167,7 +1171,8 @@ class TestLockEnvSynthesis:
             tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST}, TUNNEL_BUNDLES
         )
         monkeypatch.delenv("PLATFORM", raising=False)
-        _patch_up_probes(monkeypatch, _probe_absent)
+        _patch_up_probes(monkeypatch, _probe_present)
+        monkeypatch.setattr(up, "bash_handoff", _failing_handoff)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -1178,6 +1183,24 @@ class TestLockEnvSynthesis:
         ]
         assert len(kept) == 1
         assert kept[0].read_text(encoding="utf-8") == f"ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
+
+    def test_a_probe_failure_refuses_before_any_per_run_file_exists(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _write_ref_tree(tmp_path)
+        (tmp_path / ".env").write_text("", encoding="utf-8")
+        _write_lock(
+            tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST}, TUNNEL_BUNDLES
+        )
+        monkeypatch.delenv("PLATFORM", raising=False)
+        _patch_up_probes(monkeypatch, _probe_absent)
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, ValueError)
+        assert "kept for inspection" not in result.output
 
 
 class TestMirroredLockEnforcement:

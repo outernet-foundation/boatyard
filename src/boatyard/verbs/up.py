@@ -32,7 +32,7 @@ from boatyard.config import (
     require_compose_stack,
     required_compose_holes,
 )
-from boatyard.config_lock import LOCK_PATH, parse_config_lock, read_config_lock
+from boatyard.config_lock import LOCK_PATH, ConfigLock, parse_config_lock, read_config_lock
 from boatyard.crane import install_crane
 from boatyard.environment import BUNDLES_VARIABLE, BUNDLE_OVERRIDE_PREFIX, Environment
 from boatyard.lock import compose_env_entries, producer_env_entries, render_env_entries
@@ -257,6 +257,10 @@ def up(
     if caddyfile is not None:
         document["configs"] = {EDGE_CONFIG_NAME: {"content": caddyfile}}
 
+    # Probe every lock entry before any per-run file materializes; an overridden bundle skips
+    # its probe — testing a bundle not published at any digest yet is the override's point.
+    _probe_lock_entries(lock, overridden)
+
     # Materialize the per-run files and hand off; the handoff execs, so a successful run never unwinds.
     with ExitStack() as stack:
         # Write the per-run lock env file.
@@ -276,10 +280,6 @@ def up(
         assembly = Path(handle.name)
         stack.callback(assembly.unlink, missing_ok=True)
         compose_files = [assembly]
-
-        # Probe every lock entry before bring-up; an overridden bundle skips its probe —
-        # testing a bundle not published at any digest yet is the override's point.
-        _probe_lock_entries(config, overridden)
 
         # Build local images.
         if build:
@@ -311,8 +311,7 @@ def _refuse_unfilled_requirements(requirements: dict[str, list[str]], filled: se
         )
 
 
-def _probe_lock_entries(config: Config, overridden: set[str]) -> None:
-    lock = read_config_lock(config.root)
+def _probe_lock_entries(lock: ConfigLock, overridden: set[str]) -> None:
     references = sorted(
         set(
             [reference for entry in lock.images.values() for reference in entry.recorded_digests]
