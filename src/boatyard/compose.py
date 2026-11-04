@@ -68,24 +68,23 @@ class Invocation(NamedTuple):
 
 
 def select(config: Config, environment: Environment) -> Selection:
-    names = environment.bundles
-    root = config.root
-
-    options = config.selectable_options
-    bare_entries = config.bare_entries
-    if not names and not bare_entries and options:
+    if not environment.bundles and not config.bare_entries and config.selectable_options:
         raise ValueError(
-            f"{BUNDLES_VARIABLE}= selects nothing and no bare entry exists; the options are {sorted(options)}"
+            f"{BUNDLES_VARIABLE}= selects nothing and no bare entry exists; "
+            f"the options are {sorted(config.selectable_options)}"
         )
-    unknown = [name for name in names if name not in options]
+    unknown = [name for name in environment.bundles if name not in config.selectable_options]
     if unknown:
-        bare_entries_note = f"; bare entries, always included: {bare_entries}" if bare_entries else ""
+        bare_entries_note = (
+            f"; bare entries, always included: {config.bare_entries}" if config.bare_entries else ""
+        )
         raise ValueError(
-            f"{BUNDLES_VARIABLE}= names {unknown}; the selectable options are {sorted(options)}{bare_entries_note}"
+            f"{BUNDLES_VARIABLE}= names {unknown}; "
+            f"the selectable options are {sorted(config.selectable_options)}{bare_entries_note}"
         )
     choices: dict[str, str] = {}
-    for name in names:
-        group, option_name = options[name]
+    for name in environment.bundles:
+        group, option_name = config.selectable_options[name]
         if group in choices:
             raise ValueError(
                 f"{BUNDLES_VARIABLE}= selects {qualified_option_name(group, choices[group])} and {name}; "
@@ -93,11 +92,15 @@ def select(config: Config, environment: Environment) -> Selection:
             )
         choices[group] = option_name
 
-    unknown = sorted(name for name in environment.overrides if name not in options and name not in bare_entries)
+    unknown = sorted(
+        name
+        for name in environment.overrides
+        if name not in config.selectable_options and name not in config.bare_entries
+    )
     if unknown:
-        vocabulary = sorted(options.keys() | set(bare_entries))
+        vocabulary = sorted(config.selectable_options.keys() | set(config.bare_entries))
         raise ValueError(f"{BUNDLE_OVERRIDE_PREFIX}* names {unknown}; the bundle vocabulary is {vocabulary}")
-    selected_names = set(starmap(qualified_option_name, choices.items())) | set(bare_entries)
+    selected_names = set(starmap(qualified_option_name, choices.items())) | set(config.bare_entries)
     selected_overrides = {name: value for name, value in environment.overrides.items() if name in selected_names}
 
     auth_option = choices.get(AUTH_GROUP_NAME)
@@ -122,7 +125,7 @@ def select(config: Config, environment: Environment) -> Selection:
 
     # Collect the include list in services declaration order; a remote ref includes the
     # lock's digest-pinned form, never the yaml tag directly.
-    lock = read_config_lock(root)
+    lock = read_config_lock(config.root)
     includes: list[str] = []
     local_outputs: list[Path] = []
     overrides: list[BundleOverride] = []
@@ -138,7 +141,7 @@ def select(config: Config, environment: Environment) -> Selection:
                 includes.append(value)
                 continue
             candidate = Path(value)
-            path = (candidate if candidate.is_absolute() else root / candidate).resolve()
+            path = (candidate if candidate.is_absolute() else config.root / candidate).resolve()
             if path.parts[-4:-1] != OVERRIDE_LAYOUT:
                 raise ValueError(
                     f"{variable}: {value!r} must point into a stack/generated/compose/ bundle output layout"
@@ -153,7 +156,7 @@ def select(config: Config, environment: Environment) -> Selection:
             pinned = lock.require(bundle_lock_key(name), f"bundle {name!r}", hint="run boatyard lock")
             includes.append(f"{OCI_REFERENCE_PREFIX}{pinned}")
             continue
-        output = compose_bundle_output_path(root, name)
+        output = compose_bundle_output_path(config.root, name)
         if not output.is_file():
             raise ValueError(
                 f"selected entry {name!r} has no bundle output {output.as_posix()}; generate-score writes it"
