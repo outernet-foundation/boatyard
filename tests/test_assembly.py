@@ -7,7 +7,7 @@ import yaml
 from typer.testing import CliRunner
 
 from boatyard.cli import app
-from boatyard import compose, environment
+from boatyard import environment
 from boatyard.verbs import up
 from boatyard.config_lock import LOCK_PATH
 
@@ -91,7 +91,6 @@ def _write_edge_tree(
     monkeypatch.delenv("GATEWAY_PORT", raising=False)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(up, "install_crane", _skip_crane_install)
-    monkeypatch.setattr(compose, "bash_output", _probe_present_and_services)
     monkeypatch.setattr(up, "bash_output", _probe_present_and_services)
 
 

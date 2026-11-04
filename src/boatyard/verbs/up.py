@@ -2,23 +2,46 @@ from __future__ import annotations
 
 import re
 import shlex
+from collections.abc import Collection, Mapping
 from contextlib import ExitStack
+from itertools import groupby
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Annotated
 
 import typer
+import yaml
 from bashrun.bash import CalledProcessError, bash_handoff, bash_output
 
 from boatyard.bake import run_build
-from boatyard.compose import (
-    compose_command,
-    render_compose,
-    require_env_file,
+from boatyard.compose import compose_command, lock_env_unwind, require_env_file
+from boatyard.config import (
+    CADDY_IMAGE,
+    Config,
+    EDGE_SERVICE_NAME,
+    OCI_REFERENCE_PREFIX,
+    Yaml,
+    bundle_lock_key,
+    compose_bundle_output_path,
+    double_dollars,
+    is_mapping,
+    load_yaml_file,
+    lock_key_prefix,
+    qualified_option_name,
+    require_compose_stack,
 )
-from boatyard.config import Config, bundle_lock_key, require_compose_stack
-from boatyard.config_lock import read_config_lock
+from boatyard.config_lock import LOCK_PATH, parse_config_lock, read_config_lock
 from boatyard.crane import install_crane
-from boatyard.environment import BUNDLES_VARIABLE, Environment
+from boatyard.environment import BUNDLES_VARIABLE, BUNDLE_OVERRIDE_PREFIX, Environment
+from boatyard.lock import compose_env_entries, producer_env_entries, render_env_entries
+
+EDGE_LISTEN_PORT = 8443
+EDGE_CONFIG_NAME = "devkit-edge-caddyfile"
+ROUTE_UNRESOLVED_REFUSAL = "route {path} upstream {name} resolves to no service in the selected assembly"
+PORT_UNRESOLVED_REFUSAL = "ports for service {name!r} resolve to no service in the selected assembly"
+PROFILE_UNKNOWN_REFUSAL = (
+    "COMPOSE_PROFILES selects unknown profile(s) {unknown}; profiles defined by the compose files: {defined}"
+)
 
 app = typer.Typer()
 
@@ -49,13 +72,216 @@ def up(
     if build and not (config.repository or config.base_images):
         raise typer.BadParameter("--build requires build declarations (repository or base_images) in boatyard.yml")
 
-    # Render and validate the invocation.
     with ExitStack() as stack:
-        invocation = render_compose(config, environment, stack)
+        # Refuse an empty selection in an options-only repo.
+        if not environment.bundles and not config.bare_entries and config.selectable_options:
+            raise ValueError(
+                f"{BUNDLES_VARIABLE}= selects nothing and no bare entry exists; "
+                f"the options are {sorted(config.selectable_options)}"
+            )
+
+        # Refuse bundle names outside the selectable options.
+        unknown = [name for name in environment.bundles if name not in config.selectable_options]
+        if unknown:
+            bare_entries_note = f"; bare entries, always included: {config.bare_entries}" if config.bare_entries else ""
+            raise ValueError(
+                f"{BUNDLES_VARIABLE}= names {unknown}; "
+                f"the selectable options are {sorted(config.selectable_options)}{bare_entries_note}"
+            )
+
+        # Fold the selected names into at most one option per group.
+        choices: dict[str, str] = {}
+        for name in environment.bundles:
+            group, option_name = config.selectable_options[name]
+            if group in choices:
+                raise ValueError(
+                    f"{BUNDLES_VARIABLE}= selects {qualified_option_name(group, choices[group])} and {name}; "
+                    f"at most one option per group ({group})"
+                )
+            choices[group] = option_name
+
+        # Refuse override names outside the bundle vocabulary.
+        unknown = sorted(
+            name
+            for name in environment.oci_overrides.keys() | environment.path_overrides.keys()
+            if name not in config.selectable_options and name not in config.bare_entries
+        )
+        if unknown:
+            vocabulary = sorted(config.selectable_options.keys() | set(config.bare_entries))
+            raise ValueError(f"{BUNDLE_OVERRIDE_PREFIX}* names {unknown}; the bundle vocabulary is {vocabulary}")
+
+        # Resolve the chosen options into leaf services.
+        services = config.resolve_services(choices)
+
+        # Collect each service's include, override, and per-run lock env entries in declaration order.
+        lock = read_config_lock(config.root)
+        consumer_entries = compose_env_entries(lock, config, environment.platform)
+        entries: dict[str, str] = dict(consumer_entries)
+        includes: list[Yaml] = []
+        overridden: set[str] = set()
+
+        for service in services:
+            name = service.name
+
+            # Include the oci override in place of the locked ref.
+            if name in environment.oci_overrides:
+                includes.append(environment.oci_overrides[name])
+                overridden.add(name)
+                continue
+
+            # Refuse a missing override path or one that defines the reserved edge service.
+            if name in environment.path_overrides:
+                candidate = environment.path_overrides[name]
+                path = (candidate if candidate.is_absolute() else config.root / candidate).resolve()
+                variable = BUNDLE_OVERRIDE_PREFIX + name.upper().replace("-", "_")
+                if not path.is_file():
+                    raise ValueError(f"{variable}: {path.as_posix()} does not exist")
+                loaded = load_yaml_file(path)
+                loaded_services = loaded.get("services") if is_mapping(loaded) else None
+                if is_mapping(loaded_services) and EDGE_SERVICE_NAME in loaded_services:
+                    raise ValueError(
+                        f"{path.as_posix()}: the bundle override defines the reserved service {EDGE_SERVICE_NAME!r}"
+                    )
+                includes.append(path.as_posix())
+                overridden.add(name)
+                # Fill the override's namespaced holes from its producer's lock, three parents up
+                producer_lock = path.parents[3] / LOCK_PATH
+                if producer_lock.is_file():
+                    producer_entries = producer_env_entries(parse_config_lock(producer_lock), environment.platform)
+                    prefix = lock_key_prefix(name)
+                    entries.update({prefix + key: value for key, value in producer_entries.items()})
+                continue
+
+            # Include a remote ref as its lock-pinned digest.
+            if service.entry.ref is not None:
+                pinned = lock.require(bundle_lock_key(name), f"bundle {name!r}", hint="run boatyard lock")
+                includes.append(f"{OCI_REFERENCE_PREFIX}{pinned}")
+                continue
+
+            # Include a local entry through its generated bundle output.
+            output = compose_bundle_output_path(config.root, name)
+            if not output.is_file():
+                raise ValueError(
+                    f"selected entry {name!r} has no bundle output {output.as_posix()}; generate-score writes it"
+                )
+            includes.append(output.resolve().as_posix())
+            prefix = lock_key_prefix(name)
+            entries.update({prefix + key: value for key, value in consumer_entries.items()})
+
+        # Namespace the routes and ports under their declaring entries.
+        routes = [
+            route.model_copy(update={"upstream": f"{service.name}-{route.upstream}"})
+            for service in services
+            for route in service.routes
+        ]
+        ports = [
+            port.model_copy(update={"service": f"{service.name}-{port.service}"})
+            for service in services
+            for port in service.ports
+        ]
+
+        profiles = environment.profiles
+
+        # Write the per-run lock env file.
+        env_file: Path | None = None
+        if entries:
+            with NamedTemporaryFile(
+                "w", suffix=".env", prefix="devkit-lock-env-", delete=False, encoding="utf-8"
+            ) as handle:
+                handle.write(render_env_entries(entries))
+                env_file = Path(handle.name)
+            stack.enter_context(lock_env_unwind(env_file))
+
+        # Render the edge service and its Caddyfile when any route rides.
+        document_services: dict[str, Yaml] = {}
+        caddyfile: str | None = None
+        if routes:
+            # Require PUBLIC_URL and derive the forwarded environment under the auth option.
+            auth_service = next((service for service in services if service.auth), None)
+            forwarded = None
+            if auth_service is not None:
+                if environment.public_url is None:
+                    raise ValueError("an auth option is selected; PUBLIC_URL is required")
+                forwarded = environment.public_url.forwarded
+
+            edge: dict[str, Yaml] = {
+                "image": f"${{{CADDY_IMAGE}:?err}}",
+                "configs": [{"source": EDGE_CONFIG_NAME, "target": "/etc/caddy/Caddyfile"}],
+                "ports": [{"target": str(EDGE_LISTEN_PORT), "published": config.gateway, "protocol": "tcp"}],
+                # Attach the edge to every selected bundle's network.
+                "networks": dict.fromkeys(f"{service.name}-net" for service in services),
+            }
+            if forwarded is not None:
+                edge["environment"] = forwarded
+            document_services[EDGE_SERVICE_NAME] = edge
+
+            # Render one site with one handle block per route in declaration order.
+            lines = [f":{EDGE_LISTEN_PORT} {{"]
+            for route in routes:
+                matcher = "" if route.path == "/*" else f" {route.path}"
+                if route.raw is not None:
+                    block = ["\t\t" + line for line in route.raw.splitlines()]
+                elif auth_service is not None and route.path == auth_service.routes[0].path:
+                    block = [
+                        f"\t\treverse_proxy {route.upstream} {{",
+                        "\t\t\theader_up X-Forwarded-Proto {$FORWARDED_PROTO}",
+                        "\t\t\theader_up X-Forwarded-Port {$FORWARDED_PORT}",
+                        "\t\t}",
+                    ]
+                else:
+                    block = [f"\t\treverse_proxy {route.upstream}"]
+                head = "\thandle_path" if route.strip_prefix else "\thandle"
+                lines.extend((f"{head}{matcher} {{", *block, "\t}"))
+            lines.append("}")
+            caddyfile = double_dollars("\n".join(lines) + "\n")
+
+        # Group the namespaced ports into per-service stanzas.
+        document_services.update({
+            service: {"ports": [port.model_dump(exclude={"service"}, exclude_none=True) for port in service_ports]}
+            for service, service_ports in groupby(
+                sorted(ports, key=lambda port: port.service), key=lambda port: port.service
+            )
+        })
+        # Assemble and write the root document.
+        document: dict[str, Yaml] = {"name": config.project_name}
+        if includes:
+            document["include"] = includes
+        if document_services:
+            document["services"] = document_services
+        if caddyfile is not None:
+            document["configs"] = {EDGE_CONFIG_NAME: {"content": caddyfile}}
+        with NamedTemporaryFile(
+            "w", suffix=".yaml", prefix="devkit-assembly-", delete=False, encoding="utf-8"
+        ) as handle:
+            handle.write(yaml.safe_dump(document, sort_keys=False, default_flow_style=False))
+        assembly = Path(handle.name)
+        stack.callback(assembly.unlink, missing_ok=True)
+        compose_files = [assembly]
+
+        # Validate every route upstream and port owner against compose's own resolution.
+        if routes or ports:
+            resolved = set(_compose_config(config.root, compose_files, "--services", env_file=env_file))
+            _refuse_unknown(
+                {route.upstream.partition(":")[0]: route.path for route in routes},
+                resolved,
+                ROUTE_UNRESOLVED_REFUSAL,
+            )
+            _refuse_unknown(
+                {port.service: port.service for port in ports},
+                resolved,
+                PORT_UNRESOLVED_REFUSAL,
+            )
+        # Refuse profile names the compose files do not define.
+        if profiles:
+            _refuse_unknown(
+                {profile: profile for profile in profiles},
+                _compose_config(config.root, compose_files, "--profiles", env_file=env_file),
+                PROFILE_UNKNOWN_REFUSAL,
+            )
 
         # Probe every lock entry before bring-up; an overridden bundle skips its probe —
         # testing a bundle not published at any digest yet is the override's point.
-        _probe_lock_entries(config, {override.name for override in invocation.overrides})
+        _probe_lock_entries(config, overridden)
 
         # Build local images.
         if build:
@@ -64,10 +290,10 @@ def up(
         # Hand off to docker compose up.
         up_command = compose_command(
             root,
-            invocation.compose_files,
-            *(argument for profile in invocation.profiles for argument in ("--profile", profile)),
+            compose_files,
+            *(argument for profile in profiles for argument in ("--profile", profile)),
             "up",
-            env_file=invocation.env_file,
+            env_file=env_file,
         )
         if not build:
             up_command += " --pull missing"
@@ -77,6 +303,28 @@ def up(
             up_command += " -d"
 
         bash_handoff(up_command)
+
+
+def _compose_config(root: Path, compose_files: list[Path], *arguments: str, env_file: Path | None) -> list[str]:
+    # Run compose config and collect its non-empty output lines.
+    return [
+        line.strip()
+        for line in bash_output(
+            compose_command(root, compose_files, "config", *arguments, env_file=env_file)
+        ).splitlines()
+        if line.strip()
+    ]
+
+
+def _refuse_unknown(names: Mapping[str, str], defined: Collection[str], message: str) -> None:
+    # Refuse the first name missing from the defined set; the template formats
+    # name, path (the declaration site naming it), unknown (every missing name), and defined.
+    unknown = [(name, site) for name, site in names.items() if name not in defined]
+    if unknown:
+        name, path = unknown[0]
+        raise ValueError(
+            message.format(name=name, path=path, unknown=[missing for missing, _ in unknown], defined=defined)
+        )
 
 
 def _probe_lock_entries(config: Config, overridden: set[str]) -> None:

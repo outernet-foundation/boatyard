@@ -9,7 +9,6 @@ from bashrun.bash import CalledProcessError, bash, bash_output
 from typer.testing import CliRunner
 
 from boatyard.cli import app
-from boatyard import compose
 from boatyard.verbs import down, up
 from boatyard.config_lock import LOCK_PATH
 
@@ -230,16 +229,6 @@ def _write_workload(root: Path, name: str, service_name: str) -> None:
     path.write_text(yaml.safe_dump({"metadata": {"name": service_name}}), encoding="utf-8")
 
 
-def _defined_profiles(command: str) -> str:
-    assert "config --profiles" in command
-    return "keycloak\ntunnel-ngrok\n"
-
-
-def _rathole_profiles(command: str) -> str:
-    assert "config --profiles" in command
-    return "tunnel-rathole\n"
-
-
 def _silent_handoff(_command: str) -> None:
     return None
 
@@ -336,12 +325,22 @@ class PresentProbeAndServices:
         return "".join(f"{name}\n" for name in self.names)
 
 
+class PresentProbeAndProfiles:
+    def __init__(self, *profiles: str) -> None:
+        self.profiles = list(profiles)
+
+    def run(self, command: str) -> str:
+        if "imagetools inspect" in command or "crane digest" in command:
+            return ""
+        assert "config --profiles" in command
+        return "".join(f"{profile}\n" for profile in self.profiles)
+
+
 class TestProfileForwarding:
     def _invoke_up(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> HandoffRecorder:
         _write_ref_tree(tmp_path)
         recorder = HandoffRecorder()
-        monkeypatch.setattr(compose, "bash_output", _defined_profiles)
-        _patch_up_probes(monkeypatch, _probe_present)
+        _patch_up_probes(monkeypatch, PresentProbeAndProfiles("keycloak", "tunnel-ngrok").run)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
         return recorder
@@ -381,8 +380,7 @@ class TestProfileForwarding:
         (tmp_path / ".env").write_text("COMPOSE_PROFILES=tunnel-ngrok\n", encoding="utf-8")
         monkeypatch.setenv("COMPOSE_PROFILES", "tunnel-rathole")
         recorder = HandoffRecorder()
-        monkeypatch.setattr(compose, "bash_output", _rathole_profiles)
-        _patch_up_probes(monkeypatch, _probe_present)
+        _patch_up_probes(monkeypatch, PresentProbeAndProfiles("tunnel-rathole").run)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
@@ -503,7 +501,6 @@ class TestSelectionLaw:
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
         handler = PresentProbeAndServices(*services.split()).run
-        monkeypatch.setattr(compose, "bash_output", handler)
         _patch_up_probes(monkeypatch, handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -544,7 +541,6 @@ class TestSelectionLaw:
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
         handler = PresentProbeAndServices("api", "edge").run
-        monkeypatch.setattr(compose, "bash_output", handler)
         _patch_up_probes(monkeypatch, handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -581,7 +577,6 @@ class TestSelectionLaw:
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
         handler = PresentProbeAndServices("livekit-livekit", "edge").run
-        monkeypatch.setattr(compose, "bash_output", handler)
         _patch_up_probes(monkeypatch, handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -720,7 +715,6 @@ class TestUpMaterialization:
         handler = PresentProbeAndServices(
             "placeframe-cuda-api", "placeframe-cuda-grafana", "edge", "livekit-livekit", "auth-keycloak-keycloak"
         ).run
-        monkeypatch.setattr(compose, "bash_output", handler)
         _patch_up_probes(monkeypatch, handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -769,7 +763,6 @@ class TestUpMaterialization:
         handler = PresentProbeAndServices(
             "placeframe-cuda-api", "placeframe-cuda-grafana", "edge", "livekit-livekit"
         ).run
-        monkeypatch.setattr(compose, "bash_output", handler)
         _patch_up_probes(monkeypatch, handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -816,7 +809,7 @@ class TestUpValidation:
         _write_consumer_tree(tmp_path)
         monkeypatch.delenv("BUNDLES", raising=False)
         monkeypatch.setattr(up, "bash_handoff", _silent_handoff)
-        monkeypatch.setattr(compose, "bash_output", ServicesOutput(*services.split()).run)
+        monkeypatch.setattr(up, "bash_output", ServicesOutput(*services.split()).run)
         monkeypatch.chdir(tmp_path)
         return runner.invoke(app, ["up"])
 
@@ -883,7 +876,6 @@ class TestSharedNames:
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
         handler = PresentProbeAndServices("left-a-api", "right-b-api", "edge").run
-        monkeypatch.setattr(compose, "bash_output", handler)
         _patch_up_probes(monkeypatch, handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -1478,7 +1470,6 @@ class TestBundleOverrides:
     ) -> ProducerEnvRecorder:
         recorder = ProducerEnvRecorder()
         resolved = handler if handler is not None else PresentProbeAndServices(*services.split()).run
-        monkeypatch.setattr(compose, "bash_output", resolved)
         _patch_up_probes(monkeypatch, resolved)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(root)
