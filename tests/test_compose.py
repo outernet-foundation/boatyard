@@ -1510,67 +1510,7 @@ class TestBundleOverrides:
         assert "the producer lock records platforms" in message
         assert "linux/amd64" in message and "linux/arm64" in message
 
-    def test_the_ref_form_skips_the_lock_entry_requirement(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        _write_ref_tree(tmp_path)
-        _write_lock(tmp_path, entries={}, bundles={})
-        (tmp_path / ".env").write_text(
-            f"BUNDLE_OVERRIDE_TUNNEL=oci://ghcr.io/org/livekit:{OTHER_SHA_TAG}\n", encoding="utf-8"
-        )
-        recorder = self._invoke_up(monkeypatch, tmp_path)
-
-        result = runner.invoke(app, ["up"])
-
-        assert result.exit_code == 0, result.output
-        [document] = recorder.documents
-        assert document["include"] == [f"oci://ghcr.io/org/livekit:{OTHER_SHA_TAG}"]
-
-    def test_the_ref_form_skips_the_bundle_probe(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text(
-            f"BUNDLE_OVERRIDE_TUNNEL=oci://ghcr.io/org/livekit:{OTHER_SHA_TAG}\n", encoding="utf-8"
-        )
-        self._invoke_up(monkeypatch, tmp_path, handler=_probe_absent)
-
-        result = runner.invoke(app, ["up"])
-
-        assert result.exit_code == 0, result.output
-
-    def test_the_ref_form_attaches_no_producer_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text(
-            f"BUNDLE_OVERRIDE_TUNNEL=oci://ghcr.io/org/livekit:{OTHER_SHA_TAG}\n", encoding="utf-8"
-        )
-        recorder = self._invoke_up(monkeypatch, tmp_path)
-
-        result = runner.invoke(app, ["up"])
-
-        assert result.exit_code == 0, result.output
-        assert [_normalize(command, tmp_path) for command in recorder.commands] == [
-            "docker compose -f ASSEMBLY --project-directory ROOT --env-file .env up --pull missing -d"
-        ]
-
-    @pytest.mark.parametrize(
-        ("value", "fragment"),
-        [
-            ("oci://ghcr.io/org/livekit@" + FAKE_DIGEST, "pins a digest"),
-            ("oci://ghcr.io/org/livekit:latest", "the tag 'latest'"),
-            ("oci://ghcr.io/org/livekit:0.3.x", "is a range"),
-        ],
-    )
-    def test_the_ref_form_carries_the_tag_grammar_teeth(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str, fragment: str
-    ):
-        _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text(f"BUNDLE_OVERRIDE_TUNNEL={value}\n", encoding="utf-8")
-        self._invoke_up(monkeypatch, tmp_path)
-
-        result = runner.invoke(app, ["up"])
-
-        assert result.exit_code != 0
-        assert isinstance(result.exception, ValueError)
-        assert fragment in str(result.exception)
-
-    def test_an_empty_override_value_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_the_path_form_requires_a_value(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)
         (tmp_path / ".env").write_text("BUNDLE_OVERRIDE_TUNNEL=\n", encoding="utf-8")
         self._invoke_up(monkeypatch, tmp_path)
@@ -1581,12 +1521,27 @@ class TestBundleOverrides:
         assert isinstance(result.exception, ValueError)
         assert "empty" in str(result.exception)
 
+    def test_a_url_scheme_override_value_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        _write_ref_tree(tmp_path)
+        (tmp_path / ".env").write_text(
+            "BUNDLE_OVERRIDE_TUNNEL=oci://ghcr.io/org/livekit:some-tag\n", encoding="utf-8"
+        )
+        self._invoke_up(monkeypatch, tmp_path)
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, ValueError)
+        assert "carries a URL scheme" in str(result.exception)
+
     def test_an_unknown_override_name_refuses_listing_the_vocabulary(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         consumer = tmp_path / "consumer"
         consumer.mkdir()
-        _write_override_consumer(consumer, ["BUNDLE_OVERRIDE_GHOST=oci://ghcr.io/org/ghost:1.0.0"])
+        _write_override_consumer(
+            consumer, ["BUNDLE_OVERRIDE_GHOST=../producer/stack/generated/compose/compose.ghost.yaml"]
+        )
         self._invoke_up(monkeypatch, consumer)
 
         result = runner.invoke(app, ["up"])

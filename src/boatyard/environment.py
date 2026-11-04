@@ -5,7 +5,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from boatyard.config import OCI_REFERENCE_PREFIX, Yaml, is_mapping, require_bundle_reference
+from boatyard.config import Yaml, is_mapping
 
 ENV_FILE = Path(".env")
 BUNDLES_VARIABLE = "BUNDLES"
@@ -46,7 +46,6 @@ class Environment(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     bundles: list[str]
-    oci_overrides: dict[str, str]
     path_overrides: dict[str, Path]
     public_url: PublicUrl | None
     platform: str | None
@@ -57,27 +56,17 @@ class Environment(BaseModel):
     def _carve_overrides(cls, data: dict[str, object]) -> dict[str, object]:
         raw_overrides = data.pop("overrides", {})
         overrides = {key: str(value) for key, value in raw_overrides.items()} if is_mapping(raw_overrides) else {}
-        oci_overrides: dict[str, str] = {}
         path_overrides: dict[str, Path] = {}
         for name, value in overrides.items():
             variable = BUNDLE_OVERRIDE_PREFIX + name.upper().replace("-", "_")
             stripped = value.strip()
             if not stripped:
-                raise ValueError(f"{variable}: empty; a value is a filesystem path or an oci:// reference")
-            if stripped.startswith(OCI_REFERENCE_PREFIX):
-                oci_overrides[name] = stripped
-            else:
-                path_overrides[name] = Path(stripped)
-        data["oci_overrides"] = oci_overrides
+                raise ValueError(f"{variable}: empty; a value is a filesystem path")
+            if "://" in stripped:
+                raise ValueError(f"{variable}: {stripped!r} carries a URL scheme; a value is a filesystem path")
+            path_overrides[name] = Path(stripped)
         data["path_overrides"] = path_overrides
         return data
-
-    @field_validator("oci_overrides")
-    @classmethod
-    def _require_reference_grammar(cls, oci_overrides: dict[str, str]) -> dict[str, str]:
-        for value in oci_overrides.values():
-            require_bundle_reference(value)
-        return oci_overrides
 
     @field_validator("path_overrides")
     @classmethod

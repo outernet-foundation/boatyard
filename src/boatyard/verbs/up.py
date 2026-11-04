@@ -99,7 +99,7 @@ def up(
     # Refuse override names outside the bundle vocabulary.
     unknown = sorted(
         name
-        for name in environment.oci_overrides.keys() | environment.path_overrides.keys()
+        for name in environment.path_overrides
         if name not in config.selectable_options and name not in config.bare_entries
     )
     if unknown:
@@ -121,13 +121,6 @@ def up(
 
     for service in services:
         name = service.name
-
-        # Include the oci override in place of the locked ref; its content is unreadable without
-        # a network fetch against a mutable tag, so no reference or requirement checks ride.
-        if name in environment.oci_overrides:
-            includes.append(environment.oci_overrides[name])
-            overridden.add(name)
-            continue
 
         # Refuse a missing override path or one that defines the reserved edge service.
         if name in environment.path_overrides:
