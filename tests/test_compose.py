@@ -129,8 +129,18 @@ def _write_lock(
 def _write_bundle_output(root: Path, name: str, services: list[str]) -> Path:
     path = root / "stack" / "generated" / "compose" / f"compose.{name}.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
+    network = f"{name}-net"
     path.write_text(
-        yaml.safe_dump({"services": {service: {"image": f"demo/{service}:1"} for service in services}}),
+        yaml.safe_dump({
+            "services": {
+                f"{name}-{service}": {
+                    "image": f"demo/{service}:1",
+                    "networks": {network: {"aliases": [service]}},
+                }
+                for service in services
+            },
+            "networks": {network: None},
+        }),
         encoding="utf-8",
     )
     return path
@@ -140,8 +150,18 @@ def _write_producer(root: Path, services: list[str], lock: dict[str, object] | N
     # A sibling producer checkout carrying the fixed stack/generated/compose/ output layout.
     output = root / "producer" / "stack" / "generated" / "compose" / "compose.placeframe-cuda.yaml"
     output.parent.mkdir(parents=True, exist_ok=True)
+    network = "placeframe-cuda-net"
     output.write_text(
-        yaml.safe_dump({"services": {service: {"image": f"demo/{service}:1"} for service in services}}),
+        yaml.safe_dump({
+            "services": {
+                f"placeframe-cuda-{service}": {
+                    "image": f"demo/{service}:1",
+                    "networks": {network: {"aliases": [service]}},
+                }
+                for service in services
+            },
+            "networks": {network: None},
+        }),
         encoding="utf-8",
     )
     if lock is not None:
@@ -496,7 +516,10 @@ class TestSelectionLaw:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         bundles: str | None = "placeframe-cuda,auth-keycloak",
-        services: str = "api grafana edge livekit keycloak",
+        services: str = (
+            "placeframe-cuda-api placeframe-cuda-grafana placeframe-rocm-api placeframe-rocm-grafana "
+            "edge livekit-livekit auth-keycloak-keycloak"
+        ),
     ) -> AssemblyRecorder:
         _write_consumer_tree(tmp_path, bundles=bundles)
         monkeypatch.delenv("BUNDLES", raising=False)
@@ -579,7 +602,7 @@ class TestSelectionLaw:
         (tmp_path / ".env").write_text("BUNDLES=\n", encoding="utf-8")
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
-        handler = PresentProbeAndServices("livekit", "edge").run
+        handler = PresentProbeAndServices("livekit-livekit", "edge").run
         monkeypatch.setattr(compose, "bash_output", handler)
         _patch_up_probes(monkeypatch, handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
@@ -716,7 +739,9 @@ class TestUpMaterialization:
         _write_consumer_tree(tmp_path)
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
-        handler = PresentProbeAndServices("api", "grafana", "edge", "livekit", "keycloak").run
+        handler = PresentProbeAndServices(
+            "placeframe-cuda-api", "placeframe-cuda-grafana", "edge", "livekit-livekit", "auth-keycloak-keycloak"
+        ).run
         monkeypatch.setattr(compose, "bash_output", handler)
         _patch_up_probes(monkeypatch, handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
@@ -735,11 +760,16 @@ class TestUpMaterialization:
         edge = document["services"]["edge"]
         assert edge["image"] == "${CADDY_IMAGE:?err}"
         assert edge["ports"] == [{"target": "8443", "published": "${GATEWAY_PORT:?err}", "protocol": "tcp"}]
+        assert edge["networks"] == {
+            "auth-keycloak-net": None,
+            "placeframe-cuda-net": None,
+            "livekit-net": None,
+        }
         assert edge["environment"] == {
             "FORWARDED_PROTO": "http",
             "FORWARDED_PORT": "58080",
         }
-        assert document["services"]["livekit"]["ports"] == [
+        assert document["services"]["livekit-livekit"]["ports"] == [
             {
                 "target": "${LIVEKIT_SIGNALING_PORT:?err}",
                 "published": "${LIVEKIT_SIGNALING_PORT:?err}",
@@ -749,8 +779,8 @@ class TestUpMaterialization:
         content = document["configs"]["devkit-edge-caddyfile"]["content"]
         assert "handle_path /auth/*" in content
         assert "header_up X-Forwarded-Proto {$$FORWARDED_PROTO}" in content
-        assert "reverse_proxy grafana:3000" in content
-        assert content.rstrip().endswith("\thandle {\n\t\treverse_proxy api:8000\n\t}\n}")
+        assert "reverse_proxy placeframe-cuda-grafana:3000" in content
+        assert content.rstrip().endswith("\thandle {\n\t\treverse_proxy placeframe-cuda-api:8000\n\t}\n}")
 
     def test_the_anonymous_edge_omits_the_auth_route_and_auth_env(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -758,7 +788,9 @@ class TestUpMaterialization:
         _write_consumer_tree(tmp_path, bundles="placeframe-cuda")
         monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
-        handler = PresentProbeAndServices("api", "grafana", "edge", "livekit").run
+        handler = PresentProbeAndServices(
+            "placeframe-cuda-api", "placeframe-cuda-grafana", "edge", "livekit-livekit"
+        ).run
         monkeypatch.setattr(compose, "bash_output", handler)
         _patch_up_probes(monkeypatch, handler)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
@@ -811,33 +843,43 @@ class TestUpValidation:
         return runner.invoke(app, ["up"])
 
     def test_a_route_upstream_absent_from_the_assembly_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        result = self._invoke_up(tmp_path, monkeypatch, "api edge livekit keycloak")
+        result = self._invoke_up(
+            tmp_path,
+            monkeypatch,
+            "placeframe-cuda-api edge livekit-livekit auth-keycloak-keycloak",
+        )
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "/grafana/* upstream grafana" in str(result.exception)
+        assert "/grafana/* upstream placeframe-cuda-grafana" in str(result.exception)
 
     def test_the_selected_auth_upstream_absent_from_the_assembly_refuses(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        result = self._invoke_up(tmp_path, monkeypatch, "api grafana edge livekit")
+        result = self._invoke_up(
+            tmp_path, monkeypatch, "placeframe-cuda-api placeframe-cuda-grafana edge livekit-livekit"
+        )
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "route /auth/* upstream keycloak" in str(result.exception)
+        assert "route /auth/* upstream auth-keycloak-keycloak" in str(result.exception)
 
     def test_a_port_owning_service_absent_from_the_assembly_refuses(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        result = self._invoke_up(tmp_path, monkeypatch, "api grafana edge keycloak")
+        result = self._invoke_up(
+            tmp_path, monkeypatch, "placeframe-cuda-api placeframe-cuda-grafana edge auth-keycloak-keycloak"
+        )
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "livekit" in str(result.exception)
+        assert "livekit-livekit" in str(result.exception)
 
 
-class TestServiceExclusion:
-    def test_two_selected_outputs_sharing_a_service_refuse_at_up(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+class TestSharedNames:
+    def test_two_selected_outputs_sharing_a_service_name_namespace_apart(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         _write_config(
             tmp_path,
             {
@@ -861,15 +903,23 @@ class TestServiceExclusion:
         _write_workload(tmp_path, "api.yaml", "api")
         (tmp_path / ".env").write_text("BUNDLES=left-a,right-b\n", encoding="utf-8")
         monkeypatch.delenv("BUNDLES", raising=False)
+        recorder = AssemblyRecorder()
+        handler = PresentProbeAndServices("left-a-api", "right-b-api", "edge").run
+        monkeypatch.setattr(compose, "bash_output", handler)
+        _patch_up_probes(monkeypatch, handler)
+        monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
 
-        assert result.exit_code != 0
-        assert isinstance(result.exception, ValueError)
-        message = str(result.exception)
-        assert "compose.left-a.yaml" in message and "compose.right-b.yaml" in message
-        assert "api" in message
+        assert result.exit_code == 0, result.output
+        [document] = recorder.documents
+        assert sorted(document["include"]) == sorted([
+            (tmp_path / "stack/generated/compose/compose.left-a.yaml").resolve().as_posix(),
+            (tmp_path / "stack/generated/compose/compose.right-b.yaml").resolve().as_posix(),
+        ])
+        content = document["configs"]["devkit-edge-caddyfile"]["content"]
+        assert "reverse_proxy left-a-api:8000" in content
 
     def test_the_same_overlap_stays_legal_at_down(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_config(
@@ -1039,7 +1089,7 @@ class TestDevOverlay:
         [document] = recorder.documents
         assert document == {
             "services": {
-                "api": {
+                "apps-core-api": {
                     "image": "ghcr.io/org/demo/api:dev",
                     "volumes": [
                         {
@@ -1068,7 +1118,7 @@ class TestDevOverlay:
 
         assert result.exit_code == 0, result.output
         [document] = recorder.documents
-        assert document == {"services": {"api": {"environment": {"RELOAD": "${RELOAD:-true}"}}}}
+        assert document == {"services": {"apps-core-api": {"environment": {"RELOAD": "${RELOAD:-true}"}}}}
 
     def test_overlay_targets_only_services_the_selection_defines(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_dev_tree(
@@ -1088,7 +1138,7 @@ class TestDevOverlay:
 
         assert result.exit_code == 0, result.output
         [document] = recorder.documents
-        assert document == {"services": {"edge": {"environment": {"DEBUG_EDGE": "${DEBUG_EDGE:-false}"}}}}
+        assert document == {"services": {"apps-edge-edge": {"environment": {"DEBUG_EDGE": "${DEBUG_EDGE:-false}"}}}}
 
     def test_up_dev_without_dev_shape_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_dev_tree(tmp_path, dockerfile=SINGLE_STAGE_DOCKERFILE)
@@ -1577,7 +1627,7 @@ class TestBundleOverrides:
         self,
         monkeypatch: pytest.MonkeyPatch,
         root: Path,
-        services: str = "api grafana",
+        services: str = "placeframe-cuda-api placeframe-cuda-grafana",
         handler: object | None = None,
     ) -> ProducerEnvRecorder:
         recorder = ProducerEnvRecorder()
@@ -1800,7 +1850,14 @@ class TestBundleOverrides:
     def test_an_override_defining_the_edge_service_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         consumer = tmp_path / "consumer"
         consumer.mkdir()
-        _write_producer(tmp_path, ["api", "edge"], _producer_lock(["linux/amd64"]))
+        # A hand-authored override file outside the namespace scheme can still spell the
+        # reserved service name; the refusal guards that hand-written surface.
+        producer_output = tmp_path / "producer" / "stack" / "generated" / "compose" / "compose.placeframe-cuda.yaml"
+        producer_output.parent.mkdir(parents=True, exist_ok=True)
+        producer_output.write_text(
+            yaml.safe_dump({"services": {"api": {"image": "demo/api:1"}, "edge": {"image": "demo/edge:1"}}}),
+            encoding="utf-8",
+        )
         _write_override_consumer(consumer, [f"BUNDLE_OVERRIDE_PLACEFRAME_CUDA={OVERRIDE_PATH}"])
         self._invoke_up(monkeypatch, consumer)
 
@@ -1810,7 +1867,7 @@ class TestBundleOverrides:
         assert isinstance(result.exception, ValueError)
         assert "reserved service 'edge'" in str(result.exception)
 
-    def test_an_override_colliding_with_another_selected_output_refuses(
+    def test_an_override_sharing_a_service_name_with_another_output_namespaces_apart(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         consumer = tmp_path / "consumer"
@@ -1823,15 +1880,20 @@ class TestBundleOverrides:
         )
         _write_workload(consumer, "grafana.yaml", "grafana")
         _write_bundle_output(consumer, "extra", ["api"])
-        self._invoke_up(monkeypatch, consumer)
+        recorder = self._invoke_up(
+            monkeypatch, consumer, services="placeframe-cuda-api placeframe-cuda-grafana extra-api"
+        )
 
         result = runner.invoke(app, ["up"])
 
-        assert result.exit_code != 0
-        assert isinstance(result.exception, ValueError)
-        message = str(result.exception)
-        assert "compose.placeframe-cuda.yaml" in message and "compose.extra.yaml" in message
-        assert "api" in message
+        assert result.exit_code == 0, result.output
+        [document] = recorder.documents
+        assert sorted(document["include"]) == sorted([
+            (tmp_path / "producer" / "stack" / "generated" / "compose" / "compose.placeframe-cuda.yaml")
+            .resolve()
+            .as_posix(),
+            (consumer / "stack" / "generated" / "compose" / "compose.extra.yaml").resolve().as_posix(),
+        ])
 
 
 class TestEnvFilePrecedence:

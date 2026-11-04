@@ -3,7 +3,7 @@ from __future__ import annotations
 import shlex
 from collections.abc import Generator, Mapping
 from contextlib import ExitStack, contextmanager
-from itertools import combinations, groupby, starmap
+from itertools import groupby, starmap
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import NamedTuple
@@ -45,12 +45,13 @@ class BundleOverride(NamedTuple):
 
 class Selection(NamedTuple):
     includes: list[str]
+    bundle_networks: list[str]
     routes: list[RouteConfig]
     ports: list[PortDeclaration]
     auth_route: RouteConfig | None
     forwarded: dict[str, str] | None
     profiles: list[str]
-    dev_services: list[str]
+    dev_services: list[tuple[str, str]]
     dev_toggles: dict[str, dict[str, str]]
     overrides: list[BundleOverride]
 
@@ -107,6 +108,14 @@ def select(config: Config, environment: Environment) -> Selection:
 
     services = config.resolve_services(choices)
 
+    auth_service = (
+        None
+        if auth_option is None
+        else next(
+            service for service in services if service.name == qualified_option_name(AUTH_GROUP_NAME, auth_option)
+        )
+    )
+
     # Collect the include list in services declaration order; a remote ref includes the
     # lock's digest-pinned form, never the yaml tag directly. Each service answers one row:
     # its include string, an optional local output whose service names are scanned, and an
@@ -154,22 +163,21 @@ def select(config: Config, environment: Environment) -> Selection:
         includes.append(output.resolve().as_posix())
         local_outputs.append(output)
 
-    # Refuse selected outputs that define the same service name.
-    file_services: list[tuple[Path, set[str]]] = []
+    # Gather the service names the selected local outputs define.
+    output_services: set[str] = set()
     for path in local_outputs:
-        # Extract the service names only.
         loaded = load_yaml_file(path)
         document_services = loaded.get("services") if is_mapping(loaded) else None
-        file_services.append((path, set(document_services) if is_mapping(document_services) else set()))
-    for (path, service_names), (other_path, other_service_names) in combinations(file_services, 2):
-        shared = sorted(service_names & other_service_names)
-        if shared:
-            raise ValueError(f"{path.as_posix()} and {other_path.as_posix()} both define service(s) {shared}")
-    output_services = {name for _path, names in file_services for name in names}
+        if is_mapping(document_services):
+            output_services.update(document_services)
 
     # Dev facts: dev-stage services inside the selection, plus the workload-declared dev toggles.
+    # Pair each dev-stage build with its entry-namespaced compose service.
     dev_services = [
-        name for name, service in config.service_builds.items() if service.dev_stage and name in output_services
+        (f"{service.name}-{name}", name)
+        for service in services
+        for name, build in config.service_builds.items()
+        if build.dev_stage and f"{service.name}-{name}" in output_services
     ]
     dev_toggles: dict[str, dict[str, str]] = {}
     score_dir = config.root / config.score_dir
@@ -179,20 +187,26 @@ def select(config: Config, environment: Environment) -> Selection:
         for workload in service.entry.workloads:
             annotations = ComposeWorkloadDocument.load(score_dir / workload).metadata.annotations
             raw = annotations.get(DEV_TOGGLES_ANNOTATION)
-            stem = Path(workload).stem
-            if raw is None or stem not in output_services:
+            compose_name = f"{service.name}-{Path(workload).stem}"
+            if raw is None or compose_name not in output_services:
                 continue
-            dev_toggles[stem] = parse_dev_toggles(raw)
+            dev_toggles[compose_name] = parse_dev_toggles(raw)
+
+    routes = [namespaced_route(service.name, route) for service in services for route in service.routes]
 
     return Selection(
         includes=includes,
-        routes=[route for service in services for route in service.routes],
-        ports=[port for service in services for port in service.ports],
+        bundle_networks=[f"{service.name}-net" for service in services],
+        routes=routes,
+        ports=[
+            port.model_copy(update={"service": f"{service.name}-{port.service}"})
+            for service in services
+            for port in service.ports
+        ],
+        # Pick the auth route from the flattened list so render's identity check sees the same copy.
         auth_route=None
-        if auth_option is None
-        else next(
-            service for service in services if service.name == qualified_option_name(AUTH_GROUP_NAME, auth_option)
-        ).routes[0],
+        if auth_service is None
+        else next(route for route in routes if route.path == auth_service.routes[0].path),
         forwarded=forwarded,
         profiles=profiles,
         dev_services=dev_services,
@@ -222,6 +236,8 @@ def render(
             "image": f"${{{CADDY_IMAGE}:?err}}",
             "configs": [{"source": EDGE_CONFIG_NAME, "target": "/etc/caddy/Caddyfile"}],
             "ports": [{"target": str(EDGE_LISTEN_PORT), "published": config.gateway, "protocol": "tcp"}],
+            # Attach the edge to every selected bundle's network.
+            "networks": dict.fromkeys(selection.bundle_networks),
         }
         if selection.forwarded is not None:
             edge["environment"] = {key: value for key, value in selection.forwarded.items()}
@@ -274,9 +290,9 @@ def render(
     if dev:
         # Render the dev overlay.
         overlay_services: dict[str, Yaml] = {}
-        for name in selection.dev_services:
-            overlay_services[name] = {
-                "image": f"{config.repository}/{name}:dev",
+        for compose_name, build_name in selection.dev_services:
+            overlay_services[compose_name] = {
+                "image": f"{config.repository}/{build_name}:dev",
                 "volumes": [
                     {
                         "type": "bind",
@@ -342,6 +358,10 @@ def render(
 def require_env_file(root: Path) -> None:
     if not (root / ENV_FILE).exists():
         raise ValueError(".env is required")
+
+
+def namespaced_route(entry: str, route: RouteConfig) -> RouteConfig:
+    return route.model_copy(update={"upstream": f"{entry}-{route.upstream}"})
 
 
 def _compose_config(

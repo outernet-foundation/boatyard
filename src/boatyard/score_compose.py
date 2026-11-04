@@ -16,7 +16,6 @@ from pydantic import (
 from boatyard.config import (
     COMPOSE_HOLE,
     ComposeWorkloadDocument,
-    EDGE_SERVICE_NAME,
     WorkloadDocument,
     Yaml,
     compose_bundle_output_path,
@@ -48,6 +47,7 @@ class ComposeDocument(BaseModel):
 
     services: dict[str, ComposeService] = Field(default_factory=dict)
     configs: dict[str, ComposeConfig] | None = None
+    networks: dict[str, Yaml] | None = None
 
     @model_validator(mode="after")
     def _reject_colliding_bind_basenames(self) -> Self:
@@ -71,6 +71,7 @@ class ComposeService(BaseModel):
     depends_on: dict[str, Yaml] | list[str] | None = None
     configs: list[ComposeConfigReference] | None = None
     image: str | None = None
+    networks: dict[str, Yaml] | None = None
 
     @property
     def bind_volumes(self) -> list[BindVolume]:
@@ -136,7 +137,6 @@ def generate_compose(
     outputs: list[Path] = []
     for name, entry in config.local_service_entries():
         workloads = load_workloads(score_dir, entry.workloads, ComposeWorkloadDocument)
-        barrier = f"{BARRIER_SERVICE}-{name}"
 
         output_path = compose_bundle_output_path(config.root, name)
         tool_state = output_path.parent / f".{TOOL}"
@@ -181,11 +181,11 @@ def generate_compose(
             if service_name in services_map:
                 continue
 
-            # Rename the barrier to the per-entry name and pin its image to the lock hole
+            # Pin the barrier image to the lock hole
             if service_name == BARRIER_SERVICE:
                 barrier_service = document.services[BARRIER_SERVICE]
                 barrier_service.image = "${ALPINE_IMAGE:?err}"
-                services_map[BARRIER_SERVICE] = (barrier_service, None, barrier)
+                services_map[BARRIER_SERVICE] = (barrier_service, None, BARRIER_SERVICE)
                 continue
 
             services_map[service_name] = (service, None, service_name)
@@ -196,22 +196,25 @@ def generate_compose(
             duplicates = sorted({collapsed for collapsed in collapsed_names if collapsed_names.count(collapsed) > 1})
             raise ValueError(f"the service names {duplicates} are each claimed by more than one rendered service")
 
-        # Refuse renderings that define the reserved edge service
-        if EDGE_SERVICE_NAME in collapsed_names:
-            raise ValueError(f"bundle {name!r} rendering defines the reserved service {EDGE_SERVICE_NAME!r}")
-
-        # Transform each service in place and rekey the document by collapsed name
+        # Namespace every service under the entry with its bare name as a network alias
+        network = f"{name}-net"
+        collapsed = set(collapsed_names)
         document.services = {}
+        document.networks = {network: {}}
         for service, workload, collapsed_name in services_map.values():
-            document.services[collapsed_name] = service
+            document.services[f"{name}-{collapsed_name}"] = service
+            service.networks = {network: {"aliases": [collapsed_name]}}
 
-            # Point barrier references in depends_on at the renamed barrier
+            # Namespace dependency keys that name rendered services of this bundle
             depends_on = service.depends_on
-            if isinstance(depends_on, dict) and BARRIER_SERVICE in depends_on:
-                depends_on[barrier] = depends_on.pop(BARRIER_SERVICE)
-            elif isinstance(depends_on, list) and BARRIER_SERVICE in depends_on:
+            if isinstance(depends_on, dict):
+                service.depends_on = {
+                    f"{name}-{dependency}" if dependency in collapsed else dependency: condition
+                    for dependency, condition in depends_on.items()
+                }
+            elif isinstance(depends_on, list):
                 service.depends_on = [
-                    barrier if dependency == BARRIER_SERVICE else dependency for dependency in depends_on
+                    f"{name}-{dependency}" if dependency in collapsed else dependency for dependency in depends_on
                 ]
 
             # Inline every bind volume as a top-level configs entry
@@ -238,8 +241,8 @@ def generate_compose(
                 if workload and bind_volume.target not in workload.consumer_interpolated_targets:
                     text = double_dollars(text)
 
-                document.configs[path.name] = ComposeConfig(content=text)
-                service.configs.append(ComposeConfigReference(source=path.name, target=bind_volume.target))
+                document.configs[f"{name}-{path.name}"] = ComposeConfig(content=text)
+                service.configs.append(ComposeConfigReference(source=f"{name}-{path.name}", target=bind_volume.target))
 
         # Write the transformed document
         write_file(output_path, dump_yaml(document.dump()))

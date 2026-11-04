@@ -301,9 +301,7 @@ class Config(BaseModel):
                     )
                 )
             else:
-                resolved.append(
-                    ResolvedService(name=name, entry=member, routes=member.routes, ports=member.ports)
-                )
+                resolved.append(ResolvedService(name=name, entry=member, routes=member.routes, ports=member.ports))
         return resolved
 
     @field_validator("requires")

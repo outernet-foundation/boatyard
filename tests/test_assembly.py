@@ -123,7 +123,7 @@ def _probe_present_and_services(command: str) -> str:
     if "imagetools inspect" in command or "crane digest" in command:
         return ""
     assert "config --services" in command
-    return "livekit\nkeycloak\ngrafana\napi\nx\nedge\n"
+    return "livekit-livekit\nauth-keycloak-keycloak\nlivekit-grafana\nlivekit-x\nedge\n"
 
 
 def _caddyfile(document: dict[str, Any]) -> str:
@@ -139,19 +139,19 @@ class TestRenderCaddyfile:
     def test_the_catch_all_renders_as_a_bare_handle(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         document = _assembly_document(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
 
-        assert "\thandle {\n\t\treverse_proxy livekit:8000\n\t}\n}" in _caddyfile(document)
+        assert "\thandle {\n\t\treverse_proxy livekit-livekit:8000\n\t}\n}" in _caddyfile(document)
 
     def test_wildcard_paths_render_as_handle_matchers(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         document = _assembly_document(tmp_path, monkeypatch, [{"path": "/grafana/*", "upstream": "grafana:3000"}])
 
-        assert "\thandle /grafana/* {\n\t\treverse_proxy grafana:3000\n\t}" in _caddyfile(document)
+        assert "\thandle /grafana/* {\n\t\treverse_proxy livekit-grafana:3000\n\t}" in _caddyfile(document)
 
     def test_strip_prefix_renders_as_handle_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         document = _assembly_document(
             tmp_path, monkeypatch, [{"path": "/grafana/*", "upstream": "grafana:3000", "strip_prefix": True}]
         )
 
-        assert "\thandle_path /grafana/* {\n\t\treverse_proxy grafana:3000\n\t}" in _caddyfile(document)
+        assert "\thandle_path /grafana/* {\n\t\treverse_proxy livekit-grafana:3000\n\t}" in _caddyfile(document)
 
     def test_the_auth_route_carries_the_forwarded_headers(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -159,7 +159,9 @@ class TestRenderCaddyfile:
         document = _assembly_document(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], auth=True)
 
         caddyfile = _caddyfile(document)
-        assert "\t\t\treverse_proxy keycloak:8080 {" in caddyfile.replace("\t\treverse_proxy", "\t\t\treverse_proxy")
+        assert "\t\t\treverse_proxy auth-keycloak-keycloak:8080 {" in caddyfile.replace(
+            "\t\treverse_proxy", "\t\t\treverse_proxy"
+        )
         assert "header_up X-Forwarded-Proto {$$FORWARDED_PROTO}" in caddyfile
         assert "header_up X-Forwarded-Port {$$FORWARDED_PORT}" in caddyfile
 
@@ -188,7 +190,9 @@ class TestRenderCaddyfile:
         )
 
         caddyfile = _caddyfile(document)
-        assert caddyfile.index("reverse_proxy livekit:8000") < caddyfile.index("reverse_proxy grafana:3000")
+        assert caddyfile.index("reverse_proxy livekit-livekit:8000") < caddyfile.index(
+            "reverse_proxy livekit-grafana:3000"
+        )
 
 
 class TestPublicUrlDerivation:
@@ -228,6 +232,7 @@ class TestEdgeStanza:
             "image": "${CADDY_IMAGE:?err}",
             "configs": [{"source": "devkit-edge-caddyfile", "target": "/etc/caddy/Caddyfile"}],
             "ports": [{"target": "8443", "published": "${GATEWAY_PORT:?err}", "protocol": "tcp"}],
+            "networks": {"livekit-net": None},
         }
 
     def test_the_published_port_uses_a_literal_gateway(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

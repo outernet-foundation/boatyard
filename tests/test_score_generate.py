@@ -418,12 +418,14 @@ def test_generate_compose_collapses_doubled_names_and_inlines_binds(
     output = _generate_compose(monkeypatch, tmp_path, GENERATED_COMPOSE, _empty_secrets())
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
-    assert list(document["services"]) == ["api", "pf-postgres"]
-    api = document["services"]["api"]
+    assert list(document["services"]) == ["core-api", "core-pf-postgres"]
+    api = document["services"]["core-api"]
     assert api["image"] == "ghcr.io/org/api:1"
     assert "volumes" not in api
-    assert api["configs"] == [{"source": "config.yaml", "target": "/etc/placeframe/config.yaml"}]
-    assert document["configs"] == {"config.yaml": {"content": "key: $${FOO}\n"}}
+    assert api["networks"] == {"core-net": {"aliases": ["api"]}}
+    assert api["configs"] == [{"source": "core-config.yaml", "target": "/etc/placeframe/config.yaml"}]
+    assert document["configs"] == {"core-config.yaml": {"content": "key: $${FOO}\n"}}
+    assert document["networks"] == {"core-net": {}}
 
 
 def test_generate_compose_collapses_doubled_names_with_no_binds(
@@ -438,9 +440,10 @@ def test_generate_compose_collapses_doubled_names_with_no_binds(
     )
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
-    assert list(document["services"]) == ["gateway"]
-    assert document["services"]["gateway"]["image"] == "ghcr.io/org/gateway:1"
+    assert list(document["services"]) == ["core-gateway"]
+    assert document["services"]["core-gateway"]["image"] == "ghcr.io/org/gateway:1"
     assert "configs" not in document
+    assert document["networks"] == {"core-net": {}}
 
 
 def test_generate_compose_refuses_a_rename_collision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -469,7 +472,7 @@ def test_generate_compose_carries_a_coincidentally_prefixed_service_through(
     output = _generate_compose(monkeypatch, tmp_path, generated, _empty_secrets())
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
-    assert list(document["services"]) == ["api", "pf-postgres", "api-migrations"]
+    assert list(document["services"]) == ["core-api", "core-pf-postgres", "core-api-migrations"]
 
 
 def test_generate_compose_strips_the_workload_prefix_from_differing_container_names(
@@ -485,8 +488,8 @@ def test_generate_compose_strips_the_workload_prefix_from_differing_container_na
     )
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
-    assert list(document["services"]) == ["rathole-client"]
-    assert document["services"]["rathole-client"]["image"] == "ghcr.io/org/rathole-client:1"
+    assert list(document["services"]) == ["core-rathole-client"]
+    assert document["services"]["core-rathole-client"]["image"] == "ghcr.io/org/rathole-client:1"
 
 
 def test_generate_compose_refuses_a_container_name_shared_across_workloads(
@@ -536,10 +539,12 @@ def test_generate_compose_renames_the_barrier_and_its_references_per_entry(
     output = _generate_compose(monkeypatch, tmp_path, COMPOSE_WITH_BARRIER, _alpine_secrets())
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
-    assert list(document["services"]) == ["api", "pf-postgres", "wait-for-resources-core"]
-    assert document["services"]["api"]["depends_on"] == {"wait-for-resources-core": {"condition": "service_started"}}
-    assert document["services"]["pf-postgres"]["depends_on"] == ["wait-for-resources-core"]
-    assert document["services"]["wait-for-resources-core"]["image"] == "${ALPINE_IMAGE:?err}"
+    assert list(document["services"]) == ["core-api", "core-pf-postgres", "core-wait-for-resources"]
+    assert document["services"]["core-api"]["depends_on"] == {
+        "core-wait-for-resources": {"condition": "service_started"}
+    }
+    assert document["services"]["core-pf-postgres"]["depends_on"] == ["core-wait-for-resources"]
+    assert document["services"]["core-wait-for-resources"]["image"] == "${ALPINE_IMAGE:?err}"
 
 
 def test_generate_compose_barrier_names_differ_per_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -567,15 +572,8 @@ def test_generate_compose_barrier_names_differ_per_entry(tmp_path: Path, monkeyp
 
     core = yaml.safe_load((tmp_path / "stack/generated/compose/compose.core.yaml").read_text(encoding="utf-8"))
     edge = yaml.safe_load((tmp_path / "stack/generated/compose/compose.edge.yaml").read_text(encoding="utf-8"))
-    assert "wait-for-resources-core" in core["services"]
-    assert "wait-for-resources-edge" in edge["services"]
-
-
-def test_generate_compose_refuses_a_barrier_rename_collision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    colliding = COMPOSE_WITH_BARRIER + "  wait-for-resources-core:\n    image: ghcr.io/org/api:2\n"
-
-    with pytest.raises(ValueError, match="claimed by more than one"):
-        _generate_compose(monkeypatch, tmp_path, colliding, _alpine_secrets())
+    assert "core-wait-for-resources" in core["services"]
+    assert "edge-wait-for-resources" in edge["services"]
 
 
 class WorkloadContentsRecorder:
@@ -1016,20 +1014,6 @@ def test_a_workload_name_mismatching_the_file_stem_refuses(tmp_path: Path, monke
         _compose_init_templates(monkeypatch, tmp_path, config, {}, {"stack/score/api.yaml": source})
 
 
-def test_a_rendering_defining_the_edge_service_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config = _bundle_config()
-
-    with pytest.raises(ValueError, match=r"reserved service 'edge'"):
-        _compose_init_templates(
-            monkeypatch,
-            tmp_path,
-            config,
-            {},
-            {"stack/score/api.yaml": "metadata:\n  name: api\ncontainers: {}\n"},
-            generated="services:\n  edge:\n    image: example/caddy:1\n",
-        )
-
-
 def test_consumer_interpolated_names_must_match_declared_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _bundle_config()
 
@@ -1116,10 +1100,12 @@ def test_consumer_interpolated_binds_ride_undoubled(tmp_path: Path, monkeypatch:
 
     output = tmp_path / "stack" / "generated" / "compose" / "compose.rathole-client.yaml"
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
-    service = document["services"]["rathole-client"]
-    assert service["configs"] == [{"source": "rathole-client-files-client.toml", "target": "/etc/rathole/client.toml"}]
+    service = document["services"]["rathole-client-rathole-client"]
+    assert service["configs"] == [
+        {"source": "rathole-client-rathole-client-files-client.toml", "target": "/etc/rathole/client.toml"}
+    ]
     assert (
-        document["configs"]["rathole-client-files-client.toml"]["content"]
+        document["configs"]["rathole-client-rathole-client-files-client.toml"]["content"]
         == 'remote_addr = "${TUNNEL_CONTROL_ENDPOINT:?err}"\n'
     )
 

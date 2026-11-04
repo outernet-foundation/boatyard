@@ -61,10 +61,9 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
 - Format: `images:` name → `{index, platforms: {os/arch: reference}}`; `charts:`/`bundles:` name → flat digest-pinned reference; `bundles:` keys are `{QUALIFIED_NAME}_BUNDLE` (qualified selection name upper-cased + `_BUNDLE`; a bare entry is its own name), arch-neutral; written only by the `lock` verb and
   `build`'s incremental freeze (`relock`/`write_lock`), over declared names only — built-image digests are unrepresentable, orphans prune by construction; never hand-authored.
 - `parse_config_lock` = the only parser (path:line errors; duplicate keys, non-digest-pinned entries, cross-section name collisions reject; empty lock legal); `read_config_lock` = the only reader of the committed file (a missing file reads as the empty lock); `ConfigLock.require` = the one "lock lacks NAME" refusal.
-- `relock` computes per `base_images` entry the mirror-prefixed reference resolved into the index digest + one platform-manifest digest per declared platform (`crane copy` byte-identity holds the digests under both names); `@digest`
-  declarations pass through prefixed-unresolved, record uniformly; declaration-incremental freeze: unchanged declaration copies its frozen entry forward (same-tag re-pushes never diff a green branch), tag bump or platform-set change
-  re-resolves, `--upgrade` re-resolves everything; charts freeze by the same prefix match; bundle refs resolve direct — first-party, never mirror-prefixed — via `crane digest` (`resolve_bundle_digest`; compose-bundle media types are not
-  image indexes, `imagetools inspect` may refuse them), freezing by the same tag match.
+- `relock` computes per `base_images` entry the mirror-prefixed reference resolved into the index digest + one platform-manifest digest per declared platform (`crane copy` byte-identity holds both digests); `@digest`
+  declarations pass through prefixed-unresolved; declaration-incremental freeze: unchanged declarations copy forward, tag bump or platform-set change re-resolves, `--upgrade` re-resolves everything; charts freeze by
+  the same prefix match; bundle refs resolve direct — first-party, never mirror-prefixed — via `crane digest` (`resolve_bundle_digest`; compose-bundle media types are not image indexes), frozen by the same tag match.
 - `resolve_remote_manifests` = a pure function of the declarations — the writing machine's arch never participates; exact `os`/`architecture` match; `unknown/unknown` + attestation entries skipped; multiple matches refuse; a missing platform refuses listing the index's platforms.
 - Projection selection law: `env_entries` with no platform answers index references (build edge), with a platform its concrete manifests (compose edge); `compose_env_entries(lock, config, platform)` owns platform selection — a declared singleton self-selects, a
   multi-platform repo names `PLATFORM=` through `Environment.platform` (missing/undeclared refuses listing the declared platforms), never host introspection; read projections stay in `lock.py`.
@@ -90,14 +89,17 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
 - Leaf-service law: `Config.resolve_services(choices)` answers uniform leaf services — the option's routes/ports ride before its group's (so the auth option's own route is `routes[0]`), and an unselected group rides nothing; `select()` consumes only these.
 - Bundle overrides ride `.env` per machine: `BUNDLE_OVERRIDE_<QUALIFIED_NAME>` = a `stack/generated/compose/`-layout path (relative to the repo root) or an `oci://` tag under the ref tag grammar, carved into
   `Environment`'s typed `oci_overrides`/`path_overrides` at load; unknown names refuse listing
-  the vocabulary, unselected names are inert; an overridden entry skips its lock-entry requirement and probe; the path form carries the local-output teeth (exists, parses, no `edge` service, collisions) and attaches
+  the vocabulary, unselected names are inert; an overridden entry skips its lock-entry requirement and probe; the path form carries the local-output teeth (exists, parses, no `edge` service) and attaches
   the producer's `boatyard.lock.yml` — three parents up — as a `--env-file` before the consumer's (later `--env-file`s win shared keys, pinned), platforms from its recorded platforms
   (`producer_env_entries`); the ref form attaches nothing.
 - The materialized root carries the project `name:`, the `include:` list (remote entries as `oci://` + the lock's `{NAME}_BUNDLE` digest ref — the yaml tag never rides an include; a selected ref lacking its entry refuses naming
-  `boatyard lock`; local outputs by absolute path; `services:` declaration order), the emitted edge (iff any route rides), parent-file port stanzas; compose
+  `boatyard lock`; local outputs by absolute path; `services:` declaration order), the emitted edge (iff any route rides, attached to every selected bundle's `{entry}-net` network), parent-file port stanzas; compose
   merges parent ports into included services and honors `!reset` — the merge needs compose ≥ 2.40.
+- Namespacing law: score renders every bundle resource under `{entry}-` (services, configs keys) on a per-bundle network carrying the bare name as a service alias — include collisions are structurally impossible,
+  rendered hostnames still resolve, and accidental cross-bundle DNS fails instead of silently resolving: a bundle references only its own services; cross-bundle coupling rides the consumer's declared surface
+  (env holes, route upstreams). `select()` composes `{entry}-` onto authored route upstreams, port owners, and dev keys; `boatyard.yml` stays bare.
 - Validation teeth, in `render()`: with routes or ports, `docker compose config --services` must list every route upstream + every port's owning service; selected profiles must appear in `config --profiles`; a selected
-  bundle output that does not exist refuses naming generate-score; two selected local outputs sharing a service name refuse.
+  bundle output that does not exist refuses naming generate-score.
 - Edge stanza: `image: ${CADDY_IMAGE:?err}` (the lock hole), the Caddyfile configs entry, `gateway:` as published port, `FORWARDED_PROTO`/`FORWARDED_PORT` derived from `PUBLIC_URL` under a selected auth option (refusing when absent); the
   edge does no token validation — re-protection is a bundle-shipped oauth2-proxy sidecar treaty; the service name `edge` is reserved.
 - Caddyfile: one site on internal `:8443`; `handle` blocks mutually exclusive (caddy sorts longest-path-first, declaration order cannot shadow); `handle_path` for `strip_prefix`; `header_up X-Forwarded-*` only on the auth route; `raw:`
@@ -106,7 +108,7 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
   print and keep; a missing `.env` reads as empty so score generation runs on fresh checkouts (`Environment.load` in `environment.py`); the lock env file materializes the
   selected-platform entries as a per-run `--env-file` (empty entries attach none — a bundles-only lock carries nothing compose consumes); `compose_command` = the one docker compose invocation spelling; `down` never reads the selection, never resolves an include — a name-only root + `--remove-orphans` removes
   every container the project ever created; a config-less or `services:`-less repo refuses loudly on both verbs.
-- Dev overlay under `--dev`: an assembly-defined service with a genuine dev stage gets `image: {repository}/{service}:dev` + the repo-root → `/app:ro` bind; dev-toggles pairs become `${NAME:-default}` environment holes (`.env` overrides
+- Dev overlay under `--dev`: a selected bundle service with a genuine dev stage (keyed `{entry}-{service}`, image tagged `{service}:dev`) gets the repo-root → `/app:ro` bind; dev-toggles pairs become `${NAME:-default}` environment holes (`.env` overrides
   apply only under `--dev`); overlay keys outside the selected local outputs are filtered; `--dev` without a dev shape refuses.
 
 ## Build
@@ -134,8 +136,9 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
 - `--check` = the CI staleness gate: self-skips (exit 0) where nothing generates; otherwise regenerates in-process; any `git status` change over the outputs exits 1 printing the diff; `--check` + `--local` are mutually
   exclusive.
 - Post-passes on compose output are typed transformations on `ComposeDocument`, dumped exactly once — pydantic's declared-fields-first order is the artifacts' deterministic key order: a workload-major pass collapses `{workload}-{container}` services to the container name and inlines every `type: bind` volume as a top-level
-  `configs.content` entry — zero host-filesystem references in committed artifacts; the `$`-doubling exception rides the owning workload's consumer-interpolated declaration; workload-less services ride through under their rendered names; the per-entry barrier rename `wait-for-resources` → `wait-for-resources-{entry}` pins the
-  `ALPINE_IMAGE` lock hole with `depends_on` following; each collapsed service name is claimed once (collision loud); the edge-reserved check.
+  `configs.content` entry — zero host-filesystem references in committed artifacts; the `$`-doubling exception rides the owning workload's consumer-interpolated declaration; workload-less services ride through under
+  their rendered names; the barrier pins the `ALPINE_IMAGE` lock hole, namespacing like every service (`{entry}-wait-for-resources`, `depends_on` rewritten per rendered dependency); each collapsed service name is
+  claimed once (collision loud); the `{entry}-` namespace pass covers services, configs keys, and the per-bundle network with bare aliases.
 - The image lock is required and non-empty; the compose target requires the `ALPINE_IMAGE` entry.
 - `$`-doubling law, stated once: a literal `$` doubles whenever file text rides inside a compose document (edge Caddyfile, publish's file-sourced configs, score's bind inlining); text outside a compose document (k8s-side inclusion, k8s manifests) never doubles.
 - `docker-build-matrix` cell schema (`targets`, `variant`) = a named contract with the binding — renaming a key breaks its fanout YAML; one partition per closure × variant cell.
@@ -184,8 +187,6 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
 The only reader is a coding agent: the code is the source of truth for mechanism; this file carries only what an agent would otherwise get wrong.
 
 - Budget: 200 lines and 26KB, both hard — an addition crossing either cap cuts something else here; admit a line only if removing it would cause a mistake.
-- One law, one home: search before adding a statement; an existing law updates in place, never a second copy. The module map carries one line per module; laws live in sections named for the concern.
-- Identifiers, flags, file paths, and refusal phrasings stay exact — they are what agents grep.
-- A code change that invalidates a line here is a doc change in the same commit.
-- A fact verifiable only against another repo or CI is written as a pointer to that owner, never restated here.
-- No line exceeds 300 characters; wrap prose to hold the 200-line cap.
+- One law, one home: search before adding; an existing law updates in place, never a second copy. The module map carries one line per module; laws live in sections named for the concern.
+- Identifiers, flags, file paths, and refusal phrasings stay exact — they are what agents grep; no line exceeds 300 characters.
+- A code change that invalidates a line here is a doc change in the same commit; a fact verifiable only against another repo or CI is a pointer to that owner, never restated here.
