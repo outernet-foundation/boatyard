@@ -20,3 +20,6 @@ Parked:
 - apt-hermeticity.md — hermetic apt in image builds
 - mirror-digest-retention.md — mirror digest retention policy
 - gpu-template-collapse.md — open drill, operator's lead
+- namespaced-bundle-pins.md — per-entry hole spellings + carried bundle pins;
+  deletes the assembly lock-collision fence; trigger-gated on dogfood-override
+  pain or first divergent-remote-bundle need
