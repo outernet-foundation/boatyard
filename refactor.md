@@ -125,8 +125,24 @@ with "accept all" closes five forks in one word.
   producer/consumer lock paths (unreachable in practice); `--profile` flags into the
   validation call (verified behaviorally redundant — env/`.env` carriage already
   activates profiles during `config --services`).
+- **Q6 (session residue, independent of the ADR): extract `render_caddyfile`, and
+  decide the rule-text line it exposes.** First-audit finding never resolved: the
+  17-line Caddyfile render block inside `render_compose` is the clearest extraction,
+  but AGENTS-SHARED's "inline single-call helpers" rule as written forbids it, while
+  compose.py already carries single-call helpers owning coherent units
+  (`write_assembly_env_file`, `namespaced_route`). One deciding line either way:
+  extract + soften the rule text to target trivial pass-throughs, or keep inline.
+  Cheap, zero dependencies, pure readability.
 
-## Implementation surface once Q1 locks
+## Implementation surface
+
+Once Q2 is authorized (independent of B): the score render loop iterates
+`local_service_entries()`, which drops group context — the group-aware walk (the fold
+`resolve_services` performs, applied to every option rather than a selection) must be
+plumbed into the loop; validate each option's rendering against its leaf routes/ports;
+`compose.py`'s up-time teeth remain for remote drift and path overrides.
+
+Once Q1 locks (B):
 
 - `config.py`: the one namespaced-hole join (mirrors `bundle_lock_key` precedent).
 - `score_compose.py`: namespaced holes including the barrier; emit the carried-pin set
@@ -141,3 +157,13 @@ with "accept all" closes five forks in one word.
   differs from a consumer declaration).
 - Boundary: `major_minor` bump; producers republish, then consumers relock; old
   artifacts get the plain unfilled-hole refusal.
+
+Verify before build (engineering risk, not user questions):
+
+- `crane mutate --annotation` against compose-bundle media types (docker compose
+  `publish` constructs the manifest; mutation is post-hoc) — and registry annotation
+  size limits against a per-bundle mini image-lock.
+
+Ratification path: when the ADR closes, hardened facts move into the relevant AGENTS.md
+sections (compose assembly, lock, publish); this file is then deleted — it is an
+in-progress record, not a permanent doc.
