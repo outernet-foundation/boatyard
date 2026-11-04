@@ -19,7 +19,8 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
 
 ## Modules
 
-`config.py` schema + load; `dockerfiles.py` Dockerfile declarations + sha machinery (`ServiceBuild`, `derive_services`); `config_lock.py` lock schema + parsers; `lock.py` lock engine + projections; `compose.py` compose invocation
+`config.py` schema + load; `dockerfiles.py` Dockerfile declarations + sha machinery (`ServiceBuild`, `derive_services`); `config_lock.py` lock schema + parsers; `environment.py` the `.env`-over-shell typed view
+  (`Environment.load`, `PublicUrl`); `lock.py` lock engine + projections; `compose.py` compose invocation
   (`select`/`render`); `bake.py` build pipeline; `markers.py` marker resolution; `score.py` score shared base; `score_compose.py`/`score_k8s.py` rendering pipelines; `verbs/score.py` the score verb + `ensure_tools`;
   `publish.py` publish preparation; `crane.py` pinned crane installer; `verbs/*` one module per command. Model modules run root → leaves: root record first
   (`RootModel` subscripts quote forward refs; the one inversion is a parent whose field default constructs the child), functions callers-before-callees; imports absolute; `config_lock`/`dockerfiles` ← `config` one-way. Also in `config.py` (the shared leaf): `Yaml`,
@@ -43,7 +44,9 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
 - Derivation shape law: `Config` carries authored data and validation; a member may hold real derivation logic (`local_service_entries`, `declared_charts`), but a member that only delegates to another module's function is a
   pass-through — call the function at the consumer, `compute_service_shas` module-qualified (test seam); `root` defaults to the working directory, `resolve` injects the load root, excluded, never-authored;
   `parse_dev_toggles` = the one dev-toggles parser (ALL_CAPS, non-empty defaults, no duplicates).
-- `.env` carries `BUNDLES=`, `BUNDLE_OVERRIDE_*`, `COMPOSE_PROFILES`, `PLATFORM=`, dev-toggle overrides, the consumer's interpolation variables.
+- `.env` carries `BUNDLES=`, `BUNDLE_OVERRIDE_*`, `COMPOSE_PROFILES`, `PLATFORM=`, `PUBLIC_URL`, dev-toggle overrides, the consumer's interpolation variables; `Environment.load` (`environment.py`) carves the five consumed spellings into
+  typed fields (`bundles`, `overrides` with dash-normalized names, `profiles`, `public_url`, `platform`) plus the `variables` pass-through — consumed spellings never ride `variables`; syntactic refusals (scheme-less `PUBLIC_URL`,
+  empty override values) are pydantic `ValidationError`s at load, selection law stays `ValueError` in `select()`.
 
 ## Service derivation
 
@@ -62,8 +65,8 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
   re-resolves, `--upgrade` re-resolves everything; charts freeze by the same prefix match; bundle refs resolve direct — first-party, never mirror-prefixed — via `crane digest` (`resolve_bundle_digest`; compose-bundle media types are not
   image indexes, `imagetools inspect` may refuse them), freezing by the same tag match.
 - `resolve_remote_manifests` = a pure function of the declarations — the writing machine's arch never participates; exact `os`/`architecture` match; `unknown/unknown` + attestation entries skipped; multiple matches refuse; a missing platform refuses listing the index's platforms.
-- Projection selection law: `env_entries` with no platform answers index references (build edge), with a platform its concrete manifests (compose edge); `compose_env_entries` owns platform selection — a declared singleton self-selects, a
-  multi-platform repo names `PLATFORM=` through the merged shell-over-`.env` view (missing/empty/undeclared refuses listing the declared platforms), never host introspection; read projections stay in `lock.py`.
+- Projection selection law: `env_entries` with no platform answers index references (build edge), with a platform its concrete manifests (compose edge); `compose_env_entries(lock, config, platform)` owns platform selection — a declared singleton self-selects, a
+  multi-platform repo names `PLATFORM=` through `Environment.platform` (missing/undeclared refuses listing the declared platforms), never host introspection; read projections stay in `lock.py`.
 - `run_lock` self-skips where no config or no declarations exist (print, exit 0 — CI's freshness step runs it unconditionally); `--check` asserts instead of writes (in-memory relock, unified diff, exit 1, nothing touches the
   tree).
 
@@ -97,7 +100,7 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
 - Caddyfile: one site on internal `:8443`; `handle` blocks mutually exclusive (caddy sorts longest-path-first, declaration order cannot shadow); `handle_path` for `strip_prefix`; `header_up X-Forwarded-*` only on the auth route; `raw:`
   content rides verbatim (escape hatch, review flag); the whole file rides inline as `configs.content` with every `$` doubled.
 - Per-run files: lifetimes ride the caller-owned `ExitStack`, never an exception handler; the handoff execs — a successful run never unwinds, the files ride out in the OS temp dir; on failure the compose files unlink, the env files
-  print and keep; `merged_environment` is authored in `compose.py` (assembly state, not a config derivation; a missing `.env` reads as empty so score generation runs on fresh checkouts); the lock env file materializes the
+  print and keep; a missing `.env` reads as empty so score generation runs on fresh checkouts (`Environment.load` in `environment.py`); the lock env file materializes the
   selected-platform entries as a per-run `--env-file` (empty entries attach none — a bundles-only lock carries nothing compose consumes); `compose_command` = the one docker compose invocation spelling; `down` never reads the selection, never resolves an include — a name-only root + `--remove-orphans` removes
   every container the project ever created; a config-less or `services:`-less repo refuses loudly on both verbs.
 - Dev overlay under `--dev`: an assembly-defined service with a genuine dev stage gets `image: {repository}/{service}:dev` + the repo-root → `/app:ro` bind; dev-toggles pairs become `${NAME:-default}` environment holes (`.env` overrides
