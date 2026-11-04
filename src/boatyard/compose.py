@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import shlex
-from collections.abc import Generator, Mapping
+from collections.abc import Collection, Generator, Mapping
 from contextlib import ExitStack, contextmanager
 from itertools import groupby
 from pathlib import Path
@@ -31,6 +31,11 @@ from boatyard.lock import compose_env_entries, producer_env_entries, render_env_
 
 EDGE_LISTEN_PORT = 8443
 EDGE_CONFIG_NAME = "devkit-edge-caddyfile"
+ROUTE_UNRESOLVED_REFUSAL = "route {path} upstream {name} resolves to no service in the selected assembly"
+PORT_UNRESOLVED_REFUSAL = "ports for service {name!r} resolve to no service in the selected assembly"
+PROFILE_UNKNOWN_REFUSAL = (
+    "COMPOSE_PROFILES selects unknown profile(s) {unknown}; profiles defined by the compose files: {defined}"
+)
 
 
 class BundleOverride(NamedTuple):
@@ -214,24 +219,23 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
     # Validate every route upstream and port owner against compose's own resolution.
     if routes or ports:
         resolved = set(_compose_config(config.root, compose_files, "--services", env_file=env_file))
-        for route in routes:
-            upstream = route.upstream.partition(":")[0]
-            if upstream not in resolved:
-                raise ValueError(
-                    f"route {route.path} upstream {upstream} resolves to no service in the selected assembly"
-                )
-        for port in ports:
-            if port.service not in resolved:
-                raise ValueError(f"ports for service {port.service!r} resolve to no service in the selected assembly")
+        _refuse_unknown(
+            {route.upstream.partition(":")[0]: route.path for route in routes},
+            resolved,
+            ROUTE_UNRESOLVED_REFUSAL,
+        )
+        _refuse_unknown(
+            {port.service: port.service for port in ports},
+            resolved,
+            PORT_UNRESOLVED_REFUSAL,
+        )
     # Refuse profile names the compose files do not define.
     if profiles:
-        defined = _compose_config(config.root, compose_files, "--profiles", env_file=env_file)
-        unknown = [profile for profile in profiles if profile not in defined]
-        if unknown:
-            raise ValueError(
-                f"COMPOSE_PROFILES selects unknown profile(s) {unknown}; "
-                f"profiles defined by the compose files: {defined}"
-            )
+        _refuse_unknown(
+            {profile: profile for profile in profiles},
+            _compose_config(config.root, compose_files, "--profiles", env_file=env_file),
+            PROFILE_UNKNOWN_REFUSAL,
+        )
 
     return Invocation(
         compose_files=compose_files,
@@ -259,6 +263,15 @@ def _compose_config(root: Path, compose_files: list[Path], *arguments: str, env_
         ).splitlines()
         if line.strip()
     ]
+
+
+def _refuse_unknown(names: Mapping[str, str], defined: Collection[str], message: str) -> None:
+    # Refuse the first name missing from the defined set; the template formats
+    # name, path (the declaration site naming it), unknown (every missing name), and defined.
+    unknown = [(name, site) for name, site in names.items() if name not in defined]
+    if unknown:
+        name, path = unknown[0]
+        raise ValueError(message.format(name=name, path=path, unknown=[missing for missing, _ in unknown], defined=defined))
 
 
 def compose_command(
