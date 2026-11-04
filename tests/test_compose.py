@@ -1094,6 +1094,30 @@ class TestLockEnvSynthesis:
         [content] = recorder.env_contents
         assert content == f"ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
 
+    def test_a_selected_local_entry_reads_its_lock_keys_under_the_entry_prefix(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _write_config(
+            tmp_path,
+            {
+                "project_name": "demo",
+                "repository": "ghcr.io/org/demo",
+                "platforms": ["linux/amd64"],
+                "services": {"apps": {"options": {"core": {"workloads": ["api.yaml"]}}}},
+            },
+        )
+        _write_bundle_output(tmp_path, "apps-core", ["api"])
+        _write_workload(tmp_path, "api.yaml", "api")
+        _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST})
+        (tmp_path / ".env").write_text("BUNDLES=apps-core\n", encoding="utf-8")
+        recorder = LockEnvRecorder()
+
+        result = self._invoke_up_with_lock(tmp_path, monkeypatch, recorder)
+
+        assert result.exit_code == 0, result.output
+        [content] = recorder.env_contents
+        assert content == f"ALPINE_IMAGE={self.ALPINE_MANIFEST}\nAPPS_CORE_ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
+
     def test_two_consecutive_syntheses_are_byte_identical(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)
         (tmp_path / ".env").write_text("COMPOSE_PROFILES=\n", encoding="utf-8")
@@ -1486,12 +1510,14 @@ class TestBundleOverrides:
         ]
         assert recorder.env_contents == [
             (
-                f"ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
-                f"LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
+                f"PLACEFRAME_CUDA_ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
+                f"PLACEFRAME_CUDA_LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
             )
         ]
 
-    def test_a_lock_key_filled_by_two_locks_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_consumer_and_producer_locks_coexist_through_namespaced_keys(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         consumer = tmp_path / "consumer"
         consumer.mkdir()
         _write_producer(tmp_path, ["api", "grafana"], _producer_lock(["linux/amd64"]))
@@ -1501,16 +1527,18 @@ class TestBundleOverrides:
             platforms=["linux/amd64"],
             lock_images={"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + CONSUMER_ALPINE_DIGEST},
         )
-        self._invoke_up(monkeypatch, consumer)
+        recorder = self._invoke_up(monkeypatch, consumer)
 
         result = runner.invoke(app, ["up"])
 
-        assert result.exit_code != 0
-        assert isinstance(result.exception, ValueError)
-        message = str(result.exception)
-        assert "lock key ALPINE_IMAGE is filled by two locks in the assembly" in message
-        assert (consumer / "boatyard.lock.yml").as_posix() in message
-        assert (tmp_path / "producer" / "boatyard.lock.yml").as_posix() in message
+        assert result.exit_code == 0, result.output
+        assert recorder.env_contents == [
+            (
+                f"ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{CONSUMER_ALPINE_DIGEST}\n"
+                f"PLACEFRAME_CUDA_ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
+                f"PLACEFRAME_CUDA_LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
+            )
+        ]
 
     def test_the_producer_lock_selects_the_named_platform(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         consumer = tmp_path / "consumer"
@@ -1527,8 +1555,8 @@ class TestBundleOverrides:
         assert result.exit_code == 0, result.output
         assert recorder.env_contents == [
             (
-                f"ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
-                f"LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_ARM64_DIGEST}\n"
+                f"PLACEFRAME_CUDA_ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
+                f"PLACEFRAME_CUDA_LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_ARM64_DIGEST}\n"
             )
         ]
 

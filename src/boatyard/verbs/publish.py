@@ -11,7 +11,7 @@ import typer
 from bashrun.bash import bash, bash_output
 
 from boatyard import dockerfiles
-from boatyard.config import Config, compose_bundle_output_path
+from boatyard.config import Config, compose_bundle_output_path, lock_key_prefix
 from boatyard.config_lock import LOCK_PATH, parse_config_lock
 from boatyard.crane import install_crane
 from boatyard.lock import env_entries
@@ -83,10 +83,8 @@ def publish_compose(
     sha = bash_output("git rev-parse HEAD").strip()
     branch_tag = (branch or bash_output("git rev-parse --abbrev-ref HEAD").strip()).replace("/", "-")
 
-    substitutions = {
-        **dockerfiles.compute_service_shas(config.root, config.service_builds),
-        **env_entries(parse_config_lock(root / LOCK_PATH)),
-    }
+    service_shas = dockerfiles.compute_service_shas(config.root, config.service_builds)
+    lock_entries = env_entries(parse_config_lock(root / LOCK_PATH))
 
     published: list[PublishedEntry] = []
     for bundle_name, output in bundles:
@@ -94,6 +92,12 @@ def publish_compose(
             continue
         with TemporaryDirectory(prefix="compose-bundle-") as baked_directory_string:
             baked_directory = Path(baked_directory_string)
+            # Fan the lock keys under the bundle prefix
+            substitutions = {
+                **service_shas,
+                **lock_entries,
+                **{lock_key_prefix(bundle_name) + key: value for key, value in lock_entries.items()},
+            }
             baked_path = bake_sources(baked_directory, output.as_posix(), substitutions)
 
             # Set non-empty stubs for unresolved vars.

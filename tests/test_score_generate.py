@@ -36,10 +36,6 @@ def _empty_secrets() -> SecretsDeclaration:
     return SecretsDeclaration.model_validate({})
 
 
-def _alpine_secrets() -> SecretsDeclaration:
-    return SecretsDeclaration.model_validate({"ALPINE_IMAGE": "the wait-for-resources barrier image"})
-
-
 def test_tool_pin_defaults_live_on_the_root_model() -> None:
     config = _root_config(k8s={"workloads": ["api.yaml"], "charts": {"loki": "oci://r/chart:1.0.0"}})
 
@@ -536,7 +532,7 @@ COMPOSE_WITH_BARRIER = (
 def test_generate_compose_renames_the_barrier_and_its_references_per_entry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    output = _generate_compose(monkeypatch, tmp_path, COMPOSE_WITH_BARRIER, _alpine_secrets())
+    output = _generate_compose(monkeypatch, tmp_path, COMPOSE_WITH_BARRIER, _empty_secrets())
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
     assert list(document["services"]) == ["core-api", "core-pf-postgres", "core-wait-for-resources"]
@@ -544,7 +540,7 @@ def test_generate_compose_renames_the_barrier_and_its_references_per_entry(
         "core-wait-for-resources": {"condition": "service_started"}
     }
     assert document["services"]["core-pf-postgres"]["depends_on"] == ["core-wait-for-resources"]
-    assert document["services"]["core-wait-for-resources"]["image"] == "${ALPINE_IMAGE:?err}"
+    assert document["services"]["core-wait-for-resources"]["image"] == "${CORE_ALPINE_IMAGE:?err}"
 
 
 def test_generate_compose_barrier_names_differ_per_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -568,12 +564,12 @@ def test_generate_compose_barrier_names_differ_per_entry(tmp_path: Path, monkeyp
     )
     config.root = tmp_path
 
-    score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), {}, secrets=_alpine_secrets())
+    score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), {}, secrets=_empty_secrets())
 
     core = yaml.safe_load((tmp_path / "stack/generated/compose/compose.core.yaml").read_text(encoding="utf-8"))
     edge = yaml.safe_load((tmp_path / "stack/generated/compose/compose.edge.yaml").read_text(encoding="utf-8"))
-    assert "core-wait-for-resources" in core["services"]
-    assert "edge-wait-for-resources" in edge["services"]
+    assert core["services"]["core-wait-for-resources"]["image"] == "${CORE_ALPINE_IMAGE:?err}"
+    assert edge["services"]["edge-wait-for-resources"]["image"] == "${EDGE_ALPINE_IMAGE:?err}"
 
 
 class WorkloadContentsRecorder:

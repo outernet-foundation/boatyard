@@ -23,6 +23,7 @@ from boatyard.config import (
     double_dollars,
     is_mapping,
     load_yaml_file,
+    lock_key_prefix,
     qualified_option_name,
 )
 from boatyard.config_lock import LOCK_PATH, parse_config_lock, read_config_lock
@@ -103,6 +104,7 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
     lock = read_config_lock(config.root)
     includes: list[str] = []
     overrides: list[BundleOverride] = []
+    local_entries: list[str] = []
 
     for service in services:
         name = service.name
@@ -143,6 +145,7 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
                 f"selected entry {name!r} has no bundle output {output.as_posix()}; generate-score writes it"
             )
         includes.append(output.resolve().as_posix())
+        local_entries.append(name)
 
     # Namespace the routes and ports under their declaring entries.
     routes = [namespaced_route(service.name, route) for service in services for route in service.routes]
@@ -155,7 +158,7 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
     profiles = environment.profiles
 
     # Materialize the per-run files.
-    env_file = write_assembly_env_file(config, overrides, environment.platform, stack)
+    env_file = write_assembly_env_file(config, local_entries, overrides, environment.platform, stack)
 
     # Render the per-run root compose file.
     document_services: dict[str, Yaml] = {}
@@ -312,38 +315,30 @@ def write_env_file(entries: Mapping[str, str], prefix: str, stack: ExitStack) ->
 
 def write_assembly_env_file(
     config: Config,
+    local_entries: list[str],
     overrides: list[BundleOverride],
     platform: str | None,
     stack: ExitStack,
 ) -> Path | None:
-    # Collect the consumer's own lock entries first.
+    # Fill the root document's bare holes from the consumer's lock
+    entries: dict[str, str] = {}
     lock_path = config.root / LOCK_PATH
-    sources: list[tuple[Path, dict[str, str]]] = []
     if lock_path.is_file():
-        sources.append((lock_path, compose_env_entries(parse_config_lock(lock_path), config, platform)))
+        consumer_entries = compose_env_entries(parse_config_lock(lock_path), config, platform)
+        entries.update(consumer_entries)
+        for name in local_entries:
+            prefix = lock_key_prefix(name)
+            entries.update({prefix + key: value for key, value in consumer_entries.items()})
 
-    # Fill each path override's third-party holes from its producer's lock, three parents up.
+    # Fill each path override's holes from its producer's lock, three parents up
     for override in overrides:
         if override.path is None:
             continue
         producer_lock = override.path.parents[3] / LOCK_PATH
         if producer_lock.is_file():
-            sources.append((producer_lock, producer_env_entries(parse_config_lock(producer_lock), platform)))
-
-    # Merge the sources, refusing a lock key filled by two locks: one env file fills every
-    # bare hole in the assembly, so two authorities on one name cannot both be honored.
-    entries: dict[str, str] = {}
-    filled_by: dict[str, Path] = {}
-    for source_lock, filled in sources:
-        for key, value in filled.items():
-            previous = filled_by.get(key)
-            if previous is not None:
-                raise ValueError(
-                    f"lock key {key} is filled by two locks in the assembly: "
-                    f"{previous.as_posix()} and {source_lock.as_posix()}"
-                )
-            filled_by[key] = source_lock
-            entries[key] = value
+            producer_entries = producer_env_entries(parse_config_lock(producer_lock), platform)
+            prefix = lock_key_prefix(override.name)
+            entries.update({prefix + key: value for key, value in producer_entries.items()})
 
     # Attach no env file when no lock carries compose-consumed entries.
     if not entries:

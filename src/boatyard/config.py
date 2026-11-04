@@ -50,7 +50,7 @@ ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 PLACEHOLDER = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
 
 # Match a compose brace hole with its preceding dollar run.
-COMPOSE_HOLE = re.compile(r"(\$+)\{([A-Z][A-Z0-9_]*)(?::[^{}]*)?\}")
+COMPOSE_HOLE = re.compile(r"(\$+)\{([A-Z][A-Z0-9_]*)(:[^{}]*)?\}")
 
 type Yaml = str | int | float | bool | list[Yaml] | dict[str, Yaml] | None
 
@@ -715,12 +715,16 @@ def require_compose_stack(config: Config | None) -> Config:
     return config
 
 
+def lock_key_prefix(name: str) -> str:
+    return name.upper().replace("-", "_") + "_"
+
+
 def chart_lock_key(name: str) -> str:
-    return name.upper().replace("-", "_") + "_CHART"
+    return lock_key_prefix(name) + "CHART"
 
 
 def bundle_lock_key(name: str) -> str:
-    return name.upper().replace("-", "_") + "_BUNDLE"
+    return lock_key_prefix(name) + "BUNDLE"
 
 
 def mirrored_ref(reference: str, prefix: str) -> str:

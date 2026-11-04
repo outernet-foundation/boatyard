@@ -31,7 +31,7 @@ def down(
     # Tear down by project name, covering every selection and profile.
     with ExitStack() as stack:
         environment = Environment.load(root)
-        env_file = write_assembly_env_file(config, [], environment.platform, stack)
+        env_file = write_assembly_env_file(config, [], [], environment.platform, stack)
         assembly_root = write_temp_compose_file(stack, {"name": config.project_name}, "devkit-assembly-")
 
         command = compose_command(root, [assembly_root], "down", "--remove-orphans", env_file=env_file)

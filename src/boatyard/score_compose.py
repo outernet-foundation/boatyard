@@ -20,6 +20,7 @@ from boatyard.config import (
     Yaml,
     compose_bundle_output_path,
     double_dollars,
+    lock_key_prefix,
     Config,
 )
 from boatyard.config_lock import LOCK_PATH, ConfigLock
@@ -135,6 +136,7 @@ def generate_compose(
         raise ValueError(f"{LOCK_PATH.as_posix()}: the image lock must carry the ALPINE_IMAGE entry")
 
     outputs: list[Path] = []
+    consumed: set[str] = set()
     for name, entry in config.local_service_entries():
         workloads = load_workloads(score_dir, entry.workloads, ComposeWorkloadDocument)
 
@@ -244,19 +246,28 @@ def generate_compose(
                 document.configs[f"{name}-{path.name}"] = ComposeConfig(content=text)
                 service.configs.append(ComposeConfigReference(source=f"{name}-{path.name}", target=bind_volume.target))
 
-        # Write the transformed document
-        write_file(output_path, dump_yaml(document.dump()))
+        # Scan consumed secrets and namespace the lock-key holes in one pass
+        prefix = lock_key_prefix(name)
+        text = dump_yaml(document.dump())
+        namespaced: list[str] = []
+        cursor = 0
+        for match in COMPOSE_HOLE.finditer(text):
+            namespaced.append(text[cursor : match.start()])
+            cursor = match.end()
+            if len(match.group(1)) % 2 == 1:
+                hole = match.group(2)
+                if hole in images:
+                    namespaced.append(f"{match.group(1)}{{{prefix}{hole}{match.group(3) or ''}}}")
+                    continue
+                consumed.add(hole)
+            namespaced.append(match.group(0))
+        namespaced.append(text[cursor:])
+        write_file(output_path, "".join(namespaced))
         outputs.append(output_path)
 
         # Remove the entry's compose state dir
         shutil.rmtree(tool_state, ignore_errors=True)
 
-    # Validate the consumed secrets against the declaration
-    consumed: set[str] = set()
-    for output_path in outputs:
-        for match in COMPOSE_HOLE.finditer(output_path.read_text(encoding="utf-8")):
-            if len(match.group(1)) % 2 == 1:
-                consumed.add(match.group(2))
     secrets.validate_consumed(consumed, "compose", SECRETS_FILE.as_posix())
 
     return outputs
