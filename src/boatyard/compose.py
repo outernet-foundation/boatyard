@@ -29,7 +29,6 @@ from boatyard.config import (
     load_yaml_file,
     parse_dev_toggles,
     qualified_option_name,
-    require_bundle_reference,
 )
 from boatyard.config_lock import LOCK_PATH, parse_config_lock, read_config_lock
 from boatyard.environment import BUNDLES_VARIABLE, BUNDLE_OVERRIDE_PREFIX, ENV_FILE, Environment
@@ -37,8 +36,6 @@ from boatyard.lock import compose_env_entries, producer_env_entries, render_env_
 
 EDGE_LISTEN_PORT = 8443
 EDGE_CONFIG_NAME = "devkit-edge-caddyfile"
-
-OVERRIDE_LAYOUT = ("stack", "generated", "compose")
 
 
 class BundleOverride(NamedTuple):
@@ -88,16 +85,16 @@ def select(config: Config, environment: Environment) -> Selection:
             )
         choices[group] = option_name
 
+    override_names = environment.oci_overrides.keys() | environment.path_overrides.keys()
     unknown = sorted(
-        name
-        for name in environment.overrides
-        if name not in config.selectable_options and name not in config.bare_entries
+        name for name in override_names if name not in config.selectable_options and name not in config.bare_entries
     )
     if unknown:
         vocabulary = sorted(config.selectable_options.keys() | set(config.bare_entries))
         raise ValueError(f"{BUNDLE_OVERRIDE_PREFIX}* names {unknown}; the bundle vocabulary is {vocabulary}")
     selected_names = set(starmap(qualified_option_name, choices.items())) | set(config.bare_entries)
-    selected_overrides = {name: value for name, value in environment.overrides.items() if name in selected_names}
+    selected_oci = {name for name in environment.oci_overrides if name in selected_names}
+    selected_paths = {name for name in environment.path_overrides if name in selected_names}
 
     auth_option = choices.get(AUTH_GROUP_NAME)
 
@@ -119,41 +116,34 @@ def select(config: Config, environment: Environment) -> Selection:
     local_outputs: list[Path] = []
     overrides: list[BundleOverride] = []
 
-    for service in [service for service in services if service.name in selected_overrides]:
+    for service in services:
         name = service.name
-        value = selected_overrides[name]
-        variable = BUNDLE_OVERRIDE_PREFIX + name.upper().replace("-", "_")
 
-        if value.startswith(OCI_REFERENCE_PREFIX):
-            require_bundle_reference(value)
-            includes.append(value)
+        if name in selected_oci:
+            includes.append(environment.oci_overrides[name])
             overrides.append(BundleOverride(name=name, path=None))
             continue
 
-        candidate = Path(value)
-        path = (candidate if candidate.is_absolute() else config.root / candidate).resolve()
-        if path.parts[-4:-1] != OVERRIDE_LAYOUT:
-            raise ValueError(f"{variable}: {value!r} must point into a stack/generated/compose/ bundle output layout")
-        if not path.is_file():
-            raise ValueError(f"{variable}: {path.as_posix()} does not exist")
-        loaded = load_yaml_file(path)
-        document_services = loaded.get("services") if is_mapping(loaded) else None
-        if is_mapping(document_services) and EDGE_SERVICE_NAME in document_services:
-            raise ValueError(
-                f"{path.as_posix()}: the bundle override defines the reserved service {EDGE_SERVICE_NAME!r}"
-            )
-        includes.append(path.as_posix())
-        local_outputs.append(path)
-        overrides.append(BundleOverride(name=name, path=path))
+        if name in selected_paths:
+            candidate = environment.path_overrides[name]
+            path = (candidate if candidate.is_absolute() else config.root / candidate).resolve()
+            variable = BUNDLE_OVERRIDE_PREFIX + name.upper().replace("-", "_")
+            if not path.is_file():
+                raise ValueError(f"{variable}: {path.as_posix()} does not exist")
+            loaded = load_yaml_file(path)
+            document_services = loaded.get("services") if is_mapping(loaded) else None
+            if is_mapping(document_services) and EDGE_SERVICE_NAME in document_services:
+                raise ValueError(
+                    f"{path.as_posix()}: the bundle override defines the reserved service {EDGE_SERVICE_NAME!r}"
+                )
+            includes.append(path.as_posix())
+            local_outputs.append(path)
+            overrides.append(BundleOverride(name=name, path=path))
+            continue
 
-        continue
-
-    for service in [service for service in services if service.name not in selected_overrides]:
-        name = service.name
         if service.entry.ref is not None:
             pinned = lock.require(bundle_lock_key(name), f"bundle {name!r}", hint="run boatyard lock")
             includes.append(f"{OCI_REFERENCE_PREFIX}{pinned}")
-
             continue
 
         output = compose_bundle_output_path(config.root, name)

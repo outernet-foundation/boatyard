@@ -5,12 +5,16 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
+from boatyard.config import OCI_REFERENCE_PREFIX, is_mapping, require_bundle_reference
+
 ENV_FILE = Path(".env")
 BUNDLES_VARIABLE = "BUNDLES"
 BUNDLE_OVERRIDE_PREFIX = "BUNDLE_OVERRIDE_"
 PROFILES_VARIABLE = "COMPOSE_PROFILES"
 PLATFORM_VARIABLE = "PLATFORM"
 PUBLIC_URL_VARIABLE = "PUBLIC_URL"
+
+OVERRIDE_LAYOUT = ("stack", "generated", "compose")
 
 
 class PublicUrl(BaseModel):
@@ -43,20 +47,50 @@ class Environment(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     bundles: list[str]
-    overrides: dict[str, str]
+    oci_overrides: dict[str, str]
+    path_overrides: dict[str, Path]
     profiles: list[str]
     public_url: PublicUrl | None
     platform: str | None
     variables: dict[str, str]
 
-    @field_validator("overrides")
+    @model_validator(mode="before")
     @classmethod
-    def _require_values(cls, overrides: dict[str, str]) -> dict[str, str]:
+    def _carve_overrides(cls, data: dict[str, object]) -> dict[str, object]:
+        raw_overrides = data.pop("overrides", {})
+        overrides = {key: str(value) for key, value in raw_overrides.items()} if is_mapping(raw_overrides) else {}
+        oci_overrides: dict[str, str] = {}
+        path_overrides: dict[str, Path] = {}
         for name, value in overrides.items():
-            if not value.strip():
-                variable = BUNDLE_OVERRIDE_PREFIX + name.upper().replace("-", "_")
+            variable = BUNDLE_OVERRIDE_PREFIX + name.upper().replace("-", "_")
+            stripped = value.strip()
+            if not stripped:
                 raise ValueError(f"{variable}: empty; a value is a filesystem path or an oci:// reference")
-        return {name: value.strip() for name, value in overrides.items()}
+            if stripped.startswith(OCI_REFERENCE_PREFIX):
+                oci_overrides[name] = stripped
+            else:
+                path_overrides[name] = Path(stripped)
+        data["oci_overrides"] = oci_overrides
+        data["path_overrides"] = path_overrides
+        return data
+
+    @field_validator("oci_overrides")
+    @classmethod
+    def _require_reference_grammar(cls, oci_overrides: dict[str, str]) -> dict[str, str]:
+        for value in oci_overrides.values():
+            require_bundle_reference(value)
+        return oci_overrides
+
+    @field_validator("path_overrides")
+    @classmethod
+    def _require_output_layout(cls, path_overrides: dict[str, Path]) -> dict[str, Path]:
+        for name, path in path_overrides.items():
+            if path.parts[-4:-1] != OVERRIDE_LAYOUT:
+                variable = BUNDLE_OVERRIDE_PREFIX + name.upper().replace("-", "_")
+                raise ValueError(
+                    f"{variable}: {path.as_posix()!r} must point into a stack/generated/compose/ bundle output layout"
+                )
+        return path_overrides
 
     @classmethod
     def load(cls, root: Path) -> Environment:
