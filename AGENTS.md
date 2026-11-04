@@ -43,9 +43,9 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
 - `mirrored_ref(reference, prefix)` = the only prefix join — injects the prefix, rejects an already-prefixed reference.
 - Derivation shape law: `Config` carries authored data and validation; a member may hold real derivation logic (`local_service_entries`, `declared_charts`, `resolve_services`), but a member that only delegates to another module's function is a
   pass-through — call the function at the consumer, `compute_service_shas` module-qualified (test seam); `root` defaults to the working directory, `resolve` injects the load root, excluded, never-authored.
-- `.env` carries `BUNDLES=`, `BUNDLE_OVERRIDE_*`, `COMPOSE_PROFILES`, `PLATFORM=`, `PUBLIC_URL`, the consumer's interpolation variables; `Environment.load` (`environment.py`) carves the five consumed spellings into
+- `.env` carries `BUNDLES=`, `BUNDLE_OVERRIDE_*`, `PLATFORM=`, `PUBLIC_URL`, the consumer's interpolation variables; `Environment.load` (`environment.py`) carves the four consumed spellings into
   typed fields (`bundles`, `oci_overrides`/`path_overrides` with dash-normalized names — the oci/path spelling split, ref grammar, and `stack/generated/compose/` layout refuse at load, paths stay unresolved, resolution
-  is `up`'s against the repo root; `profiles`, `public_url`, `platform`) plus the `variables` pass-through — consumed spellings never ride `variables`; syntactic refusals (scheme-less `PUBLIC_URL`,
+  is `up`'s against the repo root; `public_url`, `platform`) plus the `variables` pass-through — consumed spellings never ride `variables`; syntactic refusals (scheme-less `PUBLIC_URL`,
   empty override values, override grammar and layout) are pydantic `ValidationError`s at load, selection law stays `ValueError` in `up`.
 
 ## Service derivation
@@ -83,8 +83,8 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
 ## Compose assembly and BUNDLES=
 
 - Selection law: `BUNDLES=` names options only, by qualified `group-dash-option` spelling (a bare entry's name refuses as unselectable); ≤ one option per group; zero options legal exactly when riders or routes carry the assembly (omitting the auth pick = the anonymous edge); an options-only
-  repo with an empty selection refuses; unknown names refuse listing the qualified vocabulary; the `up` entry gate refuses a set `BUNDLES=` in a repo without `services:`; `up` owns the selection laws. `COMPOSE_PROFILES`: shell-env-over-`.env`, comma-split, deduped, forwarded
-  as `--profile` flags. Membership law: selection, rendering, and staged inputs live inline in `verbs/up.py`; `compose.py` carries only the spelling both verbs share — `compose_command`, `require_env_file`, `lock_env_unwind`; nothing else lands there.
+  repo with an empty selection refuses; unknown names refuse listing the qualified vocabulary; the `up` entry gate refuses a set `BUNDLES=` in a repo without `services:`; `up` owns the selection laws. Membership law: selection,
+  rendering, and staged inputs live inline in `verbs/up.py`; `compose.py` carries only the spelling both verbs share — `compose_command`, `require_env_file`, `lock_env_unwind`; nothing else lands there.
 - Leaf-service law: `Config.resolve_services(choices)` answers leaf services — the option's routes/ports ride before its group's (the auth option's route is `routes[0]`), its resolved service carries `auth: True`, an unselected group rides nothing; `up` consumes only these.
 - Bundle overrides ride `.env` per machine: `BUNDLE_OVERRIDE_<QUALIFIED_NAME>` = a `stack/generated/compose/`-layout path (relative to the repo root) or an `oci://` tag under the ref tag grammar, carved into
   `Environment`'s typed `oci_overrides`/`path_overrides` at load; unknown names refuse listing
@@ -98,7 +98,7 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
   (env holes, route upstreams). `up` composes `{entry}-` onto authored route upstreams and port owners; `boatyard.yml` stays bare. Local-output lock-key holes (the lock's key set draws the line)
   rewrite under `lock_key_prefix(entry)` in the same spelling (`{ENTRY}_ALPINE_IMAGE`-style); consumer-surface holes (edge image, gateway/ports, secrets, consumer-interpolated files) stay bare; publish fans
   its bake substitution keys with the prefix mechanically.
-- Validation teeth, in `up`: with routes or ports, `docker compose config --services` must list every route upstream + every port's owning service; selected profiles must appear in `config --profiles`; a selected
+- Validation teeth, in `up`: with routes or ports, `docker compose config --services` must list every route upstream + every port's owning service; a selected
   bundle output that does not exist refuses naming generate-score.
 - Edge stanza: `image: ${CADDY_IMAGE:?err}` (the lock hole), the Caddyfile configs entry, `gateway:` as published port, `FORWARDED_PROTO`/`FORWARDED_PORT` derived from `PUBLIC_URL` under a selected auth option (refusing when absent); the
   edge does no token validation — re-protection is a bundle-shipped oauth2-proxy sidecar treaty; the service name `edge` is reserved.
