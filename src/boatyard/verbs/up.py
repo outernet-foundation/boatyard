@@ -67,8 +67,7 @@ def up(
             invocation.compose_files,
             *(argument for profile in invocation.profiles for argument in ("--profile", profile)),
             "up",
-            lock_env_file=invocation.lock_env_file,
-            extra_env_files=invocation.extra_env_files,
+            env_file=invocation.env_file,
         )
         if not build:
             up_command += " --pull missing"

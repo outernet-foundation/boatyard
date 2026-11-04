@@ -40,8 +40,7 @@ class BundleOverride(NamedTuple):
 
 class Invocation(NamedTuple):
     compose_files: list[Path]
-    lock_env_file: Path | None
-    extra_env_files: list[Path]
+    env_file: Path | None
     profiles: list[str]
     overrides: list[BundleOverride]
 
@@ -143,8 +142,7 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
     profiles = environment.profiles
 
     # Materialize the per-run files.
-    lock_env_file = write_lock_env_file(config, environment.platform, stack)
-    producer_env_files = write_producer_env_files(overrides, environment.platform, stack)
+    env_file = write_assembly_env_file(config, overrides, environment.platform, stack)
     compose_files: list[Path] = []
 
     # Render the per-run root compose file.
@@ -211,15 +209,7 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
 
     if routes or ports:
         # Validate every route upstream and port owner against compose's own resolution.
-        resolved = set(
-            _compose_config(
-                config.root,
-                compose_files,
-                "--services",
-                lock_env_file=lock_env_file,
-                extra_env_files=producer_env_files,
-            )
-        )
+        resolved = set(_compose_config(config.root, compose_files, "--services", env_file=env_file))
         for route in routes:
             upstream = route.upstream.partition(":")[0]
             if upstream not in resolved:
@@ -231,9 +221,7 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
                 raise ValueError(f"ports for service {port.service!r} resolve to no service in the selected assembly")
     if profiles:
         # Refuse profile names the compose files do not define.
-        defined = _compose_config(
-            config.root, compose_files, "--profiles", lock_env_file=lock_env_file, extra_env_files=producer_env_files
-        )
+        defined = _compose_config(config.root, compose_files, "--profiles", env_file=env_file)
         unknown = [profile for profile in profiles if profile not in defined]
         if unknown:
             raise ValueError(
@@ -243,8 +231,7 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
 
     return Invocation(
         compose_files=compose_files,
-        lock_env_file=lock_env_file,
-        extra_env_files=producer_env_files,
+        env_file=env_file,
         profiles=profiles,
         overrides=overrides,
     )
@@ -259,19 +246,11 @@ def namespaced_route(entry: str, route: RouteConfig) -> RouteConfig:
     return route.model_copy(update={"upstream": f"{entry}-{route.upstream}"})
 
 
-def _compose_config(
-    root: Path,
-    compose_files: list[Path],
-    *arguments: str,
-    lock_env_file: Path | None,
-    extra_env_files: list[Path] | None,
-) -> list[str]:
+def _compose_config(root: Path, compose_files: list[Path], *arguments: str, env_file: Path | None) -> list[str]:
     return [
         line.strip()
         for line in bash_output(
-            compose_command(
-                root, compose_files, "config", *arguments, lock_env_file=lock_env_file, extra_env_files=extra_env_files
-            )
+            compose_command(root, compose_files, "config", *arguments, env_file=env_file)
         ).splitlines()
         if line.strip()
     ]
@@ -281,19 +260,12 @@ def compose_command(
     root: Path,
     compose_files: list[Path],
     *arguments: str,
-    lock_env_file: Path | None = None,
-    extra_env_files: list[Path] | None = None,
+    env_file: Path | None = None,
 ) -> str:
     quoted_arguments = [shlex.quote(argument) for argument in arguments]
     files_arguments = " ".join(f"-f {shlex.quote(str(compose_file))}" for compose_file in compose_files)
-    # Later --env-file entries win shared keys (pinned against the compose binary in tests), so
-    # producer lock env files attach before the consumer's own lock env file.
-    extra_arguments = "".join(f" --env-file {shlex.quote(str(extra))}" for extra in extra_env_files or [])
-    lock_argument = f" --env-file {shlex.quote(str(lock_env_file))}" if lock_env_file is not None else ""
-    prefix = (
-        f"docker compose {files_arguments} --project-directory {shlex.quote(str(root))} "
-        f"--env-file .env{extra_arguments}{lock_argument}"
-    )
+    env_argument = f" --env-file {shlex.quote(str(env_file))}" if env_file is not None else ""
+    prefix = f"docker compose {files_arguments} --project-directory {shlex.quote(str(root))} --env-file .env{env_argument}"
     return " ".join([prefix, *quoted_arguments])
 
 
@@ -317,32 +289,42 @@ def write_env_file(entries: Mapping[str, str], prefix: str, stack: ExitStack) ->
     return path
 
 
-def write_lock_env_file(config: Config, platform: str | None, stack: ExitStack) -> Path | None:
+def write_assembly_env_file(
+    config: Config,
+    overrides: list[BundleOverride],
+    platform: str | None,
+    stack: ExitStack,
+) -> Path | None:
     lock_path = config.root / LOCK_PATH
-    if not lock_path.is_file():
-        return None
-    entries = compose_env_entries(parse_config_lock(lock_path), config, platform)
-    if not entries:
-        # A bundles-only lock carries nothing the compose environment consumes.
-        return None
-    return write_env_file(entries, "devkit-lock-env-", stack)
-
-
-def write_producer_env_files(overrides: list[BundleOverride], platform: str | None, stack: ExitStack) -> list[Path]:
+    sources: list[tuple[Path, dict[str, str]]] = []
+    if lock_path.is_file():
+        sources.append((lock_path, compose_env_entries(parse_config_lock(lock_path), config, platform)))
     # A path-form override's bundle output interpolates its producer's third-party holes; the
     # producer's committed lock fills them, derived from the fixed output layout three parents up.
-    files: list[Path] = []
     for override in overrides:
         if override.path is None:
             continue
         producer_lock = override.path.parents[3] / LOCK_PATH
-        if not producer_lock.is_file():
-            continue
-        entries = producer_env_entries(parse_config_lock(producer_lock), platform)
-        if not entries:
-            continue
-        files.append(write_env_file(entries, "devkit-producer-env-", stack))
-    return files
+        if producer_lock.is_file():
+            sources.append((producer_lock, producer_env_entries(parse_config_lock(producer_lock), platform)))
+
+    entries: dict[str, str] = {}
+    filled_by: dict[str, Path] = {}
+    for source_lock, filled in sources:
+        for key, value in filled.items():
+            previous = filled_by.get(key)
+            if previous is not None:
+                raise ValueError(
+                    f"lock key {key} is filled by two locks in the assembly: "
+                    f"{previous.as_posix()} and {source_lock.as_posix()}"
+                )
+            filled_by[key] = source_lock
+            entries[key] = value
+
+    if not entries:
+        # A bundles-only lock carries nothing the compose environment consumes.
+        return None
+    return write_env_file(entries, "devkit-lock-env-", stack)
 
 
 def write_temp_compose_file(stack: ExitStack, document: Mapping[str, Yaml], prefix: str) -> Path:

@@ -33,7 +33,6 @@ LOCKED_ERROR = f"Image {MIRROR_PREFIX}/docker.io/library/alpine:3.20 (digest {FA
 
 ASSEMBLY_ARGUMENT_PATTERN = re.compile(r"-f (\S*devkit-assembly-\S+\.yaml)")
 LOCK_ENV_ARGUMENT_PATTERN = re.compile(r"(\S*devkit-lock-env-\S+\.env)")
-PRODUCER_ENV_ARGUMENT_PATTERN = re.compile(r"(\S*devkit-producer-env-\S+\.env)")
 
 runner = CliRunner()
 
@@ -88,7 +87,6 @@ def _write_ref_tree(root: Path) -> None:
 def _normalize(command: str, root: Path) -> str:
     command = re.sub(r"\S*devkit-assembly-\S+\.yaml", "ASSEMBLY", command)
     command = re.sub(r"\S*devkit-lock-env-\S+\.env", "LOCKENV", command)
-    command = re.sub(r"\S*devkit-producer-env-\S+\.env", "PRODUCERENV", command)
     return command.replace(str(root), "ROOT")
 
 
@@ -310,15 +308,12 @@ class ProducerEnvRecorder(AssemblyRecorder):
     def __init__(self) -> None:
         super().__init__()
         self.env_contents: list[str] = []
-        self.lock_env_contents: list[str] = []
 
     def run(self, command: str) -> None:
         super().run(command)
-        for match in PRODUCER_ENV_ARGUMENT_PATTERN.finditer(command):
+        match = LOCK_ENV_ARGUMENT_PATTERN.search(command)
+        if match is not None:
             self.env_contents.append(Path(match.group(1)).read_text(encoding="utf-8"))
-        lock_match = LOCK_ENV_ARGUMENT_PATTERN.search(command)
-        if lock_match is not None:
-            self.lock_env_contents.append(Path(lock_match.group(1)).read_text(encoding="utf-8"))
 
 
 class ServicesOutput:
@@ -1468,7 +1463,7 @@ class TestBundleOverrides:
         monkeypatch.delenv("PLATFORM", raising=False)
         return recorder
 
-    def test_the_path_form_replaces_the_include_and_attaches_the_producer_lock_env(
+    def test_the_path_form_replaces_the_include_and_fills_from_the_producer_lock(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         consumer = tmp_path / "consumer"
@@ -1478,7 +1473,6 @@ class TestBundleOverrides:
             consumer,
             [f"BUNDLE_OVERRIDE_PLACEFRAME_CUDA={OVERRIDE_PATH}"],
             platforms=["linux/amd64"],
-            lock_images={"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + CONSUMER_ALPINE_DIGEST},
         )
         recorder = self._invoke_up(monkeypatch, consumer)
 
@@ -1488,10 +1482,7 @@ class TestBundleOverrides:
         [document] = recorder.documents
         assert document["include"] == [output.resolve().as_posix()]
         assert [_normalize(command, consumer) for command in recorder.commands] == [
-            (
-                "docker compose -f ASSEMBLY --project-directory ROOT --env-file .env "
-                "--env-file PRODUCERENV --env-file LOCKENV up --pull missing -d"
-            )
+            "docker compose -f ASSEMBLY --project-directory ROOT --env-file .env --env-file LOCKENV up --pull missing -d"
         ]
         assert recorder.env_contents == [
             (
@@ -1499,9 +1490,27 @@ class TestBundleOverrides:
                 f"LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
             )
         ]
-        assert recorder.lock_env_contents == [
-            f"ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{CONSUMER_ALPINE_DIGEST}\n"
-        ]
+
+    def test_a_lock_key_filled_by_two_locks_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        consumer = tmp_path / "consumer"
+        consumer.mkdir()
+        _write_producer(tmp_path, ["api", "grafana"], _producer_lock(["linux/amd64"]))
+        _write_override_consumer(
+            consumer,
+            [f"BUNDLE_OVERRIDE_PLACEFRAME_CUDA={OVERRIDE_PATH}"],
+            platforms=["linux/amd64"],
+            lock_images={"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + CONSUMER_ALPINE_DIGEST},
+        )
+        self._invoke_up(monkeypatch, consumer)
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, ValueError)
+        message = str(result.exception)
+        assert "lock key ALPINE_IMAGE is filled by two locks in the assembly" in message
+        assert (consumer / "boatyard.lock.yml").as_posix() in message
+        assert (tmp_path / "producer" / "boatyard.lock.yml").as_posix() in message
 
     def test_the_producer_lock_selects_the_named_platform(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         consumer = tmp_path / "consumer"
@@ -1721,35 +1730,6 @@ class TestBundleOverrides:
             .as_posix(),
             (consumer / "stack" / "generated" / "compose" / "compose.extra.yaml").resolve().as_posix(),
         ])
-
-
-class TestEnvFilePrecedence:
-    def test_later_env_files_win_shared_keys(self, tmp_path: Path, pinned_compose: str) -> None:
-        # Pin the ordering law the producer attachment rides: compose resolves shared keys
-        # from the last --env-file, so the consumer's own lock env file attaches last.
-        first = tmp_path / "first.env"
-        first.write_text("SHARED=first\nONLY_FIRST=1\n", encoding="utf-8")
-        second = tmp_path / "second.env"
-        second.write_text("SHARED=second\n", encoding="utf-8")
-        compose_file = tmp_path / "compose.yaml"
-        compose_file.write_text(
-            "services:\n"
-            "  svc:\n"
-            "    image: docker.io/library/alpine:3.20\n"
-            "    environment:\n"
-            "      - SHARED=${SHARED}\n"
-            "      - ONLY_FIRST=${ONLY_FIRST:-unset}\n",
-            encoding="utf-8",
-        )
-
-        rendered = bash_output(
-            f"{pinned_compose} -f {compose_file} --project-directory {tmp_path} "
-            f"--env-file {first} --env-file {second} config --format json"
-        )
-        document = yaml.safe_load(rendered)
-        environment = document["services"]["svc"]["environment"]
-        assert environment["SHARED"] == "second"
-        assert environment["ONLY_FIRST"] == "1"
 
 
 class TestComposePortMergeOverIncludes:
