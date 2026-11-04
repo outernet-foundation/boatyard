@@ -124,7 +124,9 @@ def select(config: Config, environment: Environment) -> Selection:
             entries.append((name, entry))
 
     # Collect the include list in services declaration order; a remote ref includes the
-    # lock's digest-pinned form, never the yaml tag directly.
+    # lock's digest-pinned form, never the yaml tag directly. Each leaf answers one row:
+    # its include string, an optional local output whose service names are scanned, and an
+    # optional bundle override.
     lock = read_config_lock(config.root)
     includes: list[str] = []
     local_outputs: list[Path] = []
@@ -132,37 +134,43 @@ def select(config: Config, environment: Environment) -> Selection:
     for name, entry in entries:
         if isinstance(entry, ServiceGroup):
             continue
+        local_output: Path | None = None
+        override: BundleOverride | None = None
         if name in selected_overrides:
             value = selected_overrides[name]
             variable = BUNDLE_OVERRIDE_PREFIX + name.upper().replace("-", "_")
             if value.startswith(OCI_REFERENCE_PREFIX):
                 require_bundle_reference(value)
-                overrides.append(BundleOverride(name=name, path=None))
-                includes.append(value)
-                continue
-            candidate = Path(value)
-            path = (candidate if candidate.is_absolute() else config.root / candidate).resolve()
-            if path.parts[-4:-1] != OVERRIDE_LAYOUT:
-                raise ValueError(
-                    f"{variable}: {value!r} must point into a stack/generated/compose/ bundle output layout"
-                )
-            if not path.is_file():
-                raise ValueError(f"{variable}: {path.as_posix()} does not exist")
-            overrides.append(BundleOverride(name=name, path=path))
-            includes.append(path.as_posix())
-            local_outputs.append(path)
-            continue
-        if entry.ref is not None:
+                include = value
+                override = BundleOverride(name=name, path=None)
+            else:
+                candidate = Path(value)
+                path = (candidate if candidate.is_absolute() else config.root / candidate).resolve()
+                if path.parts[-4:-1] != OVERRIDE_LAYOUT:
+                    raise ValueError(
+                        f"{variable}: {value!r} must point into a stack/generated/compose/ bundle output layout"
+                    )
+                if not path.is_file():
+                    raise ValueError(f"{variable}: {path.as_posix()} does not exist")
+                include = path.as_posix()
+                local_output = path
+                override = BundleOverride(name=name, path=path)
+        elif entry.ref is not None:
             pinned = lock.require(bundle_lock_key(name), f"bundle {name!r}", hint="run boatyard lock")
-            includes.append(f"{OCI_REFERENCE_PREFIX}{pinned}")
-            continue
-        output = compose_bundle_output_path(config.root, name)
-        if not output.is_file():
-            raise ValueError(
-                f"selected entry {name!r} has no bundle output {output.as_posix()}; generate-score writes it"
-            )
-        includes.append(output.resolve().as_posix())
-        local_outputs.append(output)
+            include = f"{OCI_REFERENCE_PREFIX}{pinned}"
+        else:
+            output = compose_bundle_output_path(config.root, name)
+            if not output.is_file():
+                raise ValueError(
+                    f"selected entry {name!r} has no bundle output {output.as_posix()}; generate-score writes it"
+                )
+            include = output.resolve().as_posix()
+            local_output = output
+        includes.append(include)
+        if local_output is not None:
+            local_outputs.append(local_output)
+        if override is not None:
+            overrides.append(override)
 
     # Refuse selected outputs that define the same service name.
     file_services: list[tuple[Path, set[str]]] = []
