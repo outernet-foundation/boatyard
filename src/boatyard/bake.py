@@ -142,11 +142,7 @@ def run_build(
     else:
         # Select the default targets for this machine's arch.
         defaults = {service.target_variants[0][0] for service in config.service_builds.values()}
-        resolved_targets = (
-            sorted(defaults)
-            if not config.platforms or host in config.platforms
-            else []
-        )
+        resolved_targets = sorted(defaults) if not config.platforms or host in config.platforms else []
         if not resolved_targets:
             raise ValueError(
                 f"No service targets this machine's arch ({host}); "

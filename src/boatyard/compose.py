@@ -180,14 +180,12 @@ def render_compose(config: Config, environment: Environment, stack: ExitStack) -
         document_services[EDGE_SERVICE_NAME] = edge
 
     # Group the namespaced ports into per-service stanzas.
-    document_services.update(
-        {
-            service: {"ports": [port.model_dump(exclude={"service"}, exclude_none=True) for port in service_ports]}
-            for service, service_ports in groupby(
-                sorted(ports, key=lambda port: port.service), key=lambda port: port.service
-            )
-        }
-    )
+    document_services.update({
+        service: {"ports": [port.model_dump(exclude={"service"}, exclude_none=True) for port in service_ports]}
+        for service, service_ports in groupby(
+            sorted(ports, key=lambda port: port.service), key=lambda port: port.service
+        )
+    })
     # Assemble the root document.
     document: dict[str, Yaml] = {"name": config.project_name}
     if includes:
@@ -274,7 +272,9 @@ def _refuse_unknown(names: Mapping[str, str], defined: Collection[str], message:
     unknown = [(name, site) for name, site in names.items() if name not in defined]
     if unknown:
         name, path = unknown[0]
-        raise ValueError(message.format(name=name, path=path, unknown=[missing for missing, _ in unknown], defined=defined))
+        raise ValueError(
+            message.format(name=name, path=path, unknown=[missing for missing, _ in unknown], defined=defined)
+        )
 
 
 def compose_command(
@@ -287,7 +287,9 @@ def compose_command(
     quoted_arguments = [shlex.quote(argument) for argument in arguments]
     files_arguments = " ".join(f"-f {shlex.quote(str(compose_file))}" for compose_file in compose_files)
     env_argument = f" --env-file {shlex.quote(str(env_file))}" if env_file is not None else ""
-    prefix = f"docker compose {files_arguments} --project-directory {shlex.quote(str(root))} --env-file .env{env_argument}"
+    prefix = (
+        f"docker compose {files_arguments} --project-directory {shlex.quote(str(root))} --env-file .env{env_argument}"
+    )
     return " ".join([prefix, *quoted_arguments])
 
 
