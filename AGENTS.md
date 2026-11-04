@@ -75,8 +75,7 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
 
 - Third-party images and charts are consumed through the org mirror namespace: upstream manifests get GC'd; CI = the single writer — engineers never push, and error text never teaches them to.
 - Declarations are upstream-native; the prefixed form is derived; `mirrored_ref` = the single join; the `mirror` verb never enumerates bundle declarations.
-- `up` fails closed over the lock: probes every recorded digest (index + platform manifests + charts; bundles via `crane digest` under the same classification — 404 = not published, the fix a relock) before bring-up; only a registry 404 / manifest-unknown stderr verdict = the
-  not-mirrored error — unauthorized or transport failures report as probe failures carrying the underlying text; no escape flag; the fix is CI's mirror job.
+- `up` never probes the registry — compose's include fetch and `--pull missing` surface missing digests, unclassified, at bring-up; a partial stack under `-d` is the accepted cost of no pre-flight probe.
 - The `mirror` verb probes presence per reference over every recorded digest (`crane digest`; partially mirrored still triggers the copy; probe failure falls through to `crane copy`, the loud gate — probe errors never classified); one
   `crane copy {ref} {prefix}/{ref}` per lacking reference copies the whole index; every declared `base_images`/charts reference is a target — nothing filtered; zero declared targets = a loud error; the
   footer splits copied/present; crane's installer always runs so the pin, not a preexisting binary, decides the version.
@@ -90,7 +89,7 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
 - Leaf-service law: `Config.resolve_services(choices)` answers leaf services — the option's routes/ports ride before its group's (the auth option's route is `routes[0]`), its resolved service carries `auth: True`, an unselected group rides nothing; `up` consumes only these.
 - Bundle overrides ride `.env` per machine: `BUNDLE_OVERRIDE_<QUALIFIED_NAME>` = a `stack/generated/compose/`-layout path (relative to the repo root), carved into
   `Environment`'s typed `path_overrides` at load; unknown names refuse listing
-  the vocabulary, unselected names are inert, and a name must resolve to a `ref:` entry — a local-entry name refuses listing the ref entries; an overridden ref skips its lock-entry requirement and probe; the override carries the local-output teeth (exists, parses, no `edge` service, names and
+  the vocabulary, unselected names are inert, and a name must resolve to a `ref:` entry — a local-entry name refuses listing the ref entries; an overridden ref skips its lock-entry requirement; the override carries the local-output teeth (exists, parses, no `edge` service, names and
   requirements validated against the file) and contributes
   the producer's `boatyard.lock.yml` entries — three parents up, platforms from its recorded platforms (`producer_env_entries`) — to the per-run env file under the entry prefix.
 - The materialized root carries the project `name:`, the `include:` list (remote entries as `oci://` + the lock's `{NAME}_BUNDLE` digest ref — the yaml tag never rides an include; a selected ref lacking its entry refuses naming

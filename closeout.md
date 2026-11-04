@@ -300,11 +300,9 @@ listing the qualified vocabulary; a bare entry's name refuses as unselectable.
   resolutions for the same artifacts at two levels of one pull — bundle
   mirrored, its embedded images direct — is incoherence, and mirroring
   ourselves buys insurance against our own discipline at doubled storage.)
-- `up`'s fail-closed probe stays one law over every lock entry; bundle entries
-  probe via `crane digest` (compose-bundle media types are not image indexes;
-  `buildx imagetools inspect` may refuse them), under the same
-  stderr-classification law as image probes. `up` includes the lock's digest
-  ref; the yaml tag is never used directly at bring-up.
+- `up` includes the lock's digest ref; the yaml tag is never used directly at
+  bring-up. `up` never probes the registry — compose's include fetch and
+  `--pull missing` surface missing digests, unclassified, at bring-up.
 - The loop this buys once Work 6 lands: producer release mints `{version}` on
   the certified bundle digest; the consumer's upgrade is a yaml tag bump
   (Renovate-native) plus a relock, with the digest movement visible as a
@@ -321,8 +319,7 @@ tests a colleague's landed-but-unreleased bundle without local builds and
 without dirtying the tree. Unknown names refuse loudly listing the vocabulary;
 a known-but-unselected name is inert — the override rides with selection.
 
-An overridden option skips its lock-entry fail-closed probe and its
-lock-entry requirement — testing a bundle that may not be published at any
+An overridden option skips its lock-entry requirement — testing a bundle that may not be published at any
 digest yet is the point. The path form gets the same teeth as a local bundle
 output: must exist and parse, refuses an `edge` service, service-name
 collisions with other selected sources refuse, route/port validation runs
@@ -477,7 +474,7 @@ Per-repo:
 Verify: consumer CI green end-to-end; grep over the five repos returns zero
 `boatyard` imports; the placeframe regeneration diff committed and reviewed
 (disk-basis tags minted); capture-tool's lock carries arm64 platform
-manifests; `up` probes pass against the mirror; every toolkit `uses:` ref
+manifests; every toolkit `uses:` ref
 carries one SHA and every `--lock-only`/`--gpu` mention is gone from consumer
 docs and workflows; Make-it-Sing's `up` assembles through the path override
 against a sibling placeframe checkout.
