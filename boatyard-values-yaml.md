@@ -24,6 +24,9 @@ and replaces `.env` itself with a typed YAML object.
 - Interpolation sources are exactly: the machine-values file (consumer
   holes) and the per-run lock env file (lock-key holes). The ambient shell
   fills nothing.
+- D1 resolved yes: selection spellings (`BUNDLES`, `PLATFORM`, `PUBLIC_URL`)
+  lose the shell with everything else — the values file is their only source;
+  `BUNDLES=x boatyard up` is gone.
 - Compose's documented precedence — shell environment beats `--env-file`,
   and no switch exists to disable it — is defeated by scrubbing the compose
   child environment (`env -u`), not by trusting compose. Verified
@@ -99,10 +102,6 @@ and replaces `.env` itself with a typed YAML object.
 
 ## Open design questions
 
-- **D1 — selection spellings lose the shell.** Removing the shell merge
-  kills `BUNDLES=x boatyard up` / `PLATFORM=` / `PUBLIC_URL=` from the
-  shell, not just hole values. Session recommendation was yes (coherent,
-  zero consumers — 0.6.0 unreleased, tests simplify). Needs the final call.
 - **D2 — silent scrub vs loud refusal** for shell-set hole names.
   Recommendation: scrub silently; the unfilled-requirements refusal gains a
   clause naming ignored shell values ("X is set in the shell and ignored").
