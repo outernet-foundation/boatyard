@@ -192,27 +192,22 @@ def render_lock(lock: LockFile) -> str:
     document: dict[str, Yaml] = {}
     if lock.images:
         document["images"] = {
-            name: {
-                "index": entry.index,
-                **({"platforms": dict(sorted(entry.platforms.items()))} if entry.platforms else {}),
-            }
+            name: {"index": entry.index, "platforms": dict(sorted(entry.platforms.items()))}
             for name, entry in sorted(lock.images.items())
         }
     if lock.charts:
         document["charts"] = dict(sorted(lock.charts.items()))
     if lock.bundles:
-        document["bundles"] = {name: _bundle_record(bundle) for name, bundle in sorted(lock.bundles.items())}
+        document["bundles"] = {
+            name: {
+                "reference": bundle.reference,
+                **({"requires": list(bundle.requires)} if bundle.requires else {}),
+            }
+            for name, bundle in sorted(lock.bundles.items())
+        }
     if not document:
         return "{}\n"
     return yaml.safe_dump(document, sort_keys=False, default_flow_style=False, width=10_000_000)
-
-
-def _bundle_record(bundle: ConfigLockBundle) -> Yaml:
-    record: dict[str, Yaml] = {"reference": bundle.reference}
-    if bundle.requires:
-        requires: list[Yaml] = list(bundle.requires)
-        record["requires"] = requires
-    return record
 
 
 def resolve_remote_manifests(reference: str, platforms: list[str], subject: str) -> UpstreamManifests:
@@ -226,23 +221,17 @@ def resolve_remote_manifests(reference: str, platforms: list[str], subject: str)
         return UpstreamManifests(index_digest, dict.fromkeys(platforms, index_digest))
     selected: dict[str, str] = {}
     for platform in platforms:
-        os_name, _, architecture = platform.partition("/")
         matches = [
             child
             for child in children
             if child.annotations.get("vnd.docker.reference.type") != "attestation-manifest"
-            if _concrete_platform(child) == (os_name, architecture)
+            if _concrete_platform(child) == platform
         ]
         if len(matches) > 1:
             digests = ", ".join(_child_digest(child, subject) for child in matches)
             raise ValueError(f"{subject}: platform {platform} matches multiple upstream manifests ({digests})")
         if not matches:
-            available = sorted({
-                f"{os_name}/{architecture}"
-                for child in children
-                if (concrete := _concrete_platform(child)) is not None
-                for os_name, architecture in (concrete,)
-            })
+            available = sorted({concrete for child in children if (concrete := _concrete_platform(child)) is not None})
             raise ValueError(
                 f"{subject}: the upstream index carries no {platform} manifest "
                 f"(declared platforms: {sorted(platforms)}; index platforms: {available})"
@@ -304,13 +293,13 @@ def _bundle_service_names(texts: list[str]) -> set[str]:
     return names
 
 
-def _concrete_platform(child: OciDescriptor) -> tuple[str, str] | None:
+def _concrete_platform(child: OciDescriptor) -> str | None:
     platform = child.platform
     if platform is None or platform.os is None or platform.architecture is None:
         return None
     if platform.os == "unknown" or platform.architecture == "unknown":
         return None
-    return (platform.os, platform.architecture)
+    return f"{platform.os}/{platform.architecture}"
 
 
 def _child_digest(child: OciDescriptor, subject: str) -> str:
