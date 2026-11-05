@@ -7,11 +7,8 @@ from typing import Self
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 
 from boatyard.paths import LOCK_PATH
+from boatyard.temp import PLATFORM_PATTERN, SHA256_DIGEST_REGEX
 from boatyard.yaml import load_yaml_model
-
-PLATFORM_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$")
-
-SHA256_DIGEST_REGEX = r"sha256:[a-f0-9]{64}"
 
 
 class LockFile(BaseModel):

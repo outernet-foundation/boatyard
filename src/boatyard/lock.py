@@ -28,13 +28,13 @@ from boatyard.crane import install_crane
 from boatyard.config.lock import (
     LOCK_PATH,
     read_config_lock,
-    SHA256_DIGEST_REGEX,
     LockFile,
     ConfigLockBundle,
     ConfigLockEntry,
 )
 from boatyard.config.values import PLATFORM_KEY
 from boatyard.paths import DEFAULT_CONFIG_PATH, VALUES_FILE
+from boatyard.temp import SHA256_DIGEST_REGEX
 
 DIGEST_TAIL_PATTERN = re.compile(rf"@{SHA256_DIGEST_REGEX}$")
 COMPOSE_FILE_MEDIA_TYPE = "application/vnd.docker.compose.file+yaml"

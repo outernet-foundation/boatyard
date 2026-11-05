@@ -27,11 +27,8 @@ from boatyard.dockerfiles import (
     derive_services,
     service_sha_env,
 )
-from boatyard.config.lock import (
-    PLATFORM_PATTERN,
-    SHA256_DIGEST_REGEX,
-    read_config_lock,
-)
+from boatyard.config.lock import read_config_lock
+from boatyard.temp import PLATFORM_PATTERN, SHA256_DIGEST_REGEX
 from boatyard.yaml import load_yaml_model
 
 DEV_SENTINEL = "0.0.0.dev0"
