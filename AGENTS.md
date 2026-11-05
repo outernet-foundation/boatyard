@@ -173,7 +173,7 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
 ## Deployment-surface annotations
 
 - Everything the substrate needs that score's container model doesn't carry lives in the workload file as `outernet.internal/*` annotations — `boatyard.yml` never carries a per-workload runtime fact; the shipped patch templates
-  (package data in `src/boatyard/patch_templates/`) are the annotation reader — one annotation, one template, one behavior; consumer repos never author one; refusal laws live in boatyard code (templates are data and cannot
+  (package data in `src/boatyard/score_patch_templates/`) are the annotation reader — one annotation, one template, one behavior; consumer repos never author one; refusal laws live in boatyard code (templates are data and cannot
   refuse); the lens is `WorkloadDocument`/`ComposeWorkloadDocument` (`metadata.name` pinned to the workload file stem; the compose lens adds httpGet-requires-probe-adapter), one spelling `WorkloadDocument.parse(raw, file_name)`;
   score parses workloads once and propagates `metadata.annotations` into both renderings.
 
