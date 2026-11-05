@@ -47,7 +47,7 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
 - `.env` carries `BUNDLES=`, `BUNDLE_OVERRIDE_*`, `PLATFORM=`, `PUBLIC_URL`, the consumer's interpolation variables; `Environment.load` (`environment.py`) carves the four consumed spellings into
   typed fields (`bundles`, `path_overrides` with dash-normalized names — empty values, URL-scheme values, and non-`stack/generated/compose/` layouts refuse at load, paths stay unresolved, resolution
   is `up`'s against the repo root; `public_url`, `platform`) plus the `variables` pass-through — consumed spellings never ride `variables`; syntactic refusals (scheme-less `PUBLIC_URL`,
-  empty or URL-scheme override values, layout) are pydantic `ValidationError`s at parse; the selection name tier refuses in `Environment.load`; the assembly tier stays in `up`.
+  empty or URL-scheme override values, layout) are pydantic `ValidationError`s at parse; the selection refusals and the fold into `choices` ride `Environment.load` (the selection law).
 
 ## Service derivation
 
@@ -84,8 +84,8 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
 ## Compose assembly and BUNDLES=
 
 - Selection law: `BUNDLES=` names options only, by qualified `group-dash-option` spelling (a bare entry's name refuses as unselectable); ≤ one option per group; zero options leave the riders/routes carrying the assembly (omitting the auth pick = the anonymous edge) — an options-only
-  repo with an empty selection hands compose a name-only root and compose's `no service selected` refuses at bring-up; unknown names refuse listing the qualified vocabulary; the name tier rides `Environment.load(root, config)` on every verb; `up` owns the one-per-group
-  fold. Membership law: selection,
+  repo with an empty selection hands compose a name-only root and compose's `no service selected` refuses at bring-up; unknown names refuse listing the qualified vocabulary; every selection refusal (unknown names, one-per-group) and the fold into `choices` (group → option) ride
+  `Environment.load(root, config)` on every verb. Membership law: selection consumption,
   rendering, and staged inputs live inline in `verbs/up.py`; `compose.py` carries only the spelling both verbs share — `compose_command`, `require_env_file`, `lock_env_unwind`; nothing else lands there.
 - Leaf-service law: `Config.resolve_services(choices)` answers leaf services — the option's routes/ports ride before its group's (the auth option's route is `routes[0]`), its resolved service carries `auth: True`, an unselected group rides nothing; `up` consumes only these.
 - Bundle overrides ride `.env` per machine: `BUNDLE_OVERRIDE_<QUALIFIED_NAME>` = a `stack/generated/compose/`-layout path (relative to the repo root), carved into
