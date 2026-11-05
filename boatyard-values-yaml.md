@@ -51,8 +51,17 @@ and replaces `.env` itself with a typed YAML object.
   which had specified silent lock-wins in tension with the lock-filled
   ruling. With collisions impossible, the merged file carries no
   duplicates (append-vs-de-dupe is moot; no within-file last-wins
-  verification needed) and section comment headers keep the failure print
-  teaching provenance.
+  verification needed); section comment headers label each source's
+  provenance inside the file.
+- D7 resolved: no secrets shape-lint — real tokens defeat any heuristic,
+  and a garbage value surfaces downstream as the service's own auth error.
+  The failure echo is gone entirely: `lock_env_unwind` keeps the merged
+  file and prints only the kept-path line. Every entry the echo carried is
+  reconstructable (lock entries from the committed lock, values-file key
+  names from its recorded `requires`), the unfilled case has its own
+  refusal, and the merged file may carry secrets — the residual case for
+  the echo was debugging boatyard's own fan machinery, which does not
+  justify a secrets-in-logs surface.
 - Compose's documented precedence — shell environment beats `--env-file`,
   and no switch exists to disable it — is defeated by scrubbing the compose
   child environment (`env -u`), not by trusting compose. Verified
@@ -102,7 +111,8 @@ and replaces `.env` itself with a typed YAML object.
    consumer values + lock entries under section comment headers; a key in
    both sources refuses loudly. The two-file
    `--env-file .env --env-file <per-run>` shape collapses to one argument;
-   `lock_env_unwind` prints/keeps the merged file on failure.
+   `lock_env_unwind` keeps the merged file on failure, printing only its
+   path (no content echo — the file may carry secrets).
 4. **The scrub.** `compose_command` gains `hole_names`; when non-empty it
    returns `env -u K1 -u K2 … docker compose …` (sorted; single command, no
    shell operators). `up` passes values ∪ lock entries ∪ requirement names;
@@ -129,11 +139,6 @@ and replaces `.env` itself with a typed YAML object.
    `.env` → values rename+reformat rides the existing atomic cutover
    (relock + `BUNDLES=` flip). CI passing `PLATFORM=` via env must write
    the file instead. Make-it-Sing's `BUNDLE_OVERRIDE_*` locals reformat.
-
-## Open design questions
-
-- **D7 — secrets lint.** The values file carries secrets; consider whether
-   any warning belongs on suspiciously-non-secret shapes. Low priority.
 
 ## Session context
 
