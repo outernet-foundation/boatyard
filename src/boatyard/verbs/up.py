@@ -29,10 +29,10 @@ from boatyard.config.config import (
     require_compose_stack,
     required_compose_holes,
 )
-from boatyard.lock import render_merged_env
-from boatyard.config.lock import read_config_lock
+from boatyard.lock import render_env_entries
+from boatyard.config.lock import LockFile
 from boatyard.config.values import ValuesFile
-from boatyard.paths import DEFAULT_CONFIG_PATH, VALUES_FILE
+from boatyard.paths import DEFAULT_CONFIG_PATH, LOCK_PATH, VALUES_FILE
 
 EDGE_LISTEN_PORT = 8443
 EDGE_CONFIG_NAME = "devkit-edge-caddyfile"
@@ -63,7 +63,12 @@ def up(
     services = config.resolve_services(config_values.choices)
 
     # Collect each entry's include and env entries in declaration order
-    lock = read_config_lock(config.root, config)
+    consumer_lock_path = config.root / LOCK_PATH
+    lock = (
+        LockFile.load(consumer_lock_path, config)
+        if consumer_lock_path.is_file()
+        else LockFile.model_validate({}, context={"path": consumer_lock_path.as_posix(), "config": config})
+    )
     consumer_entries = lock.manifest_references(config_values.platform)
     entries: dict[str, str] = dict(consumer_entries)
     includes: list[Yaml] = []
@@ -95,9 +100,15 @@ def up(
             # Fill the override's holes from the producer repo above the override
             producer_root = _producer_root(path)
             producer_config = ConfigFile.load(producer_root / DEFAULT_CONFIG_PATH)
-            producer_entries = read_config_lock(producer_root, producer_config).manifest_references(
-                config_values.platform
+            producer_lock_path = producer_root / LOCK_PATH
+            producer_lock = (
+                LockFile.load(producer_lock_path, producer_config)
+                if producer_lock_path.is_file()
+                else LockFile.model_validate(
+                    {}, context={"path": producer_lock_path.as_posix(), "config": producer_config}
+                )
             )
+            producer_entries = producer_lock.manifest_references(config_values.platform)
             entries.update({lock_key_prefix(name) + key: value for key, value in producer_entries.items()})
             continue
 
@@ -198,9 +209,20 @@ def up(
         # Write the one per-run dotenv: consumer values + lock entries
         env_file: Path | None = None
         if config_values.variables or entries:
+            shared = sorted(set(config_values.variables) & set(entries))
+            if shared:
+                raise ValueError(
+                    f"{VALUES_FILE.name} sets {shared}, which the lock env file also fills; "
+                    f"the lock is their only source — remove them from {VALUES_FILE.name}"
+                )
+            env_document = ""
+            if config_values.variables:
+                env_document += f"# {VALUES_FILE.name}\n{render_env_entries(config_values.variables)}"
+            if entries:
+                env_document += f"# {LOCK_PATH.name}\n{render_env_entries(entries)}"
             with NamedTemporaryFile("w", suffix=".env", prefix="devkit-env-", delete=False, encoding="utf-8") as handle:
-                handle.write(render_merged_env(config_values.variables, entries))
-                env_file = Path(handle.name)
+                handle.write(env_document)
+            env_file = Path(handle.name)
             stack.enter_context(lock_env_unwind(env_file))
 
         with NamedTemporaryFile(

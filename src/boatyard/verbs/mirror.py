@@ -11,7 +11,7 @@ from boatyard.config.config import (
     mirrored_ref,
 )
 from boatyard.crane import install_crane
-from boatyard.config.lock import read_config_lock
+from boatyard.config.lock import LOCK_PATH, LockFile
 from boatyard.paths import DEFAULT_CONFIG_PATH
 
 app = typer.Typer()
@@ -23,7 +23,12 @@ def mirror() -> None:
     config = ConfigFile.load(root / DEFAULT_CONFIG_PATH)
     prefix = config.mirror_prefix
 
-    lock = read_config_lock(root, config)
+    lock_path = root / LOCK_PATH
+    lock = (
+        LockFile.load(lock_path, config)
+        if lock_path.is_file()
+        else LockFile.model_validate({}, context={"path": lock_path.as_posix(), "config": config})
+    )
     mirror_targets: list[tuple[str, list[str]]] = []
     for name, reference in sorted(config.base_images.items(), key=lambda item: item[1]):
         entry = lock.images.get(name)

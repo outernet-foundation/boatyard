@@ -146,18 +146,3 @@ class ConfigLockBundle(BaseModel):
 
 def _digest_pinned(reference: str) -> bool:
     return re.fullmatch(SHA256_DIGEST_REGEX, reference.rpartition("@")[2]) is not None
-
-
-def read_config_lock(root: Path, config: ConfigFile) -> LockFile:
-    lock_path = root / LOCK_PATH
-    if lock_path.is_file():
-        return LockFile.load(lock_path, config)
-    return LockFile.model_validate({}, context={"path": lock_path.as_posix(), "config": config})
-
-
-def read_committed_lock(root: Path) -> LockFile:
-    # The write path's reader: drift between the committed lock and the config is relock's input, never refused.
-    lock_path = root / LOCK_PATH
-    if not lock_path.is_file():
-        return LockFile()
-    return load_yaml_model(LockFile, lock_path)

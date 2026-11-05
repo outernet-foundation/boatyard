@@ -14,7 +14,8 @@ from boatyard.config.config import (
     ServiceGroup,
     bundle_lock_key,
 )
-from boatyard.config.lock import LOCK_PATH, read_committed_lock
+from boatyard.config.lock import LOCK_PATH, LockFile
+from boatyard.yaml import load_yaml_model
 
 EDGE_BASE_IMAGES = {"CADDY_IMAGE": "docker.io/library/caddy:2.8.4-alpine"}
 EDGE_PLATFORMS = ["linux/amd64"]
@@ -1441,15 +1442,20 @@ def _write_raw_lock(tmp_path: Path, text: str) -> Path:
 
 
 class TestConfigLockParse:
+    def _parse(self, tmp_path: Path) -> LockFile:
+        return load_yaml_model(LockFile, tmp_path / LOCK_PATH)
+
     def test_the_empty_lock_stays_legal(self, tmp_path: Path) -> None:
-        assert read_committed_lock(tmp_path).images == {}
-        assert read_committed_lock(tmp_path).charts == {}
+        lock = LockFile.model_validate({})
+
+        assert lock.images == {}
+        assert lock.charts == {}
 
     def test_malformed_yaml_refuses_raw(self, tmp_path: Path) -> None:
         _write_raw_lock(tmp_path, "images:\n  A_IMAGE: [unclosed\n")
 
         with pytest.raises(yaml.YAMLError):
-            read_committed_lock(tmp_path)
+            self._parse(tmp_path)
 
     def test_duplicate_keys_refuse_naming_the_line(self, tmp_path: Path) -> None:
         lock = _write_raw_lock(
@@ -1458,19 +1464,19 @@ class TestConfigLockParse:
         )
 
         with pytest.raises(ValueError, match=rf"{re.escape(lock.as_posix())}: line 4: duplicate key 'A_IMAGE'"):
-            read_committed_lock(tmp_path)
+            self._parse(tmp_path)
 
     def test_the_env_line_format_refuses_as_a_bare_scalar(self, tmp_path: Path) -> None:
         _write_raw_lock(tmp_path, f"A_IMAGE=ghcr.io/x/a:1@{DIGEST}\n")
 
         with pytest.raises(ValidationError, match="Input should be a valid dictionary"):
-            read_committed_lock(tmp_path)
+            self._parse(tmp_path)
 
     def test_a_non_digest_pinned_index_refuses(self, tmp_path: Path) -> None:
         _write_raw_lock(tmp_path, "images:\n  A_IMAGE:\n    index: ghcr.io/x/a:1.2.3\n")
 
         with pytest.raises(ValueError, match="not digest-pinned"):
-            read_committed_lock(tmp_path)
+            self._parse(tmp_path)
 
     def test_a_non_digest_pinned_platform_entry_refuses(self, tmp_path: Path) -> None:
         _write_raw_lock(
@@ -1480,19 +1486,19 @@ class TestConfigLockParse:
         )
 
         with pytest.raises(ValueError, match="not digest-pinned"):
-            read_committed_lock(tmp_path)
+            self._parse(tmp_path)
 
     def test_a_non_digest_pinned_chart_refuses(self, tmp_path: Path) -> None:
         _write_raw_lock(tmp_path, "charts:\n  LOKI_CHART: ghcr.io/x/loki:7.3.0\n")
 
         with pytest.raises(ValueError, match="chart LOKI_CHART is not digest-pinned"):
-            read_committed_lock(tmp_path)
+            self._parse(tmp_path)
 
     def test_a_non_digest_pinned_bundle_refuses(self, tmp_path: Path) -> None:
         _write_raw_lock(tmp_path, "bundles:\n  LIVEKIT_BUNDLE:\n    reference: ghcr.io/x/livekit:0.3.1\n")
 
         with pytest.raises(ValueError, match="bundle entry is not digest-pinned"):
-            read_committed_lock(tmp_path)
+            self._parse(tmp_path)
 
     def test_a_malformed_platform_key_refuses(self, tmp_path: Path) -> None:
         _write_raw_lock(
@@ -1502,7 +1508,7 @@ class TestConfigLockParse:
         )
 
         with pytest.raises(ValueError, match="os/arch pair"):
-            read_committed_lock(tmp_path)
+            self._parse(tmp_path)
 
     def test_a_name_in_two_sections_refuses(self, tmp_path: Path) -> None:
         _write_raw_lock(
@@ -1511,7 +1517,7 @@ class TestConfigLockParse:
         )
 
         with pytest.raises(ValueError, match=r"at most one of images, charts, bundles"):
-            read_committed_lock(tmp_path)
+            self._parse(tmp_path)
 
     def test_a_bundle_name_colliding_with_base_images_keys_refuses(self, tmp_path: Path) -> None:
         _write_raw_lock(
@@ -1521,7 +1527,7 @@ class TestConfigLockParse:
         )
 
         with pytest.raises(ValueError, match=r"at most one of images, charts, bundles"):
-            read_committed_lock(tmp_path)
+            self._parse(tmp_path)
 
     def test_require_answers_the_index_for_images_and_the_flat_entry_for_charts(self, tmp_path: Path) -> None:
         _write_raw_lock(
@@ -1530,14 +1536,14 @@ class TestConfigLockParse:
             f"charts:\n  LOKI_CHART: ghcr.io/x/loki:7.3.0@{DIGEST}\n"
             f"bundles:\n  LIVEKIT_BUNDLE:\n    reference: ghcr.io/x/livekit:0.3.1@{DIGEST}\n",
         )
-        lock = read_committed_lock(tmp_path)
+        lock = self._parse(tmp_path)
 
         assert lock.require("A_IMAGE", "subject") == f"ghcr.io/x/a:1@{DIGEST}"
         assert lock.require("LOKI_CHART", "subject") == f"ghcr.io/x/loki:7.3.0@{DIGEST}"
         assert lock.require("LIVEKIT_BUNDLE", "subject") == f"ghcr.io/x/livekit:0.3.1@{DIGEST}"
 
     def test_require_refuses_naming_the_lock_verb(self, tmp_path: Path) -> None:
-        lock = read_committed_lock(tmp_path)
+        lock = LockFile.model_validate({})
 
         with pytest.raises(ValueError, match=r"lacks the CADDY_IMAGE entry.*lock verb writes it"):
             lock.require("CADDY_IMAGE", "routes are declared")

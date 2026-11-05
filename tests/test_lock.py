@@ -1,3 +1,4 @@
+import base64
 import json
 from pathlib import Path
 from typing import Any
@@ -11,8 +12,7 @@ from boatyard.cli import app
 from boatyard.config import config as config_module
 from boatyard import dockerfiles as dockerfiles_module
 from boatyard import lock as lock_module
-from boatyard.config.lock import LOCK_PATH, read_committed_lock, read_config_lock
-from boatyard.lock import UpstreamManifests
+from boatyard.config.lock import LOCK_PATH, LockFile
 
 DIGEST_A = "sha256:" + "a" * 64
 DIGEST_B = "sha256:" + "b" * 64
@@ -43,15 +43,37 @@ class DigestRecorder:
         return DIGEST_A
 
 
-class ManifestRecorder:
-    def __init__(self, index_digest: str = DIGEST_A, platform_digest: str = DIGEST_B) -> None:
+class IndexRegistry:
+    # Answers `crane manifest` with one concrete child per platform at one digest.
+    def __init__(self, platform_digest: str = DIGEST_B) -> None:
         self.inspected: list[str] = []
-        self.index_digest = index_digest
-        self.platform_digest = platform_digest
+        self.children = [_child(platform_digest, "linux", "amd64"), _child(platform_digest, "linux", "arm64")]
 
-    def resolve(self, reference: str, platforms: list[str], subject: str) -> UpstreamManifests:
-        self.inspected.append(reference)
-        return UpstreamManifests(self.index_digest, dict.fromkeys(platforms, self.platform_digest))
+    def bash_output(self, command: str) -> str:
+        assert command.startswith("crane manifest ")
+        self.inspected.append(command.removeprefix("crane manifest "))
+        return json.dumps({"manifests": self.children})
+
+
+class BundleRegistry:
+    # Answers `crane manifest` with an artifact whose compose files ride as inline base64 layers.
+    def __init__(self, compose_texts: list[str]) -> None:
+        self.inspected: list[str] = []
+        self.compose_texts = compose_texts
+
+    def bash_output(self, command: str) -> str:
+        assert command.startswith("crane manifest ")
+        self.inspected.append(command.removeprefix("crane manifest "))
+        return json.dumps({
+            "layers": [
+                {
+                    "mediaType": "application/vnd.docker.compose.file+yaml",
+                    "digest": DIGEST_A,
+                    "data": base64.b64encode(text.encode("utf-8")).decode("ascii"),
+                }
+                for text in self.compose_texts
+            ]
+        })
 
 
 def _child(
@@ -130,9 +152,9 @@ def _invoke(
     charts: dict[str, str] | None = None,
     platforms: list[str] | None = None,
 ) -> Any:
-    recorder = ManifestRecorder()
-    monkeypatch.setattr(lock_module, "resolve_remote_manifests", recorder.resolve)
+    monkeypatch.setattr(lock_module, "bash_output", IndexRegistry().bash_output)
     monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
+    monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
     monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
     monkeypatch.chdir(tmp_path)
     _write_repo(tmp_path, base_images=base_images, charts=charts, platforms=platforms)
@@ -198,8 +220,10 @@ class TestImageRecording:
     def test_records_declarations_under_the_mirror_name(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         (tmp_path / LOCK_PATH).write_text("", encoding="utf-8")
 
-        recorder = ManifestRecorder()
-        monkeypatch.setattr(lock_module, "resolve_remote_manifests", recorder.resolve)
+        registry = IndexRegistry()
+        monkeypatch.setattr(lock_module, "bash_output", registry.bash_output)
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
+        monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
         monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, base_images=LOCK_BASE_IMAGES)
@@ -207,7 +231,7 @@ class TestImageRecording:
         result = runner.invoke(app, ["lock"])
 
         assert result.exit_code == 0, result.output
-        assert recorder.inspected == [
+        assert registry.inspected == [
             "ghcr.io/astral-sh/uv:0.12.15",
             "ghcr.io/outernet-foundation/placeframe/api:1.2.3",
         ]
@@ -262,8 +286,10 @@ class TestImageRecording:
             encoding="utf-8",
         )
 
-        recorder = ManifestRecorder()
-        monkeypatch.setattr(lock_module, "resolve_remote_manifests", recorder.resolve)
+        registry = IndexRegistry()
+        monkeypatch.setattr(lock_module, "bash_output", registry.bash_output)
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
+        monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
         monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
@@ -271,7 +297,7 @@ class TestImageRecording:
         result = runner.invoke(app, ["lock"])
 
         assert result.exit_code == 0, result.output
-        assert recorder.inspected == []
+        assert registry.inspected == []
         assert _read_lock(tmp_path)["images"]["UV_IMAGE"] == _structured_entry(
             base, index_digest=DIGEST_B, platforms={"linux/amd64": DIGEST_A}
         )
@@ -289,8 +315,10 @@ class TestImageRecording:
             encoding="utf-8",
         )
 
-        recorder = ManifestRecorder()
-        monkeypatch.setattr(lock_module, "resolve_remote_manifests", recorder.resolve)
+        registry = IndexRegistry()
+        monkeypatch.setattr(lock_module, "bash_output", registry.bash_output)
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
+        monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
         monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(
@@ -302,7 +330,7 @@ class TestImageRecording:
         result = runner.invoke(app, ["lock"])
 
         assert result.exit_code == 0, result.output
-        assert recorder.inspected == ["ghcr.io/astral-sh/uv:0.12.15"]
+        assert registry.inspected == ["ghcr.io/astral-sh/uv:0.12.15"]
         assert _read_lock(tmp_path)["images"]["UV_IMAGE"] == _structured_entry(
             base,
             index_digest=DIGEST_A,
@@ -331,12 +359,12 @@ class TestImageRecording:
         result = _invoke(monkeypatch, tmp_path, [], base_images=LOCK_BASE_IMAGES)
         assert result.exit_code == 0, result.output
 
-        recorder = ManifestRecorder()
-        monkeypatch.setattr(lock_module, "resolve_remote_manifests", recorder.resolve)
+        registry = IndexRegistry()
+        monkeypatch.setattr(lock_module, "bash_output", registry.bash_output)
         result = runner.invoke(app, ["lock", "--upgrade"])
 
         assert result.exit_code == 0, result.output
-        assert recorder.inspected == [
+        assert registry.inspected == [
             "ghcr.io/astral-sh/uv:0.12.15",
             "ghcr.io/outernet-foundation/placeframe/api:1.2.3",
         ]
@@ -400,125 +428,114 @@ class TestImageRecording:
         }
 
 
-class TestSelectPlatformManifests:
-    def test_selects_one_manifest_per_declared_platform(self, monkeypatch: pytest.MonkeyPatch):
-        raw = json.dumps({
-            "manifests": [
-                _child(DIGEST_C, "linux", "amd64"),
-                _child(DIGEST_D, "linux", "arm64"),
-                _child(DIGEST_E, "unknown", "unknown", {"vnd.docker.reference.type": "attestation-manifest"}),
-            ],
-        })
-        monkeypatch.setattr(lock_module, "bash_output", ManifestOutput(raw))
-        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
-        monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
-
-        resolved = lock_module.resolve_remote_manifests(
-            "docker.io/library/alpine:3.20", ["linux/amd64", "linux/arm64"], "entry X"
-        )
-
-        assert resolved.platforms == {"linux/amd64": DIGEST_C, "linux/arm64": DIGEST_D}
-
-    def test_skips_attestation_entries_carrying_a_concrete_platform(self, monkeypatch: pytest.MonkeyPatch):
-        raw = json.dumps({
-            "manifests": [
-                _child(DIGEST_C, "linux", "amd64"),
-                _child(DIGEST_E, "linux", "amd64", {"vnd.docker.reference.type": "attestation-manifest"}),
-            ],
-        })
-        monkeypatch.setattr(lock_module, "bash_output", ManifestOutput(raw))
-        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
-        monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
-
-        resolved = lock_module.resolve_remote_manifests("docker.io/library/alpine:3.20", ["linux/amd64"], "entry X")
-
-        assert resolved.platforms == {"linux/amd64": DIGEST_C}
-
-    def test_ignores_platformless_descriptors(self, monkeypatch: pytest.MonkeyPatch):
-        raw = json.dumps({
-            "manifests": [
-                _child(DIGEST_D, "linux", "arm64"),
-                {"mediaType": "application/vnd.oci.image.manifest.v1+json", "digest": "sha256:" + "f" * 64},
-            ],
-        })
-        monkeypatch.setattr(lock_module, "bash_output", ManifestOutput(raw))
-        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
-        monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
-
-        resolved = lock_module.resolve_remote_manifests("docker.io/library/alpine:3.20", ["linux/arm64"], "entry X")
-
-        assert resolved.platforms == {"linux/arm64": DIGEST_D}
-
-    def test_a_non_mapping_child_refuses_at_parse(self, monkeypatch: pytest.MonkeyPatch):
-        raw = json.dumps({"manifests": ["not-a-descriptor"]})
-        monkeypatch.setattr(lock_module, "bash_output", ManifestOutput(raw))
-        monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
-
-        with pytest.raises(ValidationError):
-            lock_module.resolve_remote_manifests("docker.io/library/alpine:3.20", ["linux/amd64"], "entry X")
-
-    def test_a_digestless_child_refuses_at_parse(self, monkeypatch: pytest.MonkeyPatch):
-        raw = json.dumps({
-            "manifests": [
-                {
-                    "mediaType": "application/vnd.oci.image.manifest.v1+json",
-                    "platform": {"os": "linux", "architecture": "amd64"},
-                }
-            ]
-        })
-        monkeypatch.setattr(lock_module, "bash_output", ManifestOutput(raw))
-        monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
-
-        with pytest.raises(ValidationError):
-            lock_module.resolve_remote_manifests("docker.io/library/alpine:3.20", ["linux/amd64"], "entry X")
-
-    def test_multiple_matches_refuse_naming_the_entry(self, monkeypatch: pytest.MonkeyPatch):
-        raw = json.dumps({"manifests": [_child(DIGEST_C, "linux", "amd64"), _child(DIGEST_D, "linux", "amd64")]})
-        monkeypatch.setattr(lock_module, "bash_output", ManifestOutput(raw))
-        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
-        monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
-
-        with pytest.raises(ValueError, match=f"entry X.*multiple upstream manifests.*{DIGEST_C}, {DIGEST_D}"):
-            lock_module.resolve_remote_manifests("docker.io/library/alpine:3.20", ["linux/amd64"], "entry X")
-
-    def test_a_declared_platform_no_index_child_covers_refuses_naming_the_entry(self, monkeypatch: pytest.MonkeyPatch):
-        raw = json.dumps({"manifests": [_child(DIGEST_C, "linux", "amd64")]})
-        monkeypatch.setattr(lock_module, "bash_output", ManifestOutput(raw))
-        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
-        monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
-
-        with pytest.raises(ValueError, match=r"entry X.*no linux/arm64 manifest.*index platforms: \['linux/amd64'\]"):
-            lock_module.resolve_remote_manifests("docker.io/library/alpine:3.20", ["linux/arm64"], "entry X")
+def _lock_against_index(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    manifests: list[Any],
+    platforms: list[str],
+) -> Any:
+    monkeypatch.setattr(lock_module, "bash_output", ManifestOutput(json.dumps({"manifests": manifests})))
+    monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
+    monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
+    monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+    monkeypatch.chdir(tmp_path)
+    _write_repo(tmp_path, base_images={"ALPINE_IMAGE": "docker.io/library/alpine:3.20"}, platforms=platforms)
+    return runner.invoke(app, ["lock"])
 
 
-class TestResolveRemoteManifests:
-    def test_resolves_the_index_and_selects_declared_platforms(self, monkeypatch: pytest.MonkeyPatch):
-        raw = json.dumps({
-            "schemaVersion": 2,
-            "mediaType": "application/vnd.oci.image.index.v1+json",
-            "manifests": [_child(DIGEST_C, "linux", "amd64"), _child(DIGEST_D, "linux", "arm64")],
-        })
-        monkeypatch.setattr(lock_module, "bash_output", ManifestOutput(raw))
-        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
-        monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
+class TestPlatformManifestSelection:
+    ALPINE_BASE = f"{MIRROR_PREFIX}/docker.io/library/alpine:3.20"
 
-        resolved = lock_module.resolve_remote_manifests("docker.io/library/alpine:3.20", ["linux/arm64"], "entry X")
+    def test_selects_one_manifest_per_declared_platform(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        manifests = [
+            _child(DIGEST_C, "linux", "amd64"),
+            _child(DIGEST_D, "linux", "arm64"),
+            _child(DIGEST_E, "unknown", "unknown", {"vnd.docker.reference.type": "attestation-manifest"}),
+        ]
 
-        assert resolved.index_digest == DIGEST_A
-        assert resolved.platforms == {"linux/arm64": DIGEST_D}
+        result = _lock_against_index(monkeypatch, tmp_path, manifests, ["linux/amd64", "linux/arm64"])
 
-    def test_a_manifest_reference_records_uniformly(self, monkeypatch: pytest.MonkeyPatch):
-        raw = json.dumps({"schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json", "config": {}})
-        monkeypatch.setattr(lock_module, "bash_output", ManifestOutput(raw))
-        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
-        monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
+        assert result.exit_code == 0, result.output
+        assert _read_lock(tmp_path)["images"]["ALPINE_IMAGE"]["platforms"] == {
+            "linux/amd64": f"{self.ALPINE_BASE}@{DIGEST_C}",
+            "linux/arm64": f"{self.ALPINE_BASE}@{DIGEST_D}",
+        }
 
-        resolved = lock_module.resolve_remote_manifests(
-            "docker.io/library/golang:1.24", ["linux/amd64", "linux/arm64"], "entry X"
-        )
+    def test_skips_attestation_entries_carrying_a_concrete_platform(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        manifests = [
+            _child(DIGEST_C, "linux", "amd64"),
+            _child(DIGEST_E, "linux", "amd64", {"vnd.docker.reference.type": "attestation-manifest"}),
+        ]
 
-        assert resolved.index_digest == DIGEST_A
-        assert resolved.platforms == {"linux/amd64": DIGEST_A, "linux/arm64": DIGEST_A}
+        result = _lock_against_index(monkeypatch, tmp_path, manifests, ["linux/amd64"])
+
+        assert result.exit_code == 0, result.output
+        assert _read_lock(tmp_path)["images"]["ALPINE_IMAGE"]["platforms"] == {
+            "linux/amd64": f"{self.ALPINE_BASE}@{DIGEST_C}",
+        }
+
+    def test_ignores_platformless_descriptors(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        manifests = [
+            _child(DIGEST_D, "linux", "arm64"),
+            {"mediaType": "application/vnd.oci.image.manifest.v1+json", "digest": "sha256:" + "f" * 64},
+        ]
+
+        result = _lock_against_index(monkeypatch, tmp_path, manifests, ["linux/arm64"])
+
+        assert result.exit_code == 0, result.output
+        assert _read_lock(tmp_path)["images"]["ALPINE_IMAGE"]["platforms"] == {
+            "linux/arm64": f"{self.ALPINE_BASE}@{DIGEST_D}",
+        }
+
+    def test_a_non_mapping_child_refuses_at_parse(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        result = _lock_against_index(monkeypatch, tmp_path, ["not-a-descriptor"], ["linux/amd64"])
+
+        assert result.exit_code == 1
+        assert isinstance(result.exception, ValidationError)
+
+    def test_a_digestless_child_refuses_at_parse(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        manifests = [
+            {
+                "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                "platform": {"os": "linux", "architecture": "amd64"},
+            }
+        ]
+
+        result = _lock_against_index(monkeypatch, tmp_path, manifests, ["linux/amd64"])
+
+        assert result.exit_code == 1
+        assert isinstance(result.exception, ValidationError)
+
+    def test_multiple_matches_refuse_naming_the_entry(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        manifests = [_child(DIGEST_C, "linux", "amd64"), _child(DIGEST_D, "linux", "amd64")]
+
+        result = _lock_against_index(monkeypatch, tmp_path, manifests, ["linux/amd64"])
+
+        assert result.exit_code == 1
+        assert "multiple upstream manifests" in str(result.exception)
+        assert f"{DIGEST_C}, {DIGEST_D}" in str(result.exception)
+
+    def test_a_declared_platform_no_index_child_covers_refuses_naming_the_entry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        result = _lock_against_index(monkeypatch, tmp_path, [_child(DIGEST_C, "linux", "amd64")], ["linux/arm64"])
+
+        assert result.exit_code == 1
+        assert "no linux/arm64 manifest" in str(result.exception)
+        assert "index platforms: ['linux/amd64']" in str(result.exception)
+
+    def test_a_manifest_answer_records_uniformly(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        result = _lock_against_index(monkeypatch, tmp_path, [], ["linux/amd64", "linux/arm64"])
+
+        assert result.exit_code == 0, result.output
+        entry = _read_lock(tmp_path)["images"]["ALPINE_IMAGE"]
+        assert entry["index"] == f"{self.ALPINE_BASE}@{DIGEST_A}"
+        assert entry["platforms"] == {
+            "linux/amd64": f"{self.ALPINE_BASE}@{DIGEST_A}",
+            "linux/arm64": f"{self.ALPINE_BASE}@{DIGEST_A}",
+        }
 
 
 class TestChartRecording:
@@ -577,14 +594,9 @@ class TestBundleRecording:
         declares_routes: bool = False,
     ) -> tuple[Any, DigestRecorder, list[str]]:
         recorder = DigestRecorder()
-        read_references: list[str] = []
+        registry = BundleRegistry([bundle_text])
         monkeypatch.setattr(lock_module, "resolve_remote_digest", recorder.resolve)
-
-        def _read(reference: str) -> list[str]:
-            read_references.append(reference)
-            return [bundle_text]
-
-        monkeypatch.setattr(lock_module, "read_compose_bundle", _read)
+        monkeypatch.setattr(lock_module, "bash_output", registry.bash_output)
         monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
         monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
@@ -607,7 +619,7 @@ class TestBundleRecording:
             _write_repo(tmp_path, ref_services=services)
         if committed:
             (tmp_path / LOCK_PATH).write_text(committed, encoding="utf-8")
-        return runner.invoke(app, ["lock", *arguments]), recorder, read_references
+        return runner.invoke(app, ["lock", *arguments]), recorder, registry.inspected
 
     def test_an_option_ref_resolves_under_its_qualified_bundle_key(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -833,8 +845,9 @@ class TestResolveRemoteDigest:
 class TestLockCheck:
     def _prepare(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(lock_module, "resolve_remote_manifests", ManifestRecorder().resolve)
+        monkeypatch.setattr(lock_module, "bash_output", IndexRegistry().bash_output)
         monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
+        monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, base_images=LOCK_BASE_IMAGES)
 
@@ -994,7 +1007,7 @@ class TestPairedLoad:
         with pytest.raises(
             ValidationError, match=r"records platforms \['linux/amd64', 'linux/arm64'\].*run boatyard lock"
         ):
-            read_config_lock(tmp_path, self._config(tmp_path))
+            LockFile.load(tmp_path / LOCK_PATH, self._config(tmp_path))
 
     def test_an_entry_diverging_from_the_recorded_set_refuses(self, tmp_path: Path) -> None:
         _write_repo(tmp_path, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
@@ -1012,7 +1025,7 @@ class TestPairedLoad:
         )
 
         with pytest.raises(ValidationError, match=r"image entry UV_IMAGE records platforms.*run boatyard lock"):
-            read_config_lock(tmp_path, self._config(tmp_path))
+            LockFile.load(tmp_path / LOCK_PATH, self._config(tmp_path))
 
     def test_a_missing_declared_entry_refuses_as_coverage(self, tmp_path: Path) -> None:
         _write_repo(tmp_path, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
@@ -1031,7 +1044,7 @@ class TestPairedLoad:
         )
 
         with pytest.raises(ValidationError, match=r"lacks the \['UV_IMAGE'\] entries base_images declares"):
-            read_config_lock(tmp_path, self._config(tmp_path))
+            LockFile.load(tmp_path / LOCK_PATH, self._config(tmp_path))
 
     def test_an_orphan_entry_refuses_naming_the_lock_verb(self, tmp_path: Path) -> None:
         _write_repo(tmp_path, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
@@ -1052,15 +1065,18 @@ class TestPairedLoad:
         )
 
         with pytest.raises(ValidationError, match=r"no longer declares \(\['GHOST_IMAGE'\]\); run boatyard lock"):
-            read_config_lock(tmp_path, self._config(tmp_path))
+            LockFile.load(tmp_path / LOCK_PATH, self._config(tmp_path))
 
-    def test_a_missing_lock_in_a_platforms_repo_refuses_as_stale(self, tmp_path: Path) -> None:
+    def test_a_missing_lock_in_a_platforms_repo_refuses_as_stale(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         _write_repo(tmp_path, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
+        monkeypatch.chdir(tmp_path)
 
-        with pytest.raises(
-            ValidationError, match=r"records platforms \[\] but boatyard.yml declares \['linux/amd64'\]"
-        ):
-            read_config_lock(tmp_path, self._config(tmp_path))
+        result = runner.invoke(app, ["mirror"])
+
+        assert result.exit_code == 1
+        assert "records platforms [] but boatyard.yml declares ['linux/amd64']" in str(result.exception)
 
     def test_a_committed_lock_with_images_but_no_platforms_refuses(self, tmp_path: Path) -> None:
         _write_repo(tmp_path, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
@@ -1075,16 +1091,22 @@ class TestPairedLoad:
         )
 
         with pytest.raises(ValidationError, match=r"records platforms \[\] but boatyard.yml declares"):
-            read_config_lock(tmp_path, self._config(tmp_path))
+            LockFile.load(tmp_path / LOCK_PATH, self._config(tmp_path))
 
-    def test_a_missing_lock_in_a_bundles_only_repo_reads_as_empty(self, tmp_path: Path) -> None:
+    def test_a_missing_lock_in_a_bundles_only_repo_reads_as_empty(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         _write_repo(tmp_path, ref_services={"livekit": {"ref": "oci://ghcr.io/org/repo/livekit:0.4.0-dev.3"}})
+        monkeypatch.chdir(tmp_path)
 
-        lock = read_config_lock(tmp_path, self._config(tmp_path))
+        result = runner.invoke(app, ["mirror"])
 
-        assert lock.images == {} and lock.charts == {} and lock.bundles == {}
+        assert result.exit_code == 1
+        assert "nothing is declared to mirror" in str(result.exception)
 
-    def test_the_committed_reader_tolerates_drift_and_the_old_format(self, tmp_path: Path) -> None:
+    def test_relock_consumes_a_drifted_committed_lock_as_input(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         _write_repo(tmp_path, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
         base = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15"
         self._write_committed(
@@ -1096,8 +1118,16 @@ class TestPairedLoad:
                 "charts": {"GHOST_CHART": f"{MIRROR_PREFIX}/ghcr.io/x/ghost@{DIGEST_A}"},
             },
         )
+        monkeypatch.setattr(lock_module, "bash_output", IndexRegistry().bash_output)
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
+        monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
+        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.chdir(tmp_path)
 
-        lock = read_committed_lock(tmp_path)
+        result = runner.invoke(app, ["lock"])
 
-        assert lock.platforms == []
-        assert lock.images["UV_IMAGE"].index == f"{base}@{DIGEST_A}"
+        assert result.exit_code == 0, result.output
+        assert _read_lock(tmp_path) == {
+            "platforms": ["linux/amd64"],
+            "images": {"UV_IMAGE": _structured_entry(base, index_digest=DIGEST_A, platforms={"linux/amd64": DIGEST_A})},
+        }

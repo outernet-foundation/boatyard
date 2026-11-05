@@ -13,7 +13,7 @@ from boatyard.cli import app
 from boatyard.verbs import build
 from boatyard import bake as bake_module
 from boatyard import dockerfiles as dockerfiles_module
-from boatyard.lock import UpstreamManifests
+from boatyard import lock as lock_module
 from boatyard.config.lock import LOCK_PATH
 
 DIGEST_A = "sha256:" + "a" * 64
@@ -99,8 +99,28 @@ def _amd64_host() -> str:
     return "linux/amd64"
 
 
-def _fixed_manifests(reference: str, platforms: list[str], subject: str) -> UpstreamManifests:
-    return UpstreamManifests(DIGEST_A, dict.fromkeys(platforms, DIGEST_A))
+def _fixed_index(command: str) -> str:
+    assert command.startswith("crane manifest ")
+    return json.dumps({
+        "manifests": [
+            {
+                "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                "digest": DIGEST_A,
+                "size": 1234,
+                "platform": {"os": "linux", "architecture": "amd64"},
+            }
+        ]
+    })
+
+
+def _fixed_digest(reference: str) -> str:
+    return DIGEST_A
+
+
+def _fixed_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(lock_module, "bash_output", _fixed_index)
+    monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
+    monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
 
 
 class BakeRunner:
@@ -469,7 +489,7 @@ class TestBakeSeesLockValues:
         monkeypatch.setattr(bake_module, "bash", probe.run)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
-        monkeypatch.setattr("boatyard.lock.resolve_remote_manifests", _fixed_manifests)
+        _fixed_registry(monkeypatch)
         monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles=LOCK_DOCKERFILES, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
@@ -486,7 +506,7 @@ def _rendered_services(rendered: str) -> dict[str, Any]:
 
 class TestRenderBakeDeterminism:
     def test_identical_configs_render_byte_identical_files(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr("boatyard.lock.resolve_remote_manifests", _fixed_manifests)
+        _fixed_registry(monkeypatch)
         first = _prepare(
             monkeypatch,
             tmp_path,
@@ -539,7 +559,7 @@ class TestRenderBakeTagDerivation:
 
 class TestRenderBakeArgs:
     def test_every_base_image_key_is_injected_on_every_service(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr("boatyard.lock.resolve_remote_manifests", _fixed_manifests)
+        _fixed_registry(monkeypatch)
         recorder = _prepare(
             monkeypatch,
             tmp_path,
@@ -718,7 +738,7 @@ class TestRenderBakePlatforms:
 
 
 def test_render_bake_carries_only_bake_read_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("boatyard.lock.resolve_remote_manifests", _fixed_manifests)
+    _fixed_registry(monkeypatch)
     recorder = _prepare(
         monkeypatch,
         tmp_path,

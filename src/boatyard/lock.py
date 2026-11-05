@@ -7,7 +7,6 @@ import re
 import shlex
 from collections.abc import Mapping
 from pathlib import Path
-from typing import NamedTuple
 
 import yaml
 from bashrun.bash import bash_output
@@ -27,21 +26,16 @@ from boatyard.config.config import (
 from boatyard.crane import install_crane
 from boatyard.config.lock import (
     LOCK_PATH,
-    read_committed_lock,
     LockFile,
     ConfigLockBundle,
     ConfigLockEntry,
 )
-from boatyard.paths import DEFAULT_CONFIG_PATH, VALUES_FILE
+from boatyard.paths import DEFAULT_CONFIG_PATH
 from boatyard.temp import SHA256_DIGEST_REGEX
+from boatyard.yaml import load_yaml_model
 
 DIGEST_TAIL_PATTERN = re.compile(rf"@{SHA256_DIGEST_REGEX}$")
 COMPOSE_FILE_MEDIA_TYPE = "application/vnd.docker.compose.file+yaml"
-
-
-class UpstreamManifests(NamedTuple):
-    index_digest: str
-    platforms: dict[str, str]
 
 
 class OciPlatform(BaseModel):
@@ -55,7 +49,7 @@ class OciDescriptor(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     digest: str
-    media_type: str | None = None
+    media_type: str | None = Field(default=None, alias="mediaType")
     data: str | None = None
     platform: OciPlatform | None = None
     annotations: dict[str, str] = Field(default_factory=dict)
@@ -86,7 +80,8 @@ def run_lock(*, upgrade: bool = False, check: bool = False) -> None:
         return
 
     if not check:
-        write_lock(config, upgrade=upgrade)
+        lock = relock(config, upgrade=upgrade)
+        (config.root / LOCK_PATH).write_text(render_lock(lock), encoding="utf-8")
         return
     computed = render_lock(relock(config, upgrade=upgrade))
 
@@ -106,31 +101,67 @@ def run_lock(*, upgrade: bool = False, check: bool = False) -> None:
         raise ValueError("image lock is stale")
 
 
-def write_lock(config: ConfigFile, *, upgrade: bool = False) -> LockFile:
-    lock = relock(config, upgrade=upgrade)
-
-    (config.root / LOCK_PATH).write_text(render_lock(lock), encoding="utf-8")
-    return lock
-
-
 def relock(config: ConfigFile, *, upgrade: bool = False) -> LockFile:
 
     prefix = config.mirror_prefix
-    committed = read_committed_lock(config.root)
+    # The write path's committed read: drift between the committed lock and the config
+    # is relock's input, never refused here.
+    committed_path = config.root / LOCK_PATH
+    committed = load_yaml_model(LockFile, committed_path) if committed_path.is_file() else LockFile()
 
     images: dict[str, ConfigLockEntry] = {}
     for name, reference in config.base_images.items():
         base = mirrored_ref(reference, prefix)
+        committed_entry = committed.images.get(name)
         if DIGEST_TAIL_PATTERN.search(reference):
             images[name] = ConfigLockEntry(index=base, platforms=dict.fromkeys(config.platforms, base))
-        elif not upgrade and _declaration_frozen(committed.images.get(name), base, config.platforms):
-            images[name] = committed.images[name]
+        elif (
+            not upgrade
+            and committed_entry is not None
+            and _pinned_to(committed_entry.index, base)
+            and sorted(committed_entry.platforms) == sorted(config.platforms)
+        ):
+            images[name] = committed_entry
         else:
-            resolved = resolve_remote_manifests(reference, config.platforms, f"base_images entry {name}")
-            images[name] = ConfigLockEntry(
-                index=f"{base}@{resolved.index_digest}",
-                platforms={platform: f"{base}@{digest}" for platform, digest in resolved.platforms.items()},
-            )
+            subject = f"base_images entry {name}"
+            install_crane()
+            print(f"Resolving digests for: {reference}")
+            index = OciIndex.model_validate(json.loads(bash_output(f"crane manifest {shlex.quote(reference)}")))
+            index_digest = resolve_remote_digest(reference)
+            children = index.manifests
+            if not children:
+                # Record a manifest answer as the index and every platform entry.
+                images[name] = ConfigLockEntry(
+                    index=f"{base}@{index_digest}",
+                    platforms=dict.fromkeys(config.platforms, f"{base}@{index_digest}"),
+                )
+            else:
+                selected: dict[str, str] = {}
+                for platform in config.platforms:
+                    matches = [
+                        child
+                        for child in children
+                        if child.annotations.get("vnd.docker.reference.type") != "attestation-manifest"
+                        if _concrete_platform(child) == platform
+                    ]
+                    if len(matches) > 1:
+                        digests = ", ".join(_child_digest(child, subject) for child in matches)
+                        raise ValueError(
+                            f"{subject}: platform {platform} matches multiple upstream manifests ({digests})"
+                        )
+                    if not matches:
+                        available = sorted({
+                            concrete for child in children if (concrete := _concrete_platform(child)) is not None
+                        })
+                        raise ValueError(
+                            f"{subject}: the upstream index carries no {platform} manifest "
+                            f"(declared platforms: {sorted(config.platforms)}; index platforms: {available})"
+                        )
+                    selected[platform] = _child_digest(matches[0], subject)
+                images[name] = ConfigLockEntry(
+                    index=f"{base}@{index_digest}",
+                    platforms={platform: f"{base}@{digest}" for platform, digest in selected.items()},
+                )
 
     charts: dict[str, str] = {}
     declared_charts = config.declared_charts
@@ -165,13 +196,37 @@ def relock(config: ConfigFile, *, upgrade: bool = False) -> LockFile:
         pinned = (
             frozen_bundle.reference if frozen_bundle is not None else f"{reference}@{resolve_remote_digest(reference)}"
         )
-        content = read_compose_bundle(pinned)
+        # Compose bundles are OCI artifacts whose compose files ride as inline base64 layer data;
+        # export cannot read them, the manifest data and the blob fallback can.
+        install_crane()
+        print(f"Reading bundle content for: {pinned}")
+        artifact = OciArtifactManifest.model_validate(json.loads(bash_output(f"crane manifest {shlex.quote(pinned)}")))
+        # A colon is a tag only when no slash follows it; earlier colons are registry ports.
+        repository = pinned.rpartition("@")[0]
+        slash = repository.rfind("/")
+        colon = repository.rfind(":")
+        repository = repository[:colon] if colon > slash else repository
+        texts = [
+            base64.b64decode(layer.data).decode("utf-8")
+            if layer.data is not None
+            else bash_output(f"crane blob {shlex.quote(repository + '@' + layer.digest)}")
+            for layer in artifact.layers
+            if layer.media_type == COMPOSE_FILE_MEDIA_TYPE
+        ]
+        if not texts:
+            raise ValueError(f"{pinned}: the compose bundle carries no compose file layer")
         bundles[key] = (
             frozen_bundle
             if frozen_bundle is not None
-            else ConfigLockBundle(reference=pinned, requires=sorted(required_compose_holes("\n".join(content))))
+            else ConfigLockBundle(reference=pinned, requires=sorted(required_compose_holes("\n".join(texts))))
         )
-        refuse_unresolved_references(name, entry.routes, entry.ports, _bundle_service_names(content), prefix=f"{name}-")
+        service_names: set[str] = set()
+        for text in texts:
+            bundle_document = yaml.safe_load(text)
+            services = bundle_document.get("services") if is_mapping(bundle_document) else None
+            if is_mapping(services):
+                service_names.update(services)
+        refuse_unresolved_references(name, entry.routes, entry.ports, service_names, prefix=f"{name}-")
 
     return LockFile(platforms=list(config.platforms), images=images, charts=charts, bundles=bundles)
 
@@ -201,37 +256,6 @@ def render_lock(lock: LockFile) -> str:
     return yaml.safe_dump(document, sort_keys=False, default_flow_style=False, width=10_000_000)
 
 
-def resolve_remote_manifests(reference: str, platforms: list[str], subject: str) -> UpstreamManifests:
-    install_crane()
-    print(f"Resolving digests for: {reference}")
-    raw = bash_output(f"crane manifest {shlex.quote(reference)}")
-    index = OciIndex.model_validate(json.loads(raw))
-    index_digest = resolve_remote_digest(reference)
-    children = index.manifests
-    if not children:
-        # Record a manifest answer as the index and every platform entry.
-        return UpstreamManifests(index_digest, dict.fromkeys(platforms, index_digest))
-    selected: dict[str, str] = {}
-    for platform in platforms:
-        matches = [
-            child
-            for child in children
-            if child.annotations.get("vnd.docker.reference.type") != "attestation-manifest"
-            if _concrete_platform(child) == platform
-        ]
-        if len(matches) > 1:
-            digests = ", ".join(_child_digest(child, subject) for child in matches)
-            raise ValueError(f"{subject}: platform {platform} matches multiple upstream manifests ({digests})")
-        if not matches:
-            available = sorted({concrete for child in children if (concrete := _concrete_platform(child)) is not None})
-            raise ValueError(
-                f"{subject}: the upstream index carries no {platform} manifest "
-                f"(declared platforms: {sorted(platforms)}; index platforms: {available})"
-            )
-        selected[platform] = _child_digest(matches[0], subject)
-    return UpstreamManifests(index_digest, selected)
-
-
 def resolve_remote_digest(reference: str) -> str:
     install_crane()
     print(f"Resolving digest for: {reference}")
@@ -241,40 +265,8 @@ def resolve_remote_digest(reference: str) -> str:
     return output
 
 
-def read_compose_bundle(reference: str) -> list[str]:
-    # Compose bundles are OCI artifacts whose compose files ride as inline base64 layer data;
-    # export cannot read them, the manifest data and the blob fallback can.
-    install_crane()
-    print(f"Reading bundle content for: {reference}")
-    manifest = OciArtifactManifest.model_validate(json.loads(bash_output(f"crane manifest {shlex.quote(reference)}")))
-    texts = [
-        base64.b64decode(layer.data).decode("utf-8")
-        if layer.data is not None
-        else bash_output(f"crane blob {shlex.quote(_blob_repository(reference) + '@' + layer.digest)}")
-        for layer in manifest.layers
-        if layer.media_type == COMPOSE_FILE_MEDIA_TYPE
-    ]
-    if not texts:
-        raise ValueError(f"{reference}: the compose bundle carries no compose file layer")
-    return texts
-
-
-def _blob_repository(reference: str) -> str:
-    # A colon is a tag only when no slash follows it; earlier colons are registry ports.
-    base = reference.rpartition("@")[0]
-    slash = base.rfind("/")
-    colon = base.rfind(":")
-    return base[:colon] if colon > slash else base
-
-
-def _bundle_service_names(texts: list[str]) -> set[str]:
-    names: set[str] = set()
-    for text in texts:
-        document = yaml.safe_load(text)
-        services = document.get("services") if is_mapping(document) else None
-        if is_mapping(services):
-            names.update(services)
-    return names
+def render_env_entries(entries: Mapping[str, str]) -> str:
+    return "".join(f"{name}={reference}\n" for name, reference in sorted(entries.items()))
 
 
 def _concrete_platform(child: OciDescriptor) -> str | None:
@@ -290,31 +282,6 @@ def _child_digest(child: OciDescriptor, subject: str) -> str:
     if not child.digest.startswith("sha256:"):
         raise ValueError(f"{subject}: upstream index child must carry a digest ({child!r})")
     return child.digest
-
-
-def render_env_entries(entries: Mapping[str, str]) -> str:
-    return "".join(f"{name}={reference}\n" for name, reference in sorted(entries.items()))
-
-
-def render_merged_env(values: Mapping[str, str], entries: Mapping[str, str]) -> str:
-    shared = sorted(set(values) & set(entries))
-    if shared:
-        raise ValueError(
-            f"{VALUES_FILE.name} sets {shared}, which the lock env file also fills; "
-            f"the lock is their only source — remove them from {VALUES_FILE.name}"
-        )
-    document = ""
-    if values:
-        document += f"# {VALUES_FILE.name}\n{render_env_entries(values)}"
-    if entries:
-        document += f"# {LOCK_PATH.name}\n{render_env_entries(entries)}"
-    return document
-
-
-def _declaration_frozen(entry: ConfigLockEntry | None, base: str, platforms: list[str]) -> bool:
-    if entry is None:
-        return False
-    return _pinned_to(entry.index, base) and sorted(entry.platforms) == sorted(platforms)
 
 
 def _pinned_to(committed: str | None, reference: str) -> bool:
