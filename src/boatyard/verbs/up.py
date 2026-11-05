@@ -110,7 +110,12 @@ def up(
 
     # Refuse bundles whose requirements no environment source fills
     filled = {variable for variable, value in {**os.environ, **environment.variables, **entries}.items() if value}
-    _refuse_unfilled_requirements(requirements, filled)
+    missing = {name: sorted(set(required) - filled) for name, required in requirements.items() if set(required) - filled}
+    if missing:
+        name, absent = min(missing.items())
+        raise ValueError(
+            f"bundle {name!r} requires {absent}, which no environment source sets (shell, .env, or the lock env file)"
+        )
 
     # Derive the forwarded environment from PUBLIC_URL under the auth option
     auth_service = next((service for service in services if service.auth), None)
@@ -237,12 +242,3 @@ def _scan_local_bundle(name: str, service: ResolvedService, path: Path, *, refus
         prefix=f"{name}-",
     )
     return sorted(required_compose_holes(path.read_text(encoding="utf-8")))
-
-
-def _refuse_unfilled_requirements(requirements: dict[str, list[str]], filled: set[str]) -> None:
-    missing = {name: sorted(set(required) - filled) for name, required in requirements.items() if set(required) - filled}
-    if missing:
-        name, absent = min(missing.items())
-        raise ValueError(
-            f"bundle {name!r} requires {absent}, which no environment source sets (shell, .env, or the lock env file)"
-        )
