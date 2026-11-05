@@ -10,13 +10,13 @@ import yaml
 from bashrun.bash import CalledProcessError, bash, bash_output
 from pydantic import ValidationError
 
-from boatyard import config_file as config_module
+from boatyard.config import config as config_module
 from boatyard import score as score_module
 from boatyard import score_compose as score_compose_module
 from boatyard import score_k8s as score_k8s_module
 from boatyard.verbs import score as score_verb_module
-from boatyard.config_file import Config, WorkloadDocument
-from boatyard.lock_file import ConfigLock
+from boatyard.config.config import Config, WorkloadDocument
+from boatyard.config.lock import ConfigLock
 from boatyard.score import SecretsDeclaration, write_file
 from boatyard.score_compose import BindVolume, ComposeService
 from boatyard.score_k8s import generate_k8s

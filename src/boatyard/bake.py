@@ -15,7 +15,7 @@ from bashrun.bash import bash, bash_check, bash_output
 from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, model_validator
 
 from boatyard import dockerfiles
-from boatyard.config_file import Config, Yaml
+from boatyard.config.config import Config, Yaml
 from boatyard.dockerfiles import ServiceBuild, service_sha_env
 from boatyard.lock import env_entries, write_lock
 

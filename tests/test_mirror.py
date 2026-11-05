@@ -7,8 +7,8 @@ from typer.testing import CliRunner, Result
 from boatyard.cli import app
 from boatyard import crane
 from boatyard.verbs import mirror
-from boatyard.config_file import mirrored_ref
-from boatyard.lock_file import LOCK_PATH
+from boatyard.config.config import mirrored_ref
+from boatyard.config.lock import LOCK_PATH
 
 MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
 FAKE_DIGEST = "sha256:" + "a" * 64

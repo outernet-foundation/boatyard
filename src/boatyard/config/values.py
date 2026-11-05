@@ -4,7 +4,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from boatyard.config_file import (
+from boatyard.config.config import (
     ENV_NAME_PATTERN,
     Config,
     Yaml,

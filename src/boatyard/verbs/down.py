@@ -10,10 +10,10 @@ import yaml
 from bashrun.bash import bash_handoff
 
 from boatyard.compose import compose_command, lock_env_unwind, require_env_file
-from boatyard.config_file import Config, require_compose_stack
+from boatyard.config.config import Config, require_compose_stack
 from boatyard.lock import compose_env_entries, render_merged_env
-from boatyard.lock_file import read_config_lock
-from boatyard.values_file import ConfigValues
+from boatyard.config.lock import read_config_lock
+from boatyard.config.values import ConfigValues
 
 app = typer.Typer()
 

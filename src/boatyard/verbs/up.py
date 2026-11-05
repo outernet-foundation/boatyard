@@ -13,7 +13,7 @@ from bashrun.bash import bash_handoff
 
 from boatyard.bake import run_build
 from boatyard.compose import compose_command, lock_env_unwind, require_env_file
-from boatyard.config_file import (
+from boatyard.config.config import (
     CADDY_IMAGE,
     Config,
     EDGE_SERVICE_NAME,
@@ -31,8 +31,8 @@ from boatyard.config_file import (
     required_compose_holes,
 )
 from boatyard.lock import compose_env_entries, producer_env_entries, render_merged_env
-from boatyard.lock_file import LOCK_PATH, parse_config_lock, read_config_lock
-from boatyard.values_file import ConfigValues
+from boatyard.config.lock import LOCK_PATH, parse_config_lock, read_config_lock
+from boatyard.config.values import ConfigValues
 
 EDGE_LISTEN_PORT = 8443
 EDGE_CONFIG_NAME = "devkit-edge-caddyfile"

@@ -6,7 +6,7 @@ from typing import Annotated
 import typer
 
 from boatyard import dockerfiles
-from boatyard.config_file import Config
+from boatyard.config.config import Config
 from boatyard.dockerfiles import service_sha_env
 
 app = typer.Typer()

@@ -7,10 +7,10 @@ import yaml
 from typer.testing import CliRunner
 
 from boatyard.cli import app
-from boatyard import values_file
-from boatyard.config_file import Config
+from boatyard.config import values
+from boatyard.config.config import Config
 from boatyard.verbs import up
-from boatyard.lock_file import LOCK_PATH
+from boatyard.config.lock import LOCK_PATH
 
 FAKE_DIGEST = "sha256:" + "a" * 64
 LIVEKIT_SHA_TAG = "a" * 40
@@ -273,7 +273,7 @@ class TestValuesLoad:
             encoding="utf-8",
         )
 
-        parsed = values_file.ConfigValues.load(tmp_path, Config.load(tmp_path))
+        parsed = values.ConfigValues.load(tmp_path, Config.load(tmp_path))
 
         assert parsed.bundles == ["core-cuda", "ui-open"]
         assert parsed.choices == {"core": "cuda", "ui": "open"}

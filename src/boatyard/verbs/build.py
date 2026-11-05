@@ -6,7 +6,7 @@ from typing import Annotated
 import typer
 
 from boatyard.bake import run_build
-from boatyard.config_file import Config
+from boatyard.config.config import Config
 
 app = typer.Typer()
 

@@ -5,7 +5,7 @@ from collections.abc import Generator, Iterable
 from contextlib import contextmanager
 from pathlib import Path
 
-from boatyard.values_file import VALUES_FILE
+from boatyard.config.values import VALUES_FILE
 
 
 def require_env_file(root: Path) -> None:

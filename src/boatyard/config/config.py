@@ -29,7 +29,7 @@ from boatyard.dockerfiles import (
     derive_services,
     service_sha_env,
 )
-from boatyard.lock_file import (
+from boatyard.config.lock import (
     LOCK_PATH,
     PLATFORM_PATTERN,
     SHA256_DIGEST_REGEX,

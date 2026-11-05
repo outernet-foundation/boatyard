@@ -9,8 +9,8 @@ import typer
 from bashrun.bash import bash, bash_check, bash_output
 
 from boatyard import dockerfiles
-from boatyard.config_file import Config, Target, load_yaml_file
-from boatyard.lock_file import LOCK_PATH, parse_config_lock
+from boatyard.config.config import Config, Target, load_yaml_file
+from boatyard.config.lock import LOCK_PATH, parse_config_lock
 from boatyard.score import (
     SECRETS_FILE,
     SECRETS_OUTPUT,

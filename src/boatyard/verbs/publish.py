@@ -11,10 +11,10 @@ import typer
 from bashrun.bash import bash, bash_output
 
 from boatyard import dockerfiles
-from boatyard.config_file import Config, compose_bundle_output_path, lock_key_prefix
+from boatyard.config.config import Config, compose_bundle_output_path, lock_key_prefix
 from boatyard.crane import install_crane
 from boatyard.lock import env_entries
-from boatyard.lock_file import LOCK_PATH, parse_config_lock
+from boatyard.config.lock import LOCK_PATH, parse_config_lock
 from boatyard.publish import (
     STUB_VALUE,
     VAR_PATTERN,

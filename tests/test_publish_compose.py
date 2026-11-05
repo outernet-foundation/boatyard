@@ -13,8 +13,8 @@ from boatyard import dockerfiles as dockerfiles_module
 from boatyard import crane
 from boatyard import publish as publish_compose
 from boatyard.verbs import publish as publish_verb
-from boatyard.config_file import Config
-from boatyard.lock_file import LOCK_PATH
+from boatyard.config.config import Config
+from boatyard.config.lock import LOCK_PATH
 
 REPOSITORY = "ghcr.io/outernet-foundation/lbe-toolkit"
 FAKE_SHA = "a" * 40

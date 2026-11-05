@@ -5,7 +5,7 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from boatyard.config_file import is_mapping
+from boatyard.config.config import is_mapping
 from boatyard.markers import MarkerContext, resolve_markers
 
 RIVER = """// relay config
