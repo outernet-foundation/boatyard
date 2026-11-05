@@ -901,12 +901,6 @@ def _selection_lock(platforms: list[str] | None = None) -> lock_module.LockFile:
 
 
 class TestEntrySelection:
-    def test_the_projection_refuses_a_platform_an_entry_never_recorded(self) -> None:
-        with pytest.raises(
-            ValueError, match=r"LOKI_IMAGE records no linux/ppc64le platform manifest.*recorded platforms"
-        ):
-            _selection_lock().env_entries("linux/ppc64le")
-
     def test_the_projection_carries_no_entry_for_unknown_names(self) -> None:
         assert "GHOST_IMAGE" not in _selection_lock().env_entries()
 
@@ -916,12 +910,6 @@ class TestEnvProjection:
         entries = _selection_lock().env_entries()
 
         assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_A}")
-        assert entries["GRAFANA_CHART"].endswith(f"@{DIGEST_A}")
-
-    def test_the_projection_with_a_platform_carries_platform_manifests(self) -> None:
-        entries = _selection_lock().env_entries("linux/amd64")
-
-        assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_B}")
         assert entries["GRAFANA_CHART"].endswith(f"@{DIGEST_A}")
 
 
@@ -936,10 +924,6 @@ class TestComposeProjection:
         entries = _selection_lock().compose_env_entries("linux/arm64")
 
         assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_C}")
-
-    def test_compose_entries_refuse_image_entries_without_recorded_platforms(self) -> None:
-        with pytest.raises(ValueError, match=r"records image entries but no platforms"):
-            _selection_lock(platforms=[]).compose_env_entries(None)
 
     def test_the_env_render_is_sorted_and_stable(self) -> None:
         entries = _selection_lock(platforms=["linux/amd64"]).compose_env_entries(None)
@@ -1076,6 +1060,21 @@ class TestPairedLoad:
         with pytest.raises(
             ValidationError, match=r"records platforms \[\] but boatyard.yml declares \['linux/amd64'\]"
         ):
+            read_config_lock(tmp_path, self._config(tmp_path))
+
+    def test_a_committed_lock_with_images_but_no_platforms_refuses(self, tmp_path: Path) -> None:
+        _write_repo(tmp_path, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
+        base = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15"
+        self._write_committed(
+            tmp_path,
+            {
+                "images": {
+                    "UV_IMAGE": _structured_entry(base, index_digest=DIGEST_A, platforms={"linux/amd64": DIGEST_A})
+                }
+            },
+        )
+
+        with pytest.raises(ValidationError, match=r"records platforms \[\] but boatyard.yml declares"):
             read_config_lock(tmp_path, self._config(tmp_path))
 
     def test_a_missing_lock_in_a_bundles_only_repo_reads_as_empty(self, tmp_path: Path) -> None:

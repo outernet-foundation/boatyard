@@ -83,20 +83,8 @@ class LockFile(BaseModel):
             return self.bundles[name].reference
         raise ValueError(f"{subject}: {LOCK_PATH.as_posix()} lacks the {name} entry ({hint})")
 
-    def env_entries(self, platform: str | None = None) -> dict[str, str]:
-        images: dict[str, str] = {}
-        for name, entry in self.images.items():
-            if platform is None:
-                images[name] = entry.index
-                continue
-            recorded = entry.platforms.get(platform)
-            if recorded is None:
-                raise ValueError(
-                    f"{LOCK_PATH.as_posix()}: image entry {name} records no {platform} platform manifest; "
-                    f"recorded platforms: {sorted(entry.platforms) or 'none'}"
-                )
-            images[name] = recorded
-        return {**images, **self.charts}
+    def env_entries(self) -> dict[str, str]:
+        return {**{name: entry.index for name, entry in self.images.items()}, **self.charts}
 
     def compose_env_entries(self, platform: str | None) -> dict[str, str]:
         resolved: str | None
@@ -112,11 +100,10 @@ class LockFile(BaseModel):
         elif self.platforms and platform not in self.platforms:
             raise ValueError(f"{PLATFORM_KEY}: {platform!r} must be one of the recorded platforms {self.platforms}")
         else:
-            # A platforms-less lock has nothing to validate the platform against; its entries police it.
             resolved = platform
-        if resolved is None and self.images:
-            raise ValueError(f"{LOCK_PATH.as_posix()}: records image entries but no platforms")
-        return self.env_entries(resolved)
+        if resolved is None:
+            return self.env_entries()
+        return {**{name: entry.platforms[resolved] for name, entry in self.images.items()}, **self.charts}
 
 
 class ConfigLockEntry(BaseModel):
