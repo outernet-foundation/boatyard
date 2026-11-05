@@ -6,12 +6,11 @@ from tempfile import TemporaryDirectory
 from typing import Annotated, NamedTuple
 
 import typer
-import yaml
 from bashrun.bash import bash, bash_check, bash_output
 
 from boatyard import dockerfiles
 from boatyard.config.config import ConfigFile, Target
-from boatyard.config.lock import LOCK_PATH, LockFile
+from boatyard.config.lock import LOCK_PATH, LockFile, load_yaml_model
 from boatyard.score import (
     SECRETS_FILE,
     SECRETS_OUTPUT,
@@ -92,7 +91,7 @@ def generate_score(
     secrets_path = root / SECRETS_FILE
     if not secrets_path.is_file():
         raise ValueError(f"{secrets_path.as_posix()}: the secrets declaration is required")
-    secrets = SecretsDeclaration.model_validate(yaml.safe_load(secrets_path.read_text(encoding="utf-8")))
+    secrets = load_yaml_model(SecretsDeclaration, secrets_path)
 
     ensure_tools(
         [

@@ -4,7 +4,6 @@ import shutil
 from pathlib import Path
 from typing import Literal, Self
 
-import yaml
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -24,7 +23,7 @@ from boatyard.config.config import (
     ConfigFile,
 )
 from boatyard.lock import compose_env_entries
-from boatyard.config.lock import LOCK_PATH, LockFile
+from boatyard.config.lock import LOCK_PATH, LockFile, load_yaml_model
 from boatyard.score import (
     SECRETS_FILE,
     SecretsDeclaration,
@@ -168,7 +167,7 @@ def generate_compose(
         )
 
         # Parse the rendering into the typed document
-        document = ComposeDocument.model_validate(yaml.safe_load(output_path.read_text(encoding="utf-8")))
+        document = load_yaml_model(ComposeDocument, output_path)
 
         # Attribute rendered container services to their owning workloads
         services_map: dict[str, tuple[ComposeService, WorkloadDocument | None, str]] = {

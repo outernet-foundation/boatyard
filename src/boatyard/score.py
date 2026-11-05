@@ -31,6 +31,7 @@ from boatyard.config.config import (
     ConfigFile,
     WorkloadDocument,
 )
+from boatyard.config.lock import load_yaml_model
 from boatyard.markers import MarkerContext, resolve_markers
 
 PATCH_TEMPLATES_DIR = "score_patch_templates"
@@ -198,7 +199,7 @@ def render_score(
         # Pre-seed each workload's instance suffix so generated names are deterministic
         if substrate == "k8s":
             state_path = output.parent / f".{tool}" / "state.yaml"
-            state = ToolState.model_validate(yaml.safe_load(state_path.read_text(encoding="utf-8")) or {})
+            state = load_yaml_model(ToolState, state_path)
             for workload in workloads:
                 workload_name = Path(workload.file_name).stem
                 state.workloads.setdefault(workload_name, {})["instance_suffix"] = (
