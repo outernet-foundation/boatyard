@@ -79,13 +79,12 @@ def run_lock(*, upgrade: bool = False, check: bool = False) -> None:
         print("no lock declarations (none of base_images, k8s.charts, service refs); nothing to relock")
         return
 
-    if not check:
-        lock = relock(config, upgrade=upgrade)
-        (config.root / LOCK_PATH).write_text(render_lock(lock), encoding="utf-8")
-        return
-    computed = render_lock(relock(config, upgrade=upgrade))
-
     lock_file = config.root / LOCK_PATH
+    computed = render_lock(relock(config, upgrade=upgrade))
+    if not check:
+        lock_file.write_text(computed, encoding="utf-8")
+        return
+
     committed = lock_file.read_text(encoding="utf-8") if lock_file.exists() else ""
     if committed != computed:
         print(
