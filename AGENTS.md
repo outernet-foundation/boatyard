@@ -15,7 +15,7 @@ One module per command under `verbs/`, each with its local bare `app = typer.Typ
 console script. Error-channel law: no verb boundary — authored-input refusals propagate with full traceback — hand-raised bare `ValueError` (byte-stable text), pydantic parses raw `ValidationError`; `typer.BadParameter`
 owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry credentials) and `verbs/score.py` (stale artifacts). Flags live in the typer signatures in `verbs/*.py`; the flag laws: `build`'s
 `--push`/`--push-to` refuse together; `generate-score --target both` refuses (BadParameter) a one-substrate repo naming the matching narrower `--target` (the rendering pipelines carry no substrate-presence checks); `docker-build-matrix` answers a bare JSON array.
-Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, never `build`; no `--gpu`, no `--compose-file` (the verbs own the compose invocation). `tree-tags` answers a bare string — no JSON, no `{SERVICE}_SHA` names.
+`--lock-only`/`--check`/`--upgrade` belong to `lock`, never `build`; no `--gpu`, no `--compose-file` (the verbs own the compose invocation); `tree-tags` answers a bare string — no JSON, no `{SERVICE}_SHA` names.
 
 ## Modules
 
@@ -47,7 +47,7 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
 - `.env` carries `BUNDLES=`, `BUNDLE_OVERRIDE_*`, `PLATFORM=`, `PUBLIC_URL`, the consumer's interpolation variables; `Environment.load` (`environment.py`) carves the four consumed spellings into
   typed fields (`bundles`, `path_overrides` with dash-normalized names — empty values, URL-scheme values, and non-`stack/generated/compose/` layouts refuse at load, paths stay unresolved, resolution
   is `up`'s against the repo root; `public_url`, `platform`) plus the `variables` pass-through — consumed spellings never ride `variables`; syntactic refusals (scheme-less `PUBLIC_URL`,
-  empty or URL-scheme override values, layout) are pydantic `ValidationError`s at load, selection law stays `ValueError` in `up`.
+  empty or URL-scheme override values, layout) are pydantic `ValidationError`s at parse; the selection name tier refuses in `Environment.load`; the assembly tier stays in `up`.
 
 ## Service derivation
 
@@ -84,7 +84,8 @@ Gone flags stay gone: `--lock-only`/`--check`/`--upgrade` belong to `lock`, neve
 ## Compose assembly and BUNDLES=
 
 - Selection law: `BUNDLES=` names options only, by qualified `group-dash-option` spelling (a bare entry's name refuses as unselectable); ≤ one option per group; zero options legal exactly when riders or routes carry the assembly (omitting the auth pick = the anonymous edge); an options-only
-  repo with an empty selection refuses; unknown names refuse listing the qualified vocabulary; the `up` entry gate refuses a set `BUNDLES=` in a repo without `services:`; `up` owns the selection laws. Membership law: selection,
+  repo with an empty selection refuses; unknown names refuse listing the qualified vocabulary; the name tier rides `Environment.load(root, config)` on every verb; `up` owns the assembly tier
+  (empty-in-options-only, one-per-group). Membership law: selection,
   rendering, and staged inputs live inline in `verbs/up.py`; `compose.py` carries only the spelling both verbs share — `compose_command`, `require_env_file`, `lock_env_unwind`; nothing else lands there.
 - Leaf-service law: `Config.resolve_services(choices)` answers leaf services — the option's routes/ports ride before its group's (the auth option's route is `routes[0]`), its resolved service carries `auth: True`, an unselected group rides nothing; `up` consumes only these.
 - Bundle overrides ride `.env` per machine: `BUNDLE_OVERRIDE_<QUALIFIED_NAME>` = a `stack/generated/compose/`-layout path (relative to the repo root), carved into
