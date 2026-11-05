@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator, mod
 
 from boatyard.config.config import (
     ENV_NAME_PATTERN,
-    Config,
+    ConfigFile,
     Yaml,
     is_mapping,
     qualified_option_name,
@@ -47,7 +47,7 @@ class PublicUrl(BaseModel):
         return {"FORWARDED_PROTO": self.forwarded_proto, "FORWARDED_PORT": self.forwarded_port}
 
 
-class ConfigValues(BaseModel):
+class ValuesFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     choices: dict[str, str]
@@ -72,7 +72,7 @@ class ConfigValues(BaseModel):
                 raise TypeError("bundles: must be a list of selection names")
             bundles.append(name)
         choices: dict[str, str] = {}
-        if not isinstance(config, Config) or not config.services:
+        if not isinstance(config, ConfigFile) or not config.services:
             if bundles:
                 raise ValueError("bundles: is set but this repo declares no services")
         else:
@@ -110,7 +110,7 @@ class ConfigValues(BaseModel):
     def _require_ref_entry_overrides(self, info: ValidationInfo) -> Self:
         context: dict[str, object] = info.context or {}
         config = context.get("config")
-        if not isinstance(config, Config) or not config.services:
+        if not isinstance(config, ConfigFile) or not config.services:
             return self
         vocabulary = set(config.selectable_options) | set(config.bare_entries)
         remote_names = {name for name, _declared, _entry in config.remote_declared_entries()}
@@ -170,5 +170,5 @@ class ConfigValues(BaseModel):
         return variables
 
     @classmethod
-    def load(cls, path: Path, config: Config | None) -> ConfigValues:
+    def load(cls, path: Path, config: ConfigFile | None) -> ValuesFile:
         return load_yaml_model(cls, path, {"path": path.as_posix(), "config": config})

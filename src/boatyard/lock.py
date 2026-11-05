@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from boatyard.config.config import (
     OCI_REFERENCE_PREFIX,
-    Config,
+    ConfigFile,
     Yaml,
     bundle_lock_key,
     chart_lock_key,
@@ -30,7 +30,7 @@ from boatyard.config.lock import (
     LOCK_PATH,
     read_config_lock,
     SHA256_DIGEST_REGEX,
-    ConfigLock,
+    LockFile,
     ConfigLockBundle,
     ConfigLockEntry,
 )
@@ -87,7 +87,7 @@ class OciArtifactManifest(BaseModel):
 
 def run_lock(*, upgrade: bool = False, check: bool = False) -> None:
     config_path = Path.cwd() / DEFAULT_CONFIG_PATH
-    config = Config.load(config_path) if config_path.is_file() else None
+    config = ConfigFile.load(config_path) if config_path.is_file() else None
     if config is None:
         print("no boatyard.yml; no lock declarations to relock")
         return
@@ -118,14 +118,14 @@ def run_lock(*, upgrade: bool = False, check: bool = False) -> None:
         raise ValueError("image lock is stale")
 
 
-def write_lock(config: Config, *, upgrade: bool = False) -> ConfigLock:
+def write_lock(config: ConfigFile, *, upgrade: bool = False) -> LockFile:
     lock = relock(config, upgrade=upgrade)
 
     (config.root / LOCK_PATH).write_text(render_lock(lock), encoding="utf-8")
     return lock
 
 
-def relock(config: Config, *, upgrade: bool = False) -> ConfigLock:
+def relock(config: ConfigFile, *, upgrade: bool = False) -> LockFile:
 
     prefix = config.mirror_prefix
     committed = read_config_lock(config.root)
@@ -184,10 +184,10 @@ def relock(config: Config, *, upgrade: bool = False) -> ConfigLock:
         )
         refuse_unresolved_references(name, entry.routes, entry.ports, _bundle_service_names(content), prefix=f"{name}-")
 
-    return ConfigLock(images=images, charts=charts, bundles=bundles)
+    return LockFile(images=images, charts=charts, bundles=bundles)
 
 
-def render_lock(lock: ConfigLock) -> str:
+def render_lock(lock: LockFile) -> str:
     # Render names and platform keys in sorted order.
     document: dict[str, Yaml] = {}
     if lock.images:
@@ -319,7 +319,7 @@ def _child_digest(child: OciDescriptor, subject: str) -> str:
     return child.digest
 
 
-def compose_env_entries(lock: ConfigLock, config: Config, platform: str | None) -> dict[str, str]:
+def compose_env_entries(lock: LockFile, config: ConfigFile, platform: str | None) -> dict[str, str]:
     if platform is None:
         if not config.platforms:
             resolved: str | None = None
@@ -340,7 +340,7 @@ def compose_env_entries(lock: ConfigLock, config: Config, platform: str | None) 
     return env_entries(lock, resolved)
 
 
-def producer_env_entries(lock: ConfigLock, platform: str | None) -> dict[str, str]:
+def producer_env_entries(lock: LockFile, platform: str | None) -> dict[str, str]:
     # A foreign lock has no consumer-side config; its own recorded platforms are the declaration.
     recorded = {platform_name for entry in lock.images.values() for platform_name in entry.platforms}
     if platform is not None:
@@ -354,7 +354,7 @@ def producer_env_entries(lock: ConfigLock, platform: str | None) -> dict[str, st
     return env_entries(lock, resolved)
 
 
-def env_entries(lock: ConfigLock, platform: str | None = None) -> dict[str, str]:
+def env_entries(lock: LockFile, platform: str | None = None) -> dict[str, str]:
     images: dict[str, str] = {}
     for name, entry in lock.images.items():
         if platform is None:

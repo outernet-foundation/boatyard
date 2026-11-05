@@ -865,8 +865,8 @@ def test_build_no_longer_carries_the_lock_flags() -> None:
     assert result.exit_code == 2
 
 
-def _selection_lock() -> lock_module.ConfigLock:
-    return lock_module.ConfigLock.model_validate({
+def _selection_lock() -> lock_module.LockFile:
+    return lock_module.LockFile.model_validate({
         "images": {
             "LOKI_IMAGE": {
                 "index": f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.5.0@{DIGEST_A}",
@@ -882,10 +882,10 @@ def _selection_lock() -> lock_module.ConfigLock:
     })
 
 
-def _selection_config(**sections: object) -> config_module.Config:
+def _selection_config(**sections: object) -> config_module.ConfigFile:
     payload: dict[str, object] = {"requires": ">=0"}
     payload.update(sections)
-    return config_module.Config.model_validate(payload)
+    return config_module.ConfigFile.model_validate(payload)
 
 
 class TestEntrySelection:
@@ -978,7 +978,7 @@ class TestPlatformSelectionLaw:
             lock_module.compose_env_entries(_selection_lock(), config, "linux/arm64")
 
     def test_a_platform_less_declaring_repo_answers_none(self) -> None:
-        charts_only = lock_module.ConfigLock(
+        charts_only = lock_module.LockFile(
             charts={"GRAFANA_CHART": f"{MIRROR_PREFIX}/ghcr.io/grafana/chart@{DIGEST_A}"}
         )
 

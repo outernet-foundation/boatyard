@@ -6,7 +6,7 @@ from typing import Annotated
 import typer
 
 from boatyard import dockerfiles
-from boatyard.config.config import Config
+from boatyard.config.config import ConfigFile
 from boatyard.dockerfiles import service_sha_env
 from boatyard.paths import DEFAULT_CONFIG_PATH
 
@@ -21,7 +21,7 @@ def tree_tags(
     ] = None,
 ) -> None:
     root = Path.cwd()
-    config = Config.load(root / DEFAULT_CONFIG_PATH)
+    config = ConfigFile.load(root / DEFAULT_CONFIG_PATH)
     vocabulary = sorted(config.service_builds)
     if not services:
         raise typer.BadParameter(

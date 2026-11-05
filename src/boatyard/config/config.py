@@ -112,7 +112,7 @@ class PyprojectToml(BaseModel):
     tool: ToolTable | None = None
 
 
-class Config(BaseModel):
+class ConfigFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     requires: str
@@ -137,7 +137,7 @@ class Config(BaseModel):
     root: Path = Field(default_factory=Path.cwd, exclude=True)
 
     @classmethod
-    def load(cls, path: Path) -> Config:
+    def load(cls, path: Path) -> ConfigFile:
         config = load_yaml_model(cls, path)
         config.resolve(path.parent)
         return config
@@ -700,7 +700,7 @@ def qualified_option_name(group: str, option_name: str) -> str:
     return f"{group}-{option_name}"
 
 
-def require_compose_stack(config: Config) -> Config:
+def require_compose_stack(config: ConfigFile) -> ConfigFile:
     if not config.services:
         raise ValueError("boatyard.yml must declare services")
     return config

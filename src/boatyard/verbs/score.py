@@ -10,8 +10,8 @@ import yaml
 from bashrun.bash import bash, bash_check, bash_output
 
 from boatyard import dockerfiles
-from boatyard.config.config import Config, Target
-from boatyard.config.lock import LOCK_PATH, ConfigLock
+from boatyard.config.config import ConfigFile, Target
+from boatyard.config.lock import LOCK_PATH, LockFile
 from boatyard.score import (
     SECRETS_FILE,
     SECRETS_OUTPUT,
@@ -52,7 +52,7 @@ def generate_score(
         raise typer.BadParameter("--check and --local are mutually exclusive")
     root = Path.cwd()
     config_path = root / DEFAULT_CONFIG_PATH
-    config = Config.load(config_path) if config_path.is_file() else None
+    config = ConfigFile.load(config_path) if config_path.is_file() else None
     if config is None or not (config.local_service_entries() or config.k8s):
         if check:
             print("no local service entries and no k8s section; nothing to check")
@@ -84,7 +84,7 @@ def generate_score(
     lock_path = root / LOCK_PATH
     if not lock_path.is_file():
         raise ValueError(f"{lock_path.as_posix()}: the image lock is required")
-    lock = ConfigLock.load(lock_path)
+    lock = LockFile.load(lock_path)
     if not lock.images and not lock.charts:
         raise ValueError(f"{lock_path.as_posix()}: the image lock carries no entries")
 

@@ -13,7 +13,7 @@ from boatyard import dockerfiles as dockerfiles_module
 from boatyard import crane
 from boatyard import publish as publish_compose
 from boatyard.verbs import publish as publish_verb
-from boatyard.config.config import Config
+from boatyard.config.config import ConfigFile
 from boatyard.config.lock import LOCK_PATH
 
 REPOSITORY = "ghcr.io/outernet-foundation/lbe-toolkit"
@@ -107,7 +107,7 @@ class TestPublishGating:
         _write_config(tmp_path, {"publish-compose": {"repository": REPOSITORY}})
 
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_bundles_without_repository_refuse_at_load(self, tmp_path: Path):
         _write_config(
@@ -116,7 +116,7 @@ class TestPublishGating:
         )
 
         with pytest.raises(ValidationError, match="repository is required"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
 
 class TestBakeSources:

@@ -14,7 +14,7 @@ PLATFORM_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$")
 SHA256_DIGEST_REGEX = r"sha256:[a-f0-9]{64}"
 
 
-class ConfigLock(BaseModel):
+class LockFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     images: dict[str, ConfigLockEntry] = Field(default_factory=dict)
@@ -51,7 +51,7 @@ class ConfigLock(BaseModel):
         raise ValueError(f"{subject}: {LOCK_PATH.as_posix()} lacks the {name} entry ({hint})")
 
     @classmethod
-    def load(cls, path: Path) -> ConfigLock:
+    def load(cls, path: Path) -> LockFile:
         return load_yaml_model(cls, path, {"path": path.as_posix()})
 
 
@@ -95,9 +95,9 @@ def _digest_pinned(reference: str) -> bool:
     return re.fullmatch(SHA256_DIGEST_REGEX, reference.rpartition("@")[2]) is not None
 
 
-def read_config_lock(root: Path) -> ConfigLock:
+def read_config_lock(root: Path) -> LockFile:
     lock_path = root / LOCK_PATH
-    return ConfigLock.load(lock_path) if lock_path.is_file() else ConfigLock()
+    return LockFile.load(lock_path) if lock_path.is_file() else LockFile()
 
 
 def load_yaml_model[ModelT: BaseModel](

@@ -21,10 +21,10 @@ from boatyard.config.config import (
     compose_bundle_output_path,
     double_dollars,
     lock_key_prefix,
-    Config,
+    ConfigFile,
 )
 from boatyard.lock import compose_env_entries
-from boatyard.config.lock import LOCK_PATH, ConfigLock
+from boatyard.config.lock import LOCK_PATH, LockFile
 from boatyard.score import (
     SECRETS_FILE,
     SecretsDeclaration,
@@ -33,7 +33,7 @@ from boatyard.score import (
     render_score,
     write_file,
 )
-from boatyard.config.values import ConfigValues
+from boatyard.config.values import ValuesFile
 from boatyard.paths import VALUES_FILE
 
 TOOL = "score-compose"
@@ -127,12 +127,12 @@ class ComposeConfig(BaseModel):
 
 
 def generate_compose(
-    config: Config, lock: ConfigLock, service_shas: dict[str, str], secrets: SecretsDeclaration
+    config: ConfigFile, lock: LockFile, service_shas: dict[str, str], secrets: SecretsDeclaration
 ) -> list[Path]:
     score_dir = config.root / config.score_dir
     state_prefix = f".{TOOL}/"
     values_path = config.root / VALUES_FILE
-    platform = ConfigValues.load(values_path, config).platform if values_path.is_file() else None
+    platform = ValuesFile.load(values_path, config).platform if values_path.is_file() else None
     images = compose_env_entries(lock, config, platform)
 
     if "ALPINE_IMAGE" not in images:

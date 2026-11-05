@@ -16,13 +16,13 @@ from boatyard.config.config import (
     K8sConfig,
     WorkloadDocument,
     Yaml,
-    Config,
+    ConfigFile,
     chart_lock_key,
     is_list,
     is_mapping,
 )
 from boatyard.lock import env_entries
-from boatyard.config.lock import ConfigLock
+from boatyard.config.lock import LockFile
 from boatyard.markers import MarkerContext, resolve_markers
 from boatyard.score import (
     SECRETS_FILE,
@@ -57,9 +57,9 @@ class ManifestDocument(BaseModel):
 
 
 def generate_k8s(
-    config: Config,
+    config: ConfigFile,
     k8s: K8sConfig,
-    lock: ConfigLock,
+    lock: LockFile,
     service_shas: dict[str, str],
     local: bool,
     secrets: SecretsDeclaration,

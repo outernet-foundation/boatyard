@@ -9,12 +9,12 @@ from pydantic import ValidationError
 
 from boatyard.config.config import (
     DEV_SENTINEL,
-    Config,
+    ConfigFile,
     ServiceEntry,
     ServiceGroup,
     bundle_lock_key,
 )
-from boatyard.config.lock import LOCK_PATH, ConfigLock
+from boatyard.config.lock import LOCK_PATH, LockFile
 
 DIGEST = "sha256:" + "a" * 64
 SHA_TAG = "a" * 40
@@ -62,7 +62,7 @@ def write_dockerfile(tmp_path: Path, service: str, text: str, top: str = "worklo
 
 def test_load_missing_file_raises_file_not_found(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
-        Config.load(tmp_path / "boatyard.yml")
+        ConfigFile.load(tmp_path / "boatyard.yml")
 
 
 def _installed_version(version: str) -> Any:
@@ -77,25 +77,25 @@ class TestRequires:
         write_config(tmp_path, {"project_name": "example"})
 
         with pytest.raises(ValidationError, match="requires"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_empty_string_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ""})
 
         with pytest.raises(ValidationError, match="requires"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_invalid_specifier_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": "not-a-specifier"})
 
         with pytest.raises(ValidationError, match="requires"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_dev_sentinel_skips_check(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(importlib.metadata, "version", _installed_version(DEV_SENTINEL))
         write_config(tmp_path, {"requires": ">=0.1"})
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None and config.requires == ">=0.1"
 
@@ -103,7 +103,7 @@ class TestRequires:
         monkeypatch.setattr(importlib.metadata, "version", _installed_version("0.1.18"))
         write_config(tmp_path, {"requires": ">=0.1.18"})
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None and config.requires == ">=0.1.18"
 
@@ -111,7 +111,7 @@ class TestRequires:
         monkeypatch.setattr(importlib.metadata, "version", _installed_version("0.1.19.dev5"))
         write_config(tmp_path, {"requires": ">=0.1.18"})
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None
 
@@ -120,21 +120,21 @@ class TestRequires:
         write_config(tmp_path, {"requires": ">=0.1.18"})
 
         with pytest.raises(ValueError, match="does not satisfy requires"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
 
 def test_load_rejects_duplicate_keys(tmp_path: Path) -> None:
     (tmp_path / "boatyard.yml").write_text('requires: ">=0.1"\nrequires: ">=0.2"\n', encoding="utf-8")
 
     with pytest.raises(ValueError, match=r"boatyard\.yml: line 2: duplicate key 'requires'"):
-        Config.load(tmp_path / "boatyard.yml")
+        ConfigFile.load(tmp_path / "boatyard.yml")
 
 
 def test_load_rejects_unknown_top_level_keys(tmp_path: Path) -> None:
     write_config(tmp_path, {"requires": ">=0.1", "lifecycle_prefix": "ghcr.io/x/mirror"})
 
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-        Config.load(tmp_path / "boatyard.yml")
+        ConfigFile.load(tmp_path / "boatyard.yml")
 
 
 class TestOldSectionsDied:
@@ -142,19 +142,19 @@ class TestOldSectionsDied:
         write_config(tmp_path, {"requires": ">=0.1", "generate-score": {"project_name": "example"}})
 
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_publish_compose_section_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "publish-compose": {"repository": "ghcr.io/org/repo"}})
 
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_lifecycle_section_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "lifecycle": {"files": ["compose.yml"]}})
 
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_bundles_key_rejected(self, tmp_path: Path) -> None:
         write_config(
@@ -163,7 +163,7 @@ class TestOldSectionsDied:
         )
 
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
 
 class TestWorkloadReferences:
@@ -174,7 +174,7 @@ class TestWorkloadReferences:
         )
 
         with pytest.raises(ValidationError, match=r"flat \.yaml file name"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_non_yaml_service_workload_rejected(self, tmp_path: Path) -> None:
         write_config(
@@ -183,20 +183,20 @@ class TestWorkloadReferences:
         )
 
         with pytest.raises(ValidationError, match=r"flat \.yaml file name"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_nested_k8s_workload_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "k8s": {"workloads": ["nested/api.yaml"]}})
 
         with pytest.raises(ValidationError, match=r"flat \.yaml file name"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
 
 class TestVariants:
     def test_declared_axes_load(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "variants": {"TORCH_DEVICE": ["cuda", "rocm"]}})
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None
         assert config.variants == {"TORCH_DEVICE": ["cuda", "rocm"]}
@@ -205,19 +205,19 @@ class TestVariants:
         write_config(tmp_path, {"requires": ">=0.1", "variants": {"torch_device": ["cuda"]}})
 
         with pytest.raises(ValidationError, match="ALL_CAPS env name"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_duplicate_values_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "variants": {"TORCH_DEVICE": ["cuda", "cuda"]}})
 
         with pytest.raises(ValidationError, match="declared twice"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_uppercase_value_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "variants": {"TORCH_DEVICE": ["CUDA"]}})
 
         with pytest.raises(ValidationError, match="bare lowercase spelling"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_declared_axes_reach_the_derived_services(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "localizer", "ARG PY_IMAGE\nARG TORCH_DEVICE\nFROM ${PY_IMAGE}\n")
@@ -226,7 +226,7 @@ class TestVariants:
             {"requires": ">=0.1", "repository": "ghcr.io/example/repo", "variants": {"TORCH_DEVICE": ["cuda", "rocm"]}},
         )
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None
         assert config.service_builds["localizer"].axis == "TORCH_DEVICE"
@@ -249,7 +249,7 @@ class TestBaseImages:
         )
         write_lock(tmp_path)
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None
         assert config.base_images == {
@@ -261,19 +261,19 @@ class TestBaseImages:
         write_config(tmp_path, {"requires": ">=0.1", "base_images": {"ALPINE_IMAGE": "docker.io/library/alpine"}})
 
         with pytest.raises(ValidationError, match="path:tag"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_env_hole_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "base_images": {"ALPINE_IMAGE": "${ALPINE_REF}"}})
 
         with pytest.raises(ValidationError, match="path:tag"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_lowercase_key_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "base_images": {"uv_image": "ghcr.io/astral-sh/uv:0.12.15"}})
 
         with pytest.raises(ValidationError, match="ALL_CAPS"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
 
 class TestBaseImageTemplates:
@@ -299,7 +299,7 @@ class TestBaseImageTemplates:
         )
         write_lock(tmp_path)
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None
         assert config.base_images == {
@@ -319,7 +319,7 @@ class TestBaseImageTemplates:
         )
         write_lock(tmp_path)
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None and config.base_images == {"API_IMAGE": "ghcr.io/org/api:0.12.15-and-0.12.15"}
 
@@ -334,7 +334,7 @@ class TestBaseImageTemplates:
         )
         write_lock(tmp_path)
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None and config.base_images == {"GOLANG_IMAGE": "docker.io/library/golang:1.22-alpine"}
 
@@ -353,7 +353,7 @@ class TestBaseImageTemplates:
         )
         write_lock(tmp_path)
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None
         assert config.base_images["GOLANG_IMAGE"] == "docker.io/library/golang:1.22-alpine"
@@ -371,7 +371,7 @@ class TestBaseImageTemplates:
         write_lock(tmp_path)
 
         with pytest.raises(ValueError, match=r"exact == pin like '==0\.12\.15'"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_wildcard_pin_refuses(self, tmp_path: Path) -> None:
         self._write_toolchain_pins(tmp_path, required_version="==0.12.*")
@@ -386,7 +386,7 @@ class TestBaseImageTemplates:
         write_lock(tmp_path)
 
         with pytest.raises(ValueError, match="must be an exact == pin"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_missing_uv_pin_refuses(self, tmp_path: Path) -> None:
         (tmp_path / "pyproject.toml").write_text('[project]\nname = "example"\n', encoding="utf-8")
@@ -402,7 +402,7 @@ class TestBaseImageTemplates:
         write_lock(tmp_path)
 
         with pytest.raises(ValueError, match=r"tool\.uv\.required-version is not declared"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_absent_python_version_file_refuses(self, tmp_path: Path) -> None:
         (tmp_path / "pyproject.toml").write_text(
@@ -419,7 +419,7 @@ class TestBaseImageTemplates:
         write_lock(tmp_path)
 
         with pytest.raises(ValueError, match=r"\.python-version: the file is absent"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_empty_python_version_file_refuses(self, tmp_path: Path) -> None:
         (tmp_path / "pyproject.toml").write_text(
@@ -437,7 +437,7 @@ class TestBaseImageTemplates:
         write_lock(tmp_path)
 
         with pytest.raises(ValueError, match=r"\.python-version: the file is empty"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_unknown_template_key_refuses_listing_the_vocabulary(self, tmp_path: Path) -> None:
         write_config(
@@ -453,7 +453,7 @@ class TestBaseImageTemplates:
         with pytest.raises(
             ValueError, match=r"template key \{golang\} is unknown; the toolchain pins are \{uv\}, \{python\}"
         ):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
 
 class TestCharts:
@@ -469,7 +469,7 @@ class TestCharts:
         (tmp_path / "stack" / "score" / "k8s" / "values").mkdir(parents=True)
         (tmp_path / "stack" / "score" / "k8s" / "values" / "loki.yaml").write_text("loki: {}\n", encoding="utf-8")
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None and config.k8s is not None
         assert config.k8s.charts == {"loki": "oci://ghcr.io/grafana/helm-charts/loki:7.3.0"}
@@ -483,7 +483,7 @@ class TestCharts:
         (tmp_path / "stack" / "score" / "k8s" / "values").mkdir(parents=True)
         (tmp_path / "stack" / "score" / "k8s" / "values" / "loki.yaml").write_text("loki: {}\n", encoding="utf-8")
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None and config.k8s is not None
         assert config.k8s.charts == {"loki": "oci://ghcr.io/grafana/helm-charts/loki@" + DIGEST}
@@ -494,7 +494,7 @@ class TestCharts:
         )
 
         with pytest.raises(ValidationError, match="tag or a digest"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_non_oci_rejected(self, tmp_path: Path) -> None:
         write_config(
@@ -502,7 +502,7 @@ class TestCharts:
         )
 
         with pytest.raises(ValidationError, match="upstream-native OCI"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_env_hole_rejected(self, tmp_path: Path) -> None:
         write_config(
@@ -514,7 +514,7 @@ class TestCharts:
         )
 
         with pytest.raises(ValidationError, match="tag or a digest"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_missing_values_file_refuses_at_load(self, tmp_path: Path) -> None:
         write_config(
@@ -524,7 +524,7 @@ class TestCharts:
         write_lock(tmp_path)
 
         with pytest.raises(ValueError, match=r"values/loki\.yaml.*values file is required"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
 
 class TestK8sSection:
@@ -537,7 +537,7 @@ class TestK8sSection:
             },
         )
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None and config.k8s is not None
         assert config.k8s.workloads == ["api.yaml"]
@@ -546,7 +546,7 @@ class TestK8sSection:
     def test_null_section_reads_as_absent(self, tmp_path: Path) -> None:
         (tmp_path / "boatyard.yml").write_text('requires: ">=0.1"\nk8s:\n', encoding="utf-8")
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None and config.k8s is None
 
@@ -554,13 +554,13 @@ class TestK8sSection:
         (tmp_path / "boatyard.yml").write_text('requires: ">=0.1"\nk8s: {}\n', encoding="utf-8")
 
         with pytest.raises(ValidationError, match="must declare workloads or charts"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_vars_only_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "k8s": {"vars": {"GPU_VARIANT": "cuda"}}})
 
         with pytest.raises(ValidationError, match="must declare workloads or charts"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
 
 class TestServices:
@@ -605,7 +605,7 @@ class TestServices:
             },
         )
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None
         placeframe = config.services["placeframe"]
@@ -633,7 +633,7 @@ class TestServices:
         )
 
         with pytest.raises(ValidationError, match="ref: or workloads:, not both"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_an_entry_carrying_neither_source_refuses(self, tmp_path: Path) -> None:
         write_config(
@@ -647,7 +647,7 @@ class TestServices:
         )
 
         with pytest.raises(ValidationError, match="ref: or workloads: is required"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_a_group_shape_with_entry_keys_reports_the_group_branch(self, tmp_path: Path) -> None:
         write_config(
@@ -666,7 +666,7 @@ class TestServices:
         )
 
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_vars_beside_a_ref_refuse(self, tmp_path: Path) -> None:
         write_config(
@@ -684,7 +684,7 @@ class TestServices:
         )
 
         with pytest.raises(ValidationError, match="vars is not allowed with ref:"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_a_digest_spelled_ref_refuses(self, tmp_path: Path) -> None:
         write_config(
@@ -697,7 +697,7 @@ class TestServices:
         )
 
         with pytest.raises(ValidationError, match=r"pins a digest.*the lock records the digest"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_a_latest_ref_refuses(self, tmp_path: Path) -> None:
         write_config(
@@ -710,7 +710,7 @@ class TestServices:
         )
 
         with pytest.raises(ValidationError, match="'latest' is mutable and never a pin"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     @pytest.mark.parametrize("tag", [">=0.3.1", "0.3.x", "0.3.X", "0.3.*", "~0.3", "^0.3"])
     def test_a_range_spelled_ref_refuses(self, tag: str, tmp_path: Path) -> None:
@@ -724,7 +724,7 @@ class TestServices:
         )
 
         with pytest.raises(ValidationError, match="is a range; exact tags only"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_a_tagless_ref_refuses(self, tmp_path: Path) -> None:
         write_config(
@@ -737,7 +737,7 @@ class TestServices:
         )
 
         with pytest.raises(ValidationError, match="must carry a tag"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_a_non_oci_ref_refuses(self, tmp_path: Path) -> None:
         write_config(
@@ -750,7 +750,7 @@ class TestServices:
         )
 
         with pytest.raises(ValidationError, match="must be an OCI include"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     @pytest.mark.parametrize("tag", [SHA_TAG, "0.3.1", "0.3.1-dev.42", "main"])
     def test_every_published_channel_spelling_loads(self, tag: str, tmp_path: Path) -> None:
@@ -764,13 +764,13 @@ class TestServices:
             },
         )
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None
 
     def test_an_empty_workloads_list_refuses(self) -> None:
         with pytest.raises(ValidationError, match="ref: or workloads: is required"):
-            Config.model_validate({
+            ConfigFile.model_validate({
                 "requires": ">=0.1",
                 "repository": "ghcr.io/org/repo",
                 "project_name": "example",
@@ -788,7 +788,7 @@ class TestServices:
         )
 
         with pytest.raises(ValidationError, match="project_name is required"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_local_entries_require_repository(self, tmp_path: Path) -> None:
         write_config(
@@ -802,7 +802,7 @@ class TestServices:
         )
 
         with pytest.raises(ValidationError, match="repository is required"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_remote_only_services_need_no_repository(self, tmp_path: Path) -> None:
         write_edge_lock(tmp_path, bundles=bundle_entries("livekit"))
@@ -821,7 +821,7 @@ class TestServices:
             },
         )
 
-        assert Config.load(tmp_path / "boatyard.yml") is not None
+        assert ConfigFile.load(tmp_path / "boatyard.yml") is not None
 
 
 class TestQualifiedVocabulary:
@@ -843,7 +843,7 @@ class TestQualifiedVocabulary:
             }),
         )
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None
         assert [name for name, _entry in config.local_service_entries()] == ["one-cuda", "two-cuda"]
@@ -858,7 +858,7 @@ class TestQualifiedVocabulary:
             }),
         )
 
-        assert Config.load(tmp_path / "boatyard.yml") is not None
+        assert ConfigFile.load(tmp_path / "boatyard.yml") is not None
 
     def test_two_sites_producing_one_qualified_spelling_refuse(self, tmp_path: Path) -> None:
         write_config(
@@ -870,7 +870,7 @@ class TestQualifiedVocabulary:
         )
 
         with pytest.raises(ValidationError, match=r"a-b-c is already claimed at"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_a_bare_entry_matching_a_qualified_spelling_refuses(self, tmp_path: Path) -> None:
         write_config(
@@ -882,7 +882,7 @@ class TestQualifiedVocabulary:
         )
 
         with pytest.raises(ValidationError, match=r"tunnel-ngrok is already claimed at"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
 
 class TestAuthGroup:
@@ -906,7 +906,7 @@ class TestAuthGroup:
             }),
         )
 
-        assert Config.load(tmp_path / "boatyard.yml") is not None
+        assert ConfigFile.load(tmp_path / "boatyard.yml") is not None
 
     def test_an_auth_option_without_a_route_refuses(self, tmp_path: Path) -> None:
         write_config(
@@ -915,7 +915,7 @@ class TestAuthGroup:
         )
 
         with pytest.raises(ValidationError, match="auth option declares exactly one route"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_an_auth_option_with_two_routes_refuses(self, tmp_path: Path) -> None:
         write_config(
@@ -932,7 +932,7 @@ class TestAuthGroup:
         )
 
         with pytest.raises(ValidationError, match="exactly one route"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_a_bare_entry_named_auth_refuses(self, tmp_path: Path) -> None:
         write_config(
@@ -945,7 +945,7 @@ class TestAuthGroup:
         )
 
         with pytest.raises(ValidationError, match="auth is a reserved group name"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
 
 class TestRoutes:
@@ -986,7 +986,7 @@ class TestRoutes:
         )
 
         with pytest.raises(ValidationError, match="edge-wide unique"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     @pytest.mark.parametrize(
         "path",
@@ -996,7 +996,7 @@ class TestRoutes:
         write_config(tmp_path, self._routed([{"path": path, "upstream": "api:8000"}]))
 
         with pytest.raises(ValidationError, match="must be a /-rooted segment chain"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_plain_and_wildcard_paths_load(self, tmp_path: Path) -> None:
         write_edge_lock(tmp_path, bundles=bundle_entries("livekit"))
@@ -1008,7 +1008,7 @@ class TestRoutes:
             ]),
         )
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None
 
@@ -1016,7 +1016,7 @@ class TestRoutes:
         write_config(tmp_path, self._routed([{"path": "/*", "upstream": "api:${PORT}"}]))
 
         with pytest.raises(ValidationError, match="a service name and a literal port"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_strip_prefix_on_a_non_wildcard_path_refuses(self, tmp_path: Path) -> None:
         write_config(
@@ -1025,7 +1025,7 @@ class TestRoutes:
         )
 
         with pytest.raises(ValidationError, match="must end in /\\*"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_a_raw_route_loads(self, tmp_path: Path) -> None:
         write_edge_lock(tmp_path, bundles=bundle_entries("livekit"))
@@ -1034,7 +1034,7 @@ class TestRoutes:
             self._routed([{"path": "/x/*", "upstream": "x:1", "raw": 'respond "hi" 200'}]),
         )
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None
 
@@ -1058,7 +1058,7 @@ class TestGatewayKey:
         )
 
         with pytest.raises(ValueError, match="CADDY_IMAGE"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_a_routeless_stack_carries_an_inert_gateway(self, tmp_path: Path) -> None:
         write_lock(tmp_path, bundles=bundle_entries("livekit"))
@@ -1072,7 +1072,7 @@ class TestGatewayKey:
             },
         )
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None
 
@@ -1093,7 +1093,7 @@ class TestGatewayKey:
             },
         )
 
-        assert Config.load(tmp_path / "boatyard.yml") is not None
+        assert ConfigFile.load(tmp_path / "boatyard.yml") is not None
 
     def test_a_malformed_gateway_value_refuses(self, tmp_path: Path) -> None:
         write_config(
@@ -1112,7 +1112,7 @@ class TestGatewayKey:
         )
 
         with pytest.raises(ValidationError, match="literal port number or a"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
 
 class TestPorts:
@@ -1141,7 +1141,7 @@ class TestPorts:
             }),
         )
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None
         livekit = config.services["livekit"]
@@ -1165,7 +1165,7 @@ class TestPorts:
         write_lock(tmp_path)
 
         with pytest.raises(ValidationError, match="Input should be a valid dictionary or instance of PortDeclaration"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_an_empty_group_options_map_refuses(self, tmp_path: Path) -> None:
         write_config(
@@ -1181,7 +1181,7 @@ class TestPorts:
         write_lock(tmp_path)
 
         with pytest.raises(ValidationError):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_the_mapping_form_spells_the_owning_service_and_host_ip(self, tmp_path: Path) -> None:
         write_edge_lock(tmp_path, bundles=bundle_entries("livekit"))
@@ -1206,7 +1206,7 @@ class TestPorts:
             }),
         )
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None
 
@@ -1223,7 +1223,7 @@ class TestPorts:
         )
 
         with pytest.raises(ValidationError, match="literal port number or a"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
 
 class TestRepository:
@@ -1231,13 +1231,13 @@ class TestRepository:
         write_config(tmp_path, {"requires": ">=0.1", "repository": "lbe-toolkit"})
 
         with pytest.raises(ValidationError, match="registry-host/repository-path"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_trailing_slash_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "repository": "ghcr.io/org/repo/"})
 
         with pytest.raises(ValidationError, match="trailing slash"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_repository_without_service_builds_loads(self, tmp_path: Path) -> None:
         # The publish shape for a repo whose whole runtime is its own workload set: no
@@ -1254,7 +1254,7 @@ class TestRepository:
         )
         write_lock(tmp_path)
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None and config.repository == "ghcr.io/org/repo"
         assert config.service_builds == {}
@@ -1264,7 +1264,7 @@ class TestPlatforms:
     def test_arch_pairs_load(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "platforms": ["linux/arm64"]})
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None and config.platforms == ["linux/arm64"]
 
@@ -1272,13 +1272,13 @@ class TestPlatforms:
         write_config(tmp_path, {"requires": ">=0.1", "platforms": ["arm64"]})
 
         with pytest.raises(ValidationError, match="os/arch pair"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_base_images_without_platforms_refuse_naming_the_fix(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "base_images": {"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"}})
 
         with pytest.raises(ValidationError, match=r"platforms is required.*\[linux/amd64\]"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_charts_stay_exempt_from_the_platforms_rule(self, tmp_path: Path) -> None:
         write_config(
@@ -1289,7 +1289,7 @@ class TestPlatforms:
         (tmp_path / "stack" / "score" / "k8s" / "values").mkdir(parents=True)
         (tmp_path / "stack" / "score" / "k8s" / "values" / "loki.yaml").write_text("loki: {}\n", encoding="utf-8")
 
-        assert Config.load(tmp_path / "boatyard.yml") is not None
+        assert ConfigFile.load(tmp_path / "boatyard.yml") is not None
 
 
 class TestLockPairing:
@@ -1303,7 +1303,7 @@ class TestLockPairing:
             },
         )
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config.base_images == {"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"}
 
@@ -1315,7 +1315,7 @@ class TestLockPairing:
         (tmp_path / "stack" / "score" / "k8s" / "values").mkdir(parents=True)
         (tmp_path / "stack" / "score" / "k8s" / "values" / "loki.yaml").write_text("loki: {}\n", encoding="utf-8")
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config.declared_charts == {"loki": "oci://ghcr.io/grafana/helm-charts/loki:7.3.0"}
 
@@ -1330,7 +1330,7 @@ class TestLockPairing:
         )
         write_lock(tmp_path)
 
-        assert Config.load(tmp_path / "boatyard.yml") is not None
+        assert ConfigFile.load(tmp_path / "boatyard.yml") is not None
 
     def test_refs_without_lock_load_for_bootstrap(self, tmp_path: Path) -> None:
         write_config(
@@ -1343,7 +1343,7 @@ class TestLockPairing:
             },
         )
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert [name for name, _declared, _entry in config.remote_declared_entries()] == ["livekit"]
 
@@ -1359,7 +1359,7 @@ class TestLockPairing:
             },
         )
 
-        assert Config.load(tmp_path / "boatyard.yml") is not None
+        assert ConfigFile.load(tmp_path / "boatyard.yml") is not None
 
 
 class TestServiceDerivation:
@@ -1368,20 +1368,20 @@ class TestServiceDerivation:
         write_config(tmp_path, {"requires": ">=0.1"})
 
         with pytest.raises(ValueError, match="repository is required"):
-            Config.load(tmp_path / "boatyard.yml")
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_derived_services_attach_to_the_loaded_config(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n")
         write_config(tmp_path, {"requires": ">=0.1", "repository": "ghcr.io/org/repo"})
 
-        config = Config.load(tmp_path / "boatyard.yml")
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None
         assert sorted(config.service_builds) == ["api"]
 
 
 def test_direct_model_construction_is_valid_for_tests(tmp_path: Path) -> None:
-    config = Config.model_validate({
+    config = ConfigFile.model_validate({
         "requires": ">=0.1",
         "repository": "ghcr.io/org/repo",
         "project_name": "example",
@@ -1418,7 +1418,7 @@ def test_local_service_entries_flatten_in_declaration_order_skipping_refs(tmp_pa
         },
     )
 
-    config = Config.load(tmp_path / "boatyard.yml")
+    config = ConfigFile.load(tmp_path / "boatyard.yml")
 
     assert config is not None
     assert [(name, entry.workloads) for name, entry in config.local_service_entries()] == [
@@ -1436,14 +1436,14 @@ def _write_raw_lock(tmp_path: Path, text: str) -> Path:
 
 class TestConfigLockParse:
     def test_the_empty_lock_stays_legal(self, tmp_path: Path) -> None:
-        assert ConfigLock.load(_write_raw_lock(tmp_path, "")).images == {}
-        assert ConfigLock.load(_write_raw_lock(tmp_path, "{}\n")).charts == {}
+        assert LockFile.load(_write_raw_lock(tmp_path, "")).images == {}
+        assert LockFile.load(_write_raw_lock(tmp_path, "{}\n")).charts == {}
 
     def test_malformed_yaml_refuses_raw(self, tmp_path: Path) -> None:
         lock = _write_raw_lock(tmp_path, "images:\n  A_IMAGE: [unclosed\n")
 
         with pytest.raises(yaml.YAMLError):
-            ConfigLock.load(lock)
+            LockFile.load(lock)
 
     def test_duplicate_keys_refuse_naming_the_line(self, tmp_path: Path) -> None:
         lock = _write_raw_lock(
@@ -1452,19 +1452,19 @@ class TestConfigLockParse:
         )
 
         with pytest.raises(ValueError, match=rf"{re.escape(lock.as_posix())}: line 4: duplicate key 'A_IMAGE'"):
-            ConfigLock.load(lock)
+            LockFile.load(lock)
 
     def test_the_env_line_format_refuses_as_a_bare_scalar(self, tmp_path: Path) -> None:
         lock = _write_raw_lock(tmp_path, f"A_IMAGE=ghcr.io/x/a:1@{DIGEST}\n")
 
         with pytest.raises(ValidationError, match="Input should be a valid dictionary"):
-            ConfigLock.load(lock)
+            LockFile.load(lock)
 
     def test_a_non_digest_pinned_index_refuses(self, tmp_path: Path) -> None:
         lock = _write_raw_lock(tmp_path, "images:\n  A_IMAGE:\n    index: ghcr.io/x/a:1.2.3\n")
 
         with pytest.raises(ValueError, match="not digest-pinned"):
-            ConfigLock.load(lock)
+            LockFile.load(lock)
 
     def test_a_non_digest_pinned_platform_entry_refuses(self, tmp_path: Path) -> None:
         lock = _write_raw_lock(
@@ -1474,19 +1474,19 @@ class TestConfigLockParse:
         )
 
         with pytest.raises(ValueError, match="not digest-pinned"):
-            ConfigLock.load(lock)
+            LockFile.load(lock)
 
     def test_a_non_digest_pinned_chart_refuses(self, tmp_path: Path) -> None:
         lock = _write_raw_lock(tmp_path, "charts:\n  LOKI_CHART: ghcr.io/x/loki:7.3.0\n")
 
         with pytest.raises(ValueError, match="chart LOKI_CHART is not digest-pinned"):
-            ConfigLock.load(lock)
+            LockFile.load(lock)
 
     def test_a_non_digest_pinned_bundle_refuses(self, tmp_path: Path) -> None:
         lock = _write_raw_lock(tmp_path, "bundles:\n  LIVEKIT_BUNDLE:\n    reference: ghcr.io/x/livekit:0.3.1\n")
 
         with pytest.raises(ValueError, match="bundle entry is not digest-pinned"):
-            ConfigLock.load(lock)
+            LockFile.load(lock)
 
     def test_a_malformed_platform_key_refuses(self, tmp_path: Path) -> None:
         lock = _write_raw_lock(
@@ -1496,7 +1496,7 @@ class TestConfigLockParse:
         )
 
         with pytest.raises(ValueError, match="os/arch pair"):
-            ConfigLock.load(lock)
+            LockFile.load(lock)
 
     def test_a_name_in_two_sections_refuses(self, tmp_path: Path) -> None:
         lock = _write_raw_lock(
@@ -1505,7 +1505,7 @@ class TestConfigLockParse:
         )
 
         with pytest.raises(ValueError, match=r"at most one of images, charts, bundles"):
-            ConfigLock.load(lock)
+            LockFile.load(lock)
 
     def test_a_bundle_name_colliding_with_base_images_keys_refuses(self, tmp_path: Path) -> None:
         lock = _write_raw_lock(
@@ -1515,10 +1515,10 @@ class TestConfigLockParse:
         )
 
         with pytest.raises(ValueError, match=r"at most one of images, charts, bundles"):
-            ConfigLock.load(lock)
+            LockFile.load(lock)
 
     def test_require_answers_the_index_for_images_and_the_flat_entry_for_charts(self, tmp_path: Path) -> None:
-        lock = ConfigLock.load(
+        lock = LockFile.load(
             _write_raw_lock(
                 tmp_path,
                 f"images:\n  A_IMAGE:\n    index: ghcr.io/x/a:1@{DIGEST}\n"
@@ -1532,7 +1532,7 @@ class TestConfigLockParse:
         assert lock.require("LIVEKIT_BUNDLE", "subject") == f"ghcr.io/x/livekit:0.3.1@{DIGEST}"
 
     def test_require_refuses_naming_the_lock_verb(self, tmp_path: Path) -> None:
-        lock = ConfigLock.load(_write_raw_lock(tmp_path, "{}\n"))
+        lock = LockFile.load(_write_raw_lock(tmp_path, "{}\n"))
 
         with pytest.raises(ValueError, match=r"lacks the CADDY_IMAGE entry.*lock verb writes it"):
             lock.require("CADDY_IMAGE", "routes are declared")

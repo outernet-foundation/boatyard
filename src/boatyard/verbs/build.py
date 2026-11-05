@@ -6,7 +6,7 @@ from typing import Annotated
 import typer
 
 from boatyard.bake import run_build
-from boatyard.config.config import Config
+from boatyard.config.config import ConfigFile
 from boatyard.paths import DEFAULT_CONFIG_PATH
 
 app = typer.Typer()
@@ -30,7 +30,7 @@ def build(
     no_cache: Annotated[bool, typer.Option("--no-cache", help="Force rebuild by disabling cache usage.")] = False,
 ) -> None:
     root = Path.cwd()
-    config = Config.load(root / DEFAULT_CONFIG_PATH)
+    config = ConfigFile.load(root / DEFAULT_CONFIG_PATH)
 
     if push and push_to is not None:
         raise typer.BadParameter(

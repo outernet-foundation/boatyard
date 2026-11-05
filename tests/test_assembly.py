@@ -8,7 +8,7 @@ from typer.testing import CliRunner
 
 from boatyard.cli import app
 from boatyard.config import values
-from boatyard.config.config import Config
+from boatyard.config.config import ConfigFile
 from boatyard.verbs import up
 from boatyard.config.lock import LOCK_PATH
 
@@ -273,7 +273,7 @@ class TestValuesLoad:
             encoding="utf-8",
         )
 
-        parsed = values.ConfigValues.load(tmp_path / "boatyard.values.yaml", Config.load(tmp_path / "boatyard.yml"))
+        parsed = values.ValuesFile.load(tmp_path / "boatyard.values.yaml", ConfigFile.load(tmp_path / "boatyard.yml"))
 
         assert parsed.choices == {"core": "cuda", "ui": "open"}
         assert parsed.variables == {"GATEWAY_PORT": "8443", "RELOAD": "true"}

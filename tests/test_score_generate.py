@@ -15,8 +15,8 @@ from boatyard import score as score_module
 from boatyard import score_compose as score_compose_module
 from boatyard import score_k8s as score_k8s_module
 from boatyard.verbs import score as score_verb_module
-from boatyard.config.config import Config, WorkloadDocument
-from boatyard.config.lock import ConfigLock
+from boatyard.config.config import ConfigFile, WorkloadDocument
+from boatyard.config.lock import LockFile
 from boatyard.score import SecretsDeclaration, write_file
 from boatyard.score_compose import BindVolume, ComposeService
 from boatyard.score_k8s import generate_k8s
@@ -24,12 +24,12 @@ from boatyard.score_k8s import generate_k8s
 DIGEST = "sha256:" + "a" * 64
 
 
-def _root_config(**sections: object) -> Config:
+def _root_config(**sections: object) -> ConfigFile:
     payload: dict[str, object] = {"requires": ">=0.1"}
     payload.update(sections)
     if "services" in payload and "gateway" not in payload:
         payload["gateway"] = "8080"
-    return Config.model_validate(payload)
+    return ConfigFile.model_validate(payload)
 
 
 def _empty_secrets() -> SecretsDeclaration:
@@ -130,7 +130,7 @@ class HelmRecorder:
         return HELM_RENDERED
 
 
-def _charts_config() -> Config:
+def _charts_config() -> ConfigFile:
     return _root_config(k8s={"charts": {"loki": CHART_REF}})
 
 
@@ -141,7 +141,7 @@ def _write_values(tmp_path: Path, text: str) -> None:
 
 
 def _generate_with_chart(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, config: Config, images: dict[str, str]
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, config: ConfigFile, images: dict[str, str]
 ) -> HelmRecorder:
     output = Path("stack/generated/k8s/manifests.yaml")
     k8s = K8sBashRecorder(tmp_path / output, tmp_path / "stack/generated/k8s/.score-k8s/state.yaml")
@@ -150,7 +150,7 @@ def _generate_with_chart(
     monkeypatch.setattr(score_k8s_module, "bash_output", helm.run)
     assert config.k8s is not None
     config.root = tmp_path
-    lock = ConfigLock.model_validate({
+    lock = LockFile.model_validate({
         "images": {name: {"index": ref} for name, ref in images.items() if not name.endswith("_CHART")},
         "charts": {name: ref for name, ref in images.items() if name.endswith("_CHART")},
     })
@@ -254,8 +254,8 @@ def test_values_lock_markers_resolve_after_includes(tmp_path: Path, monkeypatch:
 
 
 class TestMarkerSubstrateResolution:
-    def _multi_arch_lock(self) -> ConfigLock:
-        return ConfigLock.model_validate({
+    def _multi_arch_lock(self) -> LockFile:
+        return LockFile.model_validate({
             "images": {
                 "LOKI_IMAGE": {
                     "index": LOKI_INDEX,
@@ -708,15 +708,15 @@ PROVISIONER_WITHOUT_SERVICES = """
 ALPINE_LOCK = {"ALPINE_IMAGE": "ghcr.io/outernet-foundation/mirror/docker.io/library/alpine:3.21.0@" + DIGEST}
 
 
-def _lock_for_images(images: dict[str, str]) -> ConfigLock:
-    return ConfigLock.model_validate({
+def _lock_for_images(images: dict[str, str]) -> LockFile:
+    return LockFile.model_validate({
         "images": {
             name: {"index": reference, "platforms": {"linux/amd64": reference}} for name, reference in images.items()
         }
     })
 
 
-def _bundle_config(**bundle: object) -> Config:
+def _bundle_config(**bundle: object) -> ConfigFile:
     return _root_config(
         repository="ghcr.io/org/repo",
         project_name="example",
@@ -728,7 +728,7 @@ def _bundle_config(**bundle: object) -> Config:
 def _compose_init_templates(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    config: Config,
+    config: ConfigFile,
     images: dict[str, str],
     sources: dict[str, str],
     generated: str = "services: {}\n",
@@ -783,7 +783,7 @@ def test_generate_compose_requires_the_alpine_image_lock_entry(tmp_path: Path) -
     config.root = tmp_path
 
     with pytest.raises(ValueError, match="must carry the ALPINE_IMAGE entry"):
-        score_compose_module.generate_compose(config, ConfigLock.model_validate({}), {}, secrets=_empty_secrets())
+        score_compose_module.generate_compose(config, LockFile.model_validate({}), {}, secrets=_empty_secrets())
 
 
 def test_provisioners_register_by_resource_type_closure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1124,7 +1124,7 @@ def test_k8s_builtin_templates_register_on_every_init(tmp_path: Path, monkeypatc
     config.root = tmp_path
 
     assert config.k8s is not None
-    generate_k8s(config, config.k8s, ConfigLock.model_validate({}), {}, local=False, secrets=_empty_secrets())
+    generate_k8s(config, config.k8s, LockFile.model_validate({}), {}, local=False, secrets=_empty_secrets())
 
     init = next(command for command in recorder.commands if command.startswith("score-k8s init"))
     assert [Path(token).name for token in init.split() if token.endswith(".tpl")] == [
@@ -1144,7 +1144,7 @@ def test_k8s_instance_suffixes_are_preseeded_deterministically(tmp_path: Path, m
     config.root = tmp_path
 
     assert config.k8s is not None
-    generate_k8s(config, config.k8s, ConfigLock.model_validate({}), {}, local=False, secrets=_empty_secrets())
+    generate_k8s(config, config.k8s, LockFile.model_validate({}), {}, local=False, secrets=_empty_secrets())
 
     seeded = yaml.safe_load(recorder.state_at_generate[output.name])
     assert seeded["workloads"]["api"]["instance_suffix"] == "-" + sha256(b"api").hexdigest()[:10]
@@ -1215,7 +1215,7 @@ containers:
 def _skip_unless_pinned_score_compose() -> None:
     if shutil.which("score-compose") is None:
         pytest.skip("score-compose is not on PATH; the A0 pin needs the pinned binary")
-    pinned = Config.model_fields["score_compose_version"].default
+    pinned = ConfigFile.model_fields["score_compose_version"].default
     if f"score-compose {pinned} (" not in bash_output("score-compose version"):
         pytest.skip(f"score-compose on PATH is not the pinned {pinned}")
 

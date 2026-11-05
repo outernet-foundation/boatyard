@@ -6,7 +6,7 @@ import typer
 from bashrun.bash import bash, bash_check
 
 from boatyard.config.config import (
-    Config,
+    ConfigFile,
     chart_lock_key,
     mirrored_ref,
 )
@@ -20,7 +20,7 @@ app = typer.Typer()
 @app.command()
 def mirror() -> None:
     root = Path.cwd()
-    config = Config.load(root / DEFAULT_CONFIG_PATH)
+    config = ConfigFile.load(root / DEFAULT_CONFIG_PATH)
     prefix = config.mirror_prefix
 
     lock = read_config_lock(root)

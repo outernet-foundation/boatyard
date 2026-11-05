@@ -11,10 +11,10 @@ import typer
 from bashrun.bash import bash, bash_output
 
 from boatyard import dockerfiles
-from boatyard.config.config import Config, compose_bundle_output_path, lock_key_prefix
+from boatyard.config.config import ConfigFile, compose_bundle_output_path, lock_key_prefix
 from boatyard.crane import install_crane
 from boatyard.lock import env_entries
-from boatyard.config.lock import LOCK_PATH, ConfigLock
+from boatyard.config.lock import LOCK_PATH, LockFile
 from boatyard.paths import DEFAULT_CONFIG_PATH
 from boatyard.publish import (
     STUB_VALUE,
@@ -49,7 +49,7 @@ def publish_compose(
 ) -> None:
     root = Path.cwd()
     config_path = root / DEFAULT_CONFIG_PATH
-    config = Config.load(config_path) if config_path.is_file() else None
+    config = ConfigFile.load(config_path) if config_path.is_file() else None
     bundles = (
         [(name, compose_bundle_output_path(root, name)) for name, _entry in config.local_service_entries()]
         if config is not None
@@ -86,7 +86,7 @@ def publish_compose(
     branch_tag = (branch or bash_output("git rev-parse --abbrev-ref HEAD").strip()).replace("/", "-")
 
     service_shas = dockerfiles.compute_service_shas(config.root, config.service_builds)
-    lock_entries = env_entries(ConfigLock.load(root / LOCK_PATH))
+    lock_entries = env_entries(LockFile.load(root / LOCK_PATH))
 
     published: list[PublishedEntry] = []
     for bundle_name, output in bundles:

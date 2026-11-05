@@ -28,7 +28,7 @@ from boatyard.config.config import (
     Yaml,
     is_list,
     is_mapping,
-    Config,
+    ConfigFile,
     WorkloadDocument,
 )
 from boatyard.markers import MarkerContext, resolve_markers
@@ -127,7 +127,7 @@ LiteralBlockDumper.add_representer(str, _represent_multiline)
 
 
 def render_score(
-    config: Config,
+    config: ConfigFile,
     substrate: Substrate,
     workloads: list[LoadedWorkload],
     rendering_vars: dict[str, str],
