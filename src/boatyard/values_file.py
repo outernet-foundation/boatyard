@@ -98,12 +98,14 @@ class ConfigValues(BaseModel):
         if not is_mapping(raw):
             raise ValueError(f"{path.as_posix()}: the values file must be a YAML mapping")
         raw_values = {str(key): value for key, value in raw.items()}
-        bundles = raw_values.get("bundles", [])
-        if not isinstance(bundles, list) or not all(isinstance(name, str) for name in bundles):
-            raise ValueError("bundles: must be a list of selection names")
-        services_declared = config is not None and bool(config.services)
+        raw_bundles = raw_values.get("bundles", [])
+        if not isinstance(raw_bundles, list):
+            raise TypeError("bundles: must be a list of selection names")
+        bundles = [name for name in raw_bundles if isinstance(name, str)]
+        if len(bundles) != len(raw_bundles):
+            raise TypeError("bundles: must be a list of selection names")
         choices: dict[str, str] = {}
-        if not services_declared:
+        if config is None or not config.services:
             if bundles:
                 raise ValueError("bundles: is set but this repo declares no services")
         else:
@@ -137,7 +139,7 @@ class ConfigValues(BaseModel):
                 if key not in TYPED_KEYS
             },
         })
-        if not services_declared:
+        if config is None or not config.services:
             return environment
         unknown_overrides = sorted(
             name

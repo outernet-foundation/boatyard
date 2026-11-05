@@ -12,7 +12,7 @@ Quick loop: `uv run pytest`, `uv run ruff check`; full gate: `uv run --locked sc
 ## Verbs
 
 One module per command under `verbs/`, each with its local bare `app = typer.Typer()` + `@app.command()` on the function; `cli.py` composes them with nameless `app.add_typer(...)` — flat top-level verbs (a named `add_typer` nests a group); one `boatyard`
-console script. Error-channel law: no verb boundary — authored-input refusals propagate with full traceback — hand-raised bare `ValueError` (byte-stable text), pydantic parses raw `ValidationError`; `typer.BadParameter`
+console script. Error-channel law: no verb boundary — authored-input refusals propagate with full traceback — hand-raised bare `ValueError` (byte-stable text; `TypeError` for wrong-type documents — `lock_file.py`/`values_file.py`), pydantic parses raw `ValidationError`; `typer.BadParameter`
 owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry credentials) and `verbs/score.py` (stale artifacts). Flags live in the typer signatures in `verbs/*.py`; the flag laws: `build`'s
 `--push`/`--push-to` refuse together; `generate-score --target both` refuses (BadParameter) a one-substrate repo naming the matching narrower `--target` (the rendering pipelines carry no substrate-presence checks); `docker-build-matrix` answers a bare JSON array.
 `--lock-only`/`--check`/`--upgrade` belong to `lock`, never `build`; no `--gpu`, no `--compose-file` (the verbs own the compose invocation); `tree-tags` answers a bare string — no JSON, no `{SERVICE}_SHA` names.

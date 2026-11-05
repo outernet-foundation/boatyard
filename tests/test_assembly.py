@@ -82,9 +82,7 @@ def _write_edge_tree(
         }),
         encoding="utf-8",
     )
-    values: dict[str, object] = {"GATEWAY_PORT": 58080}
-    if public_url is not None:
-        values["public_url"] = public_url
+    values: dict[str, object] = {"GATEWAY_PORT": 58080, "public_url": public_url}
     if auth:
         values["bundles"] = ["auth-keycloak"]
     (tmp_path / "boatyard.values.yaml").write_text(
