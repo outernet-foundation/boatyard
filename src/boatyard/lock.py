@@ -87,10 +87,10 @@ class OciArtifactManifest(BaseModel):
 
 def run_lock(*, upgrade: bool = False, check: bool = False) -> None:
     config_path = Path.cwd() / DEFAULT_CONFIG_PATH
-    config = ConfigFile.load(config_path) if config_path.is_file() else None
-    if config is None:
+    if not config_path.is_file():
         print("no boatyard.yml; no lock declarations to relock")
         return
+    config = ConfigFile.load(config_path)
     declared_charts = config.declared_charts
     remote_entries = config.remote_declared_entries()
     if not config.base_images and not declared_charts and not remote_entries:
