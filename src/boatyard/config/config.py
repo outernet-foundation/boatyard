@@ -20,7 +20,6 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from strictyaml import load as load_strict_yaml
 from yaml import safe_load
 
 from boatyard.dockerfiles import (
@@ -33,6 +32,7 @@ from boatyard.config.lock import (
     LOCK_PATH,
     PLATFORM_PATTERN,
     SHA256_DIGEST_REGEX,
+    parse_yaml_document,
     read_config_lock,
 )
 
@@ -144,7 +144,8 @@ class Config(BaseModel):
         path = root / DEFAULT_CONFIG_PATH
         if not path.is_file():
             return None
-        config = cls.model_validate(load_strict_yaml(path.read_text(encoding="utf-8")).data)
+        loaded = parse_yaml_document(path.read_text(encoding="utf-8"), path.as_posix())
+        config = cls.model_validate(loaded)
         config.resolve(root)
         return config
 

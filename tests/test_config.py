@@ -125,7 +125,7 @@ class TestRequires:
 def test_load_rejects_duplicate_keys(tmp_path: Path) -> None:
     (tmp_path / "boatyard.yml").write_text('requires: ">=0.1"\nrequires: ">=0.2"\n', encoding="utf-8")
 
-    with pytest.raises(Exception, match=r"Duplicate key"):
+    with pytest.raises(ValueError, match=r"boatyard\.yml: line 2: duplicate key 'requires'"):
         Config.load(tmp_path)
 
 
@@ -542,12 +542,17 @@ class TestK8sSection:
         assert config.k8s.workloads == ["api.yaml"]
         assert config.k8s.vars == {"GPU_VARIANT": "cuda"}
 
-    def test_empty_section_rejected(self, tmp_path: Path) -> None:
-        # strictyaml hands a bare section key an empty string, so an empty k8s section is
-        # only spellable as the bare key — which refuses shape validation.
+    def test_null_section_reads_as_absent(self, tmp_path: Path) -> None:
         (tmp_path / "boatyard.yml").write_text('requires: ">=0.1"\nk8s:\n', encoding="utf-8")
 
-        with pytest.raises(ValidationError, match="Input should be a valid dictionary"):
+        config = Config.load(tmp_path)
+
+        assert config is not None and config.k8s is None
+
+    def test_empty_section_rejected(self, tmp_path: Path) -> None:
+        (tmp_path / "boatyard.yml").write_text('requires: ">=0.1"\nk8s: {}\n', encoding="utf-8")
+
+        with pytest.raises(ValidationError, match="must declare workloads or charts"):
             Config.load(tmp_path)
 
     def test_vars_only_rejected(self, tmp_path: Path) -> None:
