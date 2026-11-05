@@ -27,6 +27,10 @@ and replaces `.env` itself with a typed YAML object.
 - D1 resolved yes: selection spellings (`BUNDLES`, `PLATFORM`, `PUBLIC_URL`)
   lose the shell with everything else — the values file is their only source;
   `BUNDLES=x boatyard up` is gone.
+- D2 resolved: the scrub never refuses — shell-set hole names are stripped
+  and the run proceeds. The unfilled-requirements refusal alone mentions
+  them, gaining a clause ("X is set in the shell and ignored") when the
+  unfilled hole carries a shell value.
 - Compose's documented precedence — shell environment beats `--env-file`,
   and no switch exists to disable it — is defeated by scrubbing the compose
   child environment (`env -u`), not by trusting compose. Verified
@@ -102,9 +106,6 @@ and replaces `.env` itself with a typed YAML object.
 
 ## Open design questions
 
-- **D2 — silent scrub vs loud refusal** for shell-set hole names.
-  Recommendation: scrub silently; the unfilled-requirements refusal gains a
-  clause naming ignored shell values ("X is set in the shell and ignored").
 - **D3 — the name.** `boatyard.values.yaml` (collides conceptually with the
   helm `values/` files these repos carry) vs `boatyard.machine.yaml` /
   `boatyard.env.yaml`. Operator taste.
