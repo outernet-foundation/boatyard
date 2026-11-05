@@ -155,10 +155,11 @@ def relock(config: ConfigFile, *, upgrade: bool = False) -> LockFile:
         key = chart_lock_key(chart_name)
         reference = chart_reference.removeprefix(OCI_REFERENCE_PREFIX)
         base = mirrored_ref(reference, prefix)
+        committed_chart = committed.charts.get(key)
         if DIGEST_TAIL_PATTERN.search(reference):
             charts[key] = base
-        elif not upgrade and key in committed.charts and committed.charts[key].startswith(base + "@"):
-            charts[key] = committed.charts[key]
+        elif not upgrade and _pinned_to(committed_chart, base):
+            charts[key] = committed_chart
         else:
             charts[key] = f"{base}@{resolve_remote_digest(reference)}"
 
@@ -169,16 +170,15 @@ def relock(config: ConfigFile, *, upgrade: bool = False) -> LockFile:
     for name, declared, entry in config.remote_declared_entries():
         key = bundle_lock_key(name)
         reference = declared
-        frozen = (
-            not upgrade and key in committed.bundles and committed.bundles[key].reference.startswith(reference + "@")
-        )
+        committed_bundle = committed.bundles.get(key)
+        frozen = not upgrade and committed_bundle is not None and _pinned_to(committed_bundle.reference, reference)
         if frozen and not entry.routes and not entry.ports:
-            bundles[key] = committed.bundles[key]
+            bundles[key] = committed_bundle
             continue
-        pinned = committed.bundles[key].reference if frozen else f"{reference}@{resolve_bundle_digest(reference)}"
+        pinned = committed_bundle.reference if frozen else f"{reference}@{resolve_bundle_digest(reference)}"
         content = read_compose_bundle(pinned)
         bundles[key] = (
-            committed.bundles[key]
+            committed_bundle
             if frozen
             else ConfigLockBundle(reference=pinned, requires=sorted(required_compose_holes("\n".join(content))))
         )
@@ -392,4 +392,8 @@ def render_merged_env(values: Mapping[str, str], entries: Mapping[str, str]) -> 
 def _declaration_frozen(entry: ConfigLockEntry | None, base: str, platforms: list[str]) -> bool:
     if entry is None:
         return False
-    return entry.index.startswith(base + "@") and sorted(entry.platforms) == sorted(platforms)
+    return _pinned_to(entry.index, base) and sorted(entry.platforms) == sorted(platforms)
+
+
+def _pinned_to(committed: str | None, reference: str) -> bool:
+    return committed is not None and committed.startswith(reference + "@")
