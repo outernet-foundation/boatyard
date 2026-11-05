@@ -7,7 +7,6 @@ import re
 import shlex
 from collections.abc import Mapping
 from pathlib import Path
-from typing import NamedTuple
 
 import yaml
 from bashrun.bash import bash_output
@@ -68,45 +67,19 @@ class OciArtifactManifest(BaseModel):
     layers: list[OciDescriptor] = Field(default_factory=list)
 
 
-class RelockResult(NamedTuple):
-    lock: LockFile
-    rendered: str
-
-
 def run_lock(*, upgrade: bool = False, check: bool = False) -> None:
     config_path = Path.cwd() / DEFAULT_CONFIG_PATH
     if not config_path.is_file():
         print("no boatyard.yml; no lock declarations to relock")
         return
     config = ConfigFile.load(config_path)
-    declared_charts = config.declared_charts
-    remote_entries = config.remote_declared_entries()
-    if not config.base_images and not declared_charts and not remote_entries:
+    if not config.base_images and not config.declared_charts and not config.remote_declared_entries():
         print("no lock declarations (none of base_images, k8s.charts, service refs); nothing to relock")
         return
-
-    lock_file = config.root / LOCK_PATH
-    computed = relock(config, upgrade=upgrade).rendered
-    if not check:
-        lock_file.write_text(computed, encoding="utf-8")
-        return
-
-    committed = lock_file.read_text(encoding="utf-8") if lock_file.exists() else ""
-    if committed != computed:
-        print(
-            "".join(
-                difflib.unified_diff(
-                    committed.splitlines(keepends=True),
-                    computed.splitlines(keepends=True),
-                    fromfile=f"committed {LOCK_PATH.as_posix()}",
-                    tofile=f"computed {LOCK_PATH.as_posix()}",
-                )
-            )
-        )
-        raise ValueError("image lock is stale")
+    relock(config, upgrade=upgrade, check=check)
 
 
-def relock(config: ConfigFile, *, upgrade: bool = False) -> RelockResult:
+def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) -> LockFile:
 
     prefix = config.mirror_prefix
     # The write path's committed read: drift between the committed lock and the config
@@ -254,8 +227,26 @@ def relock(config: ConfigFile, *, upgrade: bool = False) -> RelockResult:
             for name, bundle in sorted(lock.bundles.items())
         }
     if not document:
-        return RelockResult(lock, "{}\n")
-    return RelockResult(lock, yaml.safe_dump(document, sort_keys=False, default_flow_style=False, width=10_000_000))
+        rendered = "{}\n"
+    else:
+        rendered = yaml.safe_dump(document, sort_keys=False, default_flow_style=False, width=10_000_000)
+    if check:
+        committed = committed_path.read_text(encoding="utf-8") if committed_path.is_file() else ""
+        if committed != rendered:
+            print(
+                "".join(
+                    difflib.unified_diff(
+                        committed.splitlines(keepends=True),
+                        rendered.splitlines(keepends=True),
+                        fromfile=f"committed {LOCK_PATH.as_posix()}",
+                        tofile=f"computed {LOCK_PATH.as_posix()}",
+                    )
+                )
+            )
+            raise ValueError("image lock is stale")
+    else:
+        committed_path.write_text(rendered, encoding="utf-8")
+    return lock
 
 
 def resolve_remote_digest(reference: str) -> str:
