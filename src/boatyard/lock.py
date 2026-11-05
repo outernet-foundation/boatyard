@@ -11,7 +11,7 @@ from typing import NamedTuple
 
 import yaml
 from bashrun.bash import bash_output
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from boatyard.config.config import (
     OCI_REFERENCE_PREFIX,
@@ -19,7 +19,6 @@ from boatyard.config.config import (
     Yaml,
     bundle_lock_key,
     chart_lock_key,
-    is_list,
     is_mapping,
     mirrored_ref,
     refuse_unresolved_references,
@@ -56,7 +55,7 @@ class OciPlatform(BaseModel):
 class OciDescriptor(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    digest: str = ""
+    digest: str
     media_type: str | None = None
     data: str | None = None
     platform: OciPlatform | None = None
@@ -67,15 +66,6 @@ class OciIndex(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     manifests: list[OciDescriptor] = Field(default_factory=list)
-
-    @field_validator("manifests", mode="before")
-    @classmethod
-    def _drop_non_descriptors(cls, value: Yaml) -> Yaml:
-        if value is None:
-            return []
-        if is_list(value):
-            return [child for child in value if is_mapping(child)]
-        return value
 
 
 class OciArtifactManifest(BaseModel):

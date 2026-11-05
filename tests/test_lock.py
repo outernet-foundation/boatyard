@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 import yaml
+from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from boatyard.cli import app
@@ -427,12 +428,11 @@ class TestSelectPlatformManifests:
 
         assert resolved.platforms == {"linux/amd64": DIGEST_C}
 
-    def test_ignores_variant_fields_and_platformless_descriptors(self, monkeypatch: pytest.MonkeyPatch):
+    def test_ignores_platformless_descriptors(self, monkeypatch: pytest.MonkeyPatch):
         raw = json.dumps({
             "manifests": [
                 _child(DIGEST_D, "linux", "arm64"),
                 {"mediaType": "application/vnd.oci.image.manifest.v1+json", "digest": "sha256:" + "f" * 64},
-                "not-a-descriptor",
             ],
         })
         monkeypatch.setattr(lock_module, "bash_output", ManifestOutput(raw))
@@ -442,6 +442,29 @@ class TestSelectPlatformManifests:
         resolved = lock_module.resolve_remote_manifests("docker.io/library/alpine:3.20", ["linux/arm64"], "entry X")
 
         assert resolved.platforms == {"linux/arm64": DIGEST_D}
+
+    def test_a_non_mapping_child_refuses_at_parse(self, monkeypatch: pytest.MonkeyPatch):
+        raw = json.dumps({"manifests": ["not-a-descriptor"]})
+        monkeypatch.setattr(lock_module, "bash_output", ManifestOutput(raw))
+        monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
+
+        with pytest.raises(ValidationError):
+            lock_module.resolve_remote_manifests("docker.io/library/alpine:3.20", ["linux/amd64"], "entry X")
+
+    def test_a_digestless_child_refuses_at_parse(self, monkeypatch: pytest.MonkeyPatch):
+        raw = json.dumps({
+            "manifests": [
+                {
+                    "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                    "platform": {"os": "linux", "architecture": "amd64"},
+                }
+            ]
+        })
+        monkeypatch.setattr(lock_module, "bash_output", ManifestOutput(raw))
+        monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
+
+        with pytest.raises(ValidationError):
+            lock_module.resolve_remote_manifests("docker.io/library/alpine:3.20", ["linux/amd64"], "entry X")
 
     def test_multiple_matches_refuse_naming_the_entry(self, monkeypatch: pytest.MonkeyPatch):
         raw = json.dumps({"manifests": [_child(DIGEST_C, "linux", "amd64"), _child(DIGEST_D, "linux", "amd64")]})
