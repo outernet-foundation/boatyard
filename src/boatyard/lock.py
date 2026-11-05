@@ -90,7 +90,7 @@ def run_lock(*, upgrade: bool = False, check: bool = False) -> None:
         print("no boatyard.yml; no lock declarations to relock")
         return
     declared_charts = config.declared_charts
-    remote_entries = config.remote_service_entries()
+    remote_entries = config.remote_declared_entries()
     if not config.base_images and not declared_charts and not remote_entries:
         print("no lock declarations (none of base_images, k8s.charts, service refs); nothing to relock")
         return
@@ -127,7 +127,7 @@ def relock(config: Config, *, upgrade: bool = False) -> ConfigLock:
 
     prefix = config.mirror_prefix
     committed = read_config_lock(config.root)
-    remote_entries = config.remote_service_entries()
+    remote_entries = config.remote_declared_entries()
     if remote_entries:
         # Bundle refs resolve direct via crane; the installer runs so the pin, not a preexisting
         # binary, decides the version.

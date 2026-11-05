@@ -25,7 +25,7 @@ class ConfigLock(BaseModel):
     def _validate(self, info: ValidationInfo) -> Self:
         context: dict[str, object] = info.context or {}
         for name, reference in self.charts.items():
-            if not reference.rpartition("@")[2].startswith("sha256:"):
+            if not _digest_pinned(reference):
                 raise ValueError(
                     f"{context.get('path', 'the image lock')}: chart {name} is not digest-pinned ({reference!r})"
                 )
@@ -62,7 +62,7 @@ class ConfigLockEntry(BaseModel):
         context: dict[str, object] = info.context or {}
         source = context.get("path", "the image lock")
         for site, reference in [("index", self.index), *self.platforms.items()]:
-            if not reference.rpartition("@")[2].startswith("sha256:"):
+            if not _digest_pinned(reference):
                 raise ValueError(f"{source}: entry field {site} is not digest-pinned ({reference!r})")
         for platform in self.platforms:
             if PLATFORM_PATTERN.fullmatch(platform) is None:
@@ -82,9 +82,13 @@ class ConfigLockBundle(BaseModel):
 
     @model_validator(mode="after")
     def _require_digest_pin(self) -> Self:
-        if not self.reference.rpartition("@")[2].startswith("sha256:"):
+        if not _digest_pinned(self.reference):
             raise ValueError(f"bundle entry is not digest-pinned ({self.reference!r})")
         return self
+
+
+def _digest_pinned(reference: str) -> bool:
+    return re.fullmatch(SHA256_DIGEST_REGEX, reference.rpartition("@")[2]) is not None
 
 
 def read_config_lock(root: Path) -> ConfigLock:
@@ -92,23 +96,27 @@ def read_config_lock(root: Path) -> ConfigLock:
     return parse_config_lock(lock_path) if lock_path.is_file() else ConfigLock()
 
 
-def parse_config_lock(path: Path) -> ConfigLock:
-    text = path.read_text(encoding="utf-8")
-    source = path.as_posix()
+def parse_yaml_document(text: str, source: str) -> object:
     try:
         document_node = yaml.SafeLoader(text).get_single_node()
     except yaml.YAMLError as error:
         mark = getattr(error, "problem_mark", None)
         location = f"{source}:{mark.line + 1}" if mark is not None else source
         raise ValueError(f"{location}: {error}") from error
-    if document_node is not None:
-        _reject_duplicate_keys(document_node, source)
-    loaded: object = yaml.safe_load(text)
+    if document_node is None:
+        return None
+    _reject_duplicate_keys(document_node, source)
+    return yaml.safe_load(text)
+
+
+def parse_config_lock(path: Path) -> ConfigLock:
+    source = path.as_posix()
+    loaded = parse_yaml_document(path.read_text(encoding="utf-8"), source)
     if loaded is None:
         loaded = {}
     if not isinstance(loaded, dict):
         raise TypeError(
-            f"{source}: the lock must be a mapping of images:/charts: sections, not a bare {type(loaded).__name__}"
+            f"{source}: the lock must be a mapping of images:/charts:/bundles: sections, not a bare {type(loaded).__name__}"
         )
     return ConfigLock.model_validate(loaded, context={"path": source})
 

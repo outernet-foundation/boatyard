@@ -1448,7 +1448,7 @@ class TestConfigLockParse:
     def test_the_env_line_format_refuses_as_a_bare_scalar(self, tmp_path: Path) -> None:
         lock = _write_raw_lock(tmp_path, f"A_IMAGE=ghcr.io/x/a:1@{DIGEST}\n")
 
-        with pytest.raises(TypeError, match="mapping of images:/charts:"):
+        with pytest.raises(TypeError, match="mapping of images:/charts:/bundles:"):
             parse_config_lock(lock)
 
     def test_a_non_digest_pinned_index_refuses(self, tmp_path: Path) -> None:

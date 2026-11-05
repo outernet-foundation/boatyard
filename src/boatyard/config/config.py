@@ -4,7 +4,7 @@ import importlib.metadata
 import re
 import tomllib
 from collections.abc import Mapping
-from itertools import chain
+from functools import partial
 from pathlib import Path
 from typing import Annotated, Literal, NamedTuple, Self, TypeIs
 
@@ -52,6 +52,10 @@ PLACEHOLDER = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
 # Match a compose brace hole with its preceding dollar run.
 COMPOSE_HOLE = re.compile(r"(\$+)\{([A-Z][A-Z0-9_]*)(:[^{}]*)?\}")
 
+# Match compose env holes: ${NAME}, ${NAME:?err}, ${NAME:-default}.
+ENV_HOLE_PATTERN = re.compile(r"^\$\{[A-Z][A-Z0-9_]*(?::[^{}]*)?\}$")
+PORT_PATTERN = re.compile(r"^[0-9]+$")
+
 type Yaml = str | int | float | bool | list[Yaml] | dict[str, Yaml] | None
 
 
@@ -83,10 +87,6 @@ TEMPLATE_KEY_PATTERN = re.compile(r"\{([a-z][a-z0-9_]*)\}")
 REF_TAG_OPERATOR_PATTERN = re.compile(r"[<>=!~^*]")
 
 OCI_REFERENCE_PREFIX = "oci://"
-
-# Match compose env holes: ${NAME}, ${NAME:?err}, ${NAME:-default}.
-ENV_HOLE_PATTERN = re.compile(r"^\$\{[A-Z][A-Z0-9_]*(?::[^{}]*)?\}$")
-PORT_PATTERN = re.compile(r"^[0-9]+$")
 
 AUTH_GROUP_NAME = "auth"
 EDGE_SERVICE_NAME = "edge"
@@ -142,7 +142,7 @@ class Config(BaseModel):
     @classmethod
     def load(cls, root: Path) -> Config | None:
         path = root / DEFAULT_CONFIG_PATH
-        if not path.exists():
+        if not path.is_file():
             return None
         config = cls.model_validate(load_strict_yaml(path.read_text(encoding="utf-8")).data)
         config.resolve(root)
@@ -204,7 +204,7 @@ class Config(BaseModel):
                     f"base_images template key {{{key}}} is unknown; the toolchain pins are {{uv}}, {{python}}"
                 )
         self.base_images = {
-            name: TEMPLATE_KEY_PATTERN.sub(lambda match: pins[match.group(1)], reference)
+            name: TEMPLATE_KEY_PATTERN.sub(partial(_resolve_template_key, pins), reference)
             for name, reference in self.base_images.items()
         }
 
@@ -225,7 +225,7 @@ class Config(BaseModel):
 
         # Enforce the lock pairing laws.
         declared_charts = self.declared_charts
-        if (self.base_images or declared_charts or self.remote_service_entries()) and not (root / LOCK_PATH).is_file():
+        if (self.base_images or declared_charts or self.remote_declared_entries()) and not (root / LOCK_PATH).is_file():
             raise ValueError(
                 f"{LOCK_PATH.as_posix()}: base_images, k8s.charts, or service refs are declared; "
                 "the committed lock is required"
@@ -257,39 +257,23 @@ class Config(BaseModel):
     @property
     def selectable_options(self) -> dict[str, tuple[str, str]]:
         return {
-            qualified_option_name(name, option_name): (name, option_name)
-            for name, entry in self.services.items()
-            if isinstance(entry, ServiceGroup)
-            for option_name in entry.options
+            row.name: (row.root, row.option)
+            for row in _flatten_service_members(self.services)
+            if row.option is not None
         }
 
     @property
     def bare_entries(self) -> list[str]:
-        return [name for name, entry in self.services.items() if not isinstance(entry, ServiceGroup)]
-
-    def _flattened_service_entries(self) -> list[tuple[str, ServiceEntry]]:
-        # Options ride under their qualified name; bare entries are their own root.
-        flattened = chain.from_iterable(
-            (
-                ((qualified_option_name(name, option_name), option) for option_name, option in entry.options.items())
-                if isinstance(entry, ServiceGroup)
-                else ((name, entry),)
-            )
-            for name, entry in self.services.items()
-        )
-        return list(flattened)
+        return [row.root for row in _flatten_service_members(self.services) if row.option is None]
 
     def local_service_entries(self) -> list[tuple[str, ServiceEntry]]:
-        return [(name, entry) for name, entry in self._flattened_service_entries() if not entry.remote]
-
-    def remote_service_entries(self) -> list[tuple[str, str]]:
-        return [(name, entry.ref) for name, entry in self._flattened_service_entries() if entry.ref is not None]
+        return [(row.name, row.entry) for row in _flatten_service_members(self.services) if not row.entry.remote]
 
     def remote_declared_entries(self) -> list[tuple[str, str, ServiceEntry]]:
         return [
-            (name, entry.ref.removeprefix(OCI_REFERENCE_PREFIX), entry)
-            for name, entry in self._flattened_service_entries()
-            if entry.ref is not None
+            (row.name, row.entry.ref.removeprefix(OCI_REFERENCE_PREFIX), row.entry)
+            for row in _flatten_service_members(self.services)
+            if row.entry.ref is not None
         ]
 
     def resolve_services(self, choices: Mapping[str, str]) -> list[ResolvedService]:
@@ -379,18 +363,10 @@ class Config(BaseModel):
         # The qualified vocabulary (options as group-dash-option, bare entries as their root
         # name) must be collision-free: two declaration sites never produce one spelling.
         vocabulary: dict[str, str] = {}
-        for name, entry in services.items():
-            if isinstance(entry, ServiceGroup):
-                sites = {
-                    qualified_option_name(name, option_name): f"services.{name}.options.{option_name}"
-                    for option_name in entry.options
-                }
-            else:
-                sites = {name: f"services.{name}"}
-            for spelling, site in sites.items():
-                if spelling in vocabulary:
-                    raise ValueError(f"{site}: {spelling} is already claimed at {vocabulary[spelling]}")
-                vocabulary[spelling] = site
+        for row in _flatten_service_members(services):
+            if row.name in vocabulary:
+                raise ValueError(f"{row.site}: {row.name} is already claimed at {vocabulary[row.name]}")
+            vocabulary[row.name] = row.site
 
         # Collect every route with its declaration site; paths are edge-wide unique.
         route_sites = [
@@ -433,11 +409,7 @@ class Config(BaseModel):
         if self.services:
             if not self.project_name:
                 raise ValueError("services are declared; project_name is required")
-            any_local = any(
-                not option.remote
-                for entry in self.services.values()
-                for option in (entry.options.values() if isinstance(entry, ServiceGroup) else (entry,))
-            )
+            any_local = any(not row.entry.remote for row in _flatten_service_members(self.services))
             if any_local and not self.repository:
                 raise ValueError("local entries (workloads:) are declared; repository is required")
 
@@ -482,6 +454,38 @@ class ServiceEntry(BaseModel):
         for name in self.workloads:
             require_workload_reference(name)
         return self
+
+
+class FlattenedServiceEntry(NamedTuple):
+    root: str
+    option: str | None
+    name: str
+    site: str
+    entry: ServiceEntry
+
+
+def _flatten_service_members(services: dict[str, ServiceGroup | ServiceEntry]) -> list[FlattenedServiceEntry]:
+    # Options ride under their qualified name; bare entries are their own root.
+    flattened: list[FlattenedServiceEntry] = []
+    for root_name, member in services.items():
+        if isinstance(member, ServiceGroup):
+            flattened.extend(
+                FlattenedServiceEntry(
+                    root=root_name,
+                    option=option_name,
+                    name=qualified_option_name(root_name, option_name),
+                    site=f"services.{root_name}.options.{option_name}",
+                    entry=option,
+                )
+                for option_name, option in member.options.items()
+            )
+        else:
+            flattened.append(
+                FlattenedServiceEntry(
+                    root=root_name, option=None, name=root_name, site=f"services.{root_name}", entry=member
+                )
+            )
+    return flattened
 
 
 def _service_member_kind(value: Yaml) -> str:
@@ -609,10 +613,6 @@ class WorkloadDocument(BaseModel):
     metadata: WorkloadMetadata = Field(default_factory=WorkloadMetadata)
     containers: dict[str, WorkloadContainer] = Field(default_factory=dict)
     resources: dict[str, WorkloadResource] = Field(default_factory=dict)
-
-    @classmethod
-    def load(cls, path: Path) -> Self:
-        return cls.parse(load_yaml_file(path), path.name)
 
     @classmethod
     def parse(cls, raw: Yaml, file_name: str) -> Self:
@@ -768,6 +768,10 @@ def mirrored_ref(reference: str, prefix: str) -> str:
     if reference.startswith(f"{prefix}/"):
         raise ValueError(f"declarations are upstream-native; {reference} already carries the mirror prefix {prefix}")
     return f"{prefix}/{reference}"
+
+
+def _resolve_template_key(pins: Mapping[str, str], match: re.Match[str]) -> str:
+    return pins[match.group(1)]
 
 
 def is_mapping(value: object) -> TypeIs[dict[str, Yaml]]:

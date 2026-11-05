@@ -2,16 +2,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator, model_validator
 
 from boatyard.config.config import (
     ENV_NAME_PATTERN,
     Config,
     Yaml,
     is_mapping,
-    load_yaml_file,
     qualified_option_name,
 )
+from boatyard.config.lock import parse_yaml_document
 
 VALUES_FILE = Path("boatyard.values.yaml")
 PLATFORM_KEY = "platform"
@@ -49,7 +49,6 @@ class PublicUrl(BaseModel):
 class ConfigValues(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    bundles: list[str]
     choices: dict[str, str]
     path_overrides: dict[str, Path]
     public_url: PublicUrl | None
@@ -85,16 +84,18 @@ class ConfigValues(BaseModel):
 
     @field_validator("variables")
     @classmethod
-    def _require_env_names(cls, variables: dict[str, str]) -> dict[str, str]:
+    def _require_env_names(cls, variables: dict[str, str], info: ValidationInfo) -> dict[str, str]:
+        context: dict[str, object] = info.context or {}
+        source = context.get("path", VALUES_FILE.name)
         unknown = sorted(key for key in variables if ENV_NAME_PATTERN.fullmatch(key) is None)
         if unknown:
-            raise ValueError(f"{VALUES_FILE.name}: keys {unknown} are not ALL_CAPS environment names")
+            raise ValueError(f"{source}: keys {unknown} are not ALL_CAPS environment names")
         return variables
 
     @classmethod
     def load(cls, root: Path, config: Config | None) -> ConfigValues:
         path = root / VALUES_FILE
-        raw: Yaml = load_yaml_file(path) if path.is_file() else {}
+        raw: object = parse_yaml_document(path.read_text(encoding="utf-8"), path.as_posix()) if path.is_file() else {}
         if raw is None:
             raw = {}
         if not is_mapping(raw):
@@ -103,61 +104,67 @@ class ConfigValues(BaseModel):
         raw_bundles = raw_values.get("bundles", [])
         if not isinstance(raw_bundles, list):
             raise TypeError("bundles: must be a list of selection names")
-        bundles = [name for name in raw_bundles if isinstance(name, str)]
-        if len(bundles) != len(raw_bundles):
-            raise TypeError("bundles: must be a list of selection names")
+        bundles: list[str] = []
+        for name in raw_bundles:
+            if not isinstance(name, str):
+                raise TypeError("bundles: must be a list of selection names")
+            bundles.append(name)
+        selectable: dict[str, tuple[str, str]] = {}
+        bare: list[str] = []
         choices: dict[str, str] = {}
         if config is None or not config.services:
             if bundles:
                 raise ValueError("bundles: is set but this repo declares no services")
         else:
-            unknown = [name for name in bundles if name not in config.selectable_options]
+            selectable = config.selectable_options
+            bare = config.bare_entries
+            unknown = [name for name in bundles if name not in selectable]
             if unknown:
-                bare_entries_note = (
-                    f"; bare entries, always included: {config.bare_entries}" if config.bare_entries else ""
-                )
+                bare_entries_note = f"; bare entries, always included: {bare}" if bare else ""
                 raise ValueError(
-                    f"bundles: names {unknown}; "
-                    f"the selectable options are {sorted(config.selectable_options)}{bare_entries_note}"
+                    f"bundles: names {unknown}; the selectable options are {sorted(selectable)}{bare_entries_note}"
                 )
             # Fold the selection into one choice per group
             for name in bundles:
-                group, option_name = config.selectable_options[name]
+                group, option_name = selectable[name]
                 if group in choices:
                     raise ValueError(
                         f"bundles: selects {qualified_option_name(group, choices[group])} and {name}; "
                         f"at most one option per group ({group})"
                     )
                 choices[group] = option_name
-        environment = cls.model_validate({
-            "bundles": bundles,
-            "choices": choices,
-            "path_overrides": raw_values.get("path_overrides", {}),
-            "public_url": raw_values.get("public_url"),
-            "platform": raw_values.get("platform"),
-            "variables": {
-                key: (str(value).lower() if isinstance(value, bool) else str(value))
-                for key, value in raw_values.items()
-                if key not in TYPED_KEYS
+        environment = cls.model_validate(
+            {
+                "choices": choices,
+                "path_overrides": raw_values.get("path_overrides", {}),
+                "public_url": raw_values.get("public_url"),
+                "platform": raw_values.get("platform"),
+                "variables": {
+                    key: (str(value).lower() if isinstance(value, bool) else str(value))
+                    for key, value in raw_values.items()
+                    if key not in TYPED_KEYS
+                },
             },
-        })
+            context={"path": path.as_posix()},
+        )
         if config is None or not config.services:
             return environment
-        unknown_overrides = sorted(
-            name
-            for name in environment.path_overrides
-            if name not in config.selectable_options and name not in config.bare_entries
-        )
+        vocabulary = set(selectable) | set(bare)
+        remote_names = {name for name, _declared, _entry in config.remote_declared_entries()}
+        unknown_overrides: list[str] = []
+        local_names: list[str] = []
+        for name in environment.path_overrides:
+            if name not in vocabulary:
+                unknown_overrides.append(name)
+            elif name not in remote_names:
+                local_names.append(name)
         if unknown_overrides:
             raise ValueError(
-                f"path_overrides: names {unknown_overrides}; "
-                f"the bundle vocabulary is {sorted(config.selectable_options.keys() | set(config.bare_entries))}"
+                f"path_overrides: names {sorted(unknown_overrides)}; the bundle vocabulary is {sorted(vocabulary)}"
             )
-        remote_names = {name for name, _reference in config.remote_service_entries()}
-        local_names = sorted(name for name in environment.path_overrides if name not in remote_names)
         if local_names:
             raise ValueError(
-                f"path_overrides: names {local_names}; an override targets a ref entry; "
+                f"path_overrides: names {sorted(local_names)}; an override targets a ref entry; "
                 f"the ref entries are {sorted(remote_names)}"
             )
         return environment
