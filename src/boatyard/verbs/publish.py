@@ -14,7 +14,7 @@ from boatyard import dockerfiles
 from boatyard.config.config import Config, compose_bundle_output_path, lock_key_prefix
 from boatyard.crane import install_crane
 from boatyard.lock import env_entries
-from boatyard.config.lock import LOCK_PATH, parse_config_lock
+from boatyard.config.lock import LOCK_PATH, ConfigLock
 from boatyard.publish import (
     STUB_VALUE,
     VAR_PATTERN,
@@ -84,7 +84,7 @@ def publish_compose(
     branch_tag = (branch or bash_output("git rev-parse --abbrev-ref HEAD").strip()).replace("/", "-")
 
     service_shas = dockerfiles.compute_service_shas(config.root, config.service_builds)
-    lock_entries = env_entries(parse_config_lock(root / LOCK_PATH))
+    lock_entries = env_entries(ConfigLock.load(root / LOCK_PATH))
 
     published: list[PublishedEntry] = []
     for bundle_name, output in bundles:

@@ -50,6 +50,14 @@ class ConfigLock(BaseModel):
             return self.bundles[name].reference
         raise ValueError(f"{subject}: {LOCK_PATH.as_posix()} lacks the {name} entry ({hint})")
 
+    @classmethod
+    def load(cls, path: Path) -> ConfigLock:
+        source = path.as_posix()
+        loaded = parse_yaml_document(path.read_text(encoding="utf-8"), source)
+        if loaded is None:
+            loaded = {}
+        return cls.model_validate(loaded, context={"path": source})
+
 
 class ConfigLockEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -93,32 +101,15 @@ def _digest_pinned(reference: str) -> bool:
 
 def read_config_lock(root: Path) -> ConfigLock:
     lock_path = root / LOCK_PATH
-    return parse_config_lock(lock_path) if lock_path.is_file() else ConfigLock()
+    return ConfigLock.load(lock_path) if lock_path.is_file() else ConfigLock()
 
 
 def parse_yaml_document(text: str, source: str) -> object:
-    try:
-        document_node = yaml.SafeLoader(text).get_single_node()
-    except yaml.YAMLError as error:
-        mark = getattr(error, "problem_mark", None)
-        location = f"{source}:{mark.line + 1}" if mark is not None else source
-        raise ValueError(f"{location}: {error}") from error
+    document_node = yaml.SafeLoader(text).get_single_node()
     if document_node is None:
         return None
     _reject_duplicate_keys(document_node, source)
     return yaml.safe_load(text)
-
-
-def parse_config_lock(path: Path) -> ConfigLock:
-    source = path.as_posix()
-    loaded = parse_yaml_document(path.read_text(encoding="utf-8"), source)
-    if loaded is None:
-        loaded = {}
-    if not isinstance(loaded, dict):
-        raise TypeError(
-            f"{source}: the lock must be a mapping of images:/charts:/bundles: sections, not a bare {type(loaded).__name__}"
-        )
-    return ConfigLock.model_validate(loaded, context={"path": source})
 
 
 def _reject_duplicate_keys(node: yaml.Node, source: str) -> None:

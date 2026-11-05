@@ -10,7 +10,7 @@ from bashrun.bash import bash, bash_check, bash_output
 
 from boatyard import dockerfiles
 from boatyard.config.config import Config, Target, load_yaml_file
-from boatyard.config.lock import LOCK_PATH, parse_config_lock
+from boatyard.config.lock import LOCK_PATH, ConfigLock
 from boatyard.score import (
     SECRETS_FILE,
     SECRETS_OUTPUT,
@@ -81,7 +81,7 @@ def generate_score(
     lock_path = root / LOCK_PATH
     if not lock_path.is_file():
         raise ValueError(f"{lock_path.as_posix()}: the image lock is required")
-    lock = parse_config_lock(lock_path)
+    lock = ConfigLock.load(lock_path)
     if not lock.images and not lock.charts:
         raise ValueError(f"{lock_path.as_posix()}: the image lock carries no entries")
 

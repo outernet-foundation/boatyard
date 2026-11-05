@@ -31,7 +31,7 @@ from boatyard.config.config import (
     required_compose_holes,
 )
 from boatyard.lock import compose_env_entries, producer_env_entries, render_merged_env
-from boatyard.config.lock import LOCK_PATH, parse_config_lock, read_config_lock
+from boatyard.config.lock import LOCK_PATH, ConfigLock, read_config_lock
 from boatyard.config.values import ConfigValues
 
 EDGE_LISTEN_PORT = 8443
@@ -96,7 +96,7 @@ def up(
             # Fill the override's holes from the producer lock three parents up
             producer_lock = path.parents[3] / LOCK_PATH
             if producer_lock.is_file():
-                producer_entries = producer_env_entries(parse_config_lock(producer_lock), config_values.platform)
+                producer_entries = producer_env_entries(ConfigLock.load(producer_lock), config_values.platform)
                 entries.update({lock_key_prefix(name) + key: value for key, value in producer_entries.items()})
             continue
 

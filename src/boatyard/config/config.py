@@ -21,7 +21,7 @@ from pydantic import (
     model_validator,
 )
 from strictyaml import load as load_strict_yaml
-from yaml import YAMLError, safe_load
+from yaml import safe_load
 
 from boatyard.dockerfiles import (
     DOCKERFILE_NAME,
@@ -712,10 +712,7 @@ def qualified_option_name(group: str, option_name: str) -> str:
 
 
 def load_yaml_file(path: Path) -> Yaml:
-    try:
-        return safe_load(path.read_text(encoding="utf-8"))
-    except YAMLError as error:
-        raise ValueError(f"{path.as_posix()}: {error}") from error
+    return safe_load(path.read_text(encoding="utf-8"))
 
 
 def require_compose_stack(config: Config | None) -> Config:
