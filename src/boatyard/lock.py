@@ -167,8 +167,8 @@ def relock(config: Config, *, upgrade: bool = False) -> ConfigLock:
     for name, declared, entry in config.remote_declared_entries():
         key = bundle_lock_key(name)
         reference = declared
-        frozen = not upgrade and key in committed.bundles and committed.bundles[key].reference.startswith(
-            reference + "@"
+        frozen = (
+            not upgrade and key in committed.bundles and committed.bundles[key].reference.startswith(reference + "@")
         )
         if frozen and not entry.routes and not entry.ports:
             bundles[key] = committed.bundles[key]
@@ -180,9 +180,7 @@ def relock(config: Config, *, upgrade: bool = False) -> ConfigLock:
             if frozen
             else ConfigLockBundle(reference=pinned, requires=sorted(required_compose_holes("\n".join(content))))
         )
-        refuse_unresolved_references(
-            name, entry.routes, entry.ports, _bundle_service_names(content), prefix=f"{name}-"
-        )
+        refuse_unresolved_references(name, entry.routes, entry.ports, _bundle_service_names(content), prefix=f"{name}-")
 
     return ConfigLock(images=images, charts=charts, bundles=bundles)
 

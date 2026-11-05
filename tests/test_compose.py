@@ -647,9 +647,7 @@ class TestUpValidation:
         assert "services entry 'placeframe-cuda'" in message
         assert "'/grafana/*' references 'placeframe-cuda-grafana'" in message
 
-    def test_a_local_port_owner_absent_from_the_output_refuses(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_a_local_port_owner_absent_from_the_output_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_bundle_output(tmp_path, "placeframe-cuda", ["api"])
         _write_config(
             tmp_path,
@@ -866,9 +864,7 @@ class TestDownTeardown:
         assert result.exit_code == 0, result.output
         assert len(recorder.commands) == 1
         command = recorder.commands[0]
-        assert command.startswith(
-            "env -u CADDY_IMAGE -u GATEWAY_PORT -u LIVEKIT_SIGNALING_PORT docker compose -f "
-        )
+        assert command.startswith("env -u CADDY_IMAGE -u GATEWAY_PORT -u LIVEKIT_SIGNALING_PORT docker compose -f ")
         assert f" --project-directory {tmp_path} --env-file " in command
         assert LOCK_ENV_ARGUMENT_PATTERN.search(command) is not None
         assert command.endswith("down --remove-orphans")
@@ -1441,7 +1437,9 @@ class TestBundleOverrides:
         _write_producer(tmp_path, ["api"])
         stray = tmp_path / "producer" / "compose.placeframe-cuda.yaml"
         stray.write_text(yaml.safe_dump({"services": {"api": {"image": "demo/api:1"}}}), encoding="utf-8")
-        _write_override_consumer(consumer, {"path_overrides": {"placeframe-cuda": "../producer/compose.placeframe-cuda.yaml"}})
+        _write_override_consumer(
+            consumer, {"path_overrides": {"placeframe-cuda": "../producer/compose.placeframe-cuda.yaml"}}
+        )
         self._invoke_up(monkeypatch, consumer)
 
         result = runner.invoke(app, ["up"])
@@ -1547,9 +1545,7 @@ class TestValuesFileLaw:
         assert result.exit_code == 0, result.output
         assert " -u LIVEKIT_TOKEN " in recorder.commands[0]
 
-    def test_a_values_key_colliding_with_a_lock_entry_refuses(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_a_values_key_colliding_with_a_lock_entry_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)
         _write_values_file(tmp_path, {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20"})
         _write_lock(tmp_path, {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST})
@@ -1561,9 +1557,7 @@ class TestValuesFileLaw:
         assert isinstance(result.exception, ValueError)
         assert "the lock is their only source" in str(result.exception)
 
-    def test_a_values_key_outside_the_env_name_grammar_refuses(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_a_values_key_outside_the_env_name_grammar_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)
         _write_values_file(tmp_path, {"lowercase_key": "value"})
         monkeypatch.chdir(tmp_path)

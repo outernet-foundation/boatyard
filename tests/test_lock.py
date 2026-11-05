@@ -586,9 +586,7 @@ class TestBundleRecording:
             )
             if not committed:
                 committed = yaml.safe_dump({
-                    "images": {
-                        "CADDY_IMAGE": {"index": caddy_base, "platforms": {"linux/amd64": caddy_base}}
-                    }
+                    "images": {"CADDY_IMAGE": {"index": caddy_base, "platforms": {"linux/amd64": caddy_base}}}
                 })
         else:
             _write_repo(tmp_path, ref_services=services)
@@ -628,9 +626,7 @@ class TestBundleRecording:
         assert entry["reference"].startswith("ghcr.io/org/repo/")
         assert not entry["reference"].startswith(MIRROR_PREFIX)
 
-    def test_required_holes_record_sorted_under_the_bundle_key(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_required_holes_record_sorted_under_the_bundle_key(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         bundle_text = (
             "services:\n  rathole:\n    image: busybox:1.36\n"
             "    environment:\n"
@@ -731,7 +727,9 @@ class TestBundleRecording:
         }
 
     def test_an_unchanged_ref_copies_its_frozen_digest_forward(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        committed = yaml.safe_dump({"bundles": {"TUNNEL_RATHOLE_BUNDLE": {"reference": f"{self.RATHOLE_BASE}@{DIGEST_B}"}}})
+        committed = yaml.safe_dump({
+            "bundles": {"TUNNEL_RATHOLE_BUNDLE": {"reference": f"{self.RATHOLE_BASE}@{DIGEST_B}"}}
+        })
 
         result, recorder, read_references = self._invoke(monkeypatch, tmp_path, [], committed=committed)
 
@@ -743,7 +741,9 @@ class TestBundleRecording:
         }
 
     def test_a_tag_bump_re_resolves(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        committed = yaml.safe_dump({"bundles": {"TUNNEL_RATHOLE_BUNDLE": {"reference": f"{self.RATHOLE_BASE}@{DIGEST_B}"}}})
+        committed = yaml.safe_dump({
+            "bundles": {"TUNNEL_RATHOLE_BUNDLE": {"reference": f"{self.RATHOLE_BASE}@{DIGEST_B}"}}
+        })
 
         result, recorder, _ = self._invoke(
             monkeypatch,
@@ -760,13 +760,17 @@ class TestBundleRecording:
         )
 
     def test_upgrade_re_resolves_frozen_bundle_entries(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        committed = yaml.safe_dump({"bundles": {"TUNNEL_RATHOLE_BUNDLE": {"reference": f"{self.RATHOLE_BASE}@{DIGEST_B}"}}})
+        committed = yaml.safe_dump({
+            "bundles": {"TUNNEL_RATHOLE_BUNDLE": {"reference": f"{self.RATHOLE_BASE}@{DIGEST_B}"}}
+        })
 
         result, recorder, _ = self._invoke(monkeypatch, tmp_path, ["--upgrade"], committed=committed)
 
         assert result.exit_code == 0, result.output
         assert recorder.inspected == [self.RATHOLE_BASE]
-        assert _read_lock(tmp_path)["bundles"]["TUNNEL_RATHOLE_BUNDLE"]["reference"] == f"{self.RATHOLE_BASE}@{DIGEST_A}"
+        assert (
+            _read_lock(tmp_path)["bundles"]["TUNNEL_RATHOLE_BUNDLE"]["reference"] == f"{self.RATHOLE_BASE}@{DIGEST_A}"
+        )
 
     def test_entries_whose_declarations_died_prune_by_construction(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

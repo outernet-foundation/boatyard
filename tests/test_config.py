@@ -21,7 +21,9 @@ SHA_TAG = "a" * 40
 
 
 def bundle_entries(*qualified_names: str) -> dict[str, dict[str, object]]:
-    return {bundle_lock_key(name): {"reference": f"ghcr.io/org/repo/{name}:1.0.0@" + DIGEST} for name in qualified_names}
+    return {
+        bundle_lock_key(name): {"reference": f"ghcr.io/org/repo/{name}:1.0.0@" + DIGEST} for name in qualified_names
+    }
 
 
 def write_config(tmp_path: Path, payload: dict[str, object]) -> None:

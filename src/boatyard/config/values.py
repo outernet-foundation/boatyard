@@ -67,7 +67,9 @@ class ConfigValues(BaseModel):
             if not stripped:
                 raise ValueError(f"path_overrides.{name}: empty; a value is a filesystem path")
             if "://" in stripped:
-                raise ValueError(f"path_overrides.{name}: {stripped!r} carries a URL scheme; a value is a filesystem path")
+                raise ValueError(
+                    f"path_overrides.{name}: {stripped!r} carries a URL scheme; a value is a filesystem path"
+                )
             path_overrides[name] = Path(stripped)
         return path_overrides
 

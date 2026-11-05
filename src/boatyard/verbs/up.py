@@ -109,7 +109,9 @@ def up(
     # Refuse bundles whose requirements no environment source fills; the ambient
     # shell fills nothing, so a shell-set hole name is named as ignored, not counted.
     filled = {variable for variable, value in {**config_values.variables, **entries}.items() if value}
-    missing = {name: sorted(set(required) - filled) for name, required in requirements.items() if set(required) - filled}
+    missing = {
+        name: sorted(set(required) - filled) for name, required in requirements.items() if set(required) - filled
+    }
     if missing:
         name, absent = min(missing.items())
         ignored = sorted(shell_name for shell_name in absent if os.environ.get(shell_name))
@@ -195,9 +197,7 @@ def up(
         # Write the one per-run dotenv: consumer values + lock entries
         env_file: Path | None = None
         if config_values.variables or entries:
-            with NamedTemporaryFile(
-                "w", suffix=".env", prefix="devkit-env-", delete=False, encoding="utf-8"
-            ) as handle:
+            with NamedTemporaryFile("w", suffix=".env", prefix="devkit-env-", delete=False, encoding="utf-8") as handle:
                 handle.write(render_merged_env(config_values.variables, entries))
                 env_file = Path(handle.name)
             stack.enter_context(lock_env_unwind(env_file))
@@ -220,7 +220,11 @@ def up(
             compose_files,
             "up",
             env_file=env_file,
-            hole_names=[*config_values.variables, *entries, *(name for required in requirements.values() for name in required)],
+            hole_names=[
+                *config_values.variables,
+                *entries,
+                *(name for required in requirements.values() for name in required),
+            ],
         )
         if not build:
             up_command += " --pull missing"

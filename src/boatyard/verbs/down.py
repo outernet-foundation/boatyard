@@ -33,9 +33,7 @@ def down(
         entries = compose_env_entries(read_config_lock(root), config, config_values.platform)
         env_file: Path | None = None
         if config_values.variables or entries:
-            with NamedTemporaryFile(
-                "w", suffix=".env", prefix="devkit-env-", delete=False, encoding="utf-8"
-            ) as handle:
+            with NamedTemporaryFile("w", suffix=".env", prefix="devkit-env-", delete=False, encoding="utf-8") as handle:
                 handle.write(render_merged_env(config_values.variables, entries))
                 env_file = Path(handle.name)
             stack.enter_context(lock_env_unwind(env_file))
@@ -47,7 +45,12 @@ def down(
         stack.callback(assembly_root.unlink, missing_ok=True)
 
         command = compose_command(
-            root, [assembly_root], "down", "--remove-orphans", env_file=env_file, hole_names=[*config_values.variables, *entries]
+            root,
+            [assembly_root],
+            "down",
+            "--remove-orphans",
+            env_file=env_file,
+            hole_names=[*config_values.variables, *entries],
         )
         if volumes:
             command += " -v"
