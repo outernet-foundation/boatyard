@@ -33,7 +33,7 @@ from boatyard.config.config import (
 )
 from boatyard.markers import MarkerContext, resolve_markers
 
-PATCH_TEMPLATES_DIR = "patch_templates"
+PATCH_TEMPLATES_DIR = "score_patch_templates"
 
 SECRETS_FILE = Path("stack/secrets.yaml")
 SECRETS_OUTPUT = Path("stack/generated/secrets.txt")

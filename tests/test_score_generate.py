@@ -649,7 +649,7 @@ SHIPPED_TEMPLATES = {
 
 
 def test_shipped_patch_templates_resolve() -> None:
-    directory = files("boatyard") / "patch_templates"
+    directory = files("boatyard") / "score_patch_templates"
 
     assert {item.name for item in directory.iterdir()} == SHIPPED_TEMPLATES
     for name in SHIPPED_TEMPLATES:
@@ -660,7 +660,7 @@ SELF_GATING_FALLBACK = "{{- if not $matched }}\n[]\n{{- end }}"
 
 
 def test_self_gating_templates_fall_back_to_an_empty_patches_document() -> None:
-    directory = files("boatyard") / "patch_templates"
+    directory = files("boatyard") / "score_patch_templates"
 
     for name in SHIPPED_TEMPLATES:
         text = (directory / name).read_text(encoding="utf-8")
@@ -669,7 +669,7 @@ def test_self_gating_templates_fall_back_to_an_empty_patches_document() -> None:
 
 
 def test_the_healthcheck_template_ships_both_probe_adapter_spells() -> None:
-    text = (files("boatyard") / "patch_templates" / "probe-adapter-healthchecks.tpl").read_text(encoding="utf-8")
+    text = (files("boatyard") / "score_patch_templates" / "probe-adapter-healthchecks.tpl").read_text(encoding="utf-8")
 
     assert config_module.PROBE_ADAPTERS == ("python-urllib", "bash-http")
     assert "urllib.request.urlopen" in text
@@ -677,14 +677,14 @@ def test_the_healthcheck_template_ships_both_probe_adapter_spells() -> None:
 
 
 def test_the_bash_http_spell_escapes_its_dollar_for_compose_interpolation() -> None:
-    text = (files("boatyard") / "patch_templates" / "probe-adapter-healthchecks.tpl").read_text(encoding="utf-8")
+    text = (files("boatyard") / "score_patch_templates" / "probe-adapter-healthchecks.tpl").read_text(encoding="utf-8")
 
     assert "$$status" in text
     assert "$status" not in text.replace("$$status", "")
 
 
 def test_the_bash_http_spell_uses_the_slash_port_spelling() -> None:
-    text = (files("boatyard") / "patch_templates" / "probe-adapter-healthchecks.tpl").read_text(encoding="utf-8")
+    text = (files("boatyard") / "score_patch_templates" / "probe-adapter-healthchecks.tpl").read_text(encoding="utf-8")
 
     assert "/dev/tcp/127.0.0.1/{{ .port }}" in text
     assert "/dev/tcp/127.0.0.1:{{ .port }}" not in text
