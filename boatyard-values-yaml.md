@@ -45,6 +45,14 @@ and replaces `.env` itself with a typed YAML object.
   grammar governs the open map only — typed fields (`bundles`,
   `path_overrides`, `public_url`, `platform`) are never env spellings and
   carry no case law.
+- D6 resolved: a values-file key colliding with a lock entry key is a
+  mistake and refuses loudly at materialization (listing the keys, naming
+  the lock as their only source) — amending the materialization ruling,
+  which had specified silent lock-wins in tension with the lock-filled
+  ruling. With collisions impossible, the merged file carries no
+  duplicates (append-vs-de-dupe is moot; no within-file last-wins
+  verification needed) and section comment headers keep the failure print
+  teaching provenance.
 - Compose's documented precedence — shell environment beats `--env-file`,
   and no switch exists to disable it — is defeated by scrubbing the compose
   child environment (`env -u`), not by trusting compose. Verified
@@ -60,8 +68,11 @@ and replaces `.env` itself with a typed YAML object.
   open map for hole values. The tier split (name tier + fold ride
   `Environment.load` on every verb; consumption in `up`) is unchanged.
 - The materialized per-run dotenv is written by boatyard: consumer values
-  + lock entries in one file, lock entries winning shared keys (same
-  precedence as today's two `--env-file`s, later-wins).
+  + lock entries in one file, section comment headers labeling each source.
+  A key carried by both sources refuses loudly at materialization — the
+  values file never overrides the lock (lock-key holes are lock-filled by
+  construction; filling one by hand is the forbidden hand-authored lock
+  line).
 - Lock-key holes (`LOKI_IMAGE`-style) stay lock-filled; a digest in the
   values file is the hand-authored lock line the design forbids.
 - Published bundles stay native compose OCI artifacts — anyone with
@@ -88,7 +99,8 @@ and replaces `.env` itself with a typed YAML object.
    file reads as the empty declaration (preserves fresh-checkout score
    generation). The name tier, fold, `choices` are untouched.
 3. **Materialization.** `up`/`down` write ONE per-run dotenv:
-   consumer values + lock entries, lock winning shared keys. The two-file
+   consumer values + lock entries under section comment headers; a key in
+   both sources refuses loudly. The two-file
    `--env-file .env --env-file <per-run>` shape collapses to one argument;
    `lock_env_unwind` prints/keeps the merged file on failure.
 4. **The scrub.** `compose_command` gains `hole_names`; when non-empty it
@@ -120,9 +132,6 @@ and replaces `.env` itself with a typed YAML object.
 
 ## Open design questions
 
-- **D6 — merged-file unwind shape.** `lock_env_unwind` prints/keeps one
-  merged file now; check the print contract still teaches (which values
-  came from where).
 - **D7 — secrets lint.** The values file carries secrets; consider whether
    any warning belongs on suspiciously-non-secret shapes. Low priority.
 
