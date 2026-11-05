@@ -1104,6 +1104,13 @@ class TestPairedLoad:
         assert result.exit_code == 1
         assert "nothing is declared to mirror" in str(result.exception)
 
+    def test_load_reads_a_missing_lock_as_the_empty_paired_lock(self, tmp_path: Path) -> None:
+        _write_repo(tmp_path, ref_services={"livekit": {"ref": "oci://ghcr.io/org/repo/livekit:0.4.0-dev.3"}})
+
+        lock = LockFile.load(tmp_path / LOCK_PATH, self._config(tmp_path))
+
+        assert lock.images == {} and lock.charts == {} and lock.bundles == {}
+
     def test_relock_consumes_a_drifted_committed_lock_as_input(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

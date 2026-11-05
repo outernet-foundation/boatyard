@@ -85,13 +85,7 @@ def publish_compose(
     branch_tag = (branch or bash_output("git rev-parse --abbrev-ref HEAD").strip()).replace("/", "-")
 
     service_shas = dockerfiles.compute_service_shas(config.root, config.service_builds)
-    lock_path = root / LOCK_PATH
-    lock = (
-        LockFile.load(lock_path, config)
-        if lock_path.is_file()
-        else LockFile.model_validate({}, context={"path": lock_path.as_posix(), "config": config})
-    )
-    lock_entries = lock.index_references()
+    lock_entries = LockFile.load(root / LOCK_PATH, config).index_references()
 
     published: list[PublishedEntry] = []
     for bundle_name, output in bundles:

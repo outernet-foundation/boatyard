@@ -23,12 +23,7 @@ def mirror() -> None:
     config = ConfigFile.load(root / DEFAULT_CONFIG_PATH)
     prefix = config.mirror_prefix
 
-    lock_path = root / LOCK_PATH
-    lock = (
-        LockFile.load(lock_path, config)
-        if lock_path.is_file()
-        else LockFile.model_validate({}, context={"path": lock_path.as_posix(), "config": config})
-    )
+    lock = LockFile.load(root / LOCK_PATH, config)
     mirror_targets: list[tuple[str, list[str]]] = []
     for name, reference in sorted(config.base_images.items(), key=lambda item: item[1]):
         mirror_targets.append((reference, lock.images[name].recorded_digests))

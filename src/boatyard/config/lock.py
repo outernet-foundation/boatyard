@@ -72,7 +72,11 @@ class LockFile(BaseModel):
 
     @classmethod
     def load(cls, path: Path, config: ConfigFile) -> LockFile:
-        return load_yaml_model(cls, path, {"path": path.as_posix(), "config": config})
+        context = {"path": path.as_posix(), "config": config}
+        if not path.is_file():
+            # Every consumer reads a missing lock as the empty lock paired against the config.
+            return cls.model_validate({}, context=context)
+        return load_yaml_model(cls, path, context)
 
     def require(self, name: str, subject: str, hint: str = "the lock verb writes it") -> str:
         if name in self.images:

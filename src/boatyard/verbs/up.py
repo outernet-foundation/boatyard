@@ -63,12 +63,7 @@ def up(
     services = config.resolve_services(config_values.choices)
 
     # Collect each entry's include and env entries in declaration order
-    consumer_lock_path = config.root / LOCK_PATH
-    lock = (
-        LockFile.load(consumer_lock_path, config)
-        if consumer_lock_path.is_file()
-        else LockFile.model_validate({}, context={"path": consumer_lock_path.as_posix(), "config": config})
-    )
+    lock = LockFile.load(config.root / LOCK_PATH, config)
     consumer_entries = lock.manifest_references(config_values.platform)
     entries: dict[str, str] = dict(consumer_entries)
     includes: list[Yaml] = []
@@ -100,15 +95,9 @@ def up(
             # Fill the override's holes from the producer repo above the override
             producer_root = _producer_root(path)
             producer_config = ConfigFile.load(producer_root / DEFAULT_CONFIG_PATH)
-            producer_lock_path = producer_root / LOCK_PATH
-            producer_lock = (
-                LockFile.load(producer_lock_path, producer_config)
-                if producer_lock_path.is_file()
-                else LockFile.model_validate(
-                    {}, context={"path": producer_lock_path.as_posix(), "config": producer_config}
-                )
+            producer_entries = LockFile.load(producer_root / LOCK_PATH, producer_config).manifest_references(
+                config_values.platform
             )
-            producer_entries = producer_lock.manifest_references(config_values.platform)
             entries.update({lock_key_prefix(name) + key: value for key, value in producer_entries.items()})
             continue
 
