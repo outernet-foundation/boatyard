@@ -7,6 +7,7 @@ import re
 import shlex
 from collections.abc import Mapping
 from pathlib import Path
+from typing import NamedTuple
 
 import yaml
 from bashrun.bash import bash_output
@@ -67,6 +68,11 @@ class OciArtifactManifest(BaseModel):
     layers: list[OciDescriptor] = Field(default_factory=list)
 
 
+class RelockResult(NamedTuple):
+    lock: LockFile
+    rendered: str
+
+
 def run_lock(*, upgrade: bool = False, check: bool = False) -> None:
     config_path = Path.cwd() / DEFAULT_CONFIG_PATH
     if not config_path.is_file():
@@ -80,7 +86,7 @@ def run_lock(*, upgrade: bool = False, check: bool = False) -> None:
         return
 
     lock_file = config.root / LOCK_PATH
-    computed = render_lock(relock(config, upgrade=upgrade))
+    computed = relock(config, upgrade=upgrade).rendered
     if not check:
         lock_file.write_text(computed, encoding="utf-8")
         return
@@ -100,7 +106,7 @@ def run_lock(*, upgrade: bool = False, check: bool = False) -> None:
         raise ValueError("image lock is stale")
 
 
-def relock(config: ConfigFile, *, upgrade: bool = False) -> LockFile:
+def relock(config: ConfigFile, *, upgrade: bool = False) -> RelockResult:
 
     prefix = config.mirror_prefix
     # The write path's committed read: drift between the committed lock and the config
@@ -227,10 +233,7 @@ def relock(config: ConfigFile, *, upgrade: bool = False) -> LockFile:
                 service_names.update(services)
         refuse_unresolved_references(name, entry.routes, entry.ports, service_names, prefix=f"{name}-")
 
-    return LockFile(platforms=list(config.platforms), images=images, charts=charts, bundles=bundles)
-
-
-def render_lock(lock: LockFile) -> str:
+    lock = LockFile(platforms=list(config.platforms), images=images, charts=charts, bundles=bundles)
     # Render names and platform keys in sorted order.
     document: dict[str, Yaml] = {}
     if lock.platforms:
@@ -251,8 +254,8 @@ def render_lock(lock: LockFile) -> str:
             for name, bundle in sorted(lock.bundles.items())
         }
     if not document:
-        return "{}\n"
-    return yaml.safe_dump(document, sort_keys=False, default_flow_style=False, width=10_000_000)
+        return RelockResult(lock, "{}\n")
+    return RelockResult(lock, yaml.safe_dump(document, sort_keys=False, default_flow_style=False, width=10_000_000))
 
 
 def resolve_remote_digest(reference: str) -> str:

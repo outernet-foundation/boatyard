@@ -18,7 +18,7 @@ from boatyard import dockerfiles
 from boatyard.config.config import ConfigFile, Yaml
 from boatyard.config.lock import LOCK_PATH
 from boatyard.dockerfiles import ServiceBuild, service_sha_env
-from boatyard.lock import relock, render_lock
+from boatyard.lock import relock
 
 
 METADATA_PATH = Path("metadata.json")
@@ -151,9 +151,9 @@ def run_build(
             )
 
     # The incremental lock write rides every building run; bake reads the fresh entries as environment.
-    lock = relock(config)
-    (config.root / LOCK_PATH).write_text(render_lock(lock), encoding="utf-8")
-    os.environ.update(lock.index_references())
+    relocked = relock(config)
+    (config.root / LOCK_PATH).write_text(relocked.rendered, encoding="utf-8")
+    os.environ.update(relocked.lock.index_references())
 
     # Render the bake services for every target.
     namespace = destination if destination is not None else config.repository
