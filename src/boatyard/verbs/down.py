@@ -9,12 +9,9 @@ import typer
 import yaml
 from bashrun.bash import bash_handoff
 
-from boatyard.compose import compose_command, lock_env_unwind, require_env_file
+from boatyard.compose import compose_command
 from boatyard.config.config import ConfigFile, require_compose_stack
-from boatyard.lock import render_merged_env
-from boatyard.config.lock import read_config_lock
-from boatyard.config.values import ValuesFile
-from boatyard.paths import DEFAULT_CONFIG_PATH, VALUES_FILE
+from boatyard.paths import DEFAULT_CONFIG_PATH
 
 app = typer.Typer()
 
@@ -24,20 +21,10 @@ def down(
     volumes: Annotated[bool, typer.Option("--volumes", "-v", help="Remove named volumes.")] = False,
 ) -> None:
     root = Path.cwd()
-
-    require_env_file(root)
     config = require_compose_stack(ConfigFile.load(root / DEFAULT_CONFIG_PATH))
 
-    # Tear down by project name, covering every selection.
+    # Tear down by project name alone; the name-only root consumes no values, lock, or selection.
     with ExitStack() as stack:
-        config_values = ValuesFile.load(root / VALUES_FILE, config)
-        entries = read_config_lock(root, config).compose_env_entries(config_values.platform)
-        env_file: Path | None = None
-        if config_values.variables or entries:
-            with NamedTemporaryFile("w", suffix=".env", prefix="devkit-env-", delete=False, encoding="utf-8") as handle:
-                handle.write(render_merged_env(config_values.variables, entries))
-                env_file = Path(handle.name)
-            stack.enter_context(lock_env_unwind(env_file))
         with NamedTemporaryFile(
             "w", suffix=".yaml", prefix="devkit-assembly-", delete=False, encoding="utf-8"
         ) as handle:
@@ -45,14 +32,7 @@ def down(
             assembly_root = Path(handle.name)
         stack.callback(assembly_root.unlink, missing_ok=True)
 
-        command = compose_command(
-            root,
-            [assembly_root],
-            "down",
-            "--remove-orphans",
-            env_file=env_file,
-            hole_names=[*config_values.variables, *entries],
-        )
+        command = compose_command(root, [assembly_root], "down", "--remove-orphans")
         if volumes:
             command += " -v"
 

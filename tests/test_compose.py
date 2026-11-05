@@ -890,9 +890,8 @@ class TestDownTeardown:
         assert result.exit_code == 0, result.output
         assert len(recorder.commands) == 1
         command = recorder.commands[0]
-        assert command.startswith("env -u CADDY_IMAGE -u GATEWAY_PORT -u LIVEKIT_SIGNALING_PORT docker compose -f ")
-        assert f" --project-directory {tmp_path} --env-file " in command
-        assert LOCK_ENV_ARGUMENT_PATTERN.search(command) is not None
+        assert command.startswith("docker compose -f ")
+        assert "--env-file" not in command
         assert command.endswith("down --remove-orphans")
         match = ASSEMBLY_ARGUMENT_PATTERN.search(command)
         assert match is not None
@@ -948,80 +947,8 @@ class TestDownTeardown:
         assert isinstance(result.exception, ValueError)
         assert "must declare services" in str(result.exception)
 
-    def test_down_refuses_an_unknown_selection_name(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        _write_ref_tree(tmp_path)
-        _write_values_file(tmp_path, {"bundles": ["ghost"]})
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(app, ["down"])
-
-        assert result.exit_code != 0
-        assert isinstance(result.exception, ValueError)
-        assert "the selectable options are" in str(result.exception)
-
-    def test_down_refuses_two_options_from_one_group(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        _write_config(
-            tmp_path,
-            {
-                "project_name": "demo",
-                "platforms": ["linux/amd64"],
-                "services": {
-                    "tunnel": {
-                        "options": {
-                            "ngrok": {"ref": "oci://ghcr.io/org/ngrok:0.1.0"},
-                            "rathole": {"ref": "oci://ghcr.io/org/rathole:0.1.0"},
-                        }
-                    }
-                },
-            },
-        )
-        _write_lock(
-            tmp_path,
-            bundles={
-                "TUNNEL_NGROK_BUNDLE": "ghcr.io/org/ngrok:0.1.0@" + FAKE_DIGEST,
-                "TUNNEL_RATHOLE_BUNDLE": "ghcr.io/org/rathole:0.1.0@" + FAKE_DIGEST,
-            },
-        )
-        _write_values_file(tmp_path, {"bundles": ["tunnel-ngrok", "tunnel-rathole"]})
-        monkeypatch.chdir(tmp_path)
-
-        result = runner.invoke(app, ["down"])
-
-        assert result.exit_code != 0
-        assert isinstance(result.exception, ValueError)
-        assert "at most one option per group (tunnel)" in str(result.exception)
-
 
 class TestLockRequirement:
-    def test_a_bundles_only_lock_attaches_no_env_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        _write_ref_tree(tmp_path)
-        _write_values_file(tmp_path, {"public_url": "https://example.dev"})
-        recorder = HandoffRecorder()
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr(down, "bash_handoff", recorder.run)
-
-        result = runner.invoke(app, ["down"])
-
-        assert result.exit_code == 0, result.output
-        assert [_normalize(command, tmp_path) for command in recorder.commands] == [
-            "docker compose -f ASSEMBLY --project-directory ROOT down --remove-orphans"
-        ]
-
-    def test_present_lock_attaches_the_second_env_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        _write_ref_tree(tmp_path, base_images=ALPINE_BASE_IMAGES)
-        _write_values_file(tmp_path, {"public_url": "https://example.dev"})
-        _write_lock(tmp_path, {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST})
-        recorder = HandoffRecorder()
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr(down, "bash_handoff", recorder.run)
-
-        result = runner.invoke(app, ["down"])
-
-        assert result.exit_code == 0, result.output
-        assert [_normalize(command, tmp_path) for command in recorder.commands] == [
-            "env -u ALPINE_IMAGE docker compose -f ASSEMBLY --project-directory ROOT --env-file LOCKENV down --remove-orphans"
-        ]
-
     def test_a_repo_without_a_lock_skips_the_probe(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_config(
             tmp_path,
@@ -1579,10 +1506,14 @@ class TestValuesFileLaw:
     def test_a_values_key_colliding_with_a_lock_entry_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path, base_images=ALPINE_BASE_IMAGES)
         _write_values_file(tmp_path, {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20"})
-        _write_lock(tmp_path, {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST})
+        _write_lock(
+            tmp_path,
+            {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST},
+            bundles=TUNNEL_BUNDLES,
+        )
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(app, ["down"])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
@@ -1593,7 +1524,7 @@ class TestValuesFileLaw:
         _write_values_file(tmp_path, {"lowercase_key": "value"})
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(app, ["down"])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
