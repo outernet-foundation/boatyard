@@ -26,13 +26,12 @@ from boatyard.config import (
     is_mapping,
     load_yaml_file,
     lock_key_prefix,
-    qualified_option_name,
     refuse_unresolved_references,
     require_compose_stack,
     required_compose_holes,
 )
 from boatyard.config_lock import LOCK_PATH, parse_config_lock, read_config_lock
-from boatyard.environment import BUNDLES_VARIABLE, BUNDLE_OVERRIDE_PREFIX, Environment
+from boatyard.environment import BUNDLE_OVERRIDE_PREFIX, Environment
 from boatyard.lock import compose_env_entries, producer_env_entries, render_env_entries
 
 EDGE_LISTEN_PORT = 8443
@@ -61,19 +60,8 @@ def up(
     if config is None or not config.services:
         config = require_compose_stack(config)
 
-    # Fold the selection into at most one option per group
-    choices: dict[str, str] = {}
-    for name in environment.bundles:
-        group, option_name = config.selectable_options[name]
-        if group in choices:
-            raise ValueError(
-                f"{BUNDLES_VARIABLE}= selects {qualified_option_name(group, choices[group])} and {name}; "
-                f"at most one option per group ({group})"
-            )
-        choices[group] = option_name
-
     # Resolve the chosen options into leaf services
-    services = config.resolve_services(choices)
+    services = config.resolve_services(environment.choices)
 
     # Collect each entry's include and env entries in declaration order
     lock = read_config_lock(config.root)

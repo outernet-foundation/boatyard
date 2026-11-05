@@ -917,6 +917,39 @@ class TestDownTeardown:
         assert isinstance(result.exception, ValueError)
         assert "the selectable options are" in str(result.exception)
 
+    def test_down_refuses_two_options_from_one_group(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        _write_config(
+            tmp_path,
+            {
+                "project_name": "demo",
+                "platforms": ["linux/amd64"],
+                "services": {
+                    "tunnel": {
+                        "options": {
+                            "ngrok": {"ref": "oci://ghcr.io/org/ngrok:0.1.0"},
+                            "rathole": {"ref": "oci://ghcr.io/org/rathole:0.1.0"},
+                        }
+                    }
+                },
+            },
+        )
+        _write_lock(
+            tmp_path,
+            bundles={
+                "TUNNEL_NGROK_BUNDLE": "ghcr.io/org/ngrok:0.1.0@" + FAKE_DIGEST,
+                "TUNNEL_RATHOLE_BUNDLE": "ghcr.io/org/rathole:0.1.0@" + FAKE_DIGEST,
+            },
+        )
+        (tmp_path / ".env").write_text("BUNDLES=tunnel-ngrok,tunnel-rathole\n", encoding="utf-8")
+        monkeypatch.delenv("BUNDLES", raising=False)
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["down"])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, ValueError)
+        assert "at most one option per group (tunnel)" in str(result.exception)
+
 
 class TestLockRequirement:
     def test_a_bundles_only_lock_attaches_no_env_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

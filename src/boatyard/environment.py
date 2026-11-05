@@ -5,7 +5,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from boatyard.config import Config, Yaml, is_mapping
+from boatyard.config import Config, Yaml, is_mapping, qualified_option_name
 
 ENV_FILE = Path(".env")
 BUNDLES_VARIABLE = "BUNDLES"
@@ -46,6 +46,7 @@ class Environment(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     bundles: list[str]
+    choices: dict[str, str]
     path_overrides: dict[str, Path]
     public_url: PublicUrl | None
     platform: str | None
@@ -92,8 +93,34 @@ class Environment(BaseModel):
                 merged[key.strip()] = value.strip().strip("'\"")
         merged.update(environ)
         consumed = {BUNDLES_VARIABLE, PLATFORM_VARIABLE, PUBLIC_URL_VARIABLE}
+        bundles = _split_names(merged.get(BUNDLES_VARIABLE, ""))
+        services_declared = config is not None and bool(config.services)
+        choices: dict[str, str] = {}
+        if not services_declared:
+            if bundles:
+                raise ValueError(f"{BUNDLES_VARIABLE}= is set but this repo declares no services")
+        else:
+            unknown = [name for name in bundles if name not in config.selectable_options]
+            if unknown:
+                bare_entries_note = (
+                    f"; bare entries, always included: {config.bare_entries}" if config.bare_entries else ""
+                )
+                raise ValueError(
+                    f"{BUNDLES_VARIABLE}= names {unknown}; "
+                    f"the selectable options are {sorted(config.selectable_options)}{bare_entries_note}"
+                )
+            # Fold the selection into one choice per group
+            for name in bundles:
+                group, option_name = config.selectable_options[name]
+                if group in choices:
+                    raise ValueError(
+                        f"{BUNDLES_VARIABLE}= selects {qualified_option_name(group, choices[group])} and {name}; "
+                        f"at most one option per group ({group})"
+                    )
+                choices[group] = option_name
         environment = cls.model_validate({
-            "bundles": _split_names(merged.get(BUNDLES_VARIABLE, "")),
+            "bundles": bundles,
+            "choices": choices,
             "overrides": {
                 key.removeprefix(BUNDLE_OVERRIDE_PREFIX).lower().replace("_", "-"): value
                 for key, value in merged.items()
@@ -107,17 +134,8 @@ class Environment(BaseModel):
                 if key not in consumed and not key.startswith(BUNDLE_OVERRIDE_PREFIX)
             },
         })
-        if config is None or not config.services:
-            if environment.bundles:
-                raise ValueError(f"{BUNDLES_VARIABLE}= is set but this repo declares no services")
+        if not services_declared:
             return environment
-        unknown = [name for name in environment.bundles if name not in config.selectable_options]
-        if unknown:
-            bare_entries_note = f"; bare entries, always included: {config.bare_entries}" if config.bare_entries else ""
-            raise ValueError(
-                f"{BUNDLES_VARIABLE}= names {unknown}; "
-                f"the selectable options are {sorted(config.selectable_options)}{bare_entries_note}"
-            )
         unknown_overrides = sorted(
             name
             for name in environment.path_overrides
