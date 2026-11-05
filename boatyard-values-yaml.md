@@ -31,6 +31,9 @@ and replaces `.env` itself with a typed YAML object.
   and the run proceeds. The unfilled-requirements refusal alone mentions
   them, gaining a clause ("X is set in the shell and ignored") when the
   unfilled hole carries a shell value.
+- D3 resolved: the name is `boatyard.values.yaml` — the conceptual
+  collision with helm `values/` files is accepted; distinct paths and the
+  `boatyard.` prefix carry the distinction.
 - Compose's documented precedence — shell environment beats `--env-file`,
   and no switch exists to disable it — is defeated by scrubbing the compose
   child environment (`env -u`), not by trusting compose. Verified
@@ -82,8 +85,8 @@ and replaces `.env` itself with a typed YAML object.
    shell operators). `up` passes values ∪ lock entries ∪ requirement names;
    `down` passes values ∪ lock entries.
 5. **The unfilled-requirements check** (`up`, inlined): `filled` =
-   values ∪ lock entries only; message drops "shell" → "(.env or the lock
-   env file)" (or the values-file spelling once named).
+   values ∪ lock entries only; message drops "shell" → "(boatyard.values.yaml
+   or the lock env file)".
 6. **Gates.** `require_env_file` becomes the values-file gate, same
    semantics (missing file refuses for `up`/`down`, reads empty for score).
 7. **AGENTS.md.** Module map (`environment.py` line), the `.env` law → the
@@ -106,9 +109,6 @@ and replaces `.env` itself with a typed YAML object.
 
 ## Open design questions
 
-- **D3 — the name.** `boatyard.values.yaml` (collides conceptually with the
-  helm `values/` files these repos carry) vs `boatyard.machine.yaml` /
-  `boatyard.env.yaml`. Operator taste.
 - **D4 — does the unfilled-requirements check move into
   `Environment.load` now?** The pair is purer (values file + config), but
   `entries` (producer-lock fans from resolved override paths) and
