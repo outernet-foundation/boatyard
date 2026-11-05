@@ -60,9 +60,9 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
   bundle's odd-parity `${NAME}` holes minus `:-`-defaulted ones, recorded at fresh resolution and copied forward while the digest freezes (the artifact is immutable); `bundles:` keys are `{QUALIFIED_NAME}_BUNDLE` (qualified selection name upper-cased + `_BUNDLE`; a bare entry is its own name), arch-neutral; written only by the `lock` verb and
   `build`'s incremental freeze (`relock`/`write_lock`), over declared names only — built-image digests are unrepresentable, orphans prune by construction; never hand-authored.
 - `LockFile.load(path)` = the only parser (duplicate keys refuse naming the line; non-digest-pinned entries, cross-section name collisions reject; malformed or non-mapping documents surface raw pydantic/pyyaml errors; empty lock legal); `read_config_lock` = the only reader of the committed file (a missing file reads as the empty lock); `LockFile.require` = the one "lock lacks NAME" refusal.
-- `relock` computes per `base_images` entry the mirror-prefixed reference resolved into the index digest + one platform-manifest digest per declared platform (`crane copy` byte-identity holds both digests); `@digest`
+- `relock` computes per `base_images` entry the mirror-prefixed reference resolved into the index digest + one platform-manifest digest per declared platform (`crane manifest` + `crane digest`, crane installed on first use; `crane copy` byte-identity holds both digests); `@digest`
   declarations pass through prefixed-unresolved; declaration-incremental freeze: unchanged declarations copy forward, tag bump or platform-set change re-resolves, `--upgrade` re-resolves everything; charts freeze by
-  the same prefix match; bundle refs resolve direct — first-party, never mirror-prefixed — via `crane digest` (`resolve_bundle_digest`; compose-bundle media types are not image indexes), frozen by the same tag match.
+  the same prefix match; bundle refs resolve direct — first-party, never mirror-prefixed — via `crane digest`, frozen by the same tag match.
 - `resolve_remote_manifests` = a pure function of the declarations — the writing machine's arch never participates; exact `os`/`architecture` match; `unknown/unknown` + attestation entries skipped; multiple matches refuse; a missing platform refuses listing the index's platforms.
 - Projection selection law: `env_entries` with no platform answers index references (build edge), with a platform its concrete manifests (compose edge); `compose_env_entries(lock, config, platform)` owns platform selection — a declared singleton self-selects, a
   multi-platform repo names `platform:` through `ValuesFile.platform` (missing/undeclared refuses listing the declared platforms), never host introspection; read projections stay in `lock.py`.
@@ -168,7 +168,7 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
   login, no publish — the CI getter's derivation source; bake substitutes `${ALL_CAPS}` holes against `service_shas()` tree-tags + the lock's index projection, the lock keys fanned under the bundle prefix for the
   artifact's namespaced spellings; unresolved vars stay holes in the artifact for the consumer's values file
   (non-empty stubs exist only so publish's interpolation validation passes); authored `configs.content` rides verbatim (single-`$` holes = the include consumer's interpolation surface — `$`-doubling is score's concern, not publish's); image
-  refs under `{repository}/` pin to `@sha256` via memoized `imagetools inspect`; each entry publishes once under the `<sha>` tag, aliasing `<branch>` via `crane tag` (compose stamps wall-clock `created` — only the alias makes both tags name one digest); registry login reads `REGISTRY_USERNAME`/`REGISTRY_TOKEN`.
+  refs under `{repository}/` pin to `@sha256` via memoized `crane digest`; each entry publishes once under the `<sha>` tag, aliasing `<branch>` via `crane tag` (compose stamps wall-clock `created` — only the alias makes both tags name one digest); registry login reads `REGISTRY_USERNAME`/`REGISTRY_TOKEN`.
 
 ## Deployment-surface annotations
 
