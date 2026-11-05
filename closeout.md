@@ -18,9 +18,9 @@ separate commits.
 
 - boatyard branch `refactor`: all consumer-contract work, the module-tiers
   refactor, the score unification, the boatyard rename + CLI refactors, and
-  Work 1 in full — the disk-state service-hash phase (design signed off,
+  Work 1 in full —   the disk-state service-hash phase (design signed off,
   battery green, `pathspec` dropped), the qualified-selection-names phase
-  (qualified `BUNDLES=` grammar, flat vocabulary law repealed into a
+  (qualified selection grammar, flat vocabulary law repealed into a
   qualified-vocabulary collision check, options identified by qualified name
   in bundle outputs, publish legs, and selection), the ref-grammar phase
   (tag-only `ref:` grammar with digest/`latest`/range refusals;
@@ -28,16 +28,28 @@ separate commits.
   direct via `crane digest`, declaration-incremental; cross-section collision
   refusal; missing-entry refusal naming the relock; bundle probes via crane
   under the stderr-classification law; includes carry the lock's digest ref),
-  and the bundle-override phase (`BUNDLE_OVERRIDE_<QUALIFIED_NAME>` path and
-  `oci://` value forms over the ref tag grammar; probe and lock-entry skip;
+  and the bundle-override phase (path overrides over the ref tag grammar,
+  riding the values file's typed `path_overrides` map; probe and lock-entry skip;
   path-form teeth — exists, parses, `edge` refusal, service collisions;
-  producer-lock attachment three parents up, ordered before the consumer's
-  lock env file, later `--env-file`s winning shared keys pinned against the
-  version-pinned compose binary; `producer_env_entries` selects platforms
+  producer-lock attachment three parents up, its entries riding the one
+  merged per-run env file under the entry prefix;
+  `producer_env_entries` selects platforms
   from the producer lock's recorded platforms) — are landed locally, ahead
   of origin — unpushed. Work 1 is complete; the branch is ready for Work 2's
   operator handoff. `publish.yml` is wired (`packages.boatyard`,
   `major_minor: "0.6"`, `registry: pypi`).
+- The values-file session (2026-11-04, battery green) landed atop Work 1 and
+  rewrote the consumer surface: `.env` is dead — `boatyard.values.yaml`
+  (gitignored, typed; `ConfigValues` in `values_file.py`) is the only
+  machine-values source, the ambient shell fills nothing (selection
+  spellings included — `BUNDLES=x boatyard up` is gone), and compose's
+  shell-beats-env-file precedence is defeated by an `env -u` scrub over
+  values ∪ lock entries ∪ requirement names (end-to-end pinned against the
+  compose binary). `up`/`down` materialize ONE merged per-run dotenv —
+  values then lock entries under `#` source headers, a key in both
+  refusing loudly (the lock is its only source); `lock_env_unwind` keeps
+  the file with a path-line-only echo (contents may carry secrets); the
+  open values map enforces ALL_CAPS env names.
 - PyPI: `boatyard` registered, nothing published. GitHub repo rename
   (docker-devkit → boatyard) is an operator item, status unverified.
 - No `lock-env` verb exists (a stale name in the absorbed ADR): lock env is
@@ -109,7 +121,7 @@ These rulings bind every work unit below.
 
 ```
 1  build-out   the iteration unit on the refactor branch: disk-state service
-               hashes, qualified BUNDLES= grammar, ref tag grammar + _BUNDLE
+               hashes, qualified selection grammar, ref tag grammar + _BUNDLE
                lock entries, path-form bundle overrides
 2  release     boatyard 0.6.0 — operator; one release, the pin target
 3  toolkit     cutover onto boatyard spellings; the SHA the wave bumps to
@@ -133,8 +145,8 @@ Lands on the refactor branch; 0.6.0 publishes only after it. Order within:
 disk-state hashing first (everything downstream builds on tags that track
 disk state), then the selection cluster. The phases ship as one release
 because they are one cluster in the selection machinery; an override shipped
-before bundle pinning would be built against a digest-ref spelling the
-grammar deletes, and the grammar flip breaks `.env` spellings — relock and
+  before bundle pinning would be built against a digest-ref spelling the
+  grammar deletes, and the grammar flip breaks the old values spellings — relock and
 flip are atomic per repo, riding Work 4's wave.
 
 ### Disk-state service hashes
@@ -258,7 +270,7 @@ def compute_service_shas(repo_root: Path, service_builds: dict[str, ServiceBuild
 
 ### Qualified selection names
 
-`BUNDLES=` becomes qualified `group-dash-option`, uniformly, for every option
+`bundles:` names options by qualified `group-dash-option`, uniformly, for every option
 — no unqualified short forms even when unambiguous (one grammar rule beats a
 conditional rule; a group gaining a second option would break every bare
 spelling; one spelling per bundle greps). Bare entries are their own root and
@@ -310,9 +322,9 @@ listing the qualified vocabulary; a bare entry's name refuses as unselectable.
 
 ### Local bundle overrides (Stage 1)
 
-`.env` may carry `BUNDLE_OVERRIDE_<QUALIFIED_NAME>` per machine — never
-committed, one variable per override, commentable per-line, the same qualified
-identity as `BUNDLES=` and the lock key. Value grammar: a filesystem path
+`boatyard.values.yaml` may carry `path_overrides` per machine — never
+committed, one map entry per override keyed by qualified name, the same qualified
+identity as `bundles:` and the lock key. Value grammar: a filesystem path
 (relative resolves against the consumer repo root, so sibling checkouts work
 anywhere; absolute legal) or an `oci://` ref of any channel — the ref form
 tests a colleague's landed-but-unreleased bundle without local builds and
@@ -402,10 +414,21 @@ code → lockfiles → prose:
    same relock.
 5. Every consumer's toolkit `uses:` SHAs bump to the Work-3 commit — one SHA
    per repo (Make-it-Sing starts a SHA behind and jumps from further back).
-6. `.env` `BUNDLES=` flips to qualified spellings, atomic with the relock
-   (the grammar flip breaks the old spellings): placeframe
-   `core-cuda,auth-keycloak,tunnel-ngrok`; Make-it-Sing
-   `placeframe-cuda,tunnel-rathole`; the rest theirs.
+6. `.env` becomes `boatyard.values.yaml` (typed, gitignored) in the same wave:
+   `BUNDLES=` becomes the `bundles:` list, `BUNDLE_OVERRIDE_*` the
+   `path_overrides:` map keyed by qualified name, `PLATFORM=`/`PUBLIC_URL`
+   the `platform:`/`public_url:` spellings, hole values the open map —
+   atomic with the relock and the qualified-selection flip (the grammar
+   flip breaks the old spellings): placeframe
+   `bundles: [core-cuda, auth-keycloak, tunnel-ngrok]`; Make-it-Sing
+   `bundles: [placeframe-cuda, tunnel-rathole]`; the rest theirs. A repo
+   carrying `.env.sample` ships a committed `boatyard.values.yaml.sample`
+   beside it (the values file itself stays gitignored). Conversion drops
+   any lock-key spellings from the old `.env` — the merged-file collision
+   refusal blocks them (the lock is their only source) — and only ALL_CAPS
+   hole keys ride. Any CI step that materialized `.env` (a touch, an echo,
+   a `PLATFORM=` export) writes the values file instead; the ambient shell
+   fills nothing.
 7. Bundle `ref:` entries flip digest → tag spellings (`{40-hex}` sha tags —
    published today), atomic with the relock: digest refs refuse at load under
    the new grammar. The relock writes the `_BUNDLE` lock entries; nothing is
@@ -413,12 +436,15 @@ code → lockfiles → prose:
 8. Docs: `docker-devkit` → `boatyard` / `boatyard.yml` / `boatyard.lock.yml`;
    `uv run <verb>` → `uv run boatyard <verb>`; GitHub doc links to the renamed
    repo. `--lock-only` is a dead flag everywhere → `boatyard lock` (plus
-   `--upgrade` where the old text said `--lock-only --upgrade`).
-9. Consumer env reads go through a consumer-local module implementing
-   compose's env-file grammar (`KEY=VALUE`, `#` comments, no interpolation —
-   compose is the file's authoritative reader, so its rules are the spec; no
-   dotenv dependency, no shared micro-package, filename hardcoded as the
-   scripts already spell it).
+   `--upgrade` where the old text said `--lock-only --upgrade`). Shell-spelled
+   examples (`BUNDLES=x boatyard up`, `PLATFORM=x …`) flip to editing
+   `boatyard.values.yaml`; runbook text describing the failure echo of the
+   per-run env file updates to the kept-path line (contents never print —
+   secrets may ride); `.env.sample` references point at the new sample file.
+9. Consumer env reads go through `yaml.safe_load` of
+    `boatyard.values.yaml` — the file is plain YAML, so no consumer-local
+    dotenv grammar module exists (the earlier plan for one dissolved with
+    the typed values file).
 10. `stack/secrets.yaml` is required from 0.6.0 — consumers lacking it add the
     file (an empty file is legal: the empty declaration, no keys consumable)
     and commit the mint artifact `stack/generated/secrets.txt` it generates.
@@ -431,7 +457,7 @@ Per-repo:
   the postgres-wrapper leg rewrites onto the CLI (`boatyard build --targets
   postgres`; `boatyard tree-tags postgres` for the `POSTGRES_SHA` the
   `docker run` invocation spells); `api_auth.py`/`sweep_postprocess.py` read
-  `.env` through the consumer-local parser, and sweep_postprocess's lock read
+  `boatyard.values.yaml` through `yaml.safe_load`, and sweep_postprocess's lock read
   (`INITIALIZE_S3_IMAGE`) becomes a plain YAML platform selection
   (`images.INITIALIZE_S3_IMAGE.platforms[linux/amd64]`); the two score test
   modules rewrite to assert against committed artifacts (freshness is already
@@ -461,8 +487,9 @@ Per-repo:
   only its still-live instructions). The repin touches both declarations (the
   root exact pin and the `scripts/` member floor).
 - **Make-it-Sing, lbe-toolkit** — standard renames and the step-6/7 flips;
-  Make-it-Sing adds `BUNDLE_OVERRIDE_PLACEFRAME_CUDA` locally (never
-  committed — the point of the iteration unit); lbe-toolkit's floating uv
+  Make-it-Sing's local (never committed) `BUNDLE_OVERRIDE_PLACEFRAME_CUDA`
+  becomes the `path_overrides: {placeframe-cuda: …}` map entry; lbe-toolkit's
+  floating uv
   tag (`ghcr.io/astral-sh/uv:python3.13-…`) becomes an `{uv}`-templated value
   in the same relock: intent stays authored, components derive.
 - **infra-rathole** — README carries `uv run build --lock-only` (→ `uv run
