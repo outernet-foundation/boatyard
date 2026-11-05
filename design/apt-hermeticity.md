@@ -43,7 +43,7 @@ The rest of the pipeline is closed:
 - libusb source: `LIBUSB_COMMIT` git SHA (content-addressed — the clone-then-checkout
   shape is fine content-wise)
 - k8s charts: digest-pinned through the lock's `{NAME}_CHART` entries
-- score-compose / score-k8s / helm: version-pinned constants in `config.py`
+- score-compose / score-k8s / helm: version-pinned constants in `config_file.py`
 - devkits/toolkit: `uv.lock` + full-SHA `uses:` refs
 
 Nothing in boatyard parses `RUN apt-get …` lines. The literal-reference refusals

@@ -103,7 +103,7 @@ and replaces `.env` itself with a typed YAML object.
    `BUNDLES` becomes a YAML list; `BUNDLE_OVERRIDE_*` becomes a map keyed by
    qualified name — the underscore/dash/upper-case derivation law dies.
 2. **`Environment.load(root, config)`** reads the values file via the
-   strict YAML loader (`load_yaml_file` family in `config.py`) — no dotenv
+   strict YAML loader (`load_yaml_file` family in `config_file.py`) — no dotenv
    parsing, no shell merge, `from os import environ` deleted. A missing
    file reads as the empty declaration (preserves fresh-checkout score
    generation). The name tier, fold, `choices` are untouched.
@@ -122,7 +122,7 @@ and replaces `.env` itself with a typed YAML object.
    or the lock env file)".
 6. **Gates.** `require_env_file` becomes the values-file gate, same
    semantics (missing file refuses for `up`/`down`, reads empty for score).
-7. **AGENTS.md.** Module map (`environment.py` line), the `.env` law → the
+7. **AGENTS.md.** Module map (`values_file.py` line), the `.env` law → the
    values-file law, the selection-law's "(shell, …" clause, the
    `compose_command` law gains the scrub sentence, per-run-files law. Byte
    budget is already breached (28,881/26,624 at session close) — this prose
