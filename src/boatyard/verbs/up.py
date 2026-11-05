@@ -61,17 +61,6 @@ def up(
     if config is None or not config.services:
         config = require_compose_stack(config)
 
-    # Refuse --build without build declarations
-    if build and not (config.repository or config.base_images):
-        raise typer.BadParameter("--build requires build declarations (repository or base_images) in boatyard.yml")
-
-    # Refuse an empty selection in an options-only repo
-    if not environment.bundles and not config.bare_entries and config.selectable_options:
-        raise ValueError(
-            f"{BUNDLES_VARIABLE}= selects nothing and no bare entry exists; "
-            f"the options are {sorted(config.selectable_options)}"
-        )
-
     # Fold the selection into at most one option per group
     choices: dict[str, str] = {}
     for name in environment.bundles:

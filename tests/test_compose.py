@@ -417,7 +417,9 @@ class TestSelectionLaw:
         [document] = recorder.documents
         assert document["include"] == ["oci://" + LIVEKIT_PINNED]
 
-    def test_an_options_only_repo_refuses_a_selection_of_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_an_options_only_repo_with_an_empty_selection_hands_compose_a_name_only_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         _write_config(
             tmp_path,
             {
@@ -442,13 +444,14 @@ class TestSelectionLaw:
         _write_workload(tmp_path, "api.yaml", "api")
         (tmp_path / ".env").write_text("BUNDLES=\n", encoding="utf-8")
         monkeypatch.delenv("BUNDLES", raising=False)
+        recorder = AssemblyRecorder()
+        monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
 
-        assert result.exit_code != 0
-        assert isinstance(result.exception, ValueError)
-        assert "selects nothing and no bare entry exists" in str(result.exception)
+        assert result.exit_code == 0, result.output
+        assert recorder.documents == [{"name": "demo"}]
 
     def test_unknown_name_refuses_listing_the_vocabulary(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._invoke_up(tmp_path, monkeypatch, bundles="placeframe-cuda,ghost")
