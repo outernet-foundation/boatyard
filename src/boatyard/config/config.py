@@ -30,9 +30,9 @@ from boatyard.dockerfiles import (
 from boatyard.config.lock import (
     PLATFORM_PATTERN,
     SHA256_DIGEST_REGEX,
-    load_yaml_model,
     read_config_lock,
 )
+from boatyard.yaml import load_yaml_model
 
 DEV_SENTINEL = "0.0.0.dev0"
 

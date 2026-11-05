@@ -10,7 +10,8 @@ from bashrun.bash import bash, bash_check, bash_output
 
 from boatyard import dockerfiles
 from boatyard.config.config import ConfigFile, Target
-from boatyard.config.lock import LOCK_PATH, LockFile, load_yaml_model
+from boatyard.config.lock import LOCK_PATH, LockFile
+from boatyard.yaml import load_yaml_model
 from boatyard.score import (
     SECRETS_FILE,
     SECRETS_OUTPUT,

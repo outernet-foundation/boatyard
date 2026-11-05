@@ -23,7 +23,8 @@ from boatyard.config.config import (
     ConfigFile,
 )
 from boatyard.lock import compose_env_entries
-from boatyard.config.lock import LOCK_PATH, LockFile, load_yaml_model
+from boatyard.config.lock import LOCK_PATH, LockFile
+from boatyard.yaml import load_yaml_model
 from boatyard.score import (
     SECRETS_FILE,
     SecretsDeclaration,

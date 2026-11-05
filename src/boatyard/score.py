@@ -31,7 +31,7 @@ from boatyard.config.config import (
     ConfigFile,
     WorkloadDocument,
 )
-from boatyard.config.lock import load_yaml_model
+from boatyard.yaml import load_yaml_model
 from boatyard.markers import MarkerContext, resolve_markers
 
 PATCH_TEMPLATES_DIR = "score_patch_templates"

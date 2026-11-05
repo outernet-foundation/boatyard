@@ -12,7 +12,7 @@ from boatyard.config.config import (
     is_mapping,
     qualified_option_name,
 )
-from boatyard.config.lock import load_yaml_model
+from boatyard.yaml import load_yaml_model
 from boatyard.paths import VALUES_FILE
 
 PLATFORM_KEY = "platform"
