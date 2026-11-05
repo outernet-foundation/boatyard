@@ -6,13 +6,15 @@ from pathlib import Path
 import typer
 
 from boatyard.config.config import Config
+from boatyard.paths import DEFAULT_CONFIG_PATH
 
 app = typer.Typer()
 
 
 @app.command()
 def docker_build_matrix() -> None:
-    config = Config.load(Path.cwd())
+    config_path = Path.cwd() / DEFAULT_CONFIG_PATH
+    config = Config.load(config_path) if config_path.is_file() else None
     if config is None:
         print(json.dumps([]))
         return

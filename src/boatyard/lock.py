@@ -34,7 +34,8 @@ from boatyard.config.lock import (
     ConfigLockBundle,
     ConfigLockEntry,
 )
-from boatyard.config.values import PLATFORM_KEY, VALUES_FILE
+from boatyard.config.values import PLATFORM_KEY
+from boatyard.paths import DEFAULT_CONFIG_PATH, VALUES_FILE
 
 DIGEST_TAIL_PATTERN = re.compile(rf"@{SHA256_DIGEST_REGEX}$")
 DIGEST_PATTERN = re.compile(r"^Digest:\s+(sha256:[a-f0-9]+)", re.MULTILINE)
@@ -85,7 +86,8 @@ class OciArtifactManifest(BaseModel):
 
 
 def run_lock(*, upgrade: bool = False, check: bool = False) -> None:
-    config = Config.load(Path.cwd())
+    config_path = Path.cwd() / DEFAULT_CONFIG_PATH
+    config = Config.load(config_path) if config_path.is_file() else None
     if config is None:
         print("no boatyard.yml; no lock declarations to relock")
         return

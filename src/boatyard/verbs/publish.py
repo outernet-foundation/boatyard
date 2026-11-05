@@ -15,6 +15,7 @@ from boatyard.config.config import Config, compose_bundle_output_path, lock_key_
 from boatyard.crane import install_crane
 from boatyard.lock import env_entries
 from boatyard.config.lock import LOCK_PATH, ConfigLock
+from boatyard.paths import DEFAULT_CONFIG_PATH
 from boatyard.publish import (
     STUB_VALUE,
     VAR_PATTERN,
@@ -47,7 +48,8 @@ def publish_compose(
     ] = False,
 ) -> None:
     root = Path.cwd()
-    config = Config.load(root)
+    config_path = root / DEFAULT_CONFIG_PATH
+    config = Config.load(config_path) if config_path.is_file() else None
     bundles = (
         [(name, compose_bundle_output_path(root, name)) for name, _entry in config.local_service_entries()]
         if config is not None

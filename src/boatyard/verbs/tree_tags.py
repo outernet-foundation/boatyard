@@ -8,6 +8,7 @@ import typer
 from boatyard import dockerfiles
 from boatyard.config.config import Config
 from boatyard.dockerfiles import service_sha_env
+from boatyard.paths import DEFAULT_CONFIG_PATH
 
 app = typer.Typer()
 
@@ -20,9 +21,7 @@ def tree_tags(
     ] = None,
 ) -> None:
     root = Path.cwd()
-    config = Config.load(root)
-    if config is None:
-        raise ValueError("no boatyard.yml at the repo root")
+    config = Config.load(root / DEFAULT_CONFIG_PATH)
     vocabulary = sorted(config.service_builds)
     if not services:
         raise typer.BadParameter(

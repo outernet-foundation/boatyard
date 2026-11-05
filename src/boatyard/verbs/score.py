@@ -19,6 +19,7 @@ from boatyard.score import (
     write_file,
 )
 from boatyard.score_compose import generate_compose
+from boatyard.paths import DEFAULT_CONFIG_PATH
 from boatyard.score_k8s import generate_k8s
 
 app = typer.Typer()
@@ -50,7 +51,8 @@ def generate_score(
     if check and local:
         raise typer.BadParameter("--check and --local are mutually exclusive")
     root = Path.cwd()
-    config = Config.load(root)
+    config_path = root / DEFAULT_CONFIG_PATH
+    config = Config.load(config_path) if config_path.is_file() else None
     if config is None or not (config.local_service_entries() or config.k8s):
         if check:
             print("no local service entries and no k8s section; nothing to check")

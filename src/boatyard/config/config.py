@@ -20,7 +20,6 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from yaml import safe_load
 
 from boatyard.dockerfiles import (
     DOCKERFILE_NAME,
@@ -29,14 +28,12 @@ from boatyard.dockerfiles import (
     service_sha_env,
 )
 from boatyard.config.lock import (
-    LOCK_PATH,
     PLATFORM_PATTERN,
     SHA256_DIGEST_REGEX,
+    load_yaml_model,
     read_config_lock,
-    reject_duplicate_keys,
 )
 
-DEFAULT_CONFIG_PATH = Path("boatyard.yml")
 DEV_SENTINEL = "0.0.0.dev0"
 
 DEFAULT_MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
@@ -140,15 +137,9 @@ class Config(BaseModel):
     root: Path = Field(default_factory=Path.cwd, exclude=True)
 
     @classmethod
-    def load(cls, root: Path) -> Config | None:
-        path = root / DEFAULT_CONFIG_PATH
-        if not path.is_file():
-            return None
-        source = path.as_posix()
-        text = path.read_text(encoding="utf-8")
-        reject_duplicate_keys(text, source)
-        config = cls.model_validate(safe_load(text))
-        config.resolve(root)
+    def load(cls, path: Path) -> Config:
+        config = load_yaml_model(cls, path)
+        config.resolve(path.parent)
         return config
 
     def resolve(self, root: Path) -> Self:
@@ -228,11 +219,6 @@ class Config(BaseModel):
 
         # Enforce the lock pairing laws.
         declared_charts = self.declared_charts
-        if (self.base_images or declared_charts or self.remote_declared_entries()) and not (root / LOCK_PATH).is_file():
-            raise ValueError(
-                f"{LOCK_PATH.as_posix()}: base_images, k8s.charts, or service refs are declared; "
-                "the committed lock is required"
-            )
         declares_routes = any(
             entry.routes
             or (isinstance(entry, ServiceGroup) and any(option.routes for option in entry.options.values()))
@@ -714,9 +700,9 @@ def qualified_option_name(group: str, option_name: str) -> str:
     return f"{group}-{option_name}"
 
 
-def require_compose_stack(config: Config | None) -> Config:
-    if config is None or not config.services:
-        raise ValueError("boatyard.yml must exist and declare services")
+def require_compose_stack(config: Config) -> Config:
+    if not config.services:
+        raise ValueError("boatyard.yml must declare services")
     return config
 
 

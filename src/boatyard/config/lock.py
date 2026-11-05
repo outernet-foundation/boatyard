@@ -7,7 +7,7 @@ from typing import Self
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 
-LOCK_PATH = Path("boatyard.lock.yml")
+from boatyard.paths import LOCK_PATH
 
 PLATFORM_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$")
 
@@ -52,13 +52,7 @@ class ConfigLock(BaseModel):
 
     @classmethod
     def load(cls, path: Path) -> ConfigLock:
-        source = path.as_posix()
-        text = path.read_text(encoding="utf-8")
-        reject_duplicate_keys(text, source)
-        loaded: object = yaml.safe_load(text)
-        if loaded is None:
-            loaded = {}
-        return cls.model_validate(loaded, context={"path": source})
+        return load_yaml_model(cls, path, {"path": path.as_posix()})
 
 
 class ConfigLockEntry(BaseModel):
@@ -104,6 +98,18 @@ def _digest_pinned(reference: str) -> bool:
 def read_config_lock(root: Path) -> ConfigLock:
     lock_path = root / LOCK_PATH
     return ConfigLock.load(lock_path) if lock_path.is_file() else ConfigLock()
+
+
+def load_yaml_model[ModelT: BaseModel](
+    model: type[ModelT], path: Path, context: dict[str, object] | None = None
+) -> ModelT:
+    source = path.as_posix()
+    text = path.read_text(encoding="utf-8")
+    reject_duplicate_keys(text, source)
+    loaded: object = yaml.safe_load(text)
+    if loaded is None:
+        loaded = {}
+    return model.model_validate(loaded, context=context)
 
 
 def reject_duplicate_keys(text: str, source: str) -> None:

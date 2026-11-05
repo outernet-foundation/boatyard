@@ -244,8 +244,7 @@ class TestDefaultTargets:
         result = runner.invoke(app, ["build"])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, ValueError)
-        assert "No boatyard.yml" in str(result.exception)
+        assert isinstance(result.exception, FileNotFoundError)
 
 
 class TestCellSelection:

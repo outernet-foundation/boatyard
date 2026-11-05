@@ -508,8 +508,7 @@ class TestSelectionLaw:
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, ValueError)
-        assert "declares no services" in str(result.exception)
+        assert isinstance(result.exception, FileNotFoundError)
 
     def test_up_without_config_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_values_file(tmp_path, {"public_url": "https://example.dev"})
@@ -518,8 +517,7 @@ class TestSelectionLaw:
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, ValueError)
-        assert "must exist and declare services" in str(result.exception)
+        assert isinstance(result.exception, FileNotFoundError)
 
     def test_up_in_a_services_less_repo_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_config(tmp_path)
@@ -530,7 +528,7 @@ class TestSelectionLaw:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "must exist and declare services" in str(result.exception)
+        assert "must declare services" in str(result.exception)
 
     def test_missing_local_output_refuses_naming_generate_score(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_consumer_tree(tmp_path)
@@ -909,8 +907,7 @@ class TestDownTeardown:
         result = runner.invoke(app, ["down"])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, ValueError)
-        assert "must exist and declare services" in str(result.exception)
+        assert isinstance(result.exception, FileNotFoundError)
 
     def test_down_in_a_services_less_repo_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_config(tmp_path)
@@ -921,7 +918,7 @@ class TestDownTeardown:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "must exist and declare services" in str(result.exception)
+        assert "must declare services" in str(result.exception)
 
     def test_down_refuses_an_unknown_selection_name(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)

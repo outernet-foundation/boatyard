@@ -32,6 +32,7 @@ from boatyard.config.config import (
 from boatyard.lock import compose_env_entries, producer_env_entries, render_merged_env
 from boatyard.config.lock import LOCK_PATH, ConfigLock, read_config_lock
 from boatyard.config.values import ConfigValues
+from boatyard.paths import DEFAULT_CONFIG_PATH, VALUES_FILE
 
 EDGE_LISTEN_PORT = 8443
 EDGE_CONFIG_NAME = "devkit-edge-caddyfile"
@@ -52,12 +53,11 @@ def up(
     ] = False,
 ) -> None:
     root = Path.cwd()
-    config = Config.load(root)
+    config = Config.load(root / DEFAULT_CONFIG_PATH)
 
     require_env_file(root)
-    config_values = ConfigValues.load(root, config)
-    if config is None or not config.services:
-        config = require_compose_stack(config)
+    config_values = ConfigValues.load(root / VALUES_FILE, config)
+    require_compose_stack(config)
 
     # Resolve the chosen options into leaf services
     services = config.resolve_services(config_values.choices)

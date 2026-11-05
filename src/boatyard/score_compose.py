@@ -34,6 +34,7 @@ from boatyard.score import (
     write_file,
 )
 from boatyard.config.values import ConfigValues
+from boatyard.paths import VALUES_FILE
 
 TOOL = "score-compose"
 
@@ -130,7 +131,9 @@ def generate_compose(
 ) -> list[Path]:
     score_dir = config.root / config.score_dir
     state_prefix = f".{TOOL}/"
-    images = compose_env_entries(lock, config, ConfigValues.load(config.root, config).platform)
+    values_path = config.root / VALUES_FILE
+    platform = ConfigValues.load(values_path, config).platform if values_path.is_file() else None
+    images = compose_env_entries(lock, config, platform)
 
     if "ALPINE_IMAGE" not in images:
         raise ValueError(f"{LOCK_PATH.as_posix()}: the image lock must carry the ALPINE_IMAGE entry")

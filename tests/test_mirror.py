@@ -279,7 +279,7 @@ class TestMirrorVerb:
         result = runner.invoke(app, ["mirror"])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, ValueError)
+        assert isinstance(result.exception, FileNotFoundError)
 
     def test_zero_declared_targets_is_a_loud_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_config(tmp_path, {"requires": ">=0.1"})

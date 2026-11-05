@@ -14,6 +14,7 @@ from boatyard.config.config import Config, require_compose_stack
 from boatyard.lock import compose_env_entries, render_merged_env
 from boatyard.config.lock import read_config_lock
 from boatyard.config.values import ConfigValues
+from boatyard.paths import DEFAULT_CONFIG_PATH, VALUES_FILE
 
 app = typer.Typer()
 
@@ -25,11 +26,11 @@ def down(
     root = Path.cwd()
 
     require_env_file(root)
-    config = require_compose_stack(Config.load(root))
+    config = require_compose_stack(Config.load(root / DEFAULT_CONFIG_PATH))
 
     # Tear down by project name, covering every selection.
     with ExitStack() as stack:
-        config_values = ConfigValues.load(root, config)
+        config_values = ConfigValues.load(root / VALUES_FILE, config)
         entries = compose_env_entries(read_config_lock(root), config, config_values.platform)
         env_file: Path | None = None
         if config_values.variables or entries:

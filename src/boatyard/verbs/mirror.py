@@ -12,6 +12,7 @@ from boatyard.config.config import (
 )
 from boatyard.crane import install_crane
 from boatyard.config.lock import read_config_lock
+from boatyard.paths import DEFAULT_CONFIG_PATH
 
 app = typer.Typer()
 
@@ -19,9 +20,7 @@ app = typer.Typer()
 @app.command()
 def mirror() -> None:
     root = Path.cwd()
-    config = Config.load(root)
-    if config is None:
-        raise ValueError("a boatyard.yml with base_images (or k8s.charts) is required to mirror")
+    config = Config.load(root / DEFAULT_CONFIG_PATH)
     prefix = config.mirror_prefix
 
     lock = read_config_lock(root)

@@ -107,7 +107,7 @@ class TestPublishGating:
         _write_config(tmp_path, {"publish-compose": {"repository": REPOSITORY}})
 
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            Config.load(tmp_path)
+            Config.load(tmp_path / "boatyard.yml")
 
     def test_bundles_without_repository_refuse_at_load(self, tmp_path: Path):
         _write_config(
@@ -116,7 +116,7 @@ class TestPublishGating:
         )
 
         with pytest.raises(ValidationError, match="repository is required"):
-            Config.load(tmp_path)
+            Config.load(tmp_path / "boatyard.yml")
 
 
 class TestBakeSources:

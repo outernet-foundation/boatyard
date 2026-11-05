@@ -22,7 +22,7 @@ def _derive(tmp_path: Path, axes: dict[str, list[str]] | None = None) -> dict[st
     if axes is not None:
         payload["variants"] = axes
     (tmp_path / "boatyard.yml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-    loaded = Config.load(tmp_path)
+    loaded = Config.load(tmp_path / "boatyard.yml")
     assert loaded is not None
     return loaded.service_builds
 

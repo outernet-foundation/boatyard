@@ -273,7 +273,7 @@ class TestValuesLoad:
             encoding="utf-8",
         )
 
-        parsed = values.ConfigValues.load(tmp_path, Config.load(tmp_path))
+        parsed = values.ConfigValues.load(tmp_path / "boatyard.values.yaml", Config.load(tmp_path / "boatyard.yml"))
 
         assert parsed.choices == {"core": "cuda", "ui": "open"}
         assert parsed.variables == {"GATEWAY_PORT": "8443", "RELOAD": "true"}
