@@ -83,9 +83,9 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
 
 ## Compose assembly and BUNDLES=
 
-- Selection law: `BUNDLES=` names options only, by qualified `group-dash-option` spelling (a bare entry's name refuses as unselectable); ≤ one option per group; zero options legal exactly when riders or routes carry the assembly (omitting the auth pick = the anonymous edge); an options-only
-  repo with an empty selection refuses; unknown names refuse listing the qualified vocabulary; the name tier rides `Environment.load(root, config)` on every verb; `up` owns the assembly tier
-  (empty-in-options-only, one-per-group). Membership law: selection,
+- Selection law: `BUNDLES=` names options only, by qualified `group-dash-option` spelling (a bare entry's name refuses as unselectable); ≤ one option per group; zero options leave the riders/routes carrying the assembly (omitting the auth pick = the anonymous edge) — an options-only
+  repo with an empty selection hands compose a name-only root and compose's `no service selected` refuses at bring-up; unknown names refuse listing the qualified vocabulary; the name tier rides `Environment.load(root, config)` on every verb; `up` owns the one-per-group
+  fold. Membership law: selection,
   rendering, and staged inputs live inline in `verbs/up.py`; `compose.py` carries only the spelling both verbs share — `compose_command`, `require_env_file`, `lock_env_unwind`; nothing else lands there.
 - Leaf-service law: `Config.resolve_services(choices)` answers leaf services — the option's routes/ports ride before its group's (the auth option's route is `routes[0]`), its resolved service carries `auth: True`, an unselected group rides nothing; `up` consumes only these.
 - Bundle overrides ride `.env` per machine: `BUNDLE_OVERRIDE_<QUALIFIED_NAME>` = a `stack/generated/compose/`-layout path (relative to the repo root), carved into
