@@ -38,7 +38,6 @@ from boatyard.config.values import PLATFORM_KEY
 from boatyard.paths import DEFAULT_CONFIG_PATH, VALUES_FILE
 
 DIGEST_TAIL_PATTERN = re.compile(rf"@{SHA256_DIGEST_REGEX}$")
-DIGEST_PATTERN = re.compile(r"^Digest:\s+(sha256:[a-f0-9]+)", re.MULTILINE)
 COMPOSE_FILE_MEDIA_TYPE = "application/vnd.docker.compose.file+yaml"
 
 
@@ -129,11 +128,6 @@ def relock(config: ConfigFile, *, upgrade: bool = False) -> LockFile:
 
     prefix = config.mirror_prefix
     committed = read_config_lock(config.root)
-    remote_entries = config.remote_declared_entries()
-    if remote_entries:
-        # Bundle refs resolve direct via crane; the installer runs so the pin, not a preexisting
-        # binary, decides the version.
-        install_crane()
 
     images: dict[str, ConfigLockEntry] = {}
     for name, reference in config.base_images.items():
@@ -175,7 +169,7 @@ def relock(config: ConfigFile, *, upgrade: bool = False) -> LockFile:
         if frozen and not entry.routes and not entry.ports:
             bundles[key] = committed_bundle
             continue
-        pinned = committed_bundle.reference if frozen else f"{reference}@{resolve_bundle_digest(reference)}"
+        pinned = committed_bundle.reference if frozen else f"{reference}@{resolve_remote_digest(reference)}"
         content = read_compose_bundle(pinned)
         bundles[key] = (
             committed_bundle
@@ -211,8 +205,9 @@ def render_lock(lock: LockFile) -> str:
 
 
 def resolve_remote_manifests(reference: str, platforms: list[str], subject: str) -> UpstreamManifests:
+    install_crane()
     print(f"Resolving digests for: {reference}")
-    raw = bash_output(f"docker buildx imagetools inspect --raw {shlex.quote(reference)}")
+    raw = bash_output(f"crane manifest {shlex.quote(reference)}")
     index = OciIndex.model_validate(json.loads(raw))
     index_digest = resolve_remote_digest(reference)
     children = index.manifests
@@ -241,16 +236,7 @@ def resolve_remote_manifests(reference: str, platforms: list[str], subject: str)
 
 
 def resolve_remote_digest(reference: str) -> str:
-    print(f"Resolving digest for: {reference}")
-    output = bash_output(f"docker buildx imagetools inspect {shlex.quote(reference)}")
-    match = DIGEST_PATTERN.search(output)
-    if match is None:
-        raise ValueError(f"imagetools output for {reference} must carry a Digest line")
-    return match.group(1)
-
-
-def resolve_bundle_digest(reference: str) -> str:
-    # Compose-bundle media types are not image indexes; imagetools may refuse them, crane does not.
+    install_crane()
     print(f"Resolving digest for: {reference}")
     output = bash_output(f"crane digest {shlex.quote(reference)}").strip()
     if re.fullmatch(SHA256_DIGEST_REGEX, output) is None:
@@ -261,6 +247,7 @@ def resolve_bundle_digest(reference: str) -> str:
 def read_compose_bundle(reference: str) -> list[str]:
     # Compose bundles are OCI artifacts whose compose files ride as inline base64 layer data;
     # export cannot read them, the manifest data and the blob fallback can.
+    install_crane()
     print(f"Reading bundle content for: {reference}")
     manifest = OciArtifactManifest.model_validate(json.loads(bash_output(f"crane manifest {shlex.quote(reference)}")))
     texts = [
