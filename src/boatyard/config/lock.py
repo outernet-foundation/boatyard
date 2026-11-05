@@ -85,9 +85,11 @@ class ConfigLockBundle(BaseModel):
     requires: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _require_digest_pin(self) -> Self:
+    def _require_digest_pin(self, info: ValidationInfo) -> Self:
+        context: dict[str, object] = info.context or {}
+        source = context.get("path", "the image lock")
         if not _digest_pinned(self.reference):
-            raise ValueError(f"bundle entry is not digest-pinned ({self.reference!r})")
+            raise ValueError(f"{source}: bundle entry is not digest-pinned ({self.reference!r})")
         return self
 
 
