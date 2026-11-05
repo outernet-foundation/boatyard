@@ -5,7 +5,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from boatyard.config import Yaml, is_mapping
+from boatyard.config import Config, Yaml, is_mapping
 
 ENV_FILE = Path(".env")
 BUNDLES_VARIABLE = "BUNDLES"
@@ -80,7 +80,7 @@ class Environment(BaseModel):
         return path_overrides
 
     @classmethod
-    def load(cls, root: Path) -> Environment:
+    def load(cls, root: Path, config: Config | None) -> Environment:
         merged: dict[str, str] = {}
         path = root / ENV_FILE
         if path.is_file():
@@ -92,7 +92,7 @@ class Environment(BaseModel):
                 merged[key.strip()] = value.strip().strip("'\"")
         merged.update(environ)
         consumed = {BUNDLES_VARIABLE, PLATFORM_VARIABLE, PUBLIC_URL_VARIABLE}
-        return cls.model_validate({
+        environment = cls.model_validate({
             "bundles": _split_names(merged.get(BUNDLES_VARIABLE, "")),
             "overrides": {
                 key.removeprefix(BUNDLE_OVERRIDE_PREFIX).lower().replace("_", "-"): value
@@ -107,7 +107,40 @@ class Environment(BaseModel):
                 if key not in consumed and not key.startswith(BUNDLE_OVERRIDE_PREFIX)
             },
         })
+        _refuse_malformed_selection(environment, config)
+        return environment
 
 
 def _split_names(value: str) -> list[str]:
     return list(dict.fromkeys(part.strip() for part in value.split(",") if part.strip()))
+
+
+def _refuse_malformed_selection(environment: Environment, config: Config | None) -> None:
+    if config is None or not config.services:
+        if environment.bundles:
+            raise ValueError(f"{BUNDLES_VARIABLE}= is set but this repo declares no services")
+        return
+    unknown = [name for name in environment.bundles if name not in config.selectable_options]
+    if unknown:
+        bare_entries_note = f"; bare entries, always included: {config.bare_entries}" if config.bare_entries else ""
+        raise ValueError(
+            f"{BUNDLES_VARIABLE}= names {unknown}; "
+            f"the selectable options are {sorted(config.selectable_options)}{bare_entries_note}"
+        )
+    unknown_overrides = sorted(
+        name
+        for name in environment.path_overrides
+        if name not in config.selectable_options and name not in config.bare_entries
+    )
+    if unknown_overrides:
+        raise ValueError(
+            f"{BUNDLE_OVERRIDE_PREFIX}* names {unknown_overrides}; "
+            f"the bundle vocabulary is {sorted(config.selectable_options.keys() | set(config.bare_entries))}"
+        )
+    remote_names = {name for name, _reference in config.remote_service_entries()}
+    local_names = sorted(name for name in environment.path_overrides if name not in remote_names)
+    if local_names:
+        raise ValueError(
+            f"{BUNDLE_OVERRIDE_PREFIX}* names {local_names}; an override targets a ref entry; "
+            f"the ref entries are {sorted(remote_names)}"
+        )

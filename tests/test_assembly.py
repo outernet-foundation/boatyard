@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 
 from boatyard.cli import app
 from boatyard import environment
+from boatyard.config import Config
 from boatyard.verbs import up
 from boatyard.config_lock import LOCK_PATH
 
@@ -241,13 +242,41 @@ class TestEnvironmentLoad:
     def test_parses_assignments_skipping_comments_and_blanks(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        (tmp_path / "boatyard.yml").write_text(
+            yaml.safe_dump(
+                {
+                    "requires": ">=0.0",
+                    "project_name": "env-demo",
+                    "services": {
+                        "core": {"options": {"cuda": {"ref": "oci://ghcr.io/org/core:0.1.0"}}},
+                        "ui": {"options": {"open": {"ref": "oci://ghcr.io/org/ui:0.1.0"}}},
+                    },
+                },
+                default_flow_style=False,
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        tmp_path.joinpath(*LOCK_PATH.parts).write_text(
+            yaml.safe_dump(
+                {
+                    "bundles": {
+                        "CORE_CUDA_BUNDLE": {"reference": f"ghcr.io/org/core:0.1.0@{FAKE_DIGEST}"},
+                        "UI_OPEN_BUNDLE": {"reference": f"ghcr.io/org/ui:0.1.0@{FAKE_DIGEST}"},
+                    }
+                },
+                default_flow_style=False,
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
         (tmp_path / ".env").write_text(
-            "# comment\n\nBUNDLES=core-cuda,gateway-open\nGATEWAY_PORT='8443'\nRELOAD=\"true\"\nnot-an-assignment\n",
+            "# comment\n\nBUNDLES=core-cuda,ui-open\nGATEWAY_PORT='8443'\nRELOAD=\"true\"\nnot-an-assignment\n",
             encoding="utf-8",
         )
         monkeypatch.setattr(environment, "environ", {})
 
-        parsed = environment.Environment.load(tmp_path)
+        parsed = environment.Environment.load(tmp_path, Config.load(tmp_path))
 
-        assert parsed.bundles == ["core-cuda", "gateway-open"]
+        assert parsed.bundles == ["core-cuda", "ui-open"]
         assert parsed.variables == {"GATEWAY_PORT": "8443", "RELOAD": "true"}

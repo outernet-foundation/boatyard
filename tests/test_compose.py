@@ -902,6 +902,18 @@ class TestDownTeardown:
         assert isinstance(result.exception, ValueError)
         assert "must exist and declare services" in str(result.exception)
 
+    def test_down_refuses_an_unknown_selection_name(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        _write_ref_tree(tmp_path)
+        (tmp_path / ".env").write_text("BUNDLES=ghost\n", encoding="utf-8")
+        monkeypatch.delenv("BUNDLES", raising=False)
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["down"])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, ValueError)
+        assert "the selectable options are" in str(result.exception)
+
 
 class TestLockRequirement:
     def test_a_bundles_only_lock_attaches_no_env_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

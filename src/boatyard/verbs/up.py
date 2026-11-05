@@ -57,10 +57,8 @@ def up(
     config = Config.load(root)
 
     require_env_file(root)
-    environment = Environment.load(root)
+    environment = Environment.load(root, config)
     if config is None or not config.services:
-        if environment.bundles:
-            raise ValueError(f"{BUNDLES_VARIABLE}= is set but this repo declares no services")
         config = require_compose_stack(config)
 
     # Refuse --build without build declarations
@@ -74,15 +72,6 @@ def up(
             f"the options are {sorted(config.selectable_options)}"
         )
 
-    # Refuse bundle names outside the selectable options
-    unknown = [name for name in environment.bundles if name not in config.selectable_options]
-    if unknown:
-        bare_entries_note = f"; bare entries, always included: {config.bare_entries}" if config.bare_entries else ""
-        raise ValueError(
-            f"{BUNDLES_VARIABLE}= names {unknown}; "
-            f"the selectable options are {sorted(config.selectable_options)}{bare_entries_note}"
-        )
-
     # Fold the selection into at most one option per group
     choices: dict[str, str] = {}
     for name in environment.bundles:
@@ -93,27 +82,6 @@ def up(
                 f"at most one option per group ({group})"
             )
         choices[group] = option_name
-
-    # Refuse override names outside the bundle vocabulary
-    unknown = sorted(
-        name
-        for name in environment.path_overrides
-        if name not in config.selectable_options and name not in config.bare_entries
-    )
-    if unknown:
-        raise ValueError(
-            f"{BUNDLE_OVERRIDE_PREFIX}* names {unknown}; "
-            f"the bundle vocabulary is {sorted(config.selectable_options.keys() | set(config.bare_entries))}"
-        )
-
-    # Refuse overrides naming local entries
-    remote_names = {name for name, _reference in config.remote_service_entries()}
-    local_names = sorted(name for name in environment.path_overrides if name not in remote_names)
-    if local_names:
-        raise ValueError(
-            f"{BUNDLE_OVERRIDE_PREFIX}* names {local_names}; an override targets a ref entry; "
-            f"the ref entries are {sorted(remote_names)}"
-        )
 
     # Resolve the chosen options into leaf services
     services = config.resolve_services(choices)

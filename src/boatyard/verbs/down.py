@@ -29,7 +29,7 @@ def down(
 
     # Tear down by project name, covering every selection.
     with ExitStack() as stack:
-        environment = Environment.load(root)
+        environment = Environment.load(root, config)
         entries = compose_env_entries(read_config_lock(root), config, environment.platform)
         env_file: Path | None = None
         if entries:
