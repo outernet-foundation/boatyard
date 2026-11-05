@@ -32,8 +32,8 @@ from boatyard.config.lock import (
     LOCK_PATH,
     PLATFORM_PATTERN,
     SHA256_DIGEST_REGEX,
-    parse_yaml_document,
     read_config_lock,
+    reject_duplicate_keys,
 )
 
 DEFAULT_CONFIG_PATH = Path("boatyard.yml")
@@ -144,8 +144,10 @@ class Config(BaseModel):
         path = root / DEFAULT_CONFIG_PATH
         if not path.is_file():
             return None
-        loaded = parse_yaml_document(path.read_text(encoding="utf-8"), path.as_posix())
-        config = cls.model_validate(loaded)
+        source = path.as_posix()
+        text = path.read_text(encoding="utf-8")
+        reject_duplicate_keys(text, source)
+        config = cls.model_validate(safe_load(text))
         config.resolve(root)
         return config
 
@@ -710,10 +712,6 @@ def compose_bundle_output_path(root: Path, name: str) -> Path:
 
 def qualified_option_name(group: str, option_name: str) -> str:
     return f"{group}-{option_name}"
-
-
-def load_yaml_file(path: Path) -> Yaml:
-    return safe_load(path.read_text(encoding="utf-8"))
 
 
 def require_compose_stack(config: Config | None) -> Config:

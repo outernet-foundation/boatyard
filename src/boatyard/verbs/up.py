@@ -24,7 +24,6 @@ from boatyard.config.config import (
     compose_bundle_output_path,
     double_dollars,
     is_mapping,
-    load_yaml_file,
     lock_key_prefix,
     refuse_unresolved_references,
     require_compose_stack,
@@ -237,7 +236,7 @@ def up(
 
 
 def _scan_local_bundle(name: str, service: ResolvedService, path: Path, *, refuse_edge: bool) -> list[str]:
-    loaded = load_yaml_file(path)
+    loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
     loaded_services = loaded.get("services") if is_mapping(loaded) else None
     if refuse_edge and is_mapping(loaded_services) and EDGE_SERVICE_NAME in loaded_services:
         raise ValueError(f"{path.as_posix()}: the bundle override defines the reserved service {EDGE_SERVICE_NAME!r}")

@@ -5,6 +5,8 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator, model_validator
 
+from yaml import safe_load
+
 from boatyard.config.config import (
     ENV_NAME_PATTERN,
     Config,
@@ -12,7 +14,7 @@ from boatyard.config.config import (
     is_mapping,
     qualified_option_name,
 )
-from boatyard.config.lock import parse_yaml_document
+from boatyard.config.lock import reject_duplicate_keys
 
 VALUES_FILE = Path("boatyard.values.yaml")
 PLATFORM_KEY = "platform"
@@ -172,7 +174,11 @@ class ConfigValues(BaseModel):
     @classmethod
     def load(cls, root: Path, config: Config | None) -> ConfigValues:
         path = root / VALUES_FILE
-        raw: object = parse_yaml_document(path.read_text(encoding="utf-8"), path.as_posix()) if path.is_file() else {}
+        raw: object = {}
+        if path.is_file():
+            text = path.read_text(encoding="utf-8")
+            reject_duplicate_keys(text, path.as_posix())
+            raw = safe_load(text)
         if raw is None:
             raw = {}
         return cls.model_validate(raw, context={"path": path.as_posix(), "config": config})

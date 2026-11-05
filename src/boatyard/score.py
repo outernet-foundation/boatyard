@@ -28,7 +28,6 @@ from boatyard.config.config import (
     Yaml,
     is_list,
     is_mapping,
-    load_yaml_file,
     Config,
     WorkloadDocument,
 )
@@ -159,7 +158,7 @@ def render_score(
         rendering_dir = score_dir / rendering
         if rendering_dir.is_dir():
             for path in sorted(rendering_dir.glob("*.yaml")):
-                entries = load_yaml_file(path)
+                entries = yaml.safe_load(path.read_text(encoding="utf-8"))
                 if is_list(entries) and any(is_mapping(entry) and entry.get("type") in referenced for entry in entries):
                     selected.append((f"{rendering}/{path.name}", entries))
 
@@ -240,7 +239,7 @@ def render_score(
 def load_workloads(score_dir: Path, names: list[str], lens: type[WorkloadDocument]) -> list[LoadedWorkload]:
     loaded: list[LoadedWorkload] = []
     for name in names:
-        raw = load_yaml_file(score_dir / name)
+        raw = yaml.safe_load((score_dir / name).read_text(encoding="utf-8"))
         loaded.append(LoadedWorkload(name, raw, lens.parse(raw, name)))
     return loaded
 

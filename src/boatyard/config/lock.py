@@ -53,7 +53,9 @@ class ConfigLock(BaseModel):
     @classmethod
     def load(cls, path: Path) -> ConfigLock:
         source = path.as_posix()
-        loaded = parse_yaml_document(path.read_text(encoding="utf-8"), source)
+        text = path.read_text(encoding="utf-8")
+        reject_duplicate_keys(text, source)
+        loaded: object = yaml.safe_load(text)
         if loaded is None:
             loaded = {}
         return cls.model_validate(loaded, context={"path": source})
@@ -104,12 +106,10 @@ def read_config_lock(root: Path) -> ConfigLock:
     return ConfigLock.load(lock_path) if lock_path.is_file() else ConfigLock()
 
 
-def parse_yaml_document(text: str, source: str) -> object:
+def reject_duplicate_keys(text: str, source: str) -> None:
     document_node = yaml.SafeLoader(text).get_single_node()
-    if document_node is None:
-        return None
-    _reject_duplicate_keys(document_node, source)
-    return yaml.safe_load(text)
+    if document_node is not None:
+        _reject_duplicate_keys(document_node, source)
 
 
 def _reject_duplicate_keys(node: yaml.Node, source: str) -> None:
