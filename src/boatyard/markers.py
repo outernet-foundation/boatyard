@@ -7,7 +7,7 @@ from typing import Literal, NamedTuple
 import yaml
 from pydantic import BaseModel, ConfigDict
 
-from boatyard.config import Yaml, is_mapping
+from boatyard.config_file import Yaml, is_mapping
 
 TEXT_MARKER = "include"
 YAML_MARKER = "include-yaml"

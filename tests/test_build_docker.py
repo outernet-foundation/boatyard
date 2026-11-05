@@ -14,7 +14,7 @@ from boatyard.verbs import build
 from boatyard import bake as bake_module
 from boatyard import dockerfiles as dockerfiles_module
 from boatyard.lock import UpstreamManifests
-from boatyard.config_lock import LOCK_PATH
+from boatyard.lock_file import LOCK_PATH
 
 DIGEST_A = "sha256:" + "a" * 64
 MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"

@@ -22,7 +22,7 @@ from pydantic import (
     model_validator,
 )
 
-from boatyard.config import (
+from boatyard.config_file import (
     ENV_NAME_PATTERN,
     PLACEHOLDER,
     Yaml,

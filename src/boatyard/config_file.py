@@ -23,17 +23,17 @@ from pydantic import (
 from strictyaml import load as load_strict_yaml
 from yaml import YAMLError, safe_load
 
-from boatyard.config_lock import (
-    LOCK_PATH,
-    PLATFORM_PATTERN,
-    SHA256_DIGEST_REGEX,
-    read_config_lock,
-)
 from boatyard.dockerfiles import (
     DOCKERFILE_NAME,
     ServiceBuild,
     derive_services,
     service_sha_env,
+)
+from boatyard.lock_file import (
+    LOCK_PATH,
+    PLATFORM_PATTERN,
+    SHA256_DIGEST_REGEX,
+    read_config_lock,
 )
 
 DEFAULT_CONFIG_PATH = Path("boatyard.yml")

@@ -7,10 +7,10 @@ import yaml
 from typer.testing import CliRunner
 
 from boatyard.cli import app
-from boatyard import config as config_module
+from boatyard import config_file as config_module
 from boatyard import dockerfiles as dockerfiles_module
 from boatyard import lock as lock_module
-from boatyard.config_lock import LOCK_PATH
+from boatyard.lock_file import LOCK_PATH
 from boatyard.lock import UpstreamManifests
 
 DIGEST_A = "sha256:" + "a" * 64

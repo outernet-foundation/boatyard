@@ -19,11 +19,11 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
 
 ## Modules
 
-`config.py` schema + load; `Config.resolve_services(choices)` folds a selection into leaf services; `dockerfiles.py` Dockerfile declarations + sha machinery (`ServiceBuild`, `derive_services`); `config_lock.py` lock schema + parsers; `environment.py` the `.env`-over-shell typed view
+`config_file.py` schema + load; `Config.resolve_services(choices)` folds a selection into leaf services; `dockerfiles.py` Dockerfile declarations + sha machinery (`ServiceBuild`, `derive_services`); `lock_file.py` lock schema + parsers; `values_file.py` the `.env`-over-shell typed view
   (`Environment.load`, `PublicUrl`); `lock.py` lock engine + projections; `compose.py` the compose spelling shared by both verbs
   (`compose_command`, `require_env_file`, `lock_env_unwind`); `bake.py` build pipeline; `markers.py` marker resolution; `score.py` score shared base; `score_compose.py`/`score_k8s.py` rendering pipelines; `verbs/score.py` the score verb + `ensure_tools`;
   `publish.py` publish preparation; `crane.py` pinned crane installer; `verbs/up.py` selection + rendering inlined in `up`; `verbs/*` one module per command. Model modules run root → leaves: root record first
-  (`RootModel` subscripts quote forward refs; the one inversion is a parent whose field default constructs the child), functions callers-before-callees; imports absolute; `config_lock`/`dockerfiles` ← `config` one-way. Also in `config.py` (the shared leaf): `Yaml`,
+  (`RootModel` subscripts quote forward refs; the one inversion is a parent whose field default constructs the child), functions callers-before-callees; imports absolute; `lock_file`/`dockerfiles` ← `config_file` one-way. Also in `config_file.py` (the shared leaf): `Yaml`,
   `is_mapping`/`is_list`, `double_dollars` (the one `$`-doubling home), `PLACEHOLDER`/`COMPOSE_HOLE`/`ENV_NAME_PATTERN`, `EDGE_SERVICE_NAME`, `lock_key_prefix`, `chart_lock_key`, `bundle_lock_key`, `load_yaml_file`,
   `compose_bundle_output_path` (the one compose-output path join), `qualified_option_name` (the one qualified-name join), `required_compose_holes` (the odd-parity hole scan), `refuse_unresolved_references`
   (the shared route/port refusal; `prefix` composes the `{entry}-` namespace).
@@ -44,7 +44,7 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
 - `mirrored_ref(reference, prefix)` = the only prefix join — injects the prefix, rejects an already-prefixed reference.
 - Derivation shape law: `Config` carries authored data and validation; a member may hold real derivation logic (`local_service_entries`, `declared_charts`, `resolve_services`), but a member that only delegates to another module's function is a
   pass-through — call the function at the consumer, `compute_service_shas` module-qualified (test seam); `root` defaults to the working directory, `resolve` injects the load root, excluded, never-authored.
-- `.env` carries `BUNDLES=`, `BUNDLE_OVERRIDE_*`, `PLATFORM=`, `PUBLIC_URL`, the consumer's interpolation variables; `Environment.load` (`environment.py`) carves the four consumed spellings into
+- `.env` carries `BUNDLES=`, `BUNDLE_OVERRIDE_*`, `PLATFORM=`, `PUBLIC_URL`, the consumer's interpolation variables; `Environment.load` (`values_file.py`) carves the four consumed spellings into
   typed fields (`bundles`, `path_overrides` with dash-normalized names — empty values, URL-scheme values, and non-`stack/generated/compose/` layouts refuse at load, paths stay unresolved, resolution
   is `up`'s against the repo root; `public_url`, `platform`) plus the `variables` pass-through — consumed spellings never ride `variables`; syntactic refusals (scheme-less `PUBLIC_URL`,
   empty or URL-scheme override values, layout) are pydantic `ValidationError`s at parse; the selection refusals and the fold into `choices` ride `Environment.load` (the selection law).
@@ -110,7 +110,7 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
 - Caddyfile: one site on internal `:8443`; `handle` blocks mutually exclusive (caddy sorts longest-path-first, declaration order cannot shadow); `handle_path` for `strip_prefix`; `header_up X-Forwarded-*` only on the auth route; `raw:`
   content rides verbatim (escape hatch, review flag); the whole file rides inline as `configs.content` with every `$` doubled.
 - Per-run files: lifetimes ride the caller-owned `ExitStack`, never an exception handler; the handoff execs — a successful run never unwinds, the files ride out in the OS temp dir; on failure the compose files unlink, the env file
-  prints and keeps (`lock_env_unwind`); a missing `.env` reads as empty so score generation runs on fresh checkouts (`Environment.load` in `environment.py`); `up` fills one per-run `--env-file` in its
+  prints and keeps (`lock_env_unwind`); a missing `.env` reads as empty so score generation runs on fresh checkouts (`Environment.load` in `values_file.py`); `up` fills one per-run `--env-file` in its
   include loop from the consumer's lock bare (the root document's holes) plus a fan under every selected local entry's prefix, and each path-override producer's lock under the overridden entry's prefix (producer
   pins win; empty entries attach none — a bundles-only lock carries nothing compose consumes);
   `compose_command` = the one docker compose invocation spelling; `down` never reads the selection, never resolves an include — a name-only root + `--remove-orphans` removes

@@ -13,7 +13,7 @@ from pydantic import (
     model_validator,
 )
 
-from boatyard.config import (
+from boatyard.config_file import (
     COMPOSE_HOLE,
     ComposeWorkloadDocument,
     WorkloadDocument,
@@ -23,9 +23,8 @@ from boatyard.config import (
     lock_key_prefix,
     Config,
 )
-from boatyard.config_lock import LOCK_PATH, ConfigLock
-from boatyard.environment import Environment
 from boatyard.lock import compose_env_entries
+from boatyard.lock_file import LOCK_PATH, ConfigLock
 from boatyard.score import (
     SECRETS_FILE,
     SecretsDeclaration,
@@ -34,6 +33,7 @@ from boatyard.score import (
     render_score,
     write_file,
 )
+from boatyard.values_file import Environment
 
 TOOL = "score-compose"
 

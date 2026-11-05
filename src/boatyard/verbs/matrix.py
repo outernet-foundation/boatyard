@@ -5,7 +5,7 @@ from pathlib import Path
 
 import typer
 
-from boatyard.config import Config
+from boatyard.config_file import Config
 
 app = typer.Typer()
 

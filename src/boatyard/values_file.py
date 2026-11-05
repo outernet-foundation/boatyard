@@ -5,7 +5,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from boatyard.config import Config, Yaml, is_mapping, qualified_option_name
+from boatyard.config_file import Config, Yaml, is_mapping, qualified_option_name
 
 ENV_FILE = Path(".env")
 BUNDLES_VARIABLE = "BUNDLES"

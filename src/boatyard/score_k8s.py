@@ -12,7 +12,7 @@ from pydantic import (
     Field,
 )
 
-from boatyard.config import (
+from boatyard.config_file import (
     K8sConfig,
     WorkloadDocument,
     Yaml,
@@ -21,8 +21,8 @@ from boatyard.config import (
     is_list,
     is_mapping,
 )
-from boatyard.config_lock import ConfigLock
 from boatyard.lock import env_entries
+from boatyard.lock_file import ConfigLock
 from boatyard.markers import MarkerContext, resolve_markers
 from boatyard.score import (
     SECRETS_FILE,

@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 
 from boatyard.cli import app
 from boatyard.verbs import down, up
-from boatyard.config_lock import LOCK_PATH
+from boatyard.lock_file import LOCK_PATH
 
 MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
 FAKE_DIGEST = "sha256:" + "a" * 64

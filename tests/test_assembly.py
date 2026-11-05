@@ -7,10 +7,10 @@ import yaml
 from typer.testing import CliRunner
 
 from boatyard.cli import app
-from boatyard import environment
-from boatyard.config import Config
+from boatyard import values_file
+from boatyard.config_file import Config
 from boatyard.verbs import up
-from boatyard.config_lock import LOCK_PATH
+from boatyard.lock_file import LOCK_PATH
 
 FAKE_DIGEST = "sha256:" + "a" * 64
 LIVEKIT_SHA_TAG = "a" * 40
@@ -274,9 +274,9 @@ class TestEnvironmentLoad:
             "# comment\n\nBUNDLES=core-cuda,ui-open\nGATEWAY_PORT='8443'\nRELOAD=\"true\"\nnot-an-assignment\n",
             encoding="utf-8",
         )
-        monkeypatch.setattr(environment, "environ", {})
+        monkeypatch.setattr(values_file, "environ", {})
 
-        parsed = environment.Environment.load(tmp_path, Config.load(tmp_path))
+        parsed = values_file.Environment.load(tmp_path, Config.load(tmp_path))
 
         assert parsed.bundles == ["core-cuda", "ui-open"]
         assert parsed.choices == {"core": "cuda", "ui": "open"}

@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 from boatyard import dockerfiles
-from boatyard.config import Config
+from boatyard.config_file import Config
 from boatyard.dockerfiles import ServiceBuild, compute_service_shas
 
 

@@ -7,14 +7,14 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from boatyard.config import (
+from boatyard.config_file import (
     DEV_SENTINEL,
     Config,
     ServiceEntry,
     ServiceGroup,
     bundle_lock_key,
 )
-from boatyard.config_lock import LOCK_PATH, parse_config_lock
+from boatyard.lock_file import LOCK_PATH, parse_config_lock
 
 DIGEST = "sha256:" + "a" * 64
 SHA_TAG = "a" * 40

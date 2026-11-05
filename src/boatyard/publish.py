@@ -7,7 +7,7 @@ from typing import NamedTuple
 
 import yaml
 
-from boatyard.config import Yaml, double_dollars
+from boatyard.config_file import Yaml, double_dollars
 from boatyard.score_compose import ComposeDocument
 from boatyard.lock import resolve_remote_digest
 

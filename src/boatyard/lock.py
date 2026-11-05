@@ -13,7 +13,7 @@ import yaml
 from bashrun.bash import bash_output
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from boatyard.config import (
+from boatyard.config_file import (
     OCI_REFERENCE_PREFIX,
     Config,
     Yaml,
@@ -25,7 +25,8 @@ from boatyard.config import (
     refuse_unresolved_references,
     required_compose_holes,
 )
-from boatyard.config_lock import (
+from boatyard.crane import install_crane
+from boatyard.lock_file import (
     LOCK_PATH,
     read_config_lock,
     SHA256_DIGEST_REGEX,
@@ -33,8 +34,7 @@ from boatyard.config_lock import (
     ConfigLockBundle,
     ConfigLockEntry,
 )
-from boatyard.crane import install_crane
-from boatyard.environment import PLATFORM_VARIABLE
+from boatyard.values_file import PLATFORM_VARIABLE
 
 DIGEST_TAIL_PATTERN = re.compile(rf"@{SHA256_DIGEST_REGEX}$")
 DIGEST_PATTERN = re.compile(r"^Digest:\s+(sha256:[a-f0-9]+)", re.MULTILINE)
