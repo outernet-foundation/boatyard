@@ -12,18 +12,18 @@ Quick loop: `uv run pytest`, `uv run ruff check`; full gate: `uv run --locked sc
 ## Verbs
 
 One module per command under `verbs/`, each with its local bare `app = typer.Typer()` + `@app.command()` on the function; `cli.py` composes them with nameless `app.add_typer(...)` — flat top-level verbs (a named `add_typer` nests a group); one `boatyard`
-console script. Error-channel law: no verb boundary — authored-input refusals propagate with full traceback — hand-raised bare `ValueError` (byte-stable text; `TypeError` for wrong-type documents — `lock_file.py`/`values_file.py`), pydantic parses raw `ValidationError`; `typer.BadParameter`
+console script. Error-channel law: no verb boundary — authored-input refusals propagate with full traceback — hand-raised bare `ValueError` (byte-stable text; `TypeError` for wrong-type documents — `config/lock.py`/`config/values.py`), pydantic parses raw `ValidationError`; `typer.BadParameter`
 owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry credentials) and `verbs/score.py` (stale artifacts). Flags live in the typer signatures in `verbs/*.py`; the flag laws: `build`'s
 `--push`/`--push-to` refuse together; `generate-score --target both` refuses (BadParameter) a one-substrate repo naming the matching narrower `--target` (the rendering pipelines carry no substrate-presence checks); `docker-build-matrix` answers a bare JSON array.
 `--lock-only`/`--check`/`--upgrade` belong to `lock`, never `build`; no `--gpu`, no `--compose-file` (the verbs own the compose invocation); `tree-tags` answers a bare string — no JSON, no `{SERVICE}_SHA` names.
 
 ## Modules
 
-`config_file.py` schema + load; `Config.resolve_services(choices)` folds a selection into leaf services; `dockerfiles.py` Dockerfile declarations + sha machinery (`ServiceBuild`, `derive_services`); `lock_file.py` lock schema + parsers; `values_file.py` the typed values file
+`config/config.py` schema + load; `Config.resolve_services(choices)` folds a selection into leaf services; `dockerfiles.py` Dockerfile declarations + sha machinery (`ServiceBuild`, `derive_services`); `config/lock.py` lock schema + parsers; `config/values.py` the typed values file
   (`ConfigValues.load`, `PublicUrl`); `lock.py` lock engine + projections (`render_merged_env`); `compose.py` the compose spelling shared by both verbs
   (`compose_command`, `require_env_file`, `lock_env_unwind`); `bake.py` build pipeline; `markers.py` marker resolution; `score.py` score shared base; `score_compose.py`/`score_k8s.py` rendering pipelines; `verbs/score.py` the score verb + `ensure_tools`;
   `publish.py` publish preparation; `crane.py` pinned crane installer; `verbs/up.py` selection + rendering inlined in `up`; `verbs/*` one module per command. Model modules run root → leaves: root record first
-  (`RootModel` subscripts quote forward refs; the one inversion is a parent whose field default constructs the child), functions callers-before-callees; imports absolute; `lock_file`/`dockerfiles` ← `config_file` one-way. Also in `config_file.py` (the shared leaf): `Yaml`,
+  (`RootModel` subscripts quote forward refs; the one inversion is a parent whose field default constructs the child), functions callers-before-callees; imports absolute; `config/lock`/`dockerfiles` ← `config/config` one-way. Also in `config/config.py` (the shared leaf): `Yaml`,
   `is_mapping`/`is_list`, `double_dollars` (the one `$`-doubling home), `PLACEHOLDER`/`COMPOSE_HOLE`/`ENV_NAME_PATTERN`, `EDGE_SERVICE_NAME`, `lock_key_prefix`, `chart_lock_key`, `bundle_lock_key`, `load_yaml_file`,
   `compose_bundle_output_path` (the one compose-output path join), `qualified_option_name` (the one qualified-name join), `required_compose_holes` (the odd-parity hole scan), `refuse_unresolved_references`
   (the shared route/port refusal; `prefix` composes the `{entry}-` namespace).
@@ -44,7 +44,7 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
 - `mirrored_ref(reference, prefix)` = the only prefix join — injects the prefix, rejects an already-prefixed reference.
 - Derivation shape law: `Config` carries authored data and validation; a member may hold real derivation logic (`local_service_entries`, `declared_charts`, `resolve_services`), but a member that only delegates to another module's function is a
   pass-through — call the function at the consumer, `compute_service_shas` module-qualified (test seam); `root` defaults to the working directory, `resolve` injects the load root, excluded, never-authored.
-- `boatyard.values.yaml` (consumer root, gitignored) is the only machine-values source — the ambient shell fills nothing; a missing file reads as the empty declaration (score generation runs on fresh checkouts); `up`/`down` refuse without it. `ConfigValues.load` (`values_file.py`) reads it via `load_yaml_file`. Typed fields (`bundles` list, `path_overrides` map keyed by qualified name, `public_url`, `platform`) carve the consumed spellings; every other key is a hole value on the open `variables` map (ALL_CAPS enforced — `ENV_NAME_PATTERN`). Path-override refusals (empty, URL-scheme, non-`stack/generated/compose/` layout) and the scheme-less `public_url` refusal are pydantic `ValidationError`s at parse; paths resolve in `up` against the repo root.
+- `boatyard.values.yaml` (consumer root, gitignored) is the only machine-values source — the ambient shell fills nothing; a missing file reads as the empty declaration (score generation runs on fresh checkouts); `up`/`down` refuse without it. `ConfigValues.load` (`config/values.py`) reads it via `load_yaml_file`. Typed fields (`bundles` list, `path_overrides` map keyed by qualified name, `public_url`, `platform`) carve the consumed spellings; every other key is a hole value on the open `variables` map (ALL_CAPS enforced — `ENV_NAME_PATTERN`). Path-override refusals (empty, URL-scheme, non-`stack/generated/compose/` layout) and the scheme-less `public_url` refusal are pydantic `ValidationError`s at parse; paths resolve in `up` against the repo root.
 
 ## Service derivation
 
