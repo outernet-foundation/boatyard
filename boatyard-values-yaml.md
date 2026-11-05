@@ -38,6 +38,13 @@ and replaces `.env` itself with a typed YAML object.
   `entries` and `requirements` are the include loop's work product, and the
   original purity concern is fixed at the input level (filled = values ∪
   lock entries, no shell), not by relocating the code.
+- D5 resolved: no unknown-key refusal on the open map — `:-`-defaulted
+  holes are excluded from `requires` yet legitimately overridable, and the
+  per-machine file keeps values for bundles not currently selected; typos
+  surface through `up`'s unfilled-requirements refusal. The ALL_CAPS key
+  grammar governs the open map only — typed fields (`bundles`,
+  `path_overrides`, `public_url`, `platform`) are never env spellings and
+  carry no case law.
 - Compose's documented precedence — shell environment beats `--env-file`,
   and no switch exists to disable it — is defeated by scrubbing the compose
   child environment (`env -u`), not by trusting compose. Verified
@@ -113,12 +120,9 @@ and replaces `.env` itself with a typed YAML object.
 
 ## Open design questions
 
-- **D5 — open-map teeth.** Refuse values for holes no selected bundle
-  declares? (Requirements are only known in `up`.) Key grammar for the open
-  map (ALL_CAPS enforced or free-form)?
 - **D6 — merged-file unwind shape.** `lock_env_unwind` prints/keeps one
-   merged file now; check the print contract still teaches (which values
-   came from where).
+  merged file now; check the print contract still teaches (which values
+  came from where).
 - **D7 — secrets lint.** The values file carries secrets; consider whether
    any warning belongs on suspiciously-non-secret shapes. Low priority.
 
