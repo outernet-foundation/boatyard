@@ -34,6 +34,10 @@ and replaces `.env` itself with a typed YAML object.
 - D3 resolved: the name is `boatyard.values.yaml` — the conceptual
   collision with helm `values/` files is accepted; distinct paths and the
   `boatyard.` prefix carry the distinction.
+- D4 resolved: the unfilled-requirements check stays inline in `up` —
+  `entries` and `requirements` are the include loop's work product, and the
+  original purity concern is fixed at the input level (filled = values ∪
+  lock entries, no shell), not by relocating the code.
 - Compose's documented precedence — shell environment beats `--env-file`,
   and no switch exists to disable it — is defeated by scrubbing the compose
   child environment (`env -u`), not by trusting compose. Verified
@@ -109,12 +113,6 @@ and replaces `.env` itself with a typed YAML object.
 
 ## Open design questions
 
-- **D4 — does the unfilled-requirements check move into
-  `Environment.load` now?** The pair is purer (values file + config), but
-  `entries` (producer-lock fans from resolved override paths) and
-  `requirements` (include-loop scan / lock `requires`) are still the loop's
-  work product. Re-derive rather than assume; the origin refusal was about
-  input availability, which values.yaml only partially fixes.
 - **D5 — open-map teeth.** Refuse values for holes no selected bundle
   declares? (Requirements are only known in `up`.) Key grammar for the open
   map (ALL_CAPS enforced or free-form)?
