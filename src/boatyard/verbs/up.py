@@ -29,8 +29,8 @@ from boatyard.config.config import (
     require_compose_stack,
     required_compose_holes,
 )
-from boatyard.lock import compose_env_entries, producer_env_entries, render_merged_env
-from boatyard.config.lock import LOCK_PATH, LockFile, read_config_lock
+from boatyard.lock import render_merged_env
+from boatyard.config.lock import read_config_lock
 from boatyard.config.values import ValuesFile
 from boatyard.paths import DEFAULT_CONFIG_PATH, VALUES_FILE
 
@@ -63,8 +63,8 @@ def up(
     services = config.resolve_services(config_values.choices)
 
     # Collect each entry's include and env entries in declaration order
-    lock = read_config_lock(config.root)
-    consumer_entries = compose_env_entries(lock, config, config_values.platform)
+    lock = read_config_lock(config.root, config)
+    consumer_entries = lock.compose_env_entries(config_values.platform)
     entries: dict[str, str] = dict(consumer_entries)
     includes: list[Yaml] = []
     requirements: dict[str, list[str]] = {}
@@ -92,11 +92,13 @@ def up(
                 raise ValueError(f"path_overrides.{name}: {path.as_posix()} does not exist")
             requirements[name] = _scan_local_bundle(name, service, path, refuse_edge=True)
             includes.append(path.as_posix())
-            # Fill the override's holes from the producer lock three parents up
-            producer_lock = path.parents[3] / LOCK_PATH
-            if producer_lock.is_file():
-                producer_entries = producer_env_entries(LockFile.load(producer_lock), config_values.platform)
-                entries.update({lock_key_prefix(name) + key: value for key, value in producer_entries.items()})
+            # Fill the override's holes from the producer repo above the override
+            producer_root = _producer_root(path)
+            producer_config = ConfigFile.load(producer_root / DEFAULT_CONFIG_PATH)
+            producer_entries = read_config_lock(producer_root, producer_config).compose_env_entries(
+                config_values.platform
+            )
+            entries.update({lock_key_prefix(name) + key: value for key, value in producer_entries.items()})
             continue
 
         # Include a remote ref as its lock-pinned digest
@@ -248,3 +250,10 @@ def _scan_local_bundle(name: str, service: ResolvedService, path: Path, *, refus
         prefix=f"{name}-",
     )
     return sorted(required_compose_holes(path.read_text(encoding="utf-8")))
+
+
+def _producer_root(path: Path) -> Path:
+    for ancestor in path.parents:
+        if (ancestor / DEFAULT_CONFIG_PATH).is_file():
+            return ancestor
+    raise ValueError(f"{path.as_posix()}: no boatyard.yml-bearing repo root above the bundle override")

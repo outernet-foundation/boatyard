@@ -84,7 +84,7 @@ def generate_score(
     lock_path = root / LOCK_PATH
     if not lock_path.is_file():
         raise ValueError(f"{lock_path.as_posix()}: the image lock is required")
-    lock = LockFile.load(lock_path)
+    lock = LockFile.load(lock_path, config)
     if not lock.images and not lock.charts:
         raise ValueError(f"{lock_path.as_posix()}: the image lock carries no entries")
 

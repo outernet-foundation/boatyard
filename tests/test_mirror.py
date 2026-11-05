@@ -32,11 +32,15 @@ def _write_lock(
     images: dict[str, object],
     charts: dict[str, str] | None = None,
     bundles: dict[str, str] | None = None,
+    platforms: list[str] | None = None,
 ) -> None:
+    platform_list = platforms if platforms is not None else ["linux/amd64"]
     entries: dict[str, object] = {}
     for name, value in images.items():
-        entries[name] = {"index": value} if isinstance(value, str) else value
-    document: dict[str, object] = {"images": entries}
+        entries[name] = (
+            {"index": value, "platforms": dict.fromkeys(platform_list, value)} if isinstance(value, str) else value
+        )
+    document: dict[str, object] = {"platforms": platform_list, "images": entries}
     if charts:
         document["charts"] = charts
     if bundles:
@@ -86,7 +90,10 @@ class TestMirrorVerb:
         (tmp_path / "workloads").mkdir()
         _write_lock(
             tmp_path,
-            {"API_IMAGE": f"{MIRROR_PREFIX}/ghcr.io/outernet-foundation/placeframe/api:1.2.3@{FAKE_DIGEST}"},
+            {
+                "UV_IMAGE": f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{FAKE_DIGEST}",
+                "API_IMAGE": f"{MIRROR_PREFIX}/ghcr.io/outernet-foundation/placeframe/api:1.2.3@{FAKE_DIGEST}",
+            },
         )
 
     def _invoke(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recorder: CommandRecorder) -> Result:
@@ -98,6 +105,17 @@ class TestMirrorVerb:
 
     def test_probes_every_recorded_digest_index_and_platforms(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._write_tree(tmp_path)
+        _write_config(
+            tmp_path,
+            {
+                "mirror_prefix": MIRROR_PREFIX,
+                "platforms": ["linux/amd64", "linux/arm64"],
+                "base_images": {
+                    "UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15",
+                    "API_IMAGE": "ghcr.io/outernet-foundation/placeframe/api:1.2.3",
+                },
+            },
+        )
         uv_base = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15"
         api_base = f"{MIRROR_PREFIX}/ghcr.io/outernet-foundation/placeframe/api:1.2.3"
         index = f"{uv_base}@{FAKE_DIGEST}"
@@ -105,31 +123,50 @@ class TestMirrorVerb:
         arm64 = f"{uv_base}@{DIGEST_ARM64}"
         api_index = f"{api_base}@{FAKE_DIGEST}"
         api_amd64 = f"{api_base}@{DIGEST_AMD64}"
+        api_arm64 = f"{api_base}@{DIGEST_ARM64}"
         _write_lock(
             tmp_path,
             {
                 "UV_IMAGE": {"index": index, "platforms": {"linux/amd64": amd64, "linux/arm64": arm64}},
-                "API_IMAGE": {"index": api_index, "platforms": {"linux/amd64": api_amd64}},
+                "API_IMAGE": {"index": api_index, "platforms": {"linux/amd64": api_amd64, "linux/arm64": api_arm64}},
             },
+            platforms=["linux/amd64", "linux/arm64"],
         )
-        recorder = CommandRecorder(present_refs={index, amd64, arm64, api_index, api_amd64})
+        recorder = CommandRecorder(present_refs={index, amd64, arm64, api_index, api_amd64, api_arm64})
 
         result = self._invoke(tmp_path, monkeypatch, recorder)
 
         assert result.exit_code == 0
         probes = [command.removeprefix("crane digest ") for command in recorder.commands if "crane digest" in command]
-        assert probes == [index, amd64, arm64, api_index, api_amd64]
+        assert probes == [index, amd64, arm64, api_index, api_amd64, api_arm64]
         assert not [command for command in recorder.commands if command.startswith("crane copy")]
         assert "Mirrored references: 0 copied, 2 already present" in result.stdout
 
     def test_a_missing_platform_manifest_triggers_the_copy_again(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._write_tree(tmp_path)
+        _write_config(
+            tmp_path,
+            {
+                "mirror_prefix": MIRROR_PREFIX,
+                "platforms": ["linux/amd64", "linux/arm64"],
+                "base_images": {
+                    "UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15",
+                    "API_IMAGE": "ghcr.io/outernet-foundation/placeframe/api:1.2.3",
+                },
+            },
+        )
         uv_base = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15"
+        api_base = f"{MIRROR_PREFIX}/ghcr.io/outernet-foundation/placeframe/api:1.2.3"
         index = f"{uv_base}@{FAKE_DIGEST}"
         amd64 = f"{uv_base}@{DIGEST_AMD64}"
         missing_arm64 = f"{uv_base}@{DIGEST_ARM64}"
         _write_lock(
-            tmp_path, {"UV_IMAGE": {"index": index, "platforms": {"linux/amd64": amd64, "linux/arm64": missing_arm64}}}
+            tmp_path,
+            {
+                "UV_IMAGE": {"index": index, "platforms": {"linux/amd64": amd64, "linux/arm64": missing_arm64}},
+                "API_IMAGE": f"{api_base}@{FAKE_DIGEST}",
+            },
+            platforms=["linux/amd64", "linux/arm64"],
         )
         recorder = CommandRecorder(present_refs={index, amd64})
 
@@ -146,7 +183,13 @@ class TestMirrorVerb:
     def test_probes_a_digest_once_when_index_and_platform_agree(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._write_tree(tmp_path)
         uv_base = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{FAKE_DIGEST}"
-        _write_lock(tmp_path, {"UV_IMAGE": {"index": uv_base, "platforms": {"linux/amd64": uv_base}}})
+        _write_lock(
+            tmp_path,
+            {
+                "UV_IMAGE": {"index": uv_base, "platforms": {"linux/amd64": uv_base}},
+                "API_IMAGE": f"{MIRROR_PREFIX}/ghcr.io/outernet-foundation/placeframe/api:1.2.3@{FAKE_DIGEST}",
+            },
+        )
         recorder = CommandRecorder(present_refs={uv_base})
 
         result = self._invoke(tmp_path, monkeypatch, recorder)
@@ -172,7 +215,13 @@ class TestMirrorVerb:
     def test_skips_references_the_lock_pins_as_mirrored(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._write_tree(tmp_path)
         mirrored_uv = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{FAKE_DIGEST}"
-        _write_lock(tmp_path, {"UV_IMAGE": mirrored_uv})
+        _write_lock(
+            tmp_path,
+            {
+                "UV_IMAGE": mirrored_uv,
+                "API_IMAGE": f"{MIRROR_PREFIX}/ghcr.io/outernet-foundation/placeframe/api:1.2.3@{FAKE_DIGEST}",
+            },
+        )
         recorder = CommandRecorder(present_refs={mirrored_uv})
 
         result = self._invoke(tmp_path, monkeypatch, recorder)
@@ -187,7 +236,13 @@ class TestMirrorVerb:
     def test_presence_probe_failure_falls_through_to_copy(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._write_tree(tmp_path)
         mirrored_uv = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{FAKE_DIGEST}"
-        _write_lock(tmp_path, {"UV_IMAGE": mirrored_uv})
+        _write_lock(
+            tmp_path,
+            {
+                "UV_IMAGE": mirrored_uv,
+                "API_IMAGE": f"{MIRROR_PREFIX}/ghcr.io/outernet-foundation/placeframe/api:1.2.3@{FAKE_DIGEST}",
+            },
+        )
         recorder = CommandRecorder()
 
         result = self._invoke(tmp_path, monkeypatch, recorder)
@@ -237,7 +292,7 @@ class TestMirrorVerb:
             {"k8s": {"charts": {"loki": f"oci://ghcr.io/grafana/helm-charts/loki@{FAKE_DIGEST}"}}},
         )
         (tmp_path / "workloads").mkdir()
-        _write_lock(tmp_path, {"OTHER_IMAGE": f"{MIRROR_PREFIX}/docker.io/library/alpine:3.21.0@{FAKE_DIGEST}"})
+        _write_lock(tmp_path, {}, platforms=[])
         values = tmp_path / "stack" / "score" / "k8s" / "values" / "loki.yaml"
         values.parent.mkdir(parents=True)
         values.write_text("loki: {}\n", encoding="utf-8")

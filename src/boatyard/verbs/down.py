@@ -11,7 +11,7 @@ from bashrun.bash import bash_handoff
 
 from boatyard.compose import compose_command, lock_env_unwind, require_env_file
 from boatyard.config.config import ConfigFile, require_compose_stack
-from boatyard.lock import compose_env_entries, render_merged_env
+from boatyard.lock import render_merged_env
 from boatyard.config.lock import read_config_lock
 from boatyard.config.values import ValuesFile
 from boatyard.paths import DEFAULT_CONFIG_PATH, VALUES_FILE
@@ -31,7 +31,7 @@ def down(
     # Tear down by project name, covering every selection.
     with ExitStack() as stack:
         config_values = ValuesFile.load(root / VALUES_FILE, config)
-        entries = compose_env_entries(read_config_lock(root), config, config_values.platform)
+        entries = read_config_lock(root, config).compose_env_entries(config_values.platform)
         env_file: Path | None = None
         if config_values.variables or entries:
             with NamedTemporaryFile("w", suffix=".env", prefix="devkit-env-", delete=False, encoding="utf-8") as handle:

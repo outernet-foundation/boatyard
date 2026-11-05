@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, m
 from boatyard import dockerfiles
 from boatyard.config.config import ConfigFile, Yaml
 from boatyard.dockerfiles import ServiceBuild, service_sha_env
-from boatyard.lock import env_entries, write_lock
+from boatyard.lock import write_lock
 
 
 METADATA_PATH = Path("metadata.json")
@@ -151,7 +151,7 @@ def run_build(
 
     # Write the incremental lock and load its entries into the environment.
     written = write_lock(config)
-    os.environ.update(env_entries(written))
+    os.environ.update(written.env_entries())
 
     # Render the bake services for every target.
     namespace = destination if destination is not None else config.repository

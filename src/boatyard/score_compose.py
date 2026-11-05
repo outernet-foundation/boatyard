@@ -22,7 +22,6 @@ from boatyard.config.config import (
     lock_key_prefix,
     ConfigFile,
 )
-from boatyard.lock import compose_env_entries
 from boatyard.config.lock import LOCK_PATH, LockFile
 from boatyard.yaml import load_yaml_model
 from boatyard.score import (
@@ -133,7 +132,7 @@ def generate_compose(
     state_prefix = f".{TOOL}/"
     values_path = config.root / VALUES_FILE
     platform = ValuesFile.load(values_path, config).platform if values_path.is_file() else None
-    images = compose_env_entries(lock, config, platform)
+    images = lock.compose_env_entries(platform)
 
     if "ALPINE_IMAGE" not in images:
         raise ValueError(f"{LOCK_PATH.as_posix()}: the image lock must carry the ALPINE_IMAGE entry")

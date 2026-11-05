@@ -27,7 +27,6 @@ from boatyard.dockerfiles import (
     derive_services,
     service_sha_env,
 )
-from boatyard.config.lock import read_config_lock
 from boatyard.temp import PLATFORM_PATTERN, SHA256_DIGEST_REGEX
 from boatyard.yaml import load_yaml_model
 
@@ -224,11 +223,8 @@ class ConfigFile(BaseModel):
         if declares_routes:
             if self.gateway is None:
                 raise ValueError("routes are declared; gateway is required")
-            read_config_lock(root).require(
-                CADDY_IMAGE,
-                "routes are declared",
-                hint="declare CADDY_IMAGE in base_images and run lock",
-            )
+            if CADDY_IMAGE not in self.base_images:
+                raise ValueError("routes are declared; base_images must declare CADDY_IMAGE")
         for chart in declared_charts:
             values = root / self.score_dir / "k8s" / "values" / f"{chart}.yaml"
             if not values.is_file():

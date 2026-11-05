@@ -59,6 +59,7 @@ def _write_edge_tree(
         "requires": ">=0.0",
         "project_name": "edge-demo",
         "platforms": ["linux/amd64"],
+        "base_images": {"CADDY_IMAGE": "docker.io/library/caddy:2.8.4-alpine"},
         "services": services,
     }
     if gateway is not None:
@@ -67,18 +68,21 @@ def _write_edge_tree(
         yaml.safe_dump(payload, default_flow_style=False, sort_keys=False),
         encoding="utf-8",
     )
+    bundles: dict[str, object] = {
+        "LIVEKIT_BUNDLE": {"reference": f"ghcr.io/org/livekit:{LIVEKIT_SHA_TAG}@{FAKE_DIGEST}"},
+    }
+    if auth:
+        bundles["AUTH_KEYCLOAK_BUNDLE"] = {"reference": f"ghcr.io/org/keycloak:0.3.1@{FAKE_DIGEST}"}
     tmp_path.joinpath(*LOCK_PATH.parts).write_text(
         yaml.safe_dump({
+            "platforms": ["linux/amd64"],
             "images": {
                 "CADDY_IMAGE": {
                     "index": CADDY_LOCK_ENTRY,
                     "platforms": {"linux/amd64": CADDY_LOCK_ENTRY},
                 }
             },
-            "bundles": {
-                "LIVEKIT_BUNDLE": {"reference": f"ghcr.io/org/livekit:{LIVEKIT_SHA_TAG}@{FAKE_DIGEST}"},
-                "AUTH_KEYCLOAK_BUNDLE": {"reference": f"ghcr.io/org/keycloak:0.3.1@{FAKE_DIGEST}"},
-            },
+            "bundles": bundles,
         }),
         encoding="utf-8",
     )

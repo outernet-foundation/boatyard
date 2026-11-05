@@ -23,7 +23,7 @@ def mirror() -> None:
     config = ConfigFile.load(root / DEFAULT_CONFIG_PATH)
     prefix = config.mirror_prefix
 
-    lock = read_config_lock(root)
+    lock = read_config_lock(root, config)
     mirror_targets: list[tuple[str, list[str]]] = []
     for name, reference in sorted(config.base_images.items(), key=lambda item: item[1]):
         entry = lock.images.get(name)

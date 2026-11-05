@@ -27,12 +27,11 @@ from boatyard.config.config import (
 from boatyard.crane import install_crane
 from boatyard.config.lock import (
     LOCK_PATH,
-    read_config_lock,
+    read_committed_lock,
     LockFile,
     ConfigLockBundle,
     ConfigLockEntry,
 )
-from boatyard.config.values import PLATFORM_KEY
 from boatyard.paths import DEFAULT_CONFIG_PATH, VALUES_FILE
 from boatyard.temp import SHA256_DIGEST_REGEX
 
@@ -117,7 +116,7 @@ def write_lock(config: ConfigFile, *, upgrade: bool = False) -> LockFile:
 def relock(config: ConfigFile, *, upgrade: bool = False) -> LockFile:
 
     prefix = config.mirror_prefix
-    committed = read_config_lock(config.root)
+    committed = read_committed_lock(config.root)
 
     images: dict[str, ConfigLockEntry] = {}
     for name, reference in config.base_images.items():
@@ -142,7 +141,7 @@ def relock(config: ConfigFile, *, upgrade: bool = False) -> LockFile:
         committed_chart = committed.charts.get(key)
         if DIGEST_TAIL_PATTERN.search(reference):
             charts[key] = base
-        elif not upgrade and _pinned_to(committed_chart, base):
+        elif committed_chart is not None and not upgrade and _pinned_to(committed_chart, base):
             charts[key] = committed_chart
         else:
             charts[key] = f"{base}@{resolve_remote_digest(reference)}"
@@ -155,25 +154,33 @@ def relock(config: ConfigFile, *, upgrade: bool = False) -> LockFile:
         key = bundle_lock_key(name)
         reference = declared
         committed_bundle = committed.bundles.get(key)
-        frozen = not upgrade and committed_bundle is not None and _pinned_to(committed_bundle.reference, reference)
-        if frozen and not entry.routes and not entry.ports:
-            bundles[key] = committed_bundle
+        frozen_bundle = (
+            committed_bundle
+            if committed_bundle is not None and not upgrade and _pinned_to(committed_bundle.reference, reference)
+            else None
+        )
+        if frozen_bundle is not None and not entry.routes and not entry.ports:
+            bundles[key] = frozen_bundle
             continue
-        pinned = committed_bundle.reference if frozen else f"{reference}@{resolve_remote_digest(reference)}"
+        pinned = (
+            frozen_bundle.reference if frozen_bundle is not None else f"{reference}@{resolve_remote_digest(reference)}"
+        )
         content = read_compose_bundle(pinned)
         bundles[key] = (
-            committed_bundle
-            if frozen
+            frozen_bundle
+            if frozen_bundle is not None
             else ConfigLockBundle(reference=pinned, requires=sorted(required_compose_holes("\n".join(content))))
         )
         refuse_unresolved_references(name, entry.routes, entry.ports, _bundle_service_names(content), prefix=f"{name}-")
 
-    return LockFile(images=images, charts=charts, bundles=bundles)
+    return LockFile(platforms=list(config.platforms), images=images, charts=charts, bundles=bundles)
 
 
 def render_lock(lock: LockFile) -> str:
     # Render names and platform keys in sorted order.
     document: dict[str, Yaml] = {}
+    if lock.platforms:
+        document["platforms"] = list(lock.platforms)
     if lock.images:
         document["images"] = {
             name: {"index": entry.index, "platforms": dict(sorted(entry.platforms.items()))}
@@ -283,57 +290,6 @@ def _child_digest(child: OciDescriptor, subject: str) -> str:
     if not child.digest.startswith("sha256:"):
         raise ValueError(f"{subject}: upstream index child must carry a digest ({child!r})")
     return child.digest
-
-
-def compose_env_entries(lock: LockFile, config: ConfigFile, platform: str | None) -> dict[str, str]:
-    if platform is None:
-        if not config.platforms:
-            resolved: str | None = None
-        elif len(config.platforms) == 1:
-            resolved = config.platforms[0]
-        else:
-            raise ValueError(
-                f"platforms {config.platforms} are declared; {PLATFORM_KEY}: must be named in {VALUES_FILE.name}"
-            )
-    elif config.platforms and platform not in config.platforms:
-        raise ValueError(f"{PLATFORM_KEY}: {platform!r} must be one of the declared platforms {config.platforms}")
-    else:
-        # A platforms-less repo has nothing of its own to validate the platform against; the
-        # producer lock's recorded platforms police it instead.
-        resolved = platform
-    if resolved is None and lock.images:
-        raise ValueError(f"{LOCK_PATH.as_posix()}: records image entries but boatyard.yml declares no platforms")
-    return env_entries(lock, resolved)
-
-
-def producer_env_entries(lock: LockFile, platform: str | None) -> dict[str, str]:
-    # A foreign lock has no consumer-side config; its own recorded platforms are the declaration.
-    recorded = {platform_name for entry in lock.images.values() for platform_name in entry.platforms}
-    if platform is not None:
-        resolved = platform
-    elif len(recorded) == 1:
-        resolved = next(iter(recorded))
-    elif not recorded:
-        resolved = None
-    else:
-        raise ValueError(f"the producer lock records platforms {sorted(recorded)}; {PLATFORM_KEY}: must name one")
-    return env_entries(lock, resolved)
-
-
-def env_entries(lock: LockFile, platform: str | None = None) -> dict[str, str]:
-    images: dict[str, str] = {}
-    for name, entry in lock.images.items():
-        if platform is None:
-            images[name] = entry.index
-            continue
-        recorded = entry.platforms.get(platform)
-        if recorded is None:
-            raise ValueError(
-                f"{LOCK_PATH.as_posix()}: image entry {name} records no {platform} platform manifest; "
-                f"recorded platforms: {sorted(entry.platforms) or 'none'}"
-            )
-        images[name] = recorded
-    return {**images, **lock.charts}
 
 
 def render_env_entries(entries: Mapping[str, str]) -> str:

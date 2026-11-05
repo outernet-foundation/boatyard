@@ -256,6 +256,7 @@ def test_values_lock_markers_resolve_after_includes(tmp_path: Path, monkeypatch:
 class TestMarkerSubstrateResolution:
     def _multi_arch_lock(self) -> LockFile:
         return LockFile.model_validate({
+            "platforms": ["linux/amd64", "linux/arm64"],
             "images": {
                 "LOKI_IMAGE": {
                     "index": LOKI_INDEX,
@@ -270,30 +271,32 @@ class TestMarkerSubstrateResolution:
         (tmp_path / "stack" / "score" / "api.yaml").write_text(
             "metadata:\n  name: api\ncontainers:\n  api:\n    image: ${LOKI_IMAGE}\n", encoding="utf-8"
         )
+        loki_platforms = {
+            platform: LOKI_MANIFEST if platform == "linux/amd64" else LOKI_INDEX for platform in platforms
+        }
+        alpine_platforms = dict.fromkeys(platforms, ALPINE_LOCK["ALPINE_IMAGE"])
         (tmp_path / "boatyard.lock.yml").write_text(
             yaml.safe_dump({
+                "platforms": platforms,
                 "images": {
-                    "LOKI_IMAGE": {
-                        "index": LOKI_INDEX,
-                        "platforms": {"linux/amd64": LOKI_MANIFEST, "linux/arm64": LOKI_INDEX},
-                    },
-                    "ALPINE_IMAGE": {
-                        "index": ALPINE_LOCK["ALPINE_IMAGE"],
-                        "platforms": {
-                            "linux/amd64": ALPINE_LOCK["ALPINE_IMAGE"],
-                            "linux/arm64": ALPINE_LOCK["ALPINE_IMAGE"],
-                        },
-                    },
-                }
+                    "LOKI_IMAGE": {"index": LOKI_INDEX, "platforms": loki_platforms},
+                    "ALPINE_IMAGE": {"index": ALPINE_LOCK["ALPINE_IMAGE"], "platforms": alpine_platforms},
+                },
             }),
             encoding="utf-8",
         )
         platform_lines = "".join(f"  - {platform}\n" for platform in platforms)
+        base_image_lines = (
+            "base_images:\n"
+            "  LOKI_IMAGE: docker.io/grafana/loki:3.5.0\n"
+            "  ALPINE_IMAGE: docker.io/library/alpine:3.21.0\n"
+        )
         (tmp_path / "boatyard.yml").write_text(
             "requires: '>=0'\n"
             "repository: ghcr.io/org/repo\n"
             "project_name: example\n"
             f"platforms:\n{platform_lines}"
+            f"{base_image_lines}"
             "services:\n"
             "  core:\n"
             "    workloads:\n"
@@ -710,9 +713,10 @@ ALPINE_LOCK = {"ALPINE_IMAGE": "ghcr.io/outernet-foundation/mirror/docker.io/lib
 
 def _lock_for_images(images: dict[str, str]) -> LockFile:
     return LockFile.model_validate({
+        "platforms": ["linux/amd64"],
         "images": {
             name: {"index": reference, "platforms": {"linux/amd64": reference}} for name, reference in images.items()
-        }
+        },
     })
 
 
@@ -1277,6 +1281,7 @@ def _verb_repo(tmp_path: Path) -> None:
     )
     (tmp_path / "boatyard.lock.yml").write_text(
         yaml.safe_dump({
+            "platforms": ["linux/amd64"],
             "images": {
                 "LOKI_IMAGE": {
                     "index": LOKI_INDEX,
@@ -1286,7 +1291,7 @@ def _verb_repo(tmp_path: Path) -> None:
                     "index": ALPINE_LOCK["ALPINE_IMAGE"],
                     "platforms": {"linux/amd64": ALPINE_LOCK["ALPINE_IMAGE"]},
                 },
-            }
+            },
         }),
         encoding="utf-8",
     )
@@ -1296,6 +1301,9 @@ def _verb_repo(tmp_path: Path) -> None:
         "project_name: example\n"
         "platforms:\n"
         "  - linux/amd64\n"
+        "base_images:\n"
+        "  LOKI_IMAGE: docker.io/grafana/loki:3.5.0\n"
+        "  ALPINE_IMAGE: docker.io/library/alpine:3.21.0\n"
         "services:\n"
         "  core:\n"
         "    workloads:\n"

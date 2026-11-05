@@ -219,12 +219,18 @@ class TestPublishComposeVerb:
             or {
                 "repository": REPOSITORY,
                 "project_name": "livekit-tier",
+                "platforms": ["linux/amd64"],
+                "base_images": {"CADDY_IMAGE": "docker.io/library/caddy:2.8.4-alpine"},
                 "services": {"livekit-tier": {"workloads": ["livekit-token.yaml"]}},
             },
         )
         (tmp_path / "workloads").mkdir()
         (tmp_path / LOCK_PATH).write_text(
-            yaml.safe_dump({"images": {"CADDY_IMAGE": {"index": CADDY_LOCK_REF}}}), encoding="utf-8"
+            yaml.safe_dump({
+                "platforms": ["linux/amd64"],
+                "images": {"CADDY_IMAGE": {"index": CADDY_LOCK_REF, "platforms": {"linux/amd64": CADDY_LOCK_REF}}},
+            }),
+            encoding="utf-8",
         )
         (tmp_path / "Caddyfile").write_text("reverse_proxy {$UPSTREAM}\n", encoding="utf-8")
         artifact = tmp_path / "stack" / "generated" / "compose" / "compose.livekit-tier.yaml"
@@ -313,11 +319,20 @@ class TestPublishComposeVerb:
 
 
 class TestBundleMode:
-    def _write_tree(self, tmp_path: Path, sections: dict[str, object] | None = None) -> None:
-        _write_config(tmp_path, sections or ROOT_BUNDLE_SECTION)
+    def _write_tree(self, tmp_path: Path, sections: dict[str, Any] | None = None) -> None:
+        merged: dict[str, Any] = {
+            **(sections or ROOT_BUNDLE_SECTION),
+            "platforms": ["linux/amd64"],
+            "base_images": {"ALPINE_IMAGE": "alpine:3.20"},
+        }
+        _write_config(tmp_path, merged)
         (tmp_path / "workloads").mkdir()
+        alpine = "alpine:3.20@sha256:" + "a" * 64
         (tmp_path / LOCK_PATH).write_text(
-            yaml.safe_dump({"images": {"ALPINE_IMAGE": {"index": "alpine:3.20@sha256:" + "a" * 64}}}),
+            yaml.safe_dump({
+                "platforms": ["linux/amd64"],
+                "images": {"ALPINE_IMAGE": {"index": alpine, "platforms": {"linux/amd64": alpine}}},
+            }),
             encoding="utf-8",
         )
         compose_dir = tmp_path / "stack" / "generated" / "compose"

@@ -21,7 +21,6 @@ from boatyard.config.config import (
     is_list,
     is_mapping,
 )
-from boatyard.lock import env_entries
 from boatyard.config.lock import LockFile
 from boatyard.markers import MarkerContext, resolve_markers
 from boatyard.score import (
@@ -65,7 +64,7 @@ def generate_k8s(
     secrets: SecretsDeclaration,
 ) -> Path:
     score_dir = config.root / config.score_dir
-    images = env_entries(lock)
+    images = lock.env_entries()
     workloads = load_workloads(score_dir, k8s.workloads, WorkloadDocument)
 
     output_path = config.root / (config.k8s_local_output if local else config.k8s_output)

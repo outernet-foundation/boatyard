@@ -11,7 +11,7 @@ from boatyard.cli import app
 from boatyard.config import config as config_module
 from boatyard import dockerfiles as dockerfiles_module
 from boatyard import lock as lock_module
-from boatyard.config.lock import LOCK_PATH
+from boatyard.config.lock import LOCK_PATH, read_committed_lock, read_config_lock
 from boatyard.lock import UpstreamManifests
 
 DIGEST_A = "sha256:" + "a" * 64
@@ -186,12 +186,13 @@ class TestImageRecording:
         assert result.exit_code == 0, result.output
         base = f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.5.0"
         assert _read_lock(tmp_path) == {
+            "platforms": ["linux/amd64", "linux/arm64"],
             "images": {
                 "LOKI_IMAGE": {
                     "index": f"{base}@{DIGEST_A}",
                     "platforms": {"linux/amd64": f"{base}@{DIGEST_B}", "linux/arm64": f"{base}@{DIGEST_B}"},
                 }
-            }
+            },
         }
 
     def test_records_declarations_under_the_mirror_name(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -211,6 +212,7 @@ class TestImageRecording:
             "ghcr.io/outernet-foundation/placeframe/api:1.2.3",
         ]
         assert _read_lock(tmp_path) == {
+            "platforms": ["linux/amd64"],
             "images": {
                 "API_IMAGE": _structured_entry(
                     f"{MIRROR_PREFIX}/ghcr.io/outernet-foundation/placeframe/api:1.2.3",
@@ -222,7 +224,7 @@ class TestImageRecording:
                     index_digest=DIGEST_A,
                     platforms={"linux/amd64": DIGEST_B},
                 ),
-            }
+            },
         }
 
     def test_two_consecutive_writes_are_byte_identical(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -242,7 +244,10 @@ class TestImageRecording:
         )
 
         assert result.exit_code == 0, result.output
-        assert _read_lock(tmp_path) == {"images": {"ALPINE_IMAGE": {"index": base, "platforms": {"linux/amd64": base}}}}
+        assert _read_lock(tmp_path) == {
+            "platforms": ["linux/amd64"],
+            "images": {"ALPINE_IMAGE": {"index": base, "platforms": {"linux/amd64": base}}},
+        }
 
     def test_an_unchanged_declaration_freezes_the_whole_structured_entry(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -384,13 +389,14 @@ class TestImageRecording:
 
         assert result.exit_code == 0, result.output
         assert _read_lock(tmp_path) == {
+            "platforms": ["linux/amd64"],
             "images": {
                 "RATHOLE_IMAGE": _structured_entry(
                     f"{MIRROR_PREFIX}/docker.io/x/rathole:0.11.0",
                     index_digest=DIGEST_B,
                     platforms={"linux/amd64": DIGEST_B},
                 )
-            }
+            },
         }
 
 
@@ -876,8 +882,9 @@ def test_build_no_longer_carries_the_lock_flags() -> None:
     assert result.exit_code == 2
 
 
-def _selection_lock() -> lock_module.LockFile:
+def _selection_lock(platforms: list[str] | None = None) -> lock_module.LockFile:
     return lock_module.LockFile.model_validate({
+        "platforms": platforms if platforms is not None else ["linux/amd64", "linux/arm64"],
         "images": {
             "LOKI_IMAGE": {
                 "index": f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.5.0@{DIGEST_A}",
@@ -893,61 +900,49 @@ def _selection_lock() -> lock_module.LockFile:
     })
 
 
-def _selection_config(**sections: object) -> config_module.ConfigFile:
-    payload: dict[str, object] = {"requires": ">=0"}
-    payload.update(sections)
-    return config_module.ConfigFile.model_validate(payload)
-
-
 class TestEntrySelection:
     def test_the_projection_refuses_a_platform_an_entry_never_recorded(self) -> None:
         with pytest.raises(
             ValueError, match=r"LOKI_IMAGE records no linux/ppc64le platform manifest.*recorded platforms"
         ):
-            lock_module.env_entries(_selection_lock(), "linux/ppc64le")
+            _selection_lock().env_entries("linux/ppc64le")
 
     def test_the_projection_carries_no_entry_for_unknown_names(self) -> None:
-        assert "GHOST_IMAGE" not in lock_module.env_entries(_selection_lock())
+        assert "GHOST_IMAGE" not in _selection_lock().env_entries()
 
 
 class TestEnvProjection:
     def test_the_projection_without_a_platform_carries_index_references(self) -> None:
-        entries = lock_module.env_entries(_selection_lock())
+        entries = _selection_lock().env_entries()
 
         assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_A}")
         assert entries["GRAFANA_CHART"].endswith(f"@{DIGEST_A}")
 
     def test_the_projection_with_a_platform_carries_platform_manifests(self) -> None:
-        entries = lock_module.env_entries(_selection_lock(), "linux/amd64")
+        entries = _selection_lock().env_entries("linux/amd64")
 
         assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_B}")
         assert entries["GRAFANA_CHART"].endswith(f"@{DIGEST_A}")
 
 
 class TestComposeProjection:
-    def test_compose_entries_select_platform_manifests_over_the_declared_singleton(self) -> None:
-        config = _selection_config(platforms=["linux/amd64"])
-
-        entries = lock_module.compose_env_entries(_selection_lock(), config, None)
+    def test_compose_entries_select_platform_manifests_over_the_recorded_singleton(self) -> None:
+        entries = _selection_lock(platforms=["linux/amd64"]).compose_env_entries(None)
 
         assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_B}")
         assert entries["GRAFANA_CHART"].endswith(f"@{DIGEST_A}")
 
     def test_compose_entries_select_the_platform_the_environment_names(self) -> None:
-        config = _selection_config(platforms=["linux/amd64", "linux/arm64"])
-
-        entries = lock_module.compose_env_entries(_selection_lock(), config, "linux/arm64")
+        entries = _selection_lock().compose_env_entries("linux/arm64")
 
         assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_C}")
 
-    def test_compose_entries_refuse_image_entries_without_declared_platforms(self) -> None:
-        config = _selection_config()
-
-        with pytest.raises(ValueError, match=r"records image entries but boatyard\.yml declares no platforms"):
-            lock_module.compose_env_entries(_selection_lock(), config, None)
+    def test_compose_entries_refuse_image_entries_without_recorded_platforms(self) -> None:
+        with pytest.raises(ValueError, match=r"records image entries but no platforms"):
+            _selection_lock(platforms=[]).compose_env_entries(None)
 
     def test_the_env_render_is_sorted_and_stable(self) -> None:
-        entries = lock_module.compose_env_entries(_selection_lock(), _selection_config(platforms=["linux/amd64"]), None)
+        entries = _selection_lock(platforms=["linux/amd64"]).compose_env_entries(None)
 
         rendered = lock_module.render_env_entries(entries)
 
@@ -958,41 +953,152 @@ class TestComposeProjection:
 
 class TestPlatformSelectionLaw:
     def test_a_singleton_selects_itself_without_reading_the_environment(self) -> None:
-        config = _selection_config(platforms=["linux/amd64"])
-
-        entries = lock_module.compose_env_entries(_selection_lock(), config, None)
+        entries = _selection_lock(platforms=["linux/amd64"]).compose_env_entries(None)
 
         assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_B}")
 
-    def test_a_multi_platform_repo_selects_the_named_platform(self) -> None:
-        config = _selection_config(platforms=["linux/amd64", "linux/arm64"])
-
-        entries = lock_module.compose_env_entries(_selection_lock(), config, "linux/arm64")
+    def test_a_multi_platform_lock_selects_the_named_platform(self) -> None:
+        entries = _selection_lock().compose_env_entries("linux/arm64")
 
         assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_C}")
 
-    def test_a_multi_platform_repo_without_a_selection_refuses_listing_declared(self) -> None:
-        config = _selection_config(platforms=["linux/amd64", "linux/arm64"])
-
+    def test_a_multi_platform_lock_without_a_selection_refuses_listing_recorded(self) -> None:
         with pytest.raises(
-            ValueError, match=r"platforms \['linux/amd64', 'linux/arm64'\] are declared.*platform: must be named"
+            ValueError, match=r"platforms \['linux/amd64', 'linux/arm64'\] are recorded.*platform: must be named"
         ):
-            lock_module.compose_env_entries(_selection_lock(), config, None)
+            _selection_lock().compose_env_entries(None)
 
-    def test_an_undeclared_selection_refuses_listing_declared(self) -> None:
-        config = _selection_config(platforms=["linux/amd64"])
-
+    def test_a_selection_outside_the_recorded_set_refuses_listing_recorded(self) -> None:
         with pytest.raises(
             ValueError,
-            match=r"platform: 'linux/arm64' must be one of the declared platforms \['linux/amd64'\]",
+            match=r"platform: 'linux/arm64' must be one of the recorded platforms \['linux/amd64'\]",
         ):
-            lock_module.compose_env_entries(_selection_lock(), config, "linux/arm64")
+            _selection_lock(platforms=["linux/amd64"]).compose_env_entries("linux/arm64")
 
-    def test_a_platform_less_declaring_repo_answers_none(self) -> None:
+    def test_a_platform_less_lock_answers_none(self) -> None:
         charts_only = lock_module.LockFile(
             charts={"GRAFANA_CHART": f"{MIRROR_PREFIX}/ghcr.io/grafana/chart@{DIGEST_A}"}
         )
 
-        entries = lock_module.compose_env_entries(charts_only, _selection_config(), None)
+        entries = charts_only.compose_env_entries(None)
 
         assert entries == {"GRAFANA_CHART": f"{MIRROR_PREFIX}/ghcr.io/grafana/chart@{DIGEST_A}"}
+
+
+class TestPairedLoad:
+    def _config(self, tmp_path: Path) -> config_module.ConfigFile:
+        return config_module.ConfigFile.load(tmp_path / "boatyard.yml")
+
+    def _write_committed(self, tmp_path: Path, document: dict[str, Any]) -> None:
+        (tmp_path / LOCK_PATH).write_text(yaml.safe_dump(document), encoding="utf-8")
+
+    def test_a_platform_set_mismatch_refuses_naming_the_lock_verb(self, tmp_path: Path) -> None:
+        _write_repo(tmp_path, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
+        base = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15"
+        self._write_committed(
+            tmp_path,
+            {
+                "platforms": ["linux/amd64", "linux/arm64"],
+                "images": {
+                    "UV_IMAGE": _structured_entry(
+                        base, index_digest=DIGEST_A, platforms={"linux/amd64": DIGEST_A, "linux/arm64": DIGEST_A}
+                    )
+                },
+            },
+        )
+
+        with pytest.raises(
+            ValidationError, match=r"records platforms \['linux/amd64', 'linux/arm64'\].*run boatyard lock"
+        ):
+            read_config_lock(tmp_path, self._config(tmp_path))
+
+    def test_an_entry_diverging_from_the_recorded_set_refuses(self, tmp_path: Path) -> None:
+        _write_repo(tmp_path, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
+        base = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15"
+        self._write_committed(
+            tmp_path,
+            {
+                "platforms": ["linux/amd64"],
+                "images": {
+                    "UV_IMAGE": _structured_entry(
+                        base, index_digest=DIGEST_A, platforms={"linux/amd64": DIGEST_A, "linux/arm64": DIGEST_B}
+                    )
+                },
+            },
+        )
+
+        with pytest.raises(ValidationError, match=r"image entry UV_IMAGE records platforms.*run boatyard lock"):
+            read_config_lock(tmp_path, self._config(tmp_path))
+
+    def test_a_missing_declared_entry_refuses_as_coverage(self, tmp_path: Path) -> None:
+        _write_repo(tmp_path, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
+        self._write_committed(
+            tmp_path,
+            {
+                "platforms": ["linux/amd64"],
+                "images": {
+                    "OTHER_IMAGE": _structured_entry(
+                        f"{MIRROR_PREFIX}/docker.io/x/other:1.0",
+                        index_digest=DIGEST_A,
+                        platforms={"linux/amd64": DIGEST_A},
+                    )
+                },
+            },
+        )
+
+        with pytest.raises(ValidationError, match=r"lacks the \['UV_IMAGE'\] entries base_images declares"):
+            read_config_lock(tmp_path, self._config(tmp_path))
+
+    def test_an_orphan_entry_refuses_naming_the_lock_verb(self, tmp_path: Path) -> None:
+        _write_repo(tmp_path, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
+        base = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15"
+        self._write_committed(
+            tmp_path,
+            {
+                "platforms": ["linux/amd64"],
+                "images": {
+                    "UV_IMAGE": _structured_entry(base, index_digest=DIGEST_A, platforms={"linux/amd64": DIGEST_A}),
+                    "GHOST_IMAGE": _structured_entry(
+                        f"{MIRROR_PREFIX}/docker.io/x/ghost:1.0",
+                        index_digest=DIGEST_A,
+                        platforms={"linux/amd64": DIGEST_A},
+                    ),
+                },
+            },
+        )
+
+        with pytest.raises(ValidationError, match=r"no longer declares \(\['GHOST_IMAGE'\]\); run boatyard lock"):
+            read_config_lock(tmp_path, self._config(tmp_path))
+
+    def test_a_missing_lock_in_a_platforms_repo_refuses_as_stale(self, tmp_path: Path) -> None:
+        _write_repo(tmp_path, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
+
+        with pytest.raises(
+            ValidationError, match=r"records platforms \[\] but boatyard.yml declares \['linux/amd64'\]"
+        ):
+            read_config_lock(tmp_path, self._config(tmp_path))
+
+    def test_a_missing_lock_in_a_bundles_only_repo_reads_as_empty(self, tmp_path: Path) -> None:
+        _write_repo(tmp_path, ref_services={"livekit": {"ref": "oci://ghcr.io/org/repo/livekit:0.4.0-dev.3"}})
+
+        lock = read_config_lock(tmp_path, self._config(tmp_path))
+
+        assert lock.images == {} and lock.charts == {} and lock.bundles == {}
+
+    def test_the_committed_reader_tolerates_drift_and_the_old_format(self, tmp_path: Path) -> None:
+        _write_repo(tmp_path, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
+        base = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15"
+        self._write_committed(
+            tmp_path,
+            {
+                "images": {
+                    "UV_IMAGE": _structured_entry(base, index_digest=DIGEST_A, platforms={"linux/amd64": DIGEST_A})
+                },
+                "charts": {"GHOST_CHART": f"{MIRROR_PREFIX}/ghcr.io/x/ghost@{DIGEST_A}"},
+            },
+        )
+
+        lock = read_committed_lock(tmp_path)
+
+        assert lock.platforms == []
+        assert lock.images["UV_IMAGE"].index == f"{base}@{DIGEST_A}"

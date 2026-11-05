@@ -14,7 +14,10 @@ from boatyard.config.config import (
     ServiceGroup,
     bundle_lock_key,
 )
-from boatyard.config.lock import LOCK_PATH, LockFile
+from boatyard.config.lock import LOCK_PATH, read_committed_lock
+
+EDGE_BASE_IMAGES = {"CADDY_IMAGE": "docker.io/library/caddy:2.8.4-alpine"}
+EDGE_PLATFORMS = ["linux/amd64"]
 
 DIGEST = "sha256:" + "a" * 64
 SHA_TAG = "a" * 40
@@ -565,7 +568,6 @@ class TestK8sSection:
 
 class TestServices:
     def test_groups_options_and_bare_entries_load(self, tmp_path: Path) -> None:
-        write_edge_lock(tmp_path, bundles=bundle_entries("auth-keycloak", "livekit"))
         write_config(
             tmp_path,
             {
@@ -573,6 +575,8 @@ class TestServices:
                 "repository": "ghcr.io/org/repo",
                 "project_name": "example",
                 "gateway": "${GATEWAY_PORT:?err}",
+                "base_images": EDGE_BASE_IMAGES,
+                "platforms": EDGE_PLATFORMS,
                 "services": {
                     "auth": {
                         "options": {
@@ -805,13 +809,14 @@ class TestServices:
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_remote_only_services_need_no_repository(self, tmp_path: Path) -> None:
-        write_edge_lock(tmp_path, bundles=bundle_entries("livekit"))
         write_config(
             tmp_path,
             {
                 "requires": ">=0.1",
                 "project_name": "example",
                 "gateway": "8080",
+                "base_images": EDGE_BASE_IMAGES,
+                "platforms": EDGE_PLATFORMS,
                 "services": {
                     "livekit": {
                         "ref": "oci://ghcr.io/org/repo/livekit:" + SHA_TAG,
@@ -891,11 +896,12 @@ class TestAuthGroup:
             "requires": ">=0.1",
             "project_name": "example",
             "gateway": "8080",
+            "base_images": EDGE_BASE_IMAGES,
+            "platforms": EDGE_PLATFORMS,
             "services": {"auth": {"options": options}},
         }
 
     def test_an_auth_option_with_exactly_one_route_loads(self, tmp_path: Path) -> None:
-        write_edge_lock(tmp_path, bundles=bundle_entries("auth-keycloak"))
         write_config(
             tmp_path,
             self._auth_config({
@@ -954,6 +960,8 @@ class TestRoutes:
             "requires": ">=0.1",
             "project_name": "example",
             "gateway": "8080",
+            "base_images": EDGE_BASE_IMAGES,
+            "platforms": EDGE_PLATFORMS,
             "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG, "routes": routes}},
         }
 
@@ -999,7 +1007,6 @@ class TestRoutes:
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_plain_and_wildcard_paths_load(self, tmp_path: Path) -> None:
-        write_edge_lock(tmp_path, bundles=bundle_entries("livekit"))
         write_config(
             tmp_path,
             self._routed([
@@ -1028,7 +1035,6 @@ class TestRoutes:
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_a_raw_route_loads(self, tmp_path: Path) -> None:
-        write_edge_lock(tmp_path, bundles=bundle_entries("livekit"))
         write_config(
             tmp_path,
             self._routed([{"path": "/x/*", "upstream": "x:1", "raw": 'respond "hi" 200'}]),
@@ -1040,8 +1046,7 @@ class TestRoutes:
 
 
 class TestGatewayKey:
-    def test_a_gateway_without_the_caddy_lock_entry_refuses(self, tmp_path: Path) -> None:
-        write_lock(tmp_path, entries={}, bundles=bundle_entries("livekit"))
+    def test_routes_without_the_caddy_base_image_refuses(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,
             {
@@ -1077,13 +1082,14 @@ class TestGatewayKey:
         assert config is not None
 
     def test_a_literal_port_loads(self, tmp_path: Path) -> None:
-        write_edge_lock(tmp_path, bundles=bundle_entries("livekit"))
         write_config(
             tmp_path,
             {
                 "requires": ">=0.1",
                 "project_name": "example",
                 "gateway": "8443",
+                "base_images": EDGE_BASE_IMAGES,
+                "platforms": EDGE_PLATFORMS,
                 "services": {
                     "livekit": {
                         "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
@@ -1122,11 +1128,12 @@ class TestPorts:
             "repository": "ghcr.io/org/repo",
             "project_name": "example",
             "gateway": "8080",
+            "base_images": EDGE_BASE_IMAGES,
+            "platforms": EDGE_PLATFORMS,
             "services": services,
         }
 
     def test_the_mapping_form_defaults_protocol_to_tcp(self, tmp_path: Path) -> None:
-        write_edge_lock(tmp_path, bundles=bundle_entries("livekit"))
         write_config(
             tmp_path,
             self._ports_config({
@@ -1184,7 +1191,6 @@ class TestPorts:
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_the_mapping_form_spells_the_owning_service_and_host_ip(self, tmp_path: Path) -> None:
-        write_edge_lock(tmp_path, bundles=bundle_entries("livekit"))
         write_config(
             tmp_path,
             self._ports_config({
@@ -1436,14 +1442,14 @@ def _write_raw_lock(tmp_path: Path, text: str) -> Path:
 
 class TestConfigLockParse:
     def test_the_empty_lock_stays_legal(self, tmp_path: Path) -> None:
-        assert LockFile.load(_write_raw_lock(tmp_path, "")).images == {}
-        assert LockFile.load(_write_raw_lock(tmp_path, "{}\n")).charts == {}
+        assert read_committed_lock(tmp_path).images == {}
+        assert read_committed_lock(tmp_path).charts == {}
 
     def test_malformed_yaml_refuses_raw(self, tmp_path: Path) -> None:
-        lock = _write_raw_lock(tmp_path, "images:\n  A_IMAGE: [unclosed\n")
+        _write_raw_lock(tmp_path, "images:\n  A_IMAGE: [unclosed\n")
 
         with pytest.raises(yaml.YAMLError):
-            LockFile.load(lock)
+            read_committed_lock(tmp_path)
 
     def test_duplicate_keys_refuse_naming_the_line(self, tmp_path: Path) -> None:
         lock = _write_raw_lock(
@@ -1452,87 +1458,86 @@ class TestConfigLockParse:
         )
 
         with pytest.raises(ValueError, match=rf"{re.escape(lock.as_posix())}: line 4: duplicate key 'A_IMAGE'"):
-            LockFile.load(lock)
+            read_committed_lock(tmp_path)
 
     def test_the_env_line_format_refuses_as_a_bare_scalar(self, tmp_path: Path) -> None:
-        lock = _write_raw_lock(tmp_path, f"A_IMAGE=ghcr.io/x/a:1@{DIGEST}\n")
+        _write_raw_lock(tmp_path, f"A_IMAGE=ghcr.io/x/a:1@{DIGEST}\n")
 
         with pytest.raises(ValidationError, match="Input should be a valid dictionary"):
-            LockFile.load(lock)
+            read_committed_lock(tmp_path)
 
     def test_a_non_digest_pinned_index_refuses(self, tmp_path: Path) -> None:
-        lock = _write_raw_lock(tmp_path, "images:\n  A_IMAGE:\n    index: ghcr.io/x/a:1.2.3\n")
+        _write_raw_lock(tmp_path, "images:\n  A_IMAGE:\n    index: ghcr.io/x/a:1.2.3\n")
 
         with pytest.raises(ValueError, match="not digest-pinned"):
-            LockFile.load(lock)
+            read_committed_lock(tmp_path)
 
     def test_a_non_digest_pinned_platform_entry_refuses(self, tmp_path: Path) -> None:
-        lock = _write_raw_lock(
+        _write_raw_lock(
             tmp_path,
             f"images:\n  A_IMAGE:\n    index: ghcr.io/x/a:1@{DIGEST}\n"
             "    platforms:\n      linux/amd64: ghcr.io/x/a:1\n",
         )
 
         with pytest.raises(ValueError, match="not digest-pinned"):
-            LockFile.load(lock)
+            read_committed_lock(tmp_path)
 
     def test_a_non_digest_pinned_chart_refuses(self, tmp_path: Path) -> None:
-        lock = _write_raw_lock(tmp_path, "charts:\n  LOKI_CHART: ghcr.io/x/loki:7.3.0\n")
+        _write_raw_lock(tmp_path, "charts:\n  LOKI_CHART: ghcr.io/x/loki:7.3.0\n")
 
         with pytest.raises(ValueError, match="chart LOKI_CHART is not digest-pinned"):
-            LockFile.load(lock)
+            read_committed_lock(tmp_path)
 
     def test_a_non_digest_pinned_bundle_refuses(self, tmp_path: Path) -> None:
-        lock = _write_raw_lock(tmp_path, "bundles:\n  LIVEKIT_BUNDLE:\n    reference: ghcr.io/x/livekit:0.3.1\n")
+        _write_raw_lock(tmp_path, "bundles:\n  LIVEKIT_BUNDLE:\n    reference: ghcr.io/x/livekit:0.3.1\n")
 
         with pytest.raises(ValueError, match="bundle entry is not digest-pinned"):
-            LockFile.load(lock)
+            read_committed_lock(tmp_path)
 
     def test_a_malformed_platform_key_refuses(self, tmp_path: Path) -> None:
-        lock = _write_raw_lock(
+        _write_raw_lock(
             tmp_path,
             f"images:\n  A_IMAGE:\n    index: ghcr.io/x/a:1@{DIGEST}\n"
             f"    platforms:\n      amd64: ghcr.io/x/a:1@{DIGEST}\n",
         )
 
         with pytest.raises(ValueError, match="os/arch pair"):
-            LockFile.load(lock)
+            read_committed_lock(tmp_path)
 
     def test_a_name_in_two_sections_refuses(self, tmp_path: Path) -> None:
-        lock = _write_raw_lock(
+        _write_raw_lock(
             tmp_path,
             f"images:\n  A_IMAGE:\n    index: ghcr.io/x/a:1@{DIGEST}\ncharts:\n  A_IMAGE: ghcr.io/x/a:1@{DIGEST}\n",
         )
 
         with pytest.raises(ValueError, match=r"at most one of images, charts, bundles"):
-            LockFile.load(lock)
+            read_committed_lock(tmp_path)
 
     def test_a_bundle_name_colliding_with_base_images_keys_refuses(self, tmp_path: Path) -> None:
-        lock = _write_raw_lock(
+        _write_raw_lock(
             tmp_path,
             f"images:\n  LIVEKIT_BUNDLE:\n    index: ghcr.io/x/a:1@{DIGEST}\n"
             f"bundles:\n  LIVEKIT_BUNDLE:\n    reference: ghcr.io/x/livekit:0.3.1@{DIGEST}\n",
         )
 
         with pytest.raises(ValueError, match=r"at most one of images, charts, bundles"):
-            LockFile.load(lock)
+            read_committed_lock(tmp_path)
 
     def test_require_answers_the_index_for_images_and_the_flat_entry_for_charts(self, tmp_path: Path) -> None:
-        lock = LockFile.load(
-            _write_raw_lock(
-                tmp_path,
-                f"images:\n  A_IMAGE:\n    index: ghcr.io/x/a:1@{DIGEST}\n"
-                f"charts:\n  LOKI_CHART: ghcr.io/x/loki:7.3.0@{DIGEST}\n"
-                f"bundles:\n  LIVEKIT_BUNDLE:\n    reference: ghcr.io/x/livekit:0.3.1@{DIGEST}\n",
-            )
+        _write_raw_lock(
+            tmp_path,
+            f"images:\n  A_IMAGE:\n    index: ghcr.io/x/a:1@{DIGEST}\n"
+            f"charts:\n  LOKI_CHART: ghcr.io/x/loki:7.3.0@{DIGEST}\n"
+            f"bundles:\n  LIVEKIT_BUNDLE:\n    reference: ghcr.io/x/livekit:0.3.1@{DIGEST}\n",
         )
+        lock = read_committed_lock(tmp_path)
 
         assert lock.require("A_IMAGE", "subject") == f"ghcr.io/x/a:1@{DIGEST}"
         assert lock.require("LOKI_CHART", "subject") == f"ghcr.io/x/loki:7.3.0@{DIGEST}"
         assert lock.require("LIVEKIT_BUNDLE", "subject") == f"ghcr.io/x/livekit:0.3.1@{DIGEST}"
 
     def test_require_refuses_naming_the_lock_verb(self, tmp_path: Path) -> None:
-        lock = LockFile.load(_write_raw_lock(tmp_path, "{}\n"))
+        lock = read_committed_lock(tmp_path)
 
         with pytest.raises(ValueError, match=r"lacks the CADDY_IMAGE entry.*lock verb writes it"):
             lock.require("CADDY_IMAGE", "routes are declared")
