@@ -11,9 +11,9 @@ from bashrun.bash import bash_handoff
 
 from boatyard.compose import compose_command, lock_env_unwind, require_env_file
 from boatyard.config_file import Config, require_compose_stack
-from boatyard.lock import compose_env_entries, render_env_entries
+from boatyard.lock import compose_env_entries, render_merged_env
 from boatyard.lock_file import read_config_lock
-from boatyard.values_file import Environment
+from boatyard.values_file import ConfigValues
 
 app = typer.Typer()
 
@@ -29,14 +29,14 @@ def down(
 
     # Tear down by project name, covering every selection.
     with ExitStack() as stack:
-        environment = Environment.load(root, config)
-        entries = compose_env_entries(read_config_lock(root), config, environment.platform)
+        config_values = ConfigValues.load(root, config)
+        entries = compose_env_entries(read_config_lock(root), config, config_values.platform)
         env_file: Path | None = None
-        if entries:
+        if config_values.variables or entries:
             with NamedTemporaryFile(
-                "w", suffix=".env", prefix="devkit-lock-env-", delete=False, encoding="utf-8"
+                "w", suffix=".env", prefix="devkit-env-", delete=False, encoding="utf-8"
             ) as handle:
-                handle.write(render_env_entries(entries))
+                handle.write(render_merged_env(config_values.variables, entries))
                 env_file = Path(handle.name)
             stack.enter_context(lock_env_unwind(env_file))
         with NamedTemporaryFile(
@@ -46,7 +46,9 @@ def down(
             assembly_root = Path(handle.name)
         stack.callback(assembly_root.unlink, missing_ok=True)
 
-        command = compose_command(root, [assembly_root], "down", "--remove-orphans", env_file=env_file)
+        command = compose_command(
+            root, [assembly_root], "down", "--remove-orphans", env_file=env_file, hole_names=[*config_values.variables, *entries]
+        )
         if volumes:
             command += " -v"
 

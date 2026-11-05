@@ -31,7 +31,7 @@ TUNNEL_BUNDLES = {"TUNNEL_BUNDLE": LIVEKIT_PINNED}
 PINNED_COMPOSE_VERSION = "5.6.1"
 
 ASSEMBLY_ARGUMENT_PATTERN = re.compile(r"-f (\S*devkit-assembly-\S+\.yaml)")
-LOCK_ENV_ARGUMENT_PATTERN = re.compile(r"(\S*devkit-lock-env-\S+\.env)")
+LOCK_ENV_ARGUMENT_PATTERN = re.compile(r"(\S*devkit-env-\S+\.env)")
 
 runner = CliRunner()
 
@@ -76,7 +76,7 @@ def _write_ref_tree(root: Path) -> None:
 
 def _normalize(command: str, root: Path) -> str:
     command = re.sub(r"\S*devkit-assembly-\S+\.yaml", "ASSEMBLY", command)
-    command = re.sub(r"\S*devkit-lock-env-\S+\.env", "LOCKENV", command)
+    command = re.sub(r"\S*devkit-env-\S+\.env", "LOCKENV", command)
     return command.replace(str(root), "ROOT")
 
 
@@ -178,9 +178,15 @@ def _producer_lock(platforms: list[str]) -> dict[str, object]:
     }
 
 
+def _write_values_file(root: Path, values: dict[str, object]) -> None:
+    (root / "boatyard.values.yaml").write_text(
+        yaml.safe_dump(values, default_flow_style=False, sort_keys=False), encoding="utf-8"
+    )
+
+
 def _write_override_consumer(
     root: Path,
-    environment_lines: list[str],
+    values: dict[str, object] | None = None,
     *,
     platforms: list[str] | None = None,
     lock_images: dict[str, str] | None = None,
@@ -206,10 +212,7 @@ def _write_override_consumer(
         payload["platforms"] = platforms
     _write_config(root, payload)
     _write_lock(root, entries=dict(lock_images) if lock_images is not None else {})
-    (root / ".env").write_text(
-        "BUNDLES=placeframe-cuda\n" + "".join(f"{line}\n" for line in environment_lines),
-        encoding="utf-8",
-    )
+    _write_values_file(root, {"bundles": ["placeframe-cuda"], **(values or {})})
 
 
 def _write_workload(root: Path, name: str, service_name: str) -> None:
@@ -270,8 +273,13 @@ class ProducerEnvRecorder(AssemblyRecorder):
             self.env_contents.append(Path(match.group(1)).read_text(encoding="utf-8"))
 
 
-def _write_consumer_tree(root: Path, *, bundles: str | None = "placeframe-cuda,auth-keycloak") -> Path:
-    # Write the canonical consumer tree; bundles=None writes no BUNDLES line.
+def _write_consumer_tree(
+    root: Path,
+    *,
+    bundles: str | None = "placeframe-cuda,auth-keycloak",
+    extra_values: dict[str, object] | None = None,
+) -> Path:
+    # Write the canonical consumer tree; bundles=None selects nothing.
     _write_config(
         root,
         {
@@ -319,10 +327,15 @@ def _write_consumer_tree(root: Path, *, bundles: str | None = "placeframe-cuda,a
     cuda = _write_bundle_output(root, "placeframe-cuda", ["api", "grafana"])
     _write_bundle_output(root, "placeframe-rocm", ["api", "grafana"])
     _write_workload(root, "api.yaml", "api")
-    environment = "GATEWAY_PORT=58080\nLIVEKIT_SIGNALING_PORT=6178\nPUBLIC_URL=http://192.168.8.10:58080\n"
+    values: dict[str, object] = {
+        "GATEWAY_PORT": 58080,
+        "LIVEKIT_SIGNALING_PORT": 6178,
+        "public_url": "http://192.168.8.10:58080",
+    }
     if bundles is not None:
-        environment = f"BUNDLES={bundles}\n" + environment
-    (root / ".env").write_text(environment, encoding="utf-8")
+        values["bundles"] = [name for name in bundles.split(",") if name]
+    values.update(extra_values or {})
+    _write_values_file(root, {key: value for key, value in values.items() if value is not None})
     return cuda
 
 
@@ -334,7 +347,6 @@ class TestSelectionLaw:
         bundles: str | None = "placeframe-cuda,auth-keycloak",
     ) -> AssemblyRecorder:
         _write_consumer_tree(tmp_path, bundles=bundles)
-        monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -371,8 +383,7 @@ class TestSelectionLaw:
         _write_bundle_output(tmp_path, "two-cuda", ["edge"])
         _write_workload(tmp_path, "api.yaml", "api")
         _write_workload(tmp_path, "edge.yaml", "edge")
-        (tmp_path / ".env").write_text("BUNDLES=one-cuda,two-cuda\n", encoding="utf-8")
-        monkeypatch.delenv("BUNDLES", raising=False)
+        _write_values_file(tmp_path, {"bundles": ["one-cuda", "two-cuda"]})
         recorder = AssemblyRecorder()
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -405,8 +416,7 @@ class TestSelectionLaw:
             },
         )
         _write_lock(tmp_path, bundles={"LIVEKIT_BUNDLE": LIVEKIT_PINNED})
-        (tmp_path / ".env").write_text("BUNDLES=\n", encoding="utf-8")
-        monkeypatch.delenv("BUNDLES", raising=False)
+        _write_values_file(tmp_path, {})
         recorder = AssemblyRecorder()
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -442,8 +452,7 @@ class TestSelectionLaw:
         _write_lock(tmp_path)
         _write_bundle_output(tmp_path, "placeframe-cuda", ["api"])
         _write_workload(tmp_path, "api.yaml", "api")
-        (tmp_path / ".env").write_text("BUNDLES=\n", encoding="utf-8")
-        monkeypatch.delenv("BUNDLES", raising=False)
+        _write_values_file(tmp_path, {})
         recorder = AssemblyRecorder()
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -482,17 +491,18 @@ class TestSelectionLaw:
         assert isinstance(result.exception, ValueError)
         assert "at most one option per group (placeframe)" in str(result.exception)
 
-    def test_shell_environment_overrides_the_env_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        self._invoke_up(tmp_path, monkeypatch)
+    def test_a_shell_selection_is_ignored(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        recorder = self._invoke_up(tmp_path, monkeypatch)
         monkeypatch.setenv("BUNDLES", "placeframe-rocm,auth-keycloak")
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
+        [document] = recorder.documents
+        assert "placeframe-cuda-net" in document["services"]["edge"]["networks"]
 
     def test_stray_selection_in_an_undeclaring_repo_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        (tmp_path / ".env").write_text("BUNDLES=cuda\n", encoding="utf-8")
-        monkeypatch.delenv("BUNDLES", raising=False)
+        _write_values_file(tmp_path, {"bundles": ["cuda"]})
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -502,8 +512,7 @@ class TestSelectionLaw:
         assert "declares no services" in str(result.exception)
 
     def test_up_without_config_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        (tmp_path / ".env").write_text("PUBLIC_URL=https://example.dev\n", encoding="utf-8")
-        monkeypatch.delenv("BUNDLES", raising=False)
+        _write_values_file(tmp_path, {"public_url": "https://example.dev"})
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -514,8 +523,7 @@ class TestSelectionLaw:
 
     def test_up_in_a_services_less_repo_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_config(tmp_path)
-        (tmp_path / ".env").write_text("PUBLIC_URL=https://example.dev\n", encoding="utf-8")
-        monkeypatch.delenv("BUNDLES", raising=False)
+        _write_values_file(tmp_path, {"public_url": "https://example.dev"})
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -527,7 +535,6 @@ class TestSelectionLaw:
     def test_missing_local_output_refuses_naming_generate_score(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_consumer_tree(tmp_path)
         (tmp_path / "stack" / "generated" / "compose" / "compose.placeframe-cuda.yaml").unlink()
-        monkeypatch.delenv("BUNDLES", raising=False)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -542,7 +549,6 @@ class TestUpMaterialization:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         _write_consumer_tree(tmp_path)
-        monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -586,7 +592,6 @@ class TestUpMaterialization:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         _write_consumer_tree(tmp_path, bundles="placeframe-cuda")
-        monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -603,7 +608,6 @@ class TestUpMaterialization:
     def test_the_edge_refuses_without_the_caddy_lock_entry(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_consumer_tree(tmp_path)
         _write_lock(tmp_path, entries={"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST})
-        monkeypatch.delenv("BUNDLES", raising=False)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -613,24 +617,18 @@ class TestUpMaterialization:
         assert "CADDY_IMAGE" in str(result.exception)
 
     def test_an_auth_selection_without_public_url_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        _write_consumer_tree(tmp_path)
-        (tmp_path / ".env").write_text(
-            "BUNDLES=placeframe-cuda,auth-keycloak\nGATEWAY_PORT=58080\nLIVEKIT_SIGNALING_PORT=6178\n",
-            encoding="utf-8",
-        )
-        monkeypatch.delenv("BUNDLES", raising=False)
+        _write_consumer_tree(tmp_path, bundles="placeframe-cuda,auth-keycloak", extra_values={"public_url": None})
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "PUBLIC_URL" in str(result.exception)
+        assert "public_url" in str(result.exception)
 
 
 class TestUpValidation:
     def _invoke_up(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.delenv("BUNDLES", raising=False)
         monkeypatch.setattr(up, "bash_handoff", _silent_handoff)
         monkeypatch.chdir(tmp_path)
         return runner.invoke(app, ["up"])
@@ -674,7 +672,7 @@ class TestUpValidation:
         )
         _write_workload(tmp_path, "api.yaml", "api")
         _write_lock(tmp_path, entries={})
-        (tmp_path / ".env").write_text("BUNDLES=placeframe-cuda\n", encoding="utf-8")
+        _write_values_file(tmp_path, {"bundles": ["placeframe-cuda"]})
 
         result = self._invoke_up(tmp_path, monkeypatch)
 
@@ -734,7 +732,7 @@ class TestUpValidation:
         assert "bundle 'livekit' requires ['LIVEKIT_TOKEN']" in str(result.exception)
 
     def test_a_requirement_filled_by_the_env_file_passes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        _write_consumer_tree(tmp_path)
+        _write_consumer_tree(tmp_path, extra_values={"LIVEKIT_TOKEN": "set"})
         root_lock = tmp_path.joinpath(*LOCK_PATH.parts)
         root_lock.write_text(
             root_lock.read_text(encoding="utf-8").replace(
@@ -743,14 +741,43 @@ class TestUpValidation:
             ),
             encoding="utf-8",
         )
-        (tmp_path / ".env").write_text(
-            (tmp_path / ".env").read_text(encoding="utf-8") + "LIVEKIT_TOKEN=set\n",
+
+        result = self._invoke_up(tmp_path, monkeypatch)
+
+        assert result.exit_code == 0, result.output
+
+    def test_an_unfilled_requirement_set_in_the_shell_is_named_as_ignored(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _write_consumer_tree(tmp_path)
+        monkeypatch.setenv("API_TOKEN", "shell-value")
+        cuda = tmp_path / "stack" / "generated" / "compose" / "compose.placeframe-cuda.yaml"
+        cuda.write_text(
+            "services:\n"
+            "  placeframe-cuda-api:\n"
+            "    image: demo/api:1\n"
+            "    environment:\n"
+            "      TOKEN: ${API_TOKEN}\n"
+            "    networks:\n"
+            "      placeframe-cuda-net:\n"
+            "        aliases:\n"
+            "          - api\n"
+            "  placeframe-cuda-grafana:\n"
+            "    image: demo/grafana:1\n"
+            "    networks:\n"
+            "      placeframe-cuda-net:\n"
+            "        aliases:\n"
+            "          - grafana\n"
+            "networks:\n"
+            "  placeframe-cuda-net: null\n",
             encoding="utf-8",
         )
 
         result = self._invoke_up(tmp_path, monkeypatch)
 
-        assert result.exit_code == 0, result.output
+        assert result.exit_code != 0
+        assert isinstance(result.exception, ValueError)
+        assert "API_TOKEN set in the shell and ignored" in str(result.exception)
 
 
 class TestSharedNames:
@@ -778,8 +805,7 @@ class TestSharedNames:
         _write_bundle_output(tmp_path, "left-a", ["api"])
         _write_bundle_output(tmp_path, "right-b", ["api"])
         _write_workload(tmp_path, "api.yaml", "api")
-        (tmp_path / ".env").write_text("BUNDLES=left-a,right-b\n", encoding="utf-8")
-        monkeypatch.delenv("BUNDLES", raising=False)
+        _write_values_file(tmp_path, {"bundles": ["left-a", "right-b"]})
         recorder = AssemblyRecorder()
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -817,8 +843,7 @@ class TestSharedNames:
         _write_bundle_output(tmp_path, "left-a", ["api"])
         _write_bundle_output(tmp_path, "right-b", ["api"])
         _write_workload(tmp_path, "api.yaml", "api")
-        (tmp_path / ".env").write_text("BUNDLES=left-a,right-b\n", encoding="utf-8")
-        monkeypatch.delenv("BUNDLES", raising=False)
+        _write_values_file(tmp_path, {"bundles": ["left-a", "right-b"]})
         recorder = AssemblyRecorder()
         monkeypatch.setattr(down, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -832,7 +857,6 @@ class TestSharedNames:
 class TestDownTeardown:
     def test_down_hands_off_a_name_only_root_with_remove_orphans(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_consumer_tree(tmp_path)
-        monkeypatch.delenv("BUNDLES", raising=False)
         recorder = AssemblyRecorder()
         monkeypatch.setattr(down, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -842,8 +866,10 @@ class TestDownTeardown:
         assert result.exit_code == 0, result.output
         assert len(recorder.commands) == 1
         command = recorder.commands[0]
-        assert command.startswith("docker compose -f ")
-        assert f" --project-directory {tmp_path} --env-file .env --env-file " in command
+        assert command.startswith(
+            "env -u CADDY_IMAGE -u GATEWAY_PORT -u LIVEKIT_SIGNALING_PORT docker compose -f "
+        )
+        assert f" --project-directory {tmp_path} --env-file " in command
         assert LOCK_ENV_ARGUMENT_PATTERN.search(command) is not None
         assert command.endswith("down --remove-orphans")
         match = ASSEMBLY_ARGUMENT_PATTERN.search(command)
@@ -858,7 +884,6 @@ class TestDownTeardown:
             tree = tmp_path / f"tree-{len(commands)}"
             tree.mkdir()
             _write_consumer_tree(tree, bundles=bundles)
-            monkeypatch.delenv("BUNDLES", raising=False)
             recorder = AssemblyRecorder()
             monkeypatch.setattr(down, "bash_handoff", recorder.run)
             monkeypatch.chdir(tree)
@@ -872,7 +897,6 @@ class TestDownTeardown:
 
     def test_down_forwards_the_volumes_flag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_consumer_tree(tmp_path)
-        monkeypatch.delenv("BUNDLES", raising=False)
         recorder = HandoffRecorder()
         monkeypatch.setattr(down, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -883,8 +907,7 @@ class TestDownTeardown:
         assert recorder.commands[0].endswith("down --remove-orphans -v")
 
     def test_down_without_config_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        (tmp_path / ".env").write_text("PUBLIC_URL=https://example.dev\n", encoding="utf-8")
-        monkeypatch.delenv("BUNDLES", raising=False)
+        _write_values_file(tmp_path, {"public_url": "https://example.dev"})
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["down"])
@@ -895,8 +918,7 @@ class TestDownTeardown:
 
     def test_down_in_a_services_less_repo_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_config(tmp_path)
-        (tmp_path / ".env").write_text("PUBLIC_URL=https://example.dev\n", encoding="utf-8")
-        monkeypatch.delenv("BUNDLES", raising=False)
+        _write_values_file(tmp_path, {"public_url": "https://example.dev"})
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["down"])
@@ -907,8 +929,7 @@ class TestDownTeardown:
 
     def test_down_refuses_an_unknown_selection_name(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("BUNDLES=ghost\n", encoding="utf-8")
-        monkeypatch.delenv("BUNDLES", raising=False)
+        _write_values_file(tmp_path, {"bundles": ["ghost"]})
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["down"])
@@ -940,8 +961,7 @@ class TestDownTeardown:
                 "TUNNEL_RATHOLE_BUNDLE": "ghcr.io/org/rathole:0.1.0@" + FAKE_DIGEST,
             },
         )
-        (tmp_path / ".env").write_text("BUNDLES=tunnel-ngrok,tunnel-rathole\n", encoding="utf-8")
-        monkeypatch.delenv("BUNDLES", raising=False)
+        _write_values_file(tmp_path, {"bundles": ["tunnel-ngrok", "tunnel-rathole"]})
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["down"])
@@ -954,7 +974,7 @@ class TestDownTeardown:
 class TestLockRequirement:
     def test_a_bundles_only_lock_attaches_no_env_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("PUBLIC_URL=https://example.dev\n", encoding="utf-8")
+        _write_values_file(tmp_path, {"public_url": "https://example.dev"})
         recorder = HandoffRecorder()
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(down, "bash_handoff", recorder.run)
@@ -963,12 +983,12 @@ class TestLockRequirement:
 
         assert result.exit_code == 0, result.output
         assert [_normalize(command, tmp_path) for command in recorder.commands] == [
-            "docker compose -f ASSEMBLY --project-directory ROOT --env-file .env down --remove-orphans"
+            "docker compose -f ASSEMBLY --project-directory ROOT down --remove-orphans"
         ]
 
     def test_present_lock_attaches_the_second_env_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("PUBLIC_URL=https://example.dev\n", encoding="utf-8")
+        _write_values_file(tmp_path, {"public_url": "https://example.dev"})
         _write_lock(tmp_path, {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST})
         recorder = HandoffRecorder()
         monkeypatch.chdir(tmp_path)
@@ -978,7 +998,7 @@ class TestLockRequirement:
 
         assert result.exit_code == 0, result.output
         assert [_normalize(command, tmp_path) for command in recorder.commands] == [
-            "docker compose -f ASSEMBLY --project-directory ROOT --env-file .env --env-file LOCKENV down --remove-orphans"
+            "env -u ALPINE_IMAGE docker compose -f ASSEMBLY --project-directory ROOT --env-file LOCKENV down --remove-orphans"
         ]
 
     def test_a_repo_without_a_lock_skips_the_probe(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -992,8 +1012,7 @@ class TestLockRequirement:
         )
         _write_bundle_output(tmp_path, "apps-core", ["api"])
         _write_workload(tmp_path, "api.yaml", "api")
-        (tmp_path / ".env").write_text("BUNDLES=apps-core\n", encoding="utf-8")
-        monkeypatch.delenv("BUNDLES", raising=False)
+        _write_values_file(tmp_path, {"bundles": ["apps-core"]})
         recorder = HandoffRecorder()
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
@@ -1002,7 +1021,7 @@ class TestLockRequirement:
 
         assert result.exit_code == 0, result.output
         assert [_normalize(command, tmp_path) for command in recorder.commands] == [
-            "docker compose -f ASSEMBLY --project-directory ROOT --env-file .env up --pull missing -d"
+            "docker compose -f ASSEMBLY --project-directory ROOT up --pull missing -d"
         ]
 
 
@@ -1011,7 +1030,6 @@ class TestLockEnvSynthesis:
     ALPINE_MANIFEST = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + PLATFORM_DIGEST
 
     def _invoke_up_with_lock(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recorder: HandoffRecorder):
-        monkeypatch.delenv("PLATFORM", raising=False)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
         return runner.invoke(app, ["up"])
@@ -1020,7 +1038,7 @@ class TestLockEnvSynthesis:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("", encoding="utf-8")
+        _write_values_file(tmp_path, {})
         _write_lock(
             tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST}, TUNNEL_BUNDLES
         )
@@ -1030,7 +1048,7 @@ class TestLockEnvSynthesis:
 
         assert result.exit_code == 0, result.output
         [content] = recorder.env_contents
-        assert content == f"ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
+        assert content == f"# boatyard.lock.yml\nALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
 
     def test_a_selected_local_entry_reads_its_lock_keys_under_the_entry_prefix(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1047,18 +1065,20 @@ class TestLockEnvSynthesis:
         _write_bundle_output(tmp_path, "apps-core", ["api"])
         _write_workload(tmp_path, "api.yaml", "api")
         _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST})
-        (tmp_path / ".env").write_text("BUNDLES=apps-core\n", encoding="utf-8")
+        _write_values_file(tmp_path, {"bundles": ["apps-core"]})
         recorder = LockEnvRecorder()
 
         result = self._invoke_up_with_lock(tmp_path, monkeypatch, recorder)
 
         assert result.exit_code == 0, result.output
         [content] = recorder.env_contents
-        assert content == f"ALPINE_IMAGE={self.ALPINE_MANIFEST}\nAPPS_CORE_ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
+        assert content == (
+            f"# boatyard.lock.yml\nALPINE_IMAGE={self.ALPINE_MANIFEST}\nAPPS_CORE_ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
+        )
 
     def test_two_consecutive_syntheses_are_byte_identical(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("", encoding="utf-8")
+        _write_values_file(tmp_path, {})
         _write_lock(
             tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST}, TUNNEL_BUNDLES
         )
@@ -1079,7 +1099,7 @@ class TestLockEnvSynthesis:
                 "services": {"tunnel": {"ref": LIVEKIT_REF}},
             },
         )
-        (tmp_path / ".env").write_text("PLATFORM=linux/arm64\n", encoding="utf-8")
+        _write_values_file(tmp_path, {"platform": "linux/arm64"})
         arm64_manifest = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + PLATFORM_DIGEST
         _write_lock(
             tmp_path,
@@ -1092,7 +1112,7 @@ class TestLockEnvSynthesis:
         result = self._invoke_up_with_lock(tmp_path, monkeypatch, recorder)
 
         assert result.exit_code == 0, result.output
-        assert recorder.env_contents[0] == f"ALPINE_IMAGE={arm64_manifest}\n"
+        assert recorder.env_contents[0] == f"# boatyard.lock.yml\nALPINE_IMAGE={arm64_manifest}\n"
 
     def test_a_multi_platform_repo_without_a_selection_refuses_listing_declared(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1105,7 +1125,7 @@ class TestLockEnvSynthesis:
                 "services": {"tunnel": {"ref": LIVEKIT_REF}},
             },
         )
-        (tmp_path / ".env").write_text("", encoding="utf-8")
+        _write_values_file(tmp_path, {})
         _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, bundles=TUNNEL_BUNDLES)
 
         result = self._invoke_up_with_lock(tmp_path, monkeypatch, HandoffRecorder())
@@ -1113,12 +1133,12 @@ class TestLockEnvSynthesis:
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
         message = str(result.exception)
-        assert "PLATFORM=" in message
+        assert "platform: must be named" in message
         assert "linux/amd64" in message and "linux/arm64" in message
 
     def test_an_undeclared_platform_selection_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("PLATFORM=linux/ppc64le\n", encoding="utf-8")
+        _write_values_file(tmp_path, {"platform": "linux/ppc64le"})
         _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, bundles=TUNNEL_BUNDLES)
 
         result = self._invoke_up_with_lock(tmp_path, monkeypatch, HandoffRecorder())
@@ -1133,7 +1153,7 @@ class TestLockEnvSynthesis:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("", encoding="utf-8")
+        _write_values_file(tmp_path, {})
         root_lock = tmp_path.joinpath(*LOCK_PATH.parts)
         root_lock.write_text(
             yaml.safe_dump({
@@ -1152,13 +1172,14 @@ class TestLockEnvSynthesis:
         assert "linux/amd64" in message
         assert "platform manifest" in message
 
-    def test_a_failed_run_prints_and_keeps_the_env_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_a_failed_run_keeps_the_env_file_and_never_echoes_its_values(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("", encoding="utf-8")
+        _write_values_file(tmp_path, {"SECRET_TOKEN": "supersecret"})
         _write_lock(
             tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST}, TUNNEL_BUNDLES
         )
-        monkeypatch.delenv("PLATFORM", raising=False)
         monkeypatch.setattr(up, "bash_handoff", _failing_handoff)
         monkeypatch.chdir(tmp_path)
 
@@ -1169,7 +1190,11 @@ class TestLockEnvSynthesis:
             Path(line.split(":", 1)[1].strip()) for line in result.output.splitlines() if "kept for inspection" in line
         ]
         assert len(kept) == 1
-        assert kept[0].read_text(encoding="utf-8") == f"ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
+        assert kept[0].read_text(encoding="utf-8") == (
+            f"# boatyard.values.yaml\nSECRET_TOKEN=supersecret\n"
+            f"# boatyard.lock.yml\nALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
+        )
+        assert "supersecret" not in result.output
 
 
 class TestBundleLockEnforcement:
@@ -1177,9 +1202,8 @@ class TestBundleLockEnforcement:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("", encoding="utf-8")
+        _write_values_file(tmp_path, {})
         _write_lock(tmp_path, entries={}, bundles={})
-        monkeypatch.delenv("BUNDLES", raising=False)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -1194,12 +1218,11 @@ class TestBundleLockEnforcement:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("", encoding="utf-8")
+        _write_values_file(tmp_path, {})
         relocked = dict(TUNNEL_BUNDLES)
         relocked["TUNNEL_BUNDLE"] = f"ghcr.io/org/livekit:{LIVEKIT_SHA_TAG}@{PLATFORM_DIGEST}"
         _write_lock(tmp_path, entries={}, bundles=relocked)
         recorder = AssemblyRecorder()
-        monkeypatch.delenv("BUNDLES", raising=False)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
@@ -1218,8 +1241,6 @@ class TestBundleOverrides:
         recorder = ProducerEnvRecorder()
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
         monkeypatch.chdir(root)
-        monkeypatch.delenv("BUNDLES", raising=False)
-        monkeypatch.delenv("PLATFORM", raising=False)
         return recorder
 
     def test_the_path_form_replaces_the_include_and_fills_from_the_producer_lock(
@@ -1230,7 +1251,7 @@ class TestBundleOverrides:
         output = _write_producer(tmp_path, ["api", "grafana"], _producer_lock(["linux/amd64"]))
         _write_override_consumer(
             consumer,
-            [f"BUNDLE_OVERRIDE_PLACEFRAME_CUDA={OVERRIDE_PATH}"],
+            {"path_overrides": {"placeframe-cuda": OVERRIDE_PATH}},
             platforms=["linux/amd64"],
         )
         recorder = self._invoke_up(monkeypatch, consumer)
@@ -1241,10 +1262,14 @@ class TestBundleOverrides:
         [document] = recorder.documents
         assert document["include"] == [output.resolve().as_posix()]
         assert [_normalize(command, consumer) for command in recorder.commands] == [
-            "docker compose -f ASSEMBLY --project-directory ROOT --env-file .env --env-file LOCKENV up --pull missing -d"
+            (
+                "env -u PLACEFRAME_CUDA_ALPINE_IMAGE -u PLACEFRAME_CUDA_LOKI_IMAGE "
+                "docker compose -f ASSEMBLY --project-directory ROOT --env-file LOCKENV up --pull missing -d"
+            )
         ]
         assert recorder.env_contents == [
             (
+                "# boatyard.lock.yml\n"
                 f"PLACEFRAME_CUDA_ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
                 f"PLACEFRAME_CUDA_LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
             )
@@ -1258,7 +1283,7 @@ class TestBundleOverrides:
         _write_producer(tmp_path, ["api", "grafana"], _producer_lock(["linux/amd64"]))
         _write_override_consumer(
             consumer,
-            [f"BUNDLE_OVERRIDE_PLACEFRAME_CUDA={OVERRIDE_PATH}"],
+            {"path_overrides": {"placeframe-cuda": OVERRIDE_PATH}},
             platforms=["linux/amd64"],
             lock_images={"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + CONSUMER_ALPINE_DIGEST},
         )
@@ -1269,6 +1294,7 @@ class TestBundleOverrides:
         assert result.exit_code == 0, result.output
         assert recorder.env_contents == [
             (
+                "# boatyard.lock.yml\n"
                 f"ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{CONSUMER_ALPINE_DIGEST}\n"
                 f"PLACEFRAME_CUDA_ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
                 f"PLACEFRAME_CUDA_LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
@@ -1281,7 +1307,7 @@ class TestBundleOverrides:
         _write_producer(tmp_path, ["api", "grafana"], _producer_lock(["linux/amd64", "linux/arm64"]))
         _write_override_consumer(
             consumer,
-            [f"BUNDLE_OVERRIDE_PLACEFRAME_CUDA={OVERRIDE_PATH}", "PLATFORM=linux/arm64"],
+            {"path_overrides": {"placeframe-cuda": OVERRIDE_PATH}, "platform": "linux/arm64"},
         )
         recorder = self._invoke_up(monkeypatch, consumer)
 
@@ -1290,6 +1316,7 @@ class TestBundleOverrides:
         assert result.exit_code == 0, result.output
         assert recorder.env_contents == [
             (
+                "# boatyard.lock.yml\n"
                 f"PLACEFRAME_CUDA_ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
                 f"PLACEFRAME_CUDA_LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_ARM64_DIGEST}\n"
             )
@@ -1301,7 +1328,7 @@ class TestBundleOverrides:
         consumer = tmp_path / "consumer"
         consumer.mkdir()
         _write_producer(tmp_path, ["api", "grafana"], _producer_lock(["linux/amd64", "linux/arm64"]))
-        _write_override_consumer(consumer, [f"BUNDLE_OVERRIDE_PLACEFRAME_CUDA={OVERRIDE_PATH}"])
+        _write_override_consumer(consumer, {"path_overrides": {"placeframe-cuda": OVERRIDE_PATH}})
         self._invoke_up(monkeypatch, consumer)
 
         result = runner.invoke(app, ["up"])
@@ -1314,7 +1341,7 @@ class TestBundleOverrides:
 
     def test_the_path_form_requires_a_value(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text("BUNDLE_OVERRIDE_TUNNEL=\n", encoding="utf-8")
+        _write_values_file(tmp_path, {"path_overrides": {"tunnel": "  "}})
         self._invoke_up(monkeypatch, tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -1325,9 +1352,7 @@ class TestBundleOverrides:
 
     def test_a_url_scheme_override_value_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)
-        (tmp_path / ".env").write_text(
-            "BUNDLE_OVERRIDE_TUNNEL=oci://ghcr.io/org/livekit:some-tag\n", encoding="utf-8"
-        )
+        _write_values_file(tmp_path, {"path_overrides": {"tunnel": "oci://ghcr.io/org/livekit:some-tag"}})
         self._invoke_up(monkeypatch, tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -1342,7 +1367,7 @@ class TestBundleOverrides:
         consumer = tmp_path / "consumer"
         consumer.mkdir()
         _write_override_consumer(
-            consumer, ["BUNDLE_OVERRIDE_GHOST=../producer/stack/generated/compose/compose.ghost.yaml"]
+            consumer, {"path_overrides": {"ghost": "../producer/stack/generated/compose/compose.ghost.yaml"}}
         )
         self._invoke_up(monkeypatch, consumer)
 
@@ -1351,7 +1376,7 @@ class TestBundleOverrides:
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
         message = str(result.exception)
-        assert "BUNDLE_OVERRIDE_* names ['ghost']" in message
+        assert "path_overrides: names ['ghost']" in message
         assert "placeframe-cuda" in message
 
     def test_an_override_naming_a_local_entry_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -1359,7 +1384,7 @@ class TestBundleOverrides:
         consumer.mkdir()
         _write_override_consumer(
             consumer,
-            ["BUNDLE_OVERRIDE_EXTRA=../producer/stack/generated/compose/compose.extra.yaml"],
+            {"path_overrides": {"extra": "../producer/stack/generated/compose/compose.extra.yaml"}},
             services_extra={"extra": {"workloads": ["extra.yaml"]}},
         )
         _write_workload(consumer, "extra.yaml", "extra")
@@ -1370,7 +1395,7 @@ class TestBundleOverrides:
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
         message = str(result.exception)
-        assert "BUNDLE_OVERRIDE_* names ['extra']" in message
+        assert "path_overrides: names [\x27extra\x27]" in message
         assert "an override targets a ref entry" in message
         assert "placeframe-cuda" in message
 
@@ -1380,10 +1405,12 @@ class TestBundleOverrides:
         output = _write_producer(tmp_path, ["grafana"])
         _write_override_consumer(
             consumer,
-            [
-                f"BUNDLE_OVERRIDE_PLACEFRAME_CUDA={OVERRIDE_PATH}",
-                "BUNDLE_OVERRIDE_PLACEFRAME_ROCM=../producer/stack/generated/compose/compose.placeframe-rocm.yaml",
-            ],
+            {
+                "path_overrides": {
+                    "placeframe-cuda": OVERRIDE_PATH,
+                    "placeframe-rocm": "../producer/stack/generated/compose/compose.placeframe-rocm.yaml",
+                }
+            },
         )
         recorder = self._invoke_up(monkeypatch, consumer)
 
@@ -1397,7 +1424,7 @@ class TestBundleOverrides:
     def test_a_missing_override_path_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         consumer = tmp_path / "consumer"
         consumer.mkdir()
-        _write_override_consumer(consumer, [f"BUNDLE_OVERRIDE_PLACEFRAME_CUDA={OVERRIDE_PATH}"])
+        _write_override_consumer(consumer, {"path_overrides": {"placeframe-cuda": OVERRIDE_PATH}})
         self._invoke_up(monkeypatch, consumer)
 
         result = runner.invoke(app, ["up"])
@@ -1414,7 +1441,7 @@ class TestBundleOverrides:
         _write_producer(tmp_path, ["api"])
         stray = tmp_path / "producer" / "compose.placeframe-cuda.yaml"
         stray.write_text(yaml.safe_dump({"services": {"api": {"image": "demo/api:1"}}}), encoding="utf-8")
-        _write_override_consumer(consumer, ["BUNDLE_OVERRIDE_PLACEFRAME_CUDA=../producer/compose.placeframe-cuda.yaml"])
+        _write_override_consumer(consumer, {"path_overrides": {"placeframe-cuda": "../producer/compose.placeframe-cuda.yaml"}})
         self._invoke_up(monkeypatch, consumer)
 
         result = runner.invoke(app, ["up"])
@@ -1434,7 +1461,7 @@ class TestBundleOverrides:
             yaml.safe_dump({"services": {"api": {"image": "demo/api:1"}, "edge": {"image": "demo/edge:1"}}}),
             encoding="utf-8",
         )
-        _write_override_consumer(consumer, [f"BUNDLE_OVERRIDE_PLACEFRAME_CUDA={OVERRIDE_PATH}"])
+        _write_override_consumer(consumer, {"path_overrides": {"placeframe-cuda": OVERRIDE_PATH}})
         self._invoke_up(monkeypatch, consumer)
 
         result = runner.invoke(app, ["up"])
@@ -1451,7 +1478,7 @@ class TestBundleOverrides:
         _write_producer(tmp_path, ["api", "grafana"], _producer_lock(["linux/amd64"]))
         _write_override_consumer(
             consumer,
-            [f"BUNDLE_OVERRIDE_PLACEFRAME_CUDA={OVERRIDE_PATH}"],
+            {"path_overrides": {"placeframe-cuda": OVERRIDE_PATH}},
             services_extra={"extra": {"workloads": ["grafana.yaml"]}},
         )
         _write_workload(consumer, "grafana.yaml", "grafana")
@@ -1498,3 +1525,74 @@ class TestComposePortMergeOverIncludes:
         )
         document = yaml.safe_load(rendered)
         assert "ports" not in document["services"]["svc"]
+
+
+class TestValuesFileLaw:
+    def test_the_scrub_carries_requirement_names(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        _write_consumer_tree(tmp_path, extra_values={"LIVEKIT_TOKEN": "set"})
+        root_lock = tmp_path.joinpath(*LOCK_PATH.parts)
+        root_lock.write_text(
+            root_lock.read_text(encoding="utf-8").replace(
+                f"  LIVEKIT_BUNDLE:\n    reference: {LIVEKIT_PINNED}",
+                f"  LIVEKIT_BUNDLE:\n    reference: {LIVEKIT_PINNED}\n    requires:\n      - LIVEKIT_TOKEN",
+            ),
+            encoding="utf-8",
+        )
+        recorder = HandoffRecorder()
+        monkeypatch.setattr(up, "bash_handoff", recorder.run)
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code == 0, result.output
+        assert " -u LIVEKIT_TOKEN " in recorder.commands[0]
+
+    def test_a_values_key_colliding_with_a_lock_entry_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _write_ref_tree(tmp_path)
+        _write_values_file(tmp_path, {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20"})
+        _write_lock(tmp_path, {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST})
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["down"])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, ValueError)
+        assert "the lock is their only source" in str(result.exception)
+
+    def test_a_values_key_outside_the_env_name_grammar_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _write_ref_tree(tmp_path)
+        _write_values_file(tmp_path, {"lowercase_key": "value"})
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["down"])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, ValueError)
+        assert "not ALL_CAPS environment names" in str(result.exception)
+
+
+class TestShellPrecedenceEndToEnd:
+    def test_the_scrub_defeats_composes_shell_precedence(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pinned_compose: str
+    ) -> None:
+        compose_file = tmp_path / "compose.yaml"
+        compose_file.write_text("services:\n  demo:\n    image: ${DEMO_TOKEN}-rendered\n", encoding="utf-8")
+        env_file = tmp_path / "run.env"
+        env_file.write_text("DEMO_TOKEN=from-file\n", encoding="utf-8")
+        monkeypatch.setenv("DEMO_TOKEN", "from-shell")
+
+        leaked = bash_output(
+            f"{pinned_compose} -f {compose_file} --project-directory {tmp_path} "
+            f"--env-file {env_file} config --format json"
+        )
+        assert "from-shell-rendered" in leaked
+
+        scrubbed = bash_output(
+            f"env -u DEMO_TOKEN {pinned_compose} -f {compose_file} "
+            f"--project-directory {tmp_path} --env-file {env_file} config --format json"
+        )
+        assert "from-file-rendered" in scrubbed

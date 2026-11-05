@@ -34,7 +34,7 @@ from boatyard.lock_file import (
     ConfigLockBundle,
     ConfigLockEntry,
 )
-from boatyard.values_file import PLATFORM_VARIABLE
+from boatyard.values_file import PLATFORM_KEY, VALUES_FILE
 
 DIGEST_TAIL_PATTERN = re.compile(rf"@{SHA256_DIGEST_REGEX}$")
 DIGEST_PATTERN = re.compile(r"^Digest:\s+(sha256:[a-f0-9]+)", re.MULTILINE)
@@ -326,11 +326,13 @@ def compose_env_entries(lock: ConfigLock, config: Config, platform: str | None) 
         elif len(config.platforms) == 1:
             resolved = config.platforms[0]
         else:
-            raise ValueError(f"platforms {config.platforms} are declared; {PLATFORM_VARIABLE}= must be named in .env")
+            raise ValueError(
+                f"platforms {config.platforms} are declared; {PLATFORM_KEY}: must be named in {VALUES_FILE.name}"
+            )
     elif config.platforms and platform not in config.platforms:
-        raise ValueError(f"{PLATFORM_VARIABLE}={platform!r} must be one of the declared platforms {config.platforms}")
+        raise ValueError(f"{PLATFORM_KEY}: {platform!r} must be one of the declared platforms {config.platforms}")
     else:
-        # A platforms-less repo has nothing of its own to validate PLATFORM= against; the
+        # A platforms-less repo has nothing of its own to validate the platform against; the
         # producer lock's recorded platforms police it instead.
         resolved = platform
     if resolved is None and lock.images:
@@ -348,7 +350,7 @@ def producer_env_entries(lock: ConfigLock, platform: str | None) -> dict[str, st
     elif not recorded:
         resolved = None
     else:
-        raise ValueError(f"the producer lock records platforms {sorted(recorded)}; {PLATFORM_VARIABLE}= must name one")
+        raise ValueError(f"the producer lock records platforms {sorted(recorded)}; {PLATFORM_KEY}: must name one")
     return env_entries(lock, resolved)
 
 
@@ -370,6 +372,21 @@ def env_entries(lock: ConfigLock, platform: str | None = None) -> dict[str, str]
 
 def render_env_entries(entries: Mapping[str, str]) -> str:
     return "".join(f"{name}={reference}\n" for name, reference in sorted(entries.items()))
+
+
+def render_merged_env(values: Mapping[str, str], entries: Mapping[str, str]) -> str:
+    shared = sorted(set(values) & set(entries))
+    if shared:
+        raise ValueError(
+            f"{VALUES_FILE.name} sets {shared}, which the lock env file also fills; "
+            f"the lock is their only source — remove them from {VALUES_FILE.name}"
+        )
+    document = ""
+    if values:
+        document += f"# {VALUES_FILE.name}\n{render_env_entries(values)}"
+    if entries:
+        document += f"# {LOCK_PATH.name}\n{render_env_entries(entries)}"
+    return document
 
 
 def _declaration_frozen(entry: ConfigLockEntry | None, base: str, platforms: list[str]) -> bool:

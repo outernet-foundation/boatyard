@@ -30,9 +30,9 @@ from boatyard.config_file import (
     require_compose_stack,
     required_compose_holes,
 )
-from boatyard.lock import compose_env_entries, producer_env_entries, render_env_entries
+from boatyard.lock import compose_env_entries, producer_env_entries, render_merged_env
 from boatyard.lock_file import LOCK_PATH, parse_config_lock, read_config_lock
-from boatyard.values_file import BUNDLE_OVERRIDE_PREFIX, Environment
+from boatyard.values_file import ConfigValues
 
 EDGE_LISTEN_PORT = 8443
 EDGE_CONFIG_NAME = "devkit-edge-caddyfile"
@@ -56,16 +56,16 @@ def up(
     config = Config.load(root)
 
     require_env_file(root)
-    environment = Environment.load(root, config)
+    config_values = ConfigValues.load(root, config)
     if config is None or not config.services:
         config = require_compose_stack(config)
 
     # Resolve the chosen options into leaf services
-    services = config.resolve_services(environment.choices)
+    services = config.resolve_services(config_values.choices)
 
     # Collect each entry's include and env entries in declaration order
     lock = read_config_lock(config.root)
-    consumer_entries = compose_env_entries(lock, config, environment.platform)
+    consumer_entries = compose_env_entries(lock, config, config_values.platform)
     entries: dict[str, str] = dict(consumer_entries)
     includes: list[Yaml] = []
     requirements: dict[str, list[str]] = {}
@@ -86,19 +86,17 @@ def up(
             continue
 
         # Include an overridden ref through its local path
-        if name in environment.path_overrides:
-            candidate = environment.path_overrides[name]
+        if name in config_values.path_overrides:
+            candidate = config_values.path_overrides[name]
             path = (candidate if candidate.is_absolute() else config.root / candidate).resolve()
             if not path.is_file():
-                raise ValueError(
-                    f"{BUNDLE_OVERRIDE_PREFIX + name.upper().replace('-', '_')}: {path.as_posix()} does not exist"
-                )
+                raise ValueError(f"path_overrides.{name}: {path.as_posix()} does not exist")
             requirements[name] = _scan_local_bundle(name, service, path, refuse_edge=True)
             includes.append(path.as_posix())
             # Fill the override's holes from the producer lock three parents up
             producer_lock = path.parents[3] / LOCK_PATH
             if producer_lock.is_file():
-                producer_entries = producer_env_entries(parse_config_lock(producer_lock), environment.platform)
+                producer_entries = producer_env_entries(parse_config_lock(producer_lock), config_values.platform)
                 entries.update({lock_key_prefix(name) + key: value for key, value in producer_entries.items()})
             continue
 
@@ -108,22 +106,26 @@ def up(
         requirements[name] = lock.bundles[key].requires
         includes.append(f"{OCI_REFERENCE_PREFIX}{pinned}")
 
-    # Refuse bundles whose requirements no environment source fills
-    filled = {variable for variable, value in {**os.environ, **environment.variables, **entries}.items() if value}
+    # Refuse bundles whose requirements no environment source fills; the ambient
+    # shell fills nothing, so a shell-set hole name is named as ignored, not counted.
+    filled = {variable for variable, value in {**config_values.variables, **entries}.items() if value}
     missing = {name: sorted(set(required) - filled) for name, required in requirements.items() if set(required) - filled}
     if missing:
         name, absent = min(missing.items())
+        ignored = sorted(shell_name for shell_name in absent if os.environ.get(shell_name))
+        note = f"; {', '.join(ignored)} set in the shell and ignored" if ignored else ""
         raise ValueError(
-            f"bundle {name!r} requires {absent}, which no environment source sets (shell, .env, or the lock env file)"
+            f"bundle {name!r} requires {absent}, which no environment source sets "
+            f"(boatyard.values.yaml or the lock env file){note}"
         )
 
-    # Derive the forwarded environment from PUBLIC_URL under the auth option
+    # Derive the forwarded environment from public_url under the auth option
     auth_service = next((service for service in services if service.auth), None)
     forwarded = None
     if auth_service is not None:
-        if environment.public_url is None:
-            raise ValueError("an auth option is selected; PUBLIC_URL is required")
-        forwarded = environment.public_url.forwarded
+        if config_values.public_url is None:
+            raise ValueError("an auth option is selected; public_url is required in boatyard.values.yaml")
+        forwarded = config_values.public_url.forwarded
 
     # Namespace routes and ports under their declaring entries
     routes = [
@@ -190,13 +192,13 @@ def up(
 
     # Materialize the per-run files and hand off
     with ExitStack() as stack:
-        # Write the per-run lock env file
+        # Write the one per-run dotenv: consumer values + lock entries
         env_file: Path | None = None
-        if entries:
+        if config_values.variables or entries:
             with NamedTemporaryFile(
-                "w", suffix=".env", prefix="devkit-lock-env-", delete=False, encoding="utf-8"
+                "w", suffix=".env", prefix="devkit-env-", delete=False, encoding="utf-8"
             ) as handle:
-                handle.write(render_env_entries(entries))
+                handle.write(render_merged_env(config_values.variables, entries))
                 env_file = Path(handle.name)
             stack.enter_context(lock_env_unwind(env_file))
 
@@ -218,6 +220,7 @@ def up(
             compose_files,
             "up",
             env_file=env_file,
+            hole_names=[*config_values.variables, *entries, *(name for required in requirements.values() for name in required)],
         )
         if not build:
             up_command += " --pull missing"

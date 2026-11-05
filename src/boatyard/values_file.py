@@ -1,17 +1,21 @@
 from __future__ import annotations
 
-from os import environ
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from boatyard.config_file import Config, Yaml, is_mapping, qualified_option_name
+from boatyard.config_file import (
+    ENV_NAME_PATTERN,
+    Config,
+    Yaml,
+    is_mapping,
+    load_yaml_file,
+    qualified_option_name,
+)
 
-ENV_FILE = Path(".env")
-BUNDLES_VARIABLE = "BUNDLES"
-BUNDLE_OVERRIDE_PREFIX = "BUNDLE_OVERRIDE_"
-PLATFORM_VARIABLE = "PLATFORM"
-PUBLIC_URL_VARIABLE = "PUBLIC_URL"
+VALUES_FILE = Path("boatyard.values.yaml")
+PLATFORM_KEY = "platform"
+TYPED_KEYS = frozenset({"bundles", "path_overrides", "public_url", PLATFORM_KEY})
 
 OVERRIDE_LAYOUT = ("stack", "generated", "compose")
 
@@ -27,7 +31,7 @@ class PublicUrl(BaseModel):
     def _parse(cls, value: str) -> dict[str, str]:
         scheme, separator, rest = value.partition("://")
         if not separator:
-            raise ValueError(f"PUBLIC_URL={value!r} must carry a scheme (https://example.dev)")
+            raise ValueError(f"public_url: {value!r} must carry a scheme (https://example.dev)")
         hostport = rest.partition("/")[0]
         if ":" in hostport:
             forwarded_port = hostport.rpartition(":")[2]
@@ -42,7 +46,7 @@ class PublicUrl(BaseModel):
         return {"FORWARDED_PROTO": self.forwarded_proto, "FORWARDED_PORT": self.forwarded_port}
 
 
-class Environment(BaseModel):
+class ConfigValues(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     bundles: list[str]
@@ -52,53 +56,56 @@ class Environment(BaseModel):
     platform: str | None
     variables: dict[str, str]
 
-    @model_validator(mode="before")
+    @field_validator("path_overrides", mode="before")
     @classmethod
-    def _carve_overrides(cls, data: dict[str, object]) -> dict[str, object]:
-        raw_overrides = data.pop("overrides", {})
-        overrides = {key: str(value) for key, value in raw_overrides.items()} if is_mapping(raw_overrides) else {}
+    def _require_path_values(cls, raw_overrides: object) -> object:
+        if not is_mapping(raw_overrides):
+            return raw_overrides
         path_overrides: dict[str, Path] = {}
-        for name, value in overrides.items():
-            variable = BUNDLE_OVERRIDE_PREFIX + name.upper().replace("-", "_")
-            stripped = value.strip()
+        for name, value in raw_overrides.items():
+            stripped = str(value).strip()
             if not stripped:
-                raise ValueError(f"{variable}: empty; a value is a filesystem path")
+                raise ValueError(f"path_overrides.{name}: empty; a value is a filesystem path")
             if "://" in stripped:
-                raise ValueError(f"{variable}: {stripped!r} carries a URL scheme; a value is a filesystem path")
+                raise ValueError(f"path_overrides.{name}: {stripped!r} carries a URL scheme; a value is a filesystem path")
             path_overrides[name] = Path(stripped)
-        data["path_overrides"] = path_overrides
-        return data
+        return path_overrides
 
     @field_validator("path_overrides")
     @classmethod
     def _require_output_layout(cls, path_overrides: dict[str, Path]) -> dict[str, Path]:
         for name, path in path_overrides.items():
             if path.parts[-4:-1] != OVERRIDE_LAYOUT:
-                variable = BUNDLE_OVERRIDE_PREFIX + name.upper().replace("-", "_")
                 raise ValueError(
-                    f"{variable}: {path.as_posix()!r} must point into a stack/generated/compose/ bundle output layout"
+                    f"path_overrides.{name}: {path.as_posix()!r} must point into a stack/generated/compose/ bundle output layout"
                 )
         return path_overrides
 
+    @field_validator("variables")
     @classmethod
-    def load(cls, root: Path, config: Config | None) -> Environment:
-        merged: dict[str, str] = {}
-        path = root / ENV_FILE
-        if path.is_file():
-            for raw_line in path.read_text(encoding="utf-8").splitlines():
-                line = raw_line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, _, value = line.partition("=")
-                merged[key.strip()] = value.strip().strip("'\"")
-        merged.update(environ)
-        consumed = {BUNDLES_VARIABLE, PLATFORM_VARIABLE, PUBLIC_URL_VARIABLE}
-        bundles = _split_names(merged.get(BUNDLES_VARIABLE, ""))
+    def _require_env_names(cls, variables: dict[str, str]) -> dict[str, str]:
+        unknown = sorted(key for key in variables if ENV_NAME_PATTERN.fullmatch(key) is None)
+        if unknown:
+            raise ValueError(f"{VALUES_FILE.name}: keys {unknown} are not ALL_CAPS environment names")
+        return variables
+
+    @classmethod
+    def load(cls, root: Path, config: Config | None) -> ConfigValues:
+        path = root / VALUES_FILE
+        raw: Yaml = load_yaml_file(path) if path.is_file() else {}
+        if raw is None:
+            raw = {}
+        if not is_mapping(raw):
+            raise ValueError(f"{path.as_posix()}: the values file must be a YAML mapping")
+        raw_values = {str(key): value for key, value in raw.items()}
+        bundles = raw_values.get("bundles", [])
+        if not isinstance(bundles, list) or not all(isinstance(name, str) for name in bundles):
+            raise ValueError("bundles: must be a list of selection names")
         services_declared = config is not None and bool(config.services)
         choices: dict[str, str] = {}
         if not services_declared:
             if bundles:
-                raise ValueError(f"{BUNDLES_VARIABLE}= is set but this repo declares no services")
+                raise ValueError("bundles: is set but this repo declares no services")
         else:
             unknown = [name for name in bundles if name not in config.selectable_options]
             if unknown:
@@ -106,7 +113,7 @@ class Environment(BaseModel):
                     f"; bare entries, always included: {config.bare_entries}" if config.bare_entries else ""
                 )
                 raise ValueError(
-                    f"{BUNDLES_VARIABLE}= names {unknown}; "
+                    f"bundles: names {unknown}; "
                     f"the selectable options are {sorted(config.selectable_options)}{bare_entries_note}"
                 )
             # Fold the selection into one choice per group
@@ -114,24 +121,20 @@ class Environment(BaseModel):
                 group, option_name = config.selectable_options[name]
                 if group in choices:
                     raise ValueError(
-                        f"{BUNDLES_VARIABLE}= selects {qualified_option_name(group, choices[group])} and {name}; "
+                        f"bundles: selects {qualified_option_name(group, choices[group])} and {name}; "
                         f"at most one option per group ({group})"
                     )
                 choices[group] = option_name
         environment = cls.model_validate({
             "bundles": bundles,
             "choices": choices,
-            "overrides": {
-                key.removeprefix(BUNDLE_OVERRIDE_PREFIX).lower().replace("_", "-"): value
-                for key, value in merged.items()
-                if key.startswith(BUNDLE_OVERRIDE_PREFIX)
-            },
-            "public_url": merged.get(PUBLIC_URL_VARIABLE, "").strip() or None,
-            "platform": merged.get(PLATFORM_VARIABLE, "").strip() or None,
+            "path_overrides": raw_values.get("path_overrides", {}),
+            "public_url": raw_values.get("public_url"),
+            "platform": raw_values.get("platform"),
             "variables": {
-                key: value
-                for key, value in merged.items()
-                if key not in consumed and not key.startswith(BUNDLE_OVERRIDE_PREFIX)
+                key: (str(value).lower() if isinstance(value, bool) else str(value))
+                for key, value in raw_values.items()
+                if key not in TYPED_KEYS
             },
         })
         if not services_declared:
@@ -143,18 +146,14 @@ class Environment(BaseModel):
         )
         if unknown_overrides:
             raise ValueError(
-                f"{BUNDLE_OVERRIDE_PREFIX}* names {unknown_overrides}; "
+                f"path_overrides: names {unknown_overrides}; "
                 f"the bundle vocabulary is {sorted(config.selectable_options.keys() | set(config.bare_entries))}"
             )
         remote_names = {name for name, _reference in config.remote_service_entries()}
         local_names = sorted(name for name in environment.path_overrides if name not in remote_names)
         if local_names:
             raise ValueError(
-                f"{BUNDLE_OVERRIDE_PREFIX}* names {local_names}; an override targets a ref entry; "
+                f"path_overrides: names {local_names}; an override targets a ref entry; "
                 f"the ref entries are {sorted(remote_names)}"
             )
         return environment
-
-
-def _split_names(value: str) -> list[str]:
-    return list(dict.fromkeys(part.strip() for part in value.split(",") if part.strip()))

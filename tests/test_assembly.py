@@ -82,13 +82,15 @@ def _write_edge_tree(
         }),
         encoding="utf-8",
     )
-    (tmp_path / ".env").write_text(
-        f"GATEWAY_PORT=58080\nPUBLIC_URL={public_url}\nBUNDLES={'auth-keycloak' if auth else ''}\n",
+    values: dict[str, object] = {"GATEWAY_PORT": 58080}
+    if public_url is not None:
+        values["public_url"] = public_url
+    if auth:
+        values["bundles"] = ["auth-keycloak"]
+    (tmp_path / "boatyard.values.yaml").write_text(
+        yaml.safe_dump(values, default_flow_style=False, sort_keys=False),
         encoding="utf-8",
     )
-    monkeypatch.delenv("BUNDLES", raising=False)
-    monkeypatch.delenv("PUBLIC_URL", raising=False)
-    monkeypatch.delenv("GATEWAY_PORT", raising=False)
     monkeypatch.chdir(tmp_path)
 
 
@@ -238,10 +240,8 @@ class TestEdgeStanza:
         assert "routes are declared; gateway is required" in str(result.exception)
 
 
-class TestEnvironmentLoad:
-    def test_parses_assignments_skipping_comments_and_blanks(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+class TestValuesLoad:
+    def test_carves_typed_spellings_and_coerces_scalar_values(self, tmp_path: Path) -> None:
         (tmp_path / "boatyard.yml").write_text(
             yaml.safe_dump(
                 {
@@ -270,13 +270,12 @@ class TestEnvironmentLoad:
             ),
             encoding="utf-8",
         )
-        (tmp_path / ".env").write_text(
-            "# comment\n\nBUNDLES=core-cuda,ui-open\nGATEWAY_PORT='8443'\nRELOAD=\"true\"\nnot-an-assignment\n",
+        (tmp_path / "boatyard.values.yaml").write_text(
+            "bundles: [core-cuda, ui-open]\nGATEWAY_PORT: 8443\nRELOAD: true\n",
             encoding="utf-8",
         )
-        monkeypatch.setattr(values_file, "environ", {})
 
-        parsed = values_file.Environment.load(tmp_path, Config.load(tmp_path))
+        parsed = values_file.ConfigValues.load(tmp_path, Config.load(tmp_path))
 
         assert parsed.bundles == ["core-cuda", "ui-open"]
         assert parsed.choices == {"core": "cuda", "ui": "open"}

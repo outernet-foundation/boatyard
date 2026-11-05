@@ -960,7 +960,7 @@ class TestPlatformSelectionLaw:
         config = _selection_config(platforms=["linux/amd64", "linux/arm64"])
 
         with pytest.raises(
-            ValueError, match=r"platforms \['linux/amd64', 'linux/arm64'\] are declared.*PLATFORM= must be named"
+            ValueError, match=r"platforms \['linux/amd64', 'linux/arm64'\] are declared.*platform: must be named"
         ):
             lock_module.compose_env_entries(_selection_lock(), config, None)
 
@@ -969,7 +969,7 @@ class TestPlatformSelectionLaw:
 
         with pytest.raises(
             ValueError,
-            match=r"PLATFORM='linux/arm64' must be one of the declared platforms \['linux/amd64'\]",
+            match=r"platform: 'linux/arm64' must be one of the declared platforms \['linux/amd64'\]",
         ):
             lock_module.compose_env_entries(_selection_lock(), config, "linux/arm64")
 

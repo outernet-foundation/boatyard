@@ -315,7 +315,6 @@ class TestMarkerSubstrateResolution:
     def test_compose_generation_receives_the_selected_platform_manifests(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.delenv("PLATFORM", raising=False)
 
         contents = self._compose_seam(monkeypatch, tmp_path, platforms=["linux/amd64"])
 
@@ -324,7 +323,7 @@ class TestMarkerSubstrateResolution:
     def test_compose_generation_selects_the_platform_the_environment_names(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("PLATFORM", "linux/arm64")
+        (tmp_path / "boatyard.values.yaml").write_text("platform: linux/arm64\n", encoding="utf-8")
 
         contents = self._compose_seam(monkeypatch, tmp_path, platforms=["linux/amd64", "linux/arm64"])
 
