@@ -64,7 +64,7 @@ def up(
 
     # Collect each entry's include and env entries in declaration order
     lock = read_config_lock(config.root, config)
-    consumer_entries = lock.compose_env_entries(config_values.platform)
+    consumer_entries = lock.manifest_references(config_values.platform)
     entries: dict[str, str] = dict(consumer_entries)
     includes: list[Yaml] = []
     requirements: dict[str, list[str]] = {}
@@ -95,7 +95,7 @@ def up(
             # Fill the override's holes from the producer repo above the override
             producer_root = _producer_root(path)
             producer_config = ConfigFile.load(producer_root / DEFAULT_CONFIG_PATH)
-            producer_entries = read_config_lock(producer_root, producer_config).compose_env_entries(
+            producer_entries = read_config_lock(producer_root, producer_config).manifest_references(
                 config_values.platform
             )
             entries.update({lock_key_prefix(name) + key: value for key, value in producer_entries.items()})

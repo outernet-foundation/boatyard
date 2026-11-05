@@ -83,10 +83,10 @@ class LockFile(BaseModel):
             return self.bundles[name].reference
         raise ValueError(f"{subject}: {LOCK_PATH.as_posix()} lacks the {name} entry ({hint})")
 
-    def env_entries(self) -> dict[str, str]:
+    def index_references(self) -> dict[str, str]:
         return {**{name: entry.index for name, entry in self.images.items()}, **self.charts}
 
-    def compose_env_entries(self, platform: str | None) -> dict[str, str]:
+    def manifest_references(self, platform: str | None) -> dict[str, str]:
         resolved: str | None
         if platform is None:
             if not self.platforms:
@@ -102,7 +102,7 @@ class LockFile(BaseModel):
         else:
             resolved = platform
         if resolved is None:
-            return self.env_entries()
+            return self.index_references()
         return {**{name: entry.platforms[resolved] for name, entry in self.images.items()}, **self.charts}
 
 

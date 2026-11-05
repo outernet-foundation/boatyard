@@ -64,7 +64,7 @@ def generate_k8s(
     secrets: SecretsDeclaration,
 ) -> Path:
     score_dir = config.root / config.score_dir
-    images = lock.env_entries()
+    images = lock.index_references()
     workloads = load_workloads(score_dir, k8s.workloads, WorkloadDocument)
 
     output_path = config.root / (config.k8s_local_output if local else config.k8s_output)

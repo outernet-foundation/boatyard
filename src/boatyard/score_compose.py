@@ -132,7 +132,7 @@ def generate_compose(
     state_prefix = f".{TOOL}/"
     values_path = config.root / VALUES_FILE
     platform = ValuesFile.load(values_path, config).platform if values_path.is_file() else None
-    images = lock.compose_env_entries(platform)
+    images = lock.manifest_references(platform)
 
     if "ALPINE_IMAGE" not in images:
         raise ValueError(f"{LOCK_PATH.as_posix()}: the image lock must carry the ALPINE_IMAGE entry")

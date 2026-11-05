@@ -902,31 +902,31 @@ def _selection_lock(platforms: list[str] | None = None) -> lock_module.LockFile:
 
 class TestEntrySelection:
     def test_the_projection_carries_no_entry_for_unknown_names(self) -> None:
-        assert "GHOST_IMAGE" not in _selection_lock().env_entries()
+        assert "GHOST_IMAGE" not in _selection_lock().index_references()
 
 
-class TestEnvProjection:
+class TestIndexReferences:
     def test_the_projection_without_a_platform_carries_index_references(self) -> None:
-        entries = _selection_lock().env_entries()
+        entries = _selection_lock().index_references()
 
         assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_A}")
         assert entries["GRAFANA_CHART"].endswith(f"@{DIGEST_A}")
 
 
-class TestComposeProjection:
-    def test_compose_entries_select_platform_manifests_over_the_recorded_singleton(self) -> None:
-        entries = _selection_lock(platforms=["linux/amd64"]).compose_env_entries(None)
+class TestManifestReferences:
+    def test_manifest_references_select_platform_manifests_over_the_recorded_singleton(self) -> None:
+        entries = _selection_lock(platforms=["linux/amd64"]).manifest_references(None)
 
         assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_B}")
         assert entries["GRAFANA_CHART"].endswith(f"@{DIGEST_A}")
 
-    def test_compose_entries_select_the_platform_the_environment_names(self) -> None:
-        entries = _selection_lock().compose_env_entries("linux/arm64")
+    def test_manifest_references_select_the_platform_the_environment_names(self) -> None:
+        entries = _selection_lock().manifest_references("linux/arm64")
 
         assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_C}")
 
     def test_the_env_render_is_sorted_and_stable(self) -> None:
-        entries = _selection_lock(platforms=["linux/amd64"]).compose_env_entries(None)
+        entries = _selection_lock(platforms=["linux/amd64"]).manifest_references(None)
 
         rendered = lock_module.render_env_entries(entries)
 
@@ -937,12 +937,12 @@ class TestComposeProjection:
 
 class TestPlatformSelectionLaw:
     def test_a_singleton_selects_itself_without_reading_the_environment(self) -> None:
-        entries = _selection_lock(platforms=["linux/amd64"]).compose_env_entries(None)
+        entries = _selection_lock(platforms=["linux/amd64"]).manifest_references(None)
 
         assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_B}")
 
     def test_a_multi_platform_lock_selects_the_named_platform(self) -> None:
-        entries = _selection_lock().compose_env_entries("linux/arm64")
+        entries = _selection_lock().manifest_references("linux/arm64")
 
         assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_C}")
 
@@ -950,21 +950,21 @@ class TestPlatformSelectionLaw:
         with pytest.raises(
             ValueError, match=r"platforms \['linux/amd64', 'linux/arm64'\] are recorded.*platform: must be named"
         ):
-            _selection_lock().compose_env_entries(None)
+            _selection_lock().manifest_references(None)
 
     def test_a_selection_outside_the_recorded_set_refuses_listing_recorded(self) -> None:
         with pytest.raises(
             ValueError,
             match=r"platform: 'linux/arm64' must be one of the recorded platforms \['linux/amd64'\]",
         ):
-            _selection_lock(platforms=["linux/amd64"]).compose_env_entries("linux/arm64")
+            _selection_lock(platforms=["linux/amd64"]).manifest_references("linux/arm64")
 
     def test_a_platform_less_lock_answers_none(self) -> None:
         charts_only = lock_module.LockFile(
             charts={"GRAFANA_CHART": f"{MIRROR_PREFIX}/ghcr.io/grafana/chart@{DIGEST_A}"}
         )
 
-        entries = charts_only.compose_env_entries(None)
+        entries = charts_only.manifest_references(None)
 
         assert entries == {"GRAFANA_CHART": f"{MIRROR_PREFIX}/ghcr.io/grafana/chart@{DIGEST_A}"}
 

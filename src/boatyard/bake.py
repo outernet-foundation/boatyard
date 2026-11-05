@@ -151,7 +151,7 @@ def run_build(
 
     # Write the incremental lock and load its entries into the environment.
     written = write_lock(config)
-    os.environ.update(written.env_entries())
+    os.environ.update(written.index_references())
 
     # Render the bake services for every target.
     namespace = destination if destination is not None else config.repository
