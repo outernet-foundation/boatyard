@@ -283,16 +283,22 @@ class TestVariantSelection:
     def test_a_variant_address_builds_that_variant(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         assert self._invoke(monkeypatch, tmp_path, ["--targets", "localizer/rocm"]) == ["localizer-rocm"]
 
-    def test_a_bare_name_selects_the_default_variant(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        assert self._invoke(monkeypatch, tmp_path, ["--targets", "localizer"]) == ["localizer-cuda"]
+    def test_a_bare_name_builds_an_axis_less_service(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        assert self._invoke(monkeypatch, tmp_path, ["--targets", "postgres"]) == ["postgres"]
+
+    def test_a_bare_name_on_an_axis_service_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        result = self._refuse(monkeypatch, tmp_path, ["--targets", "localizer"])
+
+        assert "localizer declares the variants ['cuda', 'rocm']" in result.output
+        assert "localizer/<variant>" in result.output
 
     def test_the_suffixed_target_name_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         result = self._refuse(monkeypatch, tmp_path, ["--targets", "localizer-rocm"])
 
         assert "Unknown target 'localizer-rocm'" in result.output
 
-    def test_repeated_addresses_build_once(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        assert self._invoke(monkeypatch, tmp_path, ["--targets", "postgres postgres"]) == ["postgres"]
+    def test_repeated_addresses_ride_through(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        assert self._invoke(monkeypatch, tmp_path, ["--targets", "postgres postgres"]) == ["postgres", "postgres"]
 
     def test_an_unknown_variant_refuses_listing_the_declared_values(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

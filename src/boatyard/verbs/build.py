@@ -26,7 +26,7 @@ def build(
         typer.Option(
             "--targets",
             "-t",
-            help="Build these targets: bare names select default variants, name/variant a declared variant.",
+            help="Build these targets: bare name for an axis-less service, name/variant when it declares variants.",
         ),
     ] = None,
     no_cache: Annotated[bool, typer.Option("--no-cache", help="Force rebuild by disabling cache usage.")] = False,

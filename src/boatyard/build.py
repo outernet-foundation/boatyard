@@ -124,15 +124,18 @@ def run_build(
                     raise typer.BadParameter(
                         f"Unknown variant {variant!r} for {service_name}; it declares the variants {service.variants}"
                     )
-                target = f"{service_name}-{variant}"
+                resolved_targets.append(f"{service_name}-{variant}")
             elif address in config.service_builds:
-                target = config.service_builds[address].target_variants[0][0]
+                service = config.service_builds[address]
+                if service.variants:
+                    raise typer.BadParameter(
+                        f"{address} declares the variants {service.variants}; spell {address}/<variant>"
+                    )
+                resolved_targets.append(address)
             else:
                 raise typer.BadParameter(
                     f"Unknown target {address!r}. Available: {_address_vocabulary(config.service_builds)}"
                 )
-            if target not in resolved_targets:
-                resolved_targets.append(target)
     else:
         # Select the default targets for this machine's arch.
         defaults = {service.target_variants[0][0] for service in config.service_builds.values()}
