@@ -514,8 +514,7 @@ class TestPlatformManifestSelection:
         result = _lock_against_index(monkeypatch, tmp_path, manifests, ["linux/amd64"])
 
         assert result.exit_code == 1
-        assert "multiple upstream manifests" in str(result.exception)
-        assert f"{DIGEST_C}, {DIGEST_D}" in str(result.exception)
+        assert "matches 2 upstream manifests, expected exactly one" in str(result.exception)
 
     def test_a_declared_platform_no_index_child_covers_refuses_naming_the_entry(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -523,8 +522,7 @@ class TestPlatformManifestSelection:
         result = _lock_against_index(monkeypatch, tmp_path, [_child(DIGEST_C, "linux", "amd64")], ["linux/arm64"])
 
         assert result.exit_code == 1
-        assert "no linux/arm64 manifest" in str(result.exception)
-        assert "index platforms: ['linux/amd64']" in str(result.exception)
+        assert "matches 0 upstream manifests, expected exactly one" in str(result.exception)
 
     def test_a_manifest_answer_records_uniformly(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         result = _lock_against_index(monkeypatch, tmp_path, [], ["linux/amd64", "linux/arm64"])

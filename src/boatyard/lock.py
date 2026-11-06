@@ -127,18 +127,10 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
                 if child.annotations.get("vnd.docker.reference.type") != "attestation-manifest"
                 if _concrete_platform(child) == platform
             ]
-            if len(matches) > 1:
-                digests = ", ".join(_child_digest(child, f"base_images entry {name}") for child in matches)
+            if len(matches) != 1:
                 raise ValueError(
-                    f"base_images entry {name}: platform {platform} matches multiple upstream manifests ({digests})"
-                )
-            if not matches:
-                available = sorted({
-                    concrete for child in children if (concrete := _concrete_platform(child)) is not None
-                })
-                raise ValueError(
-                    f"base_images entry {name}: the upstream index carries no {platform} manifest "
-                    f"(declared platforms: {sorted(config.platforms)}; index platforms: {available})"
+                    f"base_images entry {name}: platform {platform} "
+                    f"matches {len(matches)} upstream manifests, expected exactly one"
                 )
             selected[platform] = _child_digest(matches[0], f"base_images entry {name}")
 
