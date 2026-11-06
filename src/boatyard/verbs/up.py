@@ -160,8 +160,6 @@ def up(
 
     # Assemble the root document, sections omitted when empty
     document: dict[str, Yaml] = {"name": config.project_name}
-    if includes:
-        document["include"] = includes
 
     # Render the edge and its Caddyfile when a gateway is declared
     if config.gateway is not None:
@@ -208,6 +206,8 @@ def up(
         lines.append("}")
         document["configs"] = {EDGE_CONFIG_NAME: {"content": double_dollars("\n".join(lines) + "\n")}}
 
+    if includes:
+        document["include"] = includes
     if document_services:
         document["services"] = document_services
 
@@ -246,12 +246,11 @@ def up(
             run_build(config=config)
 
         # Hand off to docker compose
-        arguments = ["--pull", "missing", *(["--quiet-pull"] if quiet_pull else []), *(["-d"] if not attached else [])]
         up_command = compose_command(
             root,
             compose_files,
             "up",
-            *arguments,
+            *["--pull", "missing", *(["--quiet-pull"] if quiet_pull else []), *(["-d"] if not attached else [])],
             env_file=env_file,
             slot_names=[
                 *config_values.variables,
