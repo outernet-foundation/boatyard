@@ -5,6 +5,7 @@ description = "Deploy-files definition language and compiler, plus a runtime for
 requires-python = ">=3.13"
 dependencies = [
     "bashrun>=0.1.0",
+    "build-artifact-registry>=0.2.2",
     "packaging>=24.1",
     "pydantic>=2.11.7",
     "pyyaml>=6.0",
