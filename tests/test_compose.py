@@ -56,7 +56,7 @@ def _write_config(root: Path, sections: dict[str, Any] | None = None) -> None:
     if sections is not None:
         payload.update(sections)
     if "services" in payload and "gateway" not in payload:
-        payload["gateway"] = "8080"
+        payload["gateway"] = 8080
     if payload.get("gateway") is not None:
         payload.setdefault("platforms", ["linux/amd64"])
         payload["base_images"] = {
@@ -433,12 +433,12 @@ class TestSelectionLaw:
                 "project_name": "demo",
                 "platforms": ["linux/amd64"],
                 "base_images": {"CADDY_IMAGE": "docker.io/library/caddy:2.8.4-alpine"},
-                "gateway": "8080",
+                "gateway": 8080,
                 "services": {
                     "livekit": {
                         "ref": LIVEKIT_REF,
                         "routes": [{"path": "/*", "upstream": "livekit:8000"}],
-                        "ports": [{"service": "livekit", "published": "6178", "target": "6178"}],
+                        "ports": [{"service": "livekit", "published": 6178, "target": 6178}],
                     }
                 },
             },
@@ -464,7 +464,7 @@ class TestSelectionLaw:
                 "project_name": "demo",
                 "platforms": ["linux/amd64"],
                 "base_images": {"CADDY_IMAGE": "docker.io/library/caddy:2.8.4-alpine"},
-                "gateway": "8080",
+                "gateway": 8080,
                 "services": {
                     "placeframe": {
                         "options": {
@@ -492,7 +492,7 @@ class TestSelectionLaw:
         [document] = recorder.documents
         assert document["name"] == "demo"
         assert list(document) == ["name", "configs", "services"]
-        assert document["services"]["edge"]["ports"] == [{"target": "8443", "published": "8080", "protocol": "tcp"}]
+        assert document["services"]["edge"]["ports"] == [{"target": 8443, "published": 8080, "protocol": "tcp"}]
         assert document["configs"]["devkit-edge-caddyfile"]["content"] == ":8443 {\n}\n"
 
     def test_unknown_name_refuses_listing_the_vocabulary(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -596,7 +596,7 @@ class TestUpMaterialization:
         ])
         edge = document["services"]["edge"]
         assert edge["image"] == MIRROR_PREFIX + "/docker.io/library/caddy:2.8.4-alpine@" + FAKE_DIGEST
-        assert edge["ports"] == [{"target": "8443", "published": "${GATEWAY_PORT:?err}", "protocol": "tcp"}]
+        assert edge["ports"] == [{"target": 8443, "published": "${GATEWAY_PORT:?err}", "protocol": "tcp"}]
         assert edge["networks"] == {
             "auth-keycloak-net": None,
             "placeframe-cuda-net": None,
@@ -696,13 +696,13 @@ class TestUpValidation:
                 "project_name": "demo",
                 "repository": "ghcr.io/org/demo",
                 "platforms": ["linux/amd64"],
-                "gateway": "8080",
+                "gateway": 8080,
                 "services": {
                     "placeframe": {
                         "options": {
                             "cuda": {
                                 "workloads": ["api.yaml"],
-                                "ports": [{"service": "grafana", "published": "3306", "target": "3306"}],
+                                "ports": [{"service": "grafana", "published": 3306, "target": 3306}],
                             }
                         }
                     }
@@ -849,7 +849,7 @@ class TestSharedNames:
                 "project_name": "demo",
                 "platforms": ["linux/amd64"],
                 "base_images": {"CADDY_IMAGE": "docker.io/library/caddy:2.8.4-alpine"},
-                "gateway": "8080",
+                "gateway": 8080,
                 "repository": "ghcr.io/org/demo",
                 "services": {
                     "left": {
@@ -888,7 +888,7 @@ class TestSharedNames:
                 "project_name": "demo",
                 "platforms": ["linux/amd64"],
                 "base_images": {"CADDY_IMAGE": "docker.io/library/caddy:2.8.4-alpine"},
-                "gateway": "8080",
+                "gateway": 8080,
                 "repository": "ghcr.io/org/demo",
                 "services": {
                     "left": {

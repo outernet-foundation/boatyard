@@ -48,7 +48,6 @@ COMPOSE_SLOT = re.compile(r"(\$+)\{([A-Z][A-Z0-9_]*)(:[^{}]*)?\}")
 
 # Match compose env slots: ${NAME}, ${NAME:?err}, ${NAME:-default}.
 ENV_SLOT_PATTERN = re.compile(r"^\$\{[A-Z][A-Z0-9_]*(?::[^{}]*)?\}$")
-PORT_PATTERN = re.compile(r"^[0-9]+$")
 
 type Yaml = str | int | float | bool | list[Yaml] | dict[str, Yaml] | None
 
@@ -58,13 +57,22 @@ class BundleScan(NamedTuple):
     requires: list[str]
 
 
-def _require_port_or_slot(value: str) -> str:
-    if PORT_PATTERN.fullmatch(value) is None and ENV_SLOT_PATTERN.fullmatch(value) is None:
-        raise ValueError(f"{value!r} must be a literal port number or a ${{…}} env slot")
+def _require_port_range(value: int) -> int:
+    if not 1 <= value <= 65535:
+        raise ValueError(f"{value} is outside the port range 1-65535")
     return value
 
 
-PortOrSlot = Annotated[str, AfterValidator(_require_port_or_slot)]
+def _require_env_slot(value: str) -> str:
+    if ENV_SLOT_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"{value!r} must be a ${{…}} env slot; a literal port is an int")
+    return value
+
+
+PortOrSlot = (
+    Annotated[int, Field(strict=True), AfterValidator(_require_port_range)]
+    | Annotated[str, Field(strict=True), AfterValidator(_require_env_slot)]
+)
 
 
 def _require_all_caps_name(value: str) -> str:
