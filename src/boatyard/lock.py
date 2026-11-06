@@ -158,17 +158,11 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
     for name, reference, entry in config.remote_declared_entries():
         key = bundle_lock_key(name)
         committed_bundle = committed.bundles.get(key)
-        frozen_bundle = (
-            committed_bundle
-            if committed_bundle is not None and not upgrade and _pinned_to(committed_bundle.reference, reference)
-            else None
-        )
-        if frozen_bundle is not None and not entry.routes and not entry.ports:
-            bundles[key] = frozen_bundle
+        frozen = committed_bundle is not None and not upgrade and _pinned_to(committed_bundle.reference, reference)
+        if frozen and not entry.routes and not entry.ports:
+            bundles[key] = committed_bundle  # pyright: ignore[reportArgumentType]
             continue
-        pinned = (
-            frozen_bundle.reference if frozen_bundle is not None else f"{reference}@{resolve_remote_digest(reference)}"
-        )
+        pinned = committed_bundle.reference if frozen else f"{reference}@{resolve_remote_digest(reference)}"  # pyright: ignore[reportOptionalMemberAccess]
         # Compose bundles are OCI artifacts whose compose files ride as inline base64 layer data;
         # export cannot read them, the manifest data and the blob fallback can.
         install_crane()
@@ -188,9 +182,9 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
         ]
         if not texts:
             raise ValueError(f"{pinned}: the compose bundle carries no compose file layer")
-        bundles[key] = (
-            frozen_bundle
-            if frozen_bundle is not None
+        bundles[key] = (  # pyright: ignore[reportArgumentType]
+            committed_bundle
+            if frozen
             else ConfigLockBundle(reference=pinned, requires=sorted(required_compose_holes("\n".join(texts))))
         )
         service_names: set[str] = set()
