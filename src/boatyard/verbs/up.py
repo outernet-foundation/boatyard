@@ -140,13 +140,6 @@ def up(
             f"(boatyard.values.yaml or the lock env file){note}"
         )
 
-    # Derive the forwarded environment from public_url under the auth option
-    forwarded = None
-    if any(service.auth for service in services):
-        if config_values.public_url is None:
-            raise ValueError("an auth option is selected; public_url is required in boatyard.values.yaml")
-        forwarded = config_values.public_url.forwarded
-
     # Group the ports under their namespaced owners into per-service stanzas
     document_services: dict[str, Yaml] = {
         f"{service.name}-{owner}": {
@@ -170,8 +163,10 @@ def up(
             # Attach the edge to every selected bundle's network
             "networks": dict.fromkeys(f"{service.name}-net" for service in services),
         }
-        if forwarded is not None:
-            edge["environment"] = forwarded
+        if any(service.auth for service in services):
+            if config_values.public_url is None:
+                raise ValueError("an auth option is selected; public_url is required in boatyard.values.yaml")
+            edge["environment"] = config_values.public_url.forwarded
         document_services[EDGE_SERVICE_NAME] = edge
 
         # Render one handle block per route in declaration order
