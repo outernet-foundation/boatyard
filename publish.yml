@@ -1,6 +1,6 @@
 packages:
-  docker-devkit:
+  boatyard:
     path: .
-    major_minor: "0.4"
+    major_minor: "0.6"
     registry: pypi
-    identity: docker-devkit
+    identity: boatyard

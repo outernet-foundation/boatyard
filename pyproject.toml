@@ -1,16 +1,13 @@
 [project]
-name = "docker-devkit"
-version = "0.5.9"
-description = "Docker-stack lifecycle commands (up/down/build) driven by a pyproject-declared compose assembly"
+name = "boatyard"
+version = "0.6.0"
+description = "Deploy-files definition language and compiler, plus a runtime for the compose target"
 requires-python = ">=3.13"
 dependencies = [
     "bashrun>=0.1.0",
-    "build-artifact-registry>=0.2.0.dev0",
     "packaging>=24.1",
-    "pathspec>=1.0.4",
     "pydantic>=2.11.7",
     "pyyaml>=6.0",
-    "strictyaml>=1.7.3",
     "typer>=0.17.4",
 ]
 
@@ -21,7 +18,6 @@ dev = [
     "pytest>=8.0.0",
     "python-devkit>=0.3.0.dev0",
     "types-pyyaml>=6.0.12.20260906",
-    "types-strictyaml>=1.7.3.3",
 ]
 
 [build-system]
@@ -29,22 +25,17 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project.scripts]
-up = "docker_devkit.compose:up_app"
-down = "docker_devkit.compose:down_app"
-build = "docker_devkit.build_docker:app"
-mirror = "docker_devkit.mirror:app"
-publish-compose = "docker_devkit.publish_compose:app"
-generate-score = "docker_devkit.score_generate:app"
-docker-build-matrix = "docker_devkit.matrix:app"
+boatyard = "boatyard.cli:app"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/docker_devkit"]
+packages = ["src/boatyard"]
 
 [tool.uv.sources]
 
 [tool.basedpyright]
 venvPath = "."
 venv = ".venv"
+pythonVersion = "3.13"
 typeCheckingMode = "strict"
 include = ["src", "tests"]
 
