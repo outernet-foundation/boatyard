@@ -209,11 +209,11 @@ def up(
     # Materialize the per-run files and hand off
     with ExitStack() as stack:
         # Write the one per-run dotenv from consumer values and lock entries
-        env_document = ""
-        if config_values.variables:
-            env_document += f"# {VALUES_FILE.name}\n{render_env_entries(config_values.variables)}"
-        if entries:
-            env_document += f"# {LOCK_PATH.name}\n{render_env_entries(entries)}"
+        env_document = "".join(
+            f"# {header}\n{render_env_entries(section)}"
+            for header, section in ((VALUES_FILE.name, config_values.variables), (LOCK_PATH.name, entries))
+            if section
+        )
         with NamedTemporaryFile("w", suffix=".env", prefix="devkit-env-", delete=False, encoding="utf-8") as handle:
             handle.write(env_document)
         env_file = Path(handle.name)
