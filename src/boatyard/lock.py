@@ -36,6 +36,7 @@ DIGEST_TAIL_PATTERN = re.compile(rf"@{SHA256_DIGEST_REGEX}$")
 COMPOSE_FILE_MEDIA_TYPE = "application/vnd.docker.compose.file+yaml"
 
 
+# Model the OCI shapes crane answers with: index children and artifact layers.
 class OciPlatform(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -66,6 +67,7 @@ class OciArtifactManifest(BaseModel):
 
 
 def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) -> LockFile:
+    # Install the pinned crane and derive the mirror prefix.
     install_crane()
     prefix = config.mirror_prefix
     # Read the committed lock schema-only; drift is relock's input, never refused.
@@ -76,10 +78,12 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
     for name, reference in config.base_images.items():
         base = mirrored_ref(reference, prefix)
 
+        # Record a digest-pinned declaration as-is under the mirror prefix.
         if DIGEST_TAIL_PATTERN.search(reference):
             images[name] = ConfigLockEntry(index=base, platforms=dict.fromkeys(config.platforms, base))
             continue
 
+        # Freeze the committed entry forward while its pinned tag and platform set hold.
         committed_entry = committed.images.get(name)
         if (
             not upgrade
@@ -90,6 +94,7 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
             images[name] = committed_entry
             continue
 
+        # Resolve the reference into an index digest and its child manifests.
         print(f"Resolving digests for: {reference}")
         index_digest = resolve_remote_digest(reference)
         children = OciIndex.model_validate(
@@ -100,6 +105,7 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
             # Treat a manifest answer as every platform's sole manifest.
             matches = {platform: [OciDescriptor(digest=index_digest)] for platform in config.platforms}
         else:
+            # Match each declared platform against its concrete, non-attestation children.
             matches = {
                 platform: [
                     child
@@ -110,6 +116,7 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
                 for platform in config.platforms
             }
 
+        # Refuse any platform without exactly one match and record the survivor's digest.
         selected: dict[str, str] = {}
         for platform in config.platforms:
             if len(matches[platform]) != 1:
@@ -119,11 +126,13 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
                 )
             selected[platform] = _child_digest(matches[platform][0], f"base_images entry {name}")
 
+        # Record the mirror-prefixed index and one reference per platform.
         images[name] = ConfigLockEntry(
             index=f"{base}@{index_digest}",
             platforms={platform: f"{base}@{digest}" for platform, digest in selected.items()},
         )
 
+    # Freeze unchanged charts and resolve fresh tags to mirror-pinned digests.
     charts: dict[str, str] = {}
     for chart_name, chart_reference in config.declared_charts.items():
         key = chart_lock_key(chart_name)
@@ -143,9 +152,11 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
         key = bundle_lock_key(name)
         committed_bundle = committed.bundles.get(key)
         frozen = committed_bundle is not None and not upgrade and committed_bundle.reference.startswith(reference + "@")
+        # Carry a frozen bundle without declared routes forward unread.
         if frozen and not entry.routes and not entry.ports:
             bundles[key] = committed_bundle  # pyright: ignore[reportArgumentType]
             continue
+        # Pin the frozen reference or resolve the declaration's fresh digest.
         pinned = committed_bundle.reference if frozen else f"{reference}@{resolve_remote_digest(reference)}"  # pyright: ignore[reportOptionalMemberAccess]
         # Read the bundle's compose files as inline base64 layer data, with crane blob as the fallback.
         print(f"Reading bundle content for: {pinned}")
@@ -162,13 +173,16 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
             for layer in artifact.layers
             if layer.media_type == COMPOSE_FILE_MEDIA_TYPE
         ]
+        # Refuse a bundle that carries no compose file layer.
         if not texts:
             raise ValueError(f"{pinned}: the compose bundle carries no compose file layer")
+        # Record the frozen bundle or a fresh one with its required holes.
         bundles[key] = (  # pyright: ignore[reportArgumentType]
             committed_bundle
             if frozen
             else ConfigLockBundle(reference=pinned, requires=sorted(required_compose_holes("\n".join(texts))))
         )
+        # Refuse declared routes and ports that name no service in the bundle.
         service_names: set[str] = set()
         for text in texts:
             bundle_document = yaml.safe_load(text)
@@ -177,6 +191,7 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
                 service_names.update(services)
         refuse_unresolved_references(name, entry.routes, entry.ports, service_names, prefix=f"{name}-")
 
+    # Assemble the lock from the computed sections.
     lock = LockFile(platforms=list(config.platforms), images=images, charts=charts, bundles=bundles)
     # Render names and platform keys in sorted order.
     document: dict[str, Yaml] = {}
@@ -201,9 +216,11 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
         rendered = "{}\n"
     else:
         rendered = yaml.safe_dump(document, sort_keys=False, default_flow_style=False, width=10_000_000)
+    # Write the rendered lock over the committed file.
     if not check:
         committed_path.write_text(rendered, encoding="utf-8")
         return lock
+    # Diff the computed lock against the committed file and refuse staleness.
     committed_text = committed_path.read_text(encoding="utf-8") if committed_path.is_file() else ""
     if committed_text != rendered:
         print(
@@ -221,6 +238,7 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
 
 
 def resolve_remote_digest(reference: str) -> str:
+    # Refuse crane digest output that is not one sha256 digest.
     print(f"Resolving digest for: {reference}")
     output = bash_output(f"crane digest {shlex.quote(reference)}").strip()
     if re.fullmatch(SHA256_DIGEST_REGEX, output) is None:
@@ -229,10 +247,12 @@ def resolve_remote_digest(reference: str) -> str:
 
 
 def render_env_entries(entries: Mapping[str, str]) -> str:
+    # Render the entries as sorted dotenv lines.
     return "".join(f"{name}={reference}\n" for name, reference in sorted(entries.items()))
 
 
 def _child_digest(child: OciDescriptor, subject: str) -> str:
+    # Return the child's sha256 digest, refusing anything else.
     if not child.digest.startswith("sha256:"):
         raise ValueError(f"{subject}: upstream index child must carry a digest ({child!r})")
     return child.digest
