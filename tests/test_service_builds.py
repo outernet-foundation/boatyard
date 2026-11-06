@@ -305,6 +305,40 @@ class TestComputeServiceShas:
         assert shas_before["APP_SHA"] != shas_after["APP_SHA"]
         assert shas_before["WORKER_SHA"] == shas_after["WORKER_SHA"]
 
+    def test_ignored_files_under_the_allowlist_never_hash(self, repo: Path):
+        builds = _service_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
+        (repo / ".gitignore").write_text("__pycache__/\n")
+        shas_before = compute_service_shas(repo, builds)
+
+        (repo / "workloads" / "app" / "__pycache__").mkdir()
+        (repo / "workloads" / "app" / "__pycache__" / "main.cpython-313.pyc").write_text("machine-local bytes")
+
+        assert compute_service_shas(repo, builds) == shas_before
+
+    def test_staged_and_unstaged_edits_hash_identically(self, repo: Path):
+        builds = _service_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
+        (repo / "workloads" / "app" / "main.py").write_text("print('edited')")
+        shas_unstaged = compute_service_shas(repo, builds)
+
+        subprocess.run(["git", "add", "-A"], cwd=str(repo), capture_output=True, check=True)
+
+        assert compute_service_shas(repo, builds) == shas_unstaged
+
+    def test_global_excludes_do_not_affect_visibility(self, repo: Path, tmp_path_factory: pytest.TempPathFactory):
+        builds = _service_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
+        shas_before = compute_service_shas(repo, builds)
+
+        global_ignore = tmp_path_factory.mktemp("global-excludes") / "gitignore"
+        global_ignore.write_text("main.py\n")
+        subprocess.run(
+            ["git", "config", "core.excludesFile", str(global_ignore)],
+            cwd=str(repo),
+            capture_output=True,
+            check=True,
+        )
+
+        assert compute_service_shas(repo, builds) == shas_before
+
     def test_should_raise_when_services_span_multiple_top_level_dirs(self, repo: Path):
         builds = _service_builds("workloads/app/Dockerfile", "other/worker/Dockerfile")
 
@@ -349,9 +383,10 @@ def _docker_available() -> bool:
 class TestComputeServiceShasContextGolden:
     pytestmark = pytest.mark.skipif(not _docker_available(), reason="docker daemon required")
 
-    def test_the_hashed_file_set_equals_the_exported_build_context(self, tmp_path: Path):
+    def test_the_hashed_file_set_is_the_git_visible_build_context(self, tmp_path: Path):
         _init_repo(tmp_path)
         (tmp_path / ".dockerignore").write_text("*\n!workloads/app/\n")
+        (tmp_path / ".gitignore").write_text("__pycache__/\n")
         app = tmp_path / "workloads" / "app"
         app.mkdir(parents=True)
         (app / "Dockerfile").write_text("FROM scratch\nCOPY . /\n")
@@ -360,6 +395,8 @@ class TestComputeServiceShasContextGolden:
         helper.write_text("x = 1\n")
         helper.chmod(0o755)
         (app / "link.py").symlink_to("helper.py")
+        (app / "__pycache__").mkdir()
+        (app / "__pycache__" / "main.cpython-313.pyc").write_text("machine-local bytes")
 
         builds = _service_builds("workloads/app/Dockerfile")
         shas = compute_service_shas(tmp_path, builds)
@@ -377,6 +414,7 @@ class TestComputeServiceShasContextGolden:
             hashed[path] = meta.split()[0]
 
         # The oracle is the exported context: FROM scratch + COPY . / makes buildx write out exactly what it ships.
+        # The walk is deliberately narrower: an ignored file rides the context but never the tree tag.
         builder = f"boatyard-golden-{os.getpid()}"
         create = subprocess.run(["docker", "buildx", "create", "--name", builder, "--use"], capture_output=True)
         if create.returncode != 0:
@@ -409,4 +447,8 @@ class TestComputeServiceShasContextGolden:
                 else:
                     exported[relative] = "100644"
 
+        ignored_export = "workloads/app/__pycache__/main.cpython-313.pyc"
+        assert ignored_export in exported
+        assert ignored_export not in hashed
+        exported.pop(ignored_export)
         assert exported == hashed
