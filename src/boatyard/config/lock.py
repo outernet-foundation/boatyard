@@ -72,7 +72,7 @@ class LockFile(BaseModel):
 
     @classmethod
     def load(cls, path: Path, config: ConfigFile) -> LockFile:
-        context = {"path": path.as_posix(), "config": config}
+        context: dict[str, object] = {"path": path.as_posix(), "config": config}
         if not path.is_file():
             # Every consumer reads a missing lock as the empty lock paired against the config.
             return cls.model_validate({}, context=context)
