@@ -167,15 +167,18 @@ def up(
         for service in services:
             for index, route in enumerate(service.routes):
                 upstream = f"{service.name}-{route.upstream}"
-                matcher = "" if route.path == "/*" else f" {route.path}"
-                head = "\thandle_path" if route.strip_prefix else "\thandle"
+                opener = (
+                    ("\thandle_path" if route.strip_prefix else "\thandle")
+                    + ("" if route.path == "/*" else f" {route.path}")
+                    + " {"
+                )
                 if route.raw is not None:
-                    lines.extend((f"{head}{matcher} {{", *["\t\t" + line for line in route.raw.splitlines()], "\t}"))
+                    lines.extend((opener, *["\t\t" + line for line in route.raw.splitlines()], "\t}"))
                     continue
 
                 if service.auth and index == 0:
                     lines.extend((
-                        f"{head}{matcher} {{",
+                        opener,
                         *[
                             f"\t\treverse_proxy {upstream} {{",
                             "\t\t\theader_up X-Forwarded-Proto {$FORWARDED_PROTO}",
@@ -186,7 +189,7 @@ def up(
                     ))
                     continue
 
-                lines.extend((f"{head}{matcher} {{", *[f"\t\treverse_proxy {upstream}"], "\t}"))
+                lines.extend((opener, *[f"\t\treverse_proxy {upstream}"], "\t}"))
 
         lines.append("}")
         caddyfile = double_dollars("\n".join(lines) + "\n")
