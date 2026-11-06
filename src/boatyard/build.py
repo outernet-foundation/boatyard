@@ -183,7 +183,7 @@ def run_build(
                     context: f"target:{context}-{variant}" if variant is not None else f"target:{context}"
                     for context in service.contexts
                 }
-            if pushing:
+            if push:
                 cache = f"{namespace}/build-cache"
                 build["cache_to"] = [
                     f"type=registry,ref={cache}:{target},mode=max,image-manifest=true,oci-mediatypes=true"

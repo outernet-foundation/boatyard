@@ -119,15 +119,102 @@ separate commits.
    The run completed: every leg green except `release-pr-builds`, which
    failed pulling `images-digests-all:sha-a5430b3b…` — the digest-shard
    shelving gap (entry under Work 4): it returns to boatyard's build
-   verb as `0.6.5`; placeframe repins once that publishes.
-  NEXT SESSION OPENS HERE: the placeframe-capture-tool sweep on its
-  `compose-bundles` — the repin adds `project_name` (required from 0.6.0),
-  install-zed rewrites onto `yaml.safe_load` + `tree-tags` + `build
-  --push-to`, and the arm64 platform-manifest relock gating the ZED-box AOA
-  deploy (`zed-aoa-diagnosis-handoff.md` gates on exactly this); then
-  lbe-toolkit, then Make-it-Sing (`git switch compose-bundles` first).
+   verb as `0.6.5`. Placeframe repinned to `0.6.5` (folded into the
+   `a5430b3b` fixup commit, force-pushed), Integrate green, merged to
+   `dev`; the landing push published the prerelease packages. The
+   `release-pr-builds` job now finds the shards boatyard's `build --push`
+   shelves.
+   Placeframe-capture-tool swept (2026-11-06, three commits on its
+  `compose-bundles`: cutover, relock, docs): repin (`boatyard==0.6.5` root,
+  `>=0.6.5` + `pyyaml>=6.0` scripts, DEP002 ignore for the CLI-only dep),
+  renames + `project_name` add, install-zed rewrite (8 `docker_devkit`
+  imports dropped; SHAs via `boatyard tree-tags`, lock entries via
+  `yaml.safe_load` of `images.<NAME>.platforms.linux/arm64`, `--build` via
+  `boatyard build --push-to localhost:{REGISTRY_PORT} --targets …`; the
+  forked `_run_bake` dissolved), 9 toolkit `uses:` refs to `f2d576a…`,
+  relock landing arm64 platform-manifest digests for all seven base images
+  (loki `4c28f6be…`, alloy `08b4fe15…` — the handoff's recorded evidence),
+  docs flip (scripts/AGENTS.md's index-digest defect paragraph removed;
+  handoff status + next-session plan updated, historical findings stay).
+  Battery green locally (ruff, format, basedpyright, deptry, pytest 3,
+  `lock --check`, matrix one partition three targets, `publish-compose
+  --plan` `[]`, preflight-python); zero `boatyard` imports (CLI-only), zero
+  `docker-devkit`/`--lock-only`/`--gpu` in code/config.
+   Lbe-toolkit swept (2026-11-06, three commits on its `compose-bundles`,
+  local — operator pushes; cutover, `Run generate-score`, prose): CLI-only,
+  compose-only (the livekit tier: `livekit` + `livekit-token` workloads, one
+  `livekit-config` provisioner at `stack/score/compose/livekit.yaml`). Repin
+  (`boatyard==0.6.5`, requires `>=0.6.5`); renames (`docker-devkit.yaml`→
+  `boatyard.yml`, `docker-devkit.lock`→`boatyard.lock.yml` truncated then
+  relocked); schema flips (`platforms: [linux/amd64]`, `UV_BASE_IMAGE`
+  `{uv}`-templated — the floating `bookworm-slim` tag became
+  `{uv}-python3.13-trixie-slim` because astral dropped bookworm for 0.12.15,
+  only trixie/alpine remain; `ALPINE_IMAGE` added; ports shorthand→mapping
+  form with `protocol: udp` on the RTC leg; `gateway` unchanged); 9 toolkit
+  `uses:` refs `44bcf9b`→`f2d576a`; `.env`→`boatyard.values.yaml` (gitignored,
+  `.gitignore` flipped; no `.env.sample`, so no sample file); new
+  `stack/secrets.yaml` (8 slots — `LIVEKIT_API_KEY`/`SECRET` mint, the six
+  port/IP/endpoint knobs plain); `generate-score` regen to the 0.6.0
+  rendering (`{entry}-` namespacing, `${ENTRY}__LOCK__` image slots,
+  `livekit-net`, `name:` last; the `livekit-token` `tree-` tag unchanged —
+  disk-state stable); prose flip (`hole`→`slot` + `.env`→values in the
+  provisioner comments/description). Battery green (ruff, format,
+  basedpyright 0, pytest 2, deptry, lint-workflows, `lock --check`,
+  `generate-score --check`, matrix `livekit-token`, plan `livekit`). Sandbox
+  note: the `==0.12.15` uv lives at `/home/code/.local/bin/uv` (PATH resolves
+  `0.11.14` first); `preflight-python` needs `PATH=/home/code/.local/bin:$PATH`
+  because it invokes bare `uv`. NEXT SESSION OPENS HERE: Make-it-Sing (`git
+  switch compose-bundles` first — its checkout sits on
+  `feature/clickable-buildings-room-join`). Session-open archaeology
+  re-verified: `docker-devkit.yaml` carries digest-pinned `ref:`s
+  (auth/keycloak, placeframe cuda+rocm, tunnel/rathole, livekit) that flip
+  to tags; `.env` has `BUNDLES=cuda,rathole` (→ `bundles:
+  [core-cuda, tunnel-rathole]`), the tunnel/placeframe/livekit knobs,
+  and `PUBLIC_URL`; `.env.sample` exists (→ ship `boatyard.values.yaml.sample`);
+  no `stack/secrets.yaml` yet; toolkit pin `da90524`→`f2d576a`.
   Also unverified locally for placeframe (needs the cuda sync / CI): the
   full preflight sidecar end-to-end and generate-clients.
+- Make-it-Sing swept (2026-11-06, three commits on its `compose-bundles`:
+  cutover, docs flip, group rename): consumer-only (no `stack/score/`, no
+  local workloads — `generate-score` self-skips, no `stack/secrets.yaml`
+  needed, the placeframe-capture-tool precedent). Repin (`boatyard==0.6.5`
+  dev group, `requires >=0.6.5`); renames (`docker-devkit.yaml`→
+  `boatyard.yml`, `docker-devkit.lock`→`boatyard.lock.yml` truncated +
+  relocked); config adds `platforms: [linux/amd64]` + `ALPINE_IMAGE`;
+  ports shorthand→mapping form; `.env`→`boatyard.values.yaml` (gitignored,
+  `.gitignore` flipped) + `.env.sample`→`boatyard.values.yaml.sample` +
+  `.env.airgapped`→`boatyard.values.airgapped.yaml.sample`; 8 toolkit
+  `uses:` refs `da9052438…`→`f2d576a…`; docs flip (runbook `.env`→
+  `boatyard.values.yaml`, `PUBLIC_URL`→`public_url`). Two corrections the
+  `up` verify surfaced: (1) the placeframe bundles are published under
+  QUALIFIED-name paths (`placeframe/auth-keycloak`, `placeframe/core-cuda`,
+  `placeframe/core-rocm`) — the old option-name paths (`placeframe/keycloak`,
+  `placeframe/cuda`, `placeframe/rocm`) carry the pre-cutover rendering; (2)
+  the consumer's group name must match the producer's for the 0.6.x
+  namespacing to resolve routes — `placeframe` group renamed to `core`
+  (matching placeframe's producer config; `bundles: [core-cuda,
+  tunnel-rathole]`). The rathole bundle's defaults (`gateway:8443`,
+  `livekit:6178`, `livekit:5957`) reference old/foreign-network names — the
+  values file overrides `TUNNEL_GATEWAY_ADDR: edge:8443`; the
+  signaling/RTC defaults need explicit override too. Battery green locally
+  (ruff, format, basedpyright, `lock --check`, `generate-score --check`
+  self-skip, matrix `[]`, plan `[]`).
+  Two boatyard defects the sweep surfaced, fixed on `dev` (2026-11-06):
+  (a) `up`'s requirements fill check didn't filter lock-key slots (the
+  `LOCK_SLOT_MARKER` infix) — a remote-only bundle's lock-key `requires`
+  (e.g. `LIVEKIT__LOCK__LIVEKIT_SERVER_IMAGE`) refused even though
+  "satisfied by construction"; (b) `publish-compose`'s bake used
+  `lock_key_prefix` (`ENTRY_KEY`) for its substitution keys instead of
+  `env_lock_slot` (`ENTRY__LOCK__KEY`) — the compose text's lock-key
+  slots never matched and shipped unsubstituted, making every published
+  bundle's image slots unresolvable by consumers. Both fixed (full
+  preflight green, 517 tests); release as 0.6.6 pending. BLOCKER: the
+  producers (placeframe, infra-rathole, lbe-toolkit) must re-publish
+  their bundles with the fixed `publish-compose` before Make-it-Sing's
+  `up` can assemble — the current bundles carry unsubstituted
+  `${ENTRY}__LOCK__IMAGE:?err}` slots. After the republish: re-lock
+  Make-it-Sing, repin to 0.6.6, re-run the `up` path-override verify
+  (the `TUNNEL_*_ADDR` watch item).
 - The values-file session (2026-11-04, battery green) landed atop Work 1 and
   rewrote the consumer surface: `.env` is dead — `boatyard.values.yaml`
   (gitignored, typed; `ConfigValues` in `values_file.py`) is the only
@@ -616,10 +703,11 @@ its `up` assembly (the path-override verify) surfaces whether the
 
 Common to all five, order within a repo code → lockfiles → prose:
 
-1. Dependency: `docker-devkit…` → `boatyard==0.6.4` (or `>=`); `uv lock
-   --upgrade-package boatyard`. `requires:` floor → `>=0.6.4` (0.6.4
-   carries the git-visible hashing flip; placeframe landed at 0.6.4 via its
-   repin; infra-rathole's older floor bumps in passing when next touched).
+1. Dependency: `docker-devkit…` → `boatyard==0.6.5` (or `>=`); `uv lock
+   --upgrade-package boatyard`. `requires:` floor → `>=0.6.5` (0.6.4
+   carries the git-visible hashing flip, 0.6.5 restores the digest-shard
+   shelving; placeframe landed at 0.6.5 via its repin; infra-rathole's
+   older floor bumps in passing when next touched).
 2. `git mv docker-devkit.yaml boatyard.yml`; `git mv docker-devkit.lock
    boatyard.lock.yml`, then truncate the lock to the empty file before the
    relock — the old env format never parses at relock's committed
@@ -644,7 +732,7 @@ Common to all five, order within a repo code → lockfiles → prose:
    atomic with the relock and the qualified-selection flip (the grammar
    flip breaks the old spellings): placeframe
    `bundles: [core-cuda, auth-keycloak, tunnel-ngrok]`; Make-it-Sing
-   `bundles: [placeframe-cuda, tunnel-rathole]`; the rest theirs. A repo
+   `bundles: [core-cuda, tunnel-rathole]`; the rest theirs. A repo
    carrying `.env.sample` ships a committed `boatyard.values.yaml.sample`
    beside it (the values file itself stays gitignored). Conversion drops
    any lock-key spellings from the old `.env` — the merged-file collision
@@ -721,8 +809,8 @@ Per-repo:
   `project_name` (required from 0.6.0 — the build-only repo never carried
   one).
 - **Make-it-Sing, lbe-toolkit** — standard renames and the step-6/7 flips;
-  Make-it-Sing's local (never committed) `BUNDLE_OVERRIDE_PLACEFRAME_CUDA`
-  becomes the `path_overrides: {placeframe-cuda: …}` map entry; lbe-toolkit's
+  Make-it-Sing's local (never committed) `BUNDLE_OVERRIDE_CORE_CUDA`
+  becomes the `path_overrides: {core-cuda: …}` map entry; lbe-toolkit's
   floating uv
   tag (`ghcr.io/astral-sh/uv:python3.13-…`) becomes an `{uv}`-templated value
   in the same relock: intent stays authored, components derive.
