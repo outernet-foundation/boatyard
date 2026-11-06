@@ -459,14 +459,28 @@ the CI-green verify), fixed and released as `0.6.1`:
   environment. Rider: compose-only runs still install score-k8s + helm.
 
 Found in the placeframe sweep (2026-11-06), fixed on `dev` (full preflight
-green), unreleased — the wave's pin target becomes the release carrying it
-(placeframe's `requires:` floor and dep pin ride up with it):
+green), released as `0.6.2`; the wave's pin target and `requires:` floor
+become `0.6.2` (infra-rathole's landed `==0.6.1` pin and `>=0.6.1` floor
+bump in passing when next touched):
 - `PortOrSlot` was string-typed, so a natural YAML int port
   (`published: 4040`) refused with a coercion error and only the quoted
   digit-string loaded. Literal ports are now int-typed (strict; digit strings
   refuse naming the env-slot alternative), env slots stay the string branch,
   and the edge emission drops its `str()` coercion. infra-rathole declares no
   ports; unswept configs flip in their own sweeps.
+
+Found in the placeframe sweep (2026-11-06), fixed on `dev` (full preflight
+green), unreleased — rides the same release as the port fix if it hasn't
+cut yet, else the next:
+- `render_score` expanded workload `${SHA}` slots in-process but never
+  exported the values to the score tool subprocess, so provisioner templates
+  reading `{{ env "AUTH_INITIALIZER_SHA" }}` (placeframe carries fifteen
+  sites across both substrates, plus `{{ env "SCORE_STORAGE_CLASS" }}` under
+  `--local`) rendered empty — the oidc-issuer services template produced
+  `image: …auth-initializer:` and refused to decode. The variable set
+  (images ∪ service shas ∪ rendering vars) now rides the init/generate
+  environment; the old devkit's os.environ export was the channel 0.4.9
+  consumers depended on.
 
 Sweep mechanics discovered in infra-rathole, carried to the rest: the
 score-tool trio (score-compose 0.42.0, score-k8s 0.15.0, helm 3.22.1) must

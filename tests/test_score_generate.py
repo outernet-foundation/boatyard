@@ -305,6 +305,7 @@ class TestMarkerSubstrateResolution:
         )
         (tmp_path / "stack" / "secrets.yaml").write_text("", encoding="utf-8")
         recorder = WorkloadContentsRecorder()
+        self.recorder = recorder
 
         def _skip_tools(requirements: list[score_verb_module.ToolRequirement]) -> None:
             return None
@@ -322,6 +323,17 @@ class TestMarkerSubstrateResolution:
         contents = self._compose_seam(monkeypatch, tmp_path, platforms=["linux/amd64"])
 
         assert f"image: {LOKI_MANIFEST}" in contents
+
+    def test_the_score_tool_receives_the_variable_values_as_environment(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._compose_seam(monkeypatch, tmp_path, platforms=["linux/amd64"])
+
+        generate_env = self.recorder.command_envs["score-compose generate"]
+        assert generate_env is not None
+        assert generate_env["LOKI_IMAGE"] == LOKI_MANIFEST
+        assert generate_env["ALPINE_IMAGE"] == ALPINE_LOCK["ALPINE_IMAGE"]
+        assert self.recorder.command_envs["score-compose init"] == generate_env
 
     def test_compose_generation_selects_the_platform_the_environment_names(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -577,8 +589,10 @@ def test_generate_compose_barrier_names_differ_per_entry(tmp_path: Path, monkeyp
 class WorkloadContentsRecorder:
     def __init__(self) -> None:
         self.workload_contents: dict[str, str] = {}
+        self.command_envs: dict[str, dict[str, str] | None] = {}
 
     def run(self, command: str, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
+        self.command_envs[command.split()[0] + " " + command.split()[1]] = env
         if command.startswith("score-compose generate"):
             for argument in command.split()[2:]:
                 if argument.startswith("--output"):
