@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from boatyard.config.config import (
     OCI_REFERENCE_PREFIX,
     ConfigFile,
+    ServiceEntry,
     Yaml,
     bundle_lock_key,
     chart_lock_key,
@@ -171,35 +172,8 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
             bundles[key] = record
             continue
 
-        # Read the bundle's compose files as inline base64 layer data, with crane blob as the fallback.
-        print(f"Reading bundle content for: {pinned}")
-        artifact = OciArtifactManifest.model_validate(json.loads(bash_output(f"crane manifest {shlex.quote(pinned)}")))
-
-        # Strip the tag, treating a colon as a tag only when no slash follows it.
-        repository = pinned.rpartition("@")[0]
-        slash = repository.rfind("/")
-        colon = repository.rfind(":")
-        repository = repository[:colon] if colon > slash else repository
-        texts = [
-            base64.b64decode(layer.data).decode("utf-8")
-            if layer.data is not None
-            else bash_output(f"crane blob {shlex.quote(repository + '@' + layer.digest)}")
-            for layer in artifact.layers
-            if layer.media_type == COMPOSE_FILE_MEDIA_TYPE
-        ]
-
-        # Refuse a bundle that carries no compose file layer.
-        if not texts:
-            raise ValueError(f"{pinned}: the compose bundle carries no compose file layer")
-
-        # Refuse declared routes and ports that name no service in the bundle.
-        service_names: set[str] = set()
-        for text in texts:
-            bundle_document = yaml.safe_load(text)
-            services = bundle_document.get("services") if is_mapping(bundle_document) else None
-            if is_mapping(services):
-                service_names.update(services)
-        refuse_unresolved_references(name, entry.routes, entry.ports, service_names, prefix=f"{name}-")
+        # Read the bundle's content and refuse declared references that name no service in it.
+        texts = _read_bundle_content(pinned, name, entry)
 
         # Record the frozen bundle or a fresh one with its required holes.
         if record is None:
@@ -240,6 +214,36 @@ def _child_digest(child: OciDescriptor, subject: str) -> str:
     if not child.digest.startswith("sha256:"):
         raise ValueError(f"{subject}: upstream index child must carry a digest ({child!r})")
     return child.digest
+
+
+def _read_bundle_content(pinned: str, name: str, entry: ServiceEntry) -> list[str]:
+    # Read the bundle's compose files as inline base64 layer data, with crane blob as the fallback.
+    print(f"Reading bundle content for: {pinned}")
+    artifact = OciArtifactManifest.model_validate(json.loads(bash_output(f"crane manifest {shlex.quote(pinned)}")))
+    # Strip the tag, treating a colon as a tag only when no slash follows it.
+    repository = pinned.rpartition("@")[0]
+    slash = repository.rfind("/")
+    colon = repository.rfind(":")
+    repository = repository[:colon] if colon > slash else repository
+    texts = [
+        base64.b64decode(layer.data).decode("utf-8")
+        if layer.data is not None
+        else bash_output(f"crane blob {shlex.quote(repository + '@' + layer.digest)}")
+        for layer in artifact.layers
+        if layer.media_type == COMPOSE_FILE_MEDIA_TYPE
+    ]
+    # Refuse a bundle that carries no compose file layer.
+    if not texts:
+        raise ValueError(f"{pinned}: the compose bundle carries no compose file layer")
+    # Refuse declared routes and ports that name no service in the bundle.
+    service_names: set[str] = set()
+    for text in texts:
+        bundle_document = yaml.safe_load(text)
+        services = bundle_document.get("services") if is_mapping(bundle_document) else None
+        if is_mapping(services):
+            service_names.update(services)
+    refuse_unresolved_references(name, entry.routes, entry.ports, service_names, prefix=f"{name}-")
+    return texts
 
 
 def _canonical(value: Yaml) -> Yaml:
