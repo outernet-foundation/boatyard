@@ -13,7 +13,7 @@ Quick loop: `uv run pytest`, `uv run ruff check`; full gate: `uv run --locked sc
 
 One module per command under `verbs/`, each with its local bare `app = typer.Typer()` + `@app.command()` on the function; `cli.py` composes them with nameless `app.add_typer(...)` — flat top-level verbs (a named `add_typer` nests a group); one `boatyard`
 console script. Exception law: nothing is ever caught only to be re-raised as a different exception with added information — hand-raised guards and third-party exceptions surface raw, uncaught, with full traceback; `typer.BadParameter`
-owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry credentials) and `verbs/score.py` (stale artifacts). Flags live in the typer signatures in `verbs/*.py`; the flag laws: `build`'s
+owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry credentials), `verbs/score.py` (stale artifacts), and `lock.py` (stale lock). Flags live in the typer signatures in `verbs/*.py`; the flag laws: `build`'s
 `--push`/`--push-to` refuse together; `generate-score --target both` refuses (BadParameter) a one-substrate repo naming the matching narrower `--target` (the rendering pipelines carry no substrate-presence checks); `docker-build-matrix` answers a bare JSON array.
 `--lock-only`/`--check`/`--upgrade` belong to `lock`, never `build`; no `--gpu`, no `--compose-file` (the verbs own the compose invocation); `tree-tags` answers a bare string — no JSON, no `{SERVICE}_SHA` names.
 
@@ -65,7 +65,7 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
   the same prefix match; bundle refs resolve direct — first-party, never mirror-prefixed — via `crane digest`, frozen by the same tag match.
 - Upstream manifest selection (inline in `relock`) = a pure function of the declarations — the writing machine's arch never participates; exact `os`/`architecture` match; `unknown/unknown` + attestation entries skipped; a platform matching anything but exactly one manifest refuses.
 - Projection selection law: `lock.index_references()` answers the lock's image index references (build edge); `lock.manifest_references(platform)` answers the concrete per-platform manifests (compose edge) and owns platform selection over the lock's recorded set — a recorded singleton self-selects, a multi-platform lock names `platform:` through `ValuesFile.platform` (missing/not recorded refuses listing the recorded platforms), never host introspection; the consumer's machine platform governs producer locks too; charts ride in both (single depth).
-- The `lock` verb self-skips where no config or no declarations exist (print, exit 0 — CI's freshness step runs it unconditionally); `--check` asserts instead of writes (in-memory relock, unified diff, exit 1, nothing touches the
+- The `lock` verb self-skips where no config or no declarations exist (print, exit 0 — CI's freshness step runs it unconditionally); `--check` asserts instead of writes (in-memory relock, exit 1, nothing touches the
   tree).
 
 ## Mirror namespace
