@@ -147,6 +147,14 @@ def render_score(
     project_name = None if substrate == "k8s" else config.project_name
     output.parent.mkdir(parents=True, exist_ok=True)
 
+    # List the variable sources lowest-priority first so later ones overwrite earlier ones
+    variable_values = {
+        variable: value
+        for source in (images, service_shas, rendering_vars)
+        for variable, value in source.items()
+        if value
+    }
+
     with (
         as_file(files("boatyard") / PATCH_TEMPLATES_DIR) as builtin_templates,
         ExitStack() as stack,
@@ -194,6 +202,7 @@ def render_score(
             f"{tool} init{' --project ' + project_name if project_name is not None else ''}"
             f" --no-sample{provisioner_flags}{template_flags}",
             cwd=working_dir,
+            env=variable_values,
         )
 
         # Pre-seed each workload's instance suffix so generated names are deterministic
@@ -209,13 +218,6 @@ def render_score(
 
         # Expand each workload's ${NAME} slots into per-run copies
         copies_directory = Path(stack.enter_context(TemporaryDirectory()))
-        # List the variable sources lowest-priority first so later ones overwrite earlier ones
-        variable_values = {
-            variable: value
-            for source in (images, service_shas, rendering_vars)
-            for variable, value in source.items()
-            if value
-        }
 
         for workload in workloads:
             expanded = dump_yaml(workload.raw)
@@ -234,7 +236,7 @@ def render_score(
 
         # Run generate over the expanded copies
         rendered = " ".join((copies_directory / workload.file_name).as_posix() for workload in workloads)
-        bash(f"{tool} generate {rendered} --output {output.as_posix()}", cwd=working_dir)
+        bash(f"{tool} generate {rendered} --output {output.as_posix()}", cwd=working_dir, env=variable_values)
 
 
 def load_workloads(score_dir: Path, names: list[str], lens: type[WorkloadDocument]) -> list[LoadedWorkload]:
