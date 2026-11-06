@@ -18,7 +18,6 @@ from boatyard.config.config import (
     ConfigFile,
     EDGE_SERVICE_NAME,
     OCI_REFERENCE_PREFIX,
-    ResolvedService,
     Yaml,
     bundle_lock_key,
     compose_bundle_output_path,
@@ -31,6 +30,7 @@ from boatyard.config.lock import LockFile
 from boatyard.config.values import ValuesFile
 from boatyard.paths import DEFAULT_CONFIG_PATH, LOCK_PATH, VALUES_FILE
 
+# Name the edge listener port and its configs key
 EDGE_LISTEN_PORT = 8443
 EDGE_CONFIG_NAME = "devkit-edge-caddyfile"
 
@@ -49,23 +49,26 @@ def up(
         typer.Option("--build", help="Build all images locally before bringing the stack up; skips pulling"),
     ] = False,
 ) -> None:
+    # Load the config and the typed machine values from the working directory
     root = Path.cwd()
     config = ConfigFile.load(root / DEFAULT_CONFIG_PATH)
-
     require_env_file(root)
     config_values = ValuesFile.load(root / VALUES_FILE, config)
+
+    # Require the config to declare a compose stack
     require_compose_stack(config)
 
     # Resolve the chosen options into leaf services
     services = config.resolve_services(config_values.choices)
 
-    # Collect each entry's include and env entries in declaration order
+    # Project the consumer lock's manifest references and seed the assembly accumulators
     lock = LockFile.load(config.root / LOCK_PATH, config)
     consumer_entries = lock.manifest_references(config_values.platform)
     entries: dict[str, str] = dict(consumer_entries)
     includes: list[Yaml] = []
     requirements: dict[str, list[str]] = {}
 
+    # Collect each entry's include, requirements, and env entries in declaration order
     for service in services:
         name = service.name
 
@@ -79,38 +82,49 @@ def up(
 
         # Include a local entry through its generated output
         if service.entry.ref is None:
-            output = compose_bundle_output_path(config.root, name)
-            if not output.is_file():
+            bundle_compose_path = compose_bundle_output_path(config.root, name)
+            if not bundle_compose_path.is_file():
                 raise ValueError(
-                    f"selected entry {name!r} has no bundle output {output.as_posix()}; generate-score writes it"
+                    f"selected entry {name!r} has no bundle output {bundle_compose_path.as_posix()}; generate-score writes it"
                 )
-            requires, include, prefixed_entries = _stage_local_bundle(name, service, output, consumer_entries)
-            requirements[name] = requires
-            includes.append(include)
-            entries.update(prefixed_entries)
-            continue
+            lock_references = consumer_entries
+        else:
+            # Include an overridden ref through its local path
+            candidate = config_values.path_overrides[name]
+            bundle_compose_path = (candidate if candidate.is_absolute() else config.root / candidate).resolve()
+            if not bundle_compose_path.is_file():
+                raise ValueError(f"path_overrides.{name}: {bundle_compose_path.as_posix()} does not exist")
 
-        # Include an overridden ref through its local path
-        candidate = config_values.path_overrides[name]
-        path = (candidate if candidate.is_absolute() else config.root / candidate).resolve()
-        if not path.is_file():
-            raise ValueError(f"path_overrides.{name}: {path.as_posix()} does not exist")
-        # Fill the override's slots from the producer repo above the override
-        producer_root = next((ancestor for ancestor in path.parents if (ancestor / DEFAULT_CONFIG_PATH).is_file()), None)
-        if producer_root is None:
-            raise ValueError(f"{path.as_posix()}: no boatyard.yml-bearing repo root above the bundle override")
-        producer_config = ConfigFile.load(producer_root / DEFAULT_CONFIG_PATH)
-        producer_entries = LockFile.load(producer_root / LOCK_PATH, producer_config).manifest_references(
-            config_values.platform
-        )
+            # Walk up from the override to the boatyard.yml-bearing producer root
+            producer_root = next(
+                (ancestor for ancestor in bundle_compose_path.parents if (ancestor / DEFAULT_CONFIG_PATH).is_file()),
+                None,
+            )
+            if producer_root is None:
+                raise ValueError(
+                    f"{bundle_compose_path.as_posix()}: no boatyard.yml-bearing repo root above the bundle override"
+                )
 
-        requires, include, prefixed_entries = _stage_local_bundle(name, service, path, producer_entries)
-        requirements[name] = requires
-        includes.append(include)
-        entries.update(prefixed_entries)
+            # Project the producer lock's manifest references under the consumer's platform
+            lock_references = LockFile.load(
+                producer_root / LOCK_PATH, ConfigFile.load(producer_root / DEFAULT_CONFIG_PATH)
+            ).manifest_references(config_values.platform)
 
-    # Refuse bundles whose requirements no environment source fills; the ambient
-    # shell fills nothing, so a shell-set slot name is named as ignored, not counted.
+        # Scan the bundle file for its requirements and refuse the reserved edge service
+        text = bundle_compose_path.read_text(encoding="utf-8")
+        scan = scan_bundle_texts(name, service.routes, service.ports, [text])
+        if EDGE_SERVICE_NAME in scan.service_names:
+            raise ValueError(
+                f"{bundle_compose_path.as_posix()}: "
+                f"the included bundle defines the reserved service {EDGE_SERVICE_NAME!r}"
+            )
+
+        # Record the entry's requirements, include the file by absolute path, and fan its lock keys under the prefix
+        requirements[name] = scan.requires
+        includes.append(bundle_compose_path.resolve().as_posix())
+        entries.update({lock_key_prefix(name) + key: value for key, value in lock_references.items()})
+
+    # Refuse bundles whose requirements no environment source fills, naming shell-set slots as ignored
     filled = {variable for variable, value in {**config_values.variables, **entries}.items() if value}
     missing = {
         name: sorted(set(required) - filled) for name, required in requirements.items() if set(required) - filled
@@ -197,7 +211,7 @@ def up(
 
     # Materialize the per-run files and hand off
     with ExitStack() as stack:
-        # Write the one per-run dotenv: consumer values + lock entries
+        # Write the one per-run dotenv from consumer values and lock entries
         env_file: Path | None = None
         if config_values.variables or entries:
             shared = sorted(set(config_values.variables) & set(entries))
@@ -216,6 +230,7 @@ def up(
             env_file = Path(handle.name)
             stack.enter_context(lock_env_unwind(env_file))
 
+        # Write the materialized root document to its per-run assembly file
         with NamedTemporaryFile(
             "w", suffix=".yaml", prefix="devkit-assembly-", delete=False, encoding="utf-8"
         ) as handle:
@@ -248,18 +263,3 @@ def up(
             up_command += " -d"
 
         bash_handoff(up_command)
-
-
-def _stage_local_bundle(
-    name: str,
-    service: ResolvedService,
-    path: Path,
-    source_entries: dict[str, str],
-) -> tuple[list[str], str, dict[str, str]]:
-    text = path.read_text(encoding="utf-8")
-    scan = scan_bundle_texts(name, service.routes, service.ports, [text])
-    if EDGE_SERVICE_NAME in scan.service_names:
-        raise ValueError(f"{path.as_posix()}: the included bundle defines the reserved service {EDGE_SERVICE_NAME!r}")
-    include = path.resolve().as_posix()
-    prefixed_entries = {lock_key_prefix(name) + key: value for key, value in source_entries.items()}
-    return scan.requires, include, prefixed_entries
