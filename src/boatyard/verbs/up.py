@@ -12,7 +12,7 @@ import yaml
 from bashrun.bash import bash_handoff
 
 from boatyard.bake import run_build
-from boatyard.compose import compose_command, lock_env_unwind, require_env_file
+from boatyard.compose import compose_command, lock_env_unwind, render_env_entries, require_env_file
 from boatyard.config.config import (
     CADDY_IMAGE,
     ConfigFile,
@@ -27,7 +27,6 @@ from boatyard.config.config import (
     require_compose_stack,
     scan_bundle_texts,
 )
-from boatyard.lock import render_env_entries
 from boatyard.config.lock import LockFile
 from boatyard.config.values import ValuesFile
 from boatyard.paths import DEFAULT_CONFIG_PATH, LOCK_PATH, VALUES_FILE
@@ -97,7 +96,9 @@ def up(
         if not path.is_file():
             raise ValueError(f"path_overrides.{name}: {path.as_posix()} does not exist")
         # Fill the override's slots from the producer repo above the override
-        producer_root = _producer_root(path)
+        producer_root = next((ancestor for ancestor in path.parents if (ancestor / DEFAULT_CONFIG_PATH).is_file()), None)
+        if producer_root is None:
+            raise ValueError(f"{path.as_posix()}: no boatyard.yml-bearing repo root above the bundle override")
         producer_config = ConfigFile.load(producer_root / DEFAULT_CONFIG_PATH)
         producer_entries = LockFile.load(producer_root / LOCK_PATH, producer_config).manifest_references(
             config_values.platform
@@ -247,13 +248,6 @@ def up(
             up_command += " -d"
 
         bash_handoff(up_command)
-
-
-def _producer_root(path: Path) -> Path:
-    for ancestor in path.parents:
-        if (ancestor / DEFAULT_CONFIG_PATH).is_file():
-            return ancestor
-    raise ValueError(f"{path.as_posix()}: no boatyard.yml-bearing repo root above the bundle override")
 
 
 def _stage_local_bundle(

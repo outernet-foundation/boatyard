@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 from boatyard.cli import app
 from boatyard.config import config as config_module
+from boatyard import compose as compose_module
 from boatyard import dockerfiles as dockerfiles_module
 from boatyard import lock as lock_module
 from boatyard.config.lock import LOCK_PATH, LockFile
@@ -939,9 +940,9 @@ class TestManifestReferences:
     def test_the_env_render_is_sorted_and_stable(self) -> None:
         entries = _selection_lock(platforms=["linux/amd64"]).manifest_references(None)
 
-        rendered = lock_module.render_env_entries(entries)
+        rendered = compose_module.render_env_entries(entries)
 
-        assert rendered == lock_module.render_env_entries(entries)
+        assert rendered == compose_module.render_env_entries(entries)
         assert rendered.splitlines() == sorted(rendered.splitlines())
         assert rendered.endswith("\n")
 

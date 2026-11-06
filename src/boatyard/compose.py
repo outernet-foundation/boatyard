@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import shlex
-from collections.abc import Generator, Iterable
+from collections.abc import Generator, Iterable, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -30,6 +30,11 @@ def compose_command(
     if scrub:
         prefix = f"env{scrub} " + prefix
     return " ".join([prefix, *quoted_arguments])
+
+
+def render_env_entries(entries: Mapping[str, str]) -> str:
+    # Render the entries as sorted dotenv lines.
+    return "".join(f"{name}={reference}\n" for name, reference in sorted(entries.items()))
 
 
 @contextmanager

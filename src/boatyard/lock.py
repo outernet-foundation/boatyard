@@ -4,7 +4,6 @@ import base64
 import json
 import re
 import shlex
-from collections.abc import Mapping
 
 import yaml
 from bashrun.bash import bash_output
@@ -168,7 +167,10 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
                     f"base_images entry {name}: platform {platform} "
                     f"matches {len(matches[platform])} upstream manifests, expected exactly one"
                 )
-            selected[platform] = _child_digest(matches[platform][0], f"base_images entry {name}")
+            child = matches[platform][0]
+            if not child.digest.startswith("sha256:"):
+                raise ValueError(f"base_images entry {name}: upstream index child must carry a digest ({child!r})")
+            selected[platform] = child.digest
 
         # Record the mirror-prefixed index and one reference per platform.
         images[name] = ConfigLockEntry(
@@ -220,18 +222,6 @@ def resolve_remote_digest(reference: str) -> str:
     if re.fullmatch(SHA256_DIGEST_REGEX, output) is None:
         raise ValueError(f"crane digest output for {reference} must be one sha256 digest")
     return output
-
-
-def render_env_entries(entries: Mapping[str, str]) -> str:
-    # Render the entries as sorted dotenv lines.
-    return "".join(f"{name}={reference}\n" for name, reference in sorted(entries.items()))
-
-
-def _child_digest(child: OciDescriptor, subject: str) -> str:
-    # Return the child's sha256 digest, refusing anything else.
-    if not child.digest.startswith("sha256:"):
-        raise ValueError(f"{subject}: upstream index child must carry a digest ({child!r})")
-    return child.digest
 
 
 def _canonical(value: Yaml) -> Yaml:
