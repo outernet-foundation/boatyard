@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import platform
 from pathlib import Path
@@ -17,6 +18,7 @@ from boatyard import lock as lock_module
 from boatyard.config.lock import LOCK_PATH
 
 DIGEST_A = "sha256:" + "a" * 64
+HEAD_SHA = "1111111111111111111111111111111111111111"
 MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
 REPOSITORY = "ghcr.io/example"
 LOCAL_REGISTRY = "localhost:5000"
@@ -123,11 +125,41 @@ def _fixed_registry(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
 
 
+class ShelveRecorder:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def __call__(
+        self,
+        registry: str,
+        project: str,
+        platform: str,
+        tag: str,
+        source_directory: Path,
+        paths: list[str],
+        **kwargs: object,
+    ) -> None:
+        manifest = json.loads((source_directory / paths[0]).read_text(encoding="utf-8"))
+        self.calls.append({
+            "registry": registry,
+            "project": project,
+            "platform": platform,
+            "tag": tag,
+            "manifest": manifest,
+        })
+
+
+def _head_sha(command: str) -> str:
+    assert command == "git rev-parse HEAD"
+    return HEAD_SHA
+
+
 class BakeRunner:
     def __init__(self, entries: dict[str, dict[str, str]] | None = None) -> None:
         self.entries = entries or {}
         self.commands: list[str] = []
         self.rendered = ""
+        self.shelve = ShelveRecorder()
 
     def run(self, command: str) -> None:
         self.commands.append(command)
@@ -175,6 +207,10 @@ def _prepare(
     monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
     monkeypatch.setattr(build_module, "host_platform", _amd64_host)
     monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
+    monkeypatch.setattr(build_module, "push_build", recorder.shelve)
+    monkeypatch.setattr(build_module, "install_oras", lambda: None)
+    monkeypatch.setattr(build_module, "bash_output", _head_sha)
+    monkeypatch.setenv("REGISTRY", REPOSITORY)
     monkeypatch.chdir(tmp_path)
     _write_repo(
         tmp_path,
@@ -477,6 +513,61 @@ class TestPushDestination:
 
         assert result.exit_code != 0
         assert "no scheme" in " ".join(result.output.split())
+
+
+class TestDigestShelving:
+    def test_a_repository_push_shelves_one_shard(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        recorder = _prepare(
+            monkeypatch,
+            tmp_path,
+            ["--push", "--targets", "zed-capture"],
+            dockerfiles={"zed-capture": EXTERNAL},
+        )
+
+        assert len(recorder.shelve.calls) == 1
+        call = recorder.shelve.calls[0]
+        assert call["registry"] == f"{REPOSITORY}/builds"
+        assert call["project"] == "images-digests"
+        assert call["platform"] == "all"
+        assert call["tag"] == f"sha-{HEAD_SHA}-{hashlib.sha256(b'zed-capture').hexdigest()[:8]}"
+        assert call["manifest"] == {"zed-capture": {"ref": "registry/api", "digest": DIGEST_A, "tags": ["tree-abc"]}}
+
+    def test_the_shard_key_covers_every_leg_target(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        recorder = _prepare(
+            monkeypatch,
+            tmp_path,
+            ["--push", "--targets", "api postgres"],
+            dockerfiles={"api": EXTERNAL, "postgres": EXTERNAL},
+        )
+
+        expected_entry = {"ref": "registry/api", "digest": DIGEST_A, "tags": ["tree-abc"]}
+        assert recorder.shelve.calls[0]["tag"] == f"sha-{HEAD_SHA}-{hashlib.sha256(b'api,postgres').hexdigest()[:8]}"
+        assert recorder.shelve.calls[0]["manifest"] == {"api": expected_entry, "postgres": expected_entry}
+
+    def test_a_repository_push_without_registry_env_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(build_module, "bash", BakeRunner().run)
+        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(build_module, "host_platform", _amd64_host)
+        monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
+        monkeypatch.delenv("REGISTRY", raising=False)
+        monkeypatch.chdir(tmp_path)
+        _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL})
+
+        result = runner.invoke(app, ["build", "--push", "--targets", "zed-capture"])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, SystemExit)
+
+    def test_an_address_push_never_shelves(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        recorder = _prepare(
+            monkeypatch,
+            tmp_path,
+            ["--push-to", LOCAL_REGISTRY, "--targets", "zed-capture"],
+            dockerfiles={"zed-capture": EXTERNAL},
+        )
+
+        assert recorder.shelve.calls == []
 
 
 class TestGoneFlags:
