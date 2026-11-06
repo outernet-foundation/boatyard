@@ -35,7 +35,7 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
   `lifecycle_prefix`) refuse.
 - `base_images`: ALL_CAPS keys become build args; upstream-native `path:tag`/`path@digest` values; `{uv}`/`{python}` templates over toolchain pins (`{uv}` from `tool.uv.required-version`, exact `==` pin only; `{python}` from
   `.python-version`); a literal value in place of a template = the deliberate-skew escape hatch.
-- `variants`: ALL_CAPS axis → bare lowercase values, first = the default variant; declared, never probed. `platforms` required exactly when `base_images` is; charts arch-neutral, exempt.
+- `variants`: ALL_CAPS axis → bare lowercase values, first = the flagless build's default; declared, never probed. `platforms` required exactly when `base_images` is; charts arch-neutral, exempt.
 - `project_name` required on every config; `gateway` is optional — routes require it, and declaring it requires `CADDY_IMAGE` and renders the edge, routes or not (caddy == gateway).
 - `services`: groups (`options:` mutually exclusive) + bare riding entries; every entry/option is `ref:` (tag-pinned OCI include — digest/`latest`/range spellings refuse at load; any published channel spelling pins) or `workloads:`/`vars:`; workload references are flat `*.yaml` names (both sections; `metadata.name` pins on stems); an option's name outside its group is its
   qualified `group-dash-option` name; the vocabulary (qualified + bare spellings) refuses duplicates at load; `auth` reserved — options declare exactly one route; routes `/`-rooted, edge-wide unique, `strip_prefix` requires a wildcard; ports use the mapping form (service, published, target).
@@ -117,9 +117,9 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
 - `run_build` renders the deterministic per-run bake file (authored key order, byte-identical for identical configs; bake validates its own input — no document model); it takes the already-loaded `config` — the build verb owns its flag refusals; a failed bake re-raises with the rendered content attached.
 - Push axis: `--push` (bool) pushes for the config's `repository`; `--push-to <addr>` re-roots tags + cache refs under that registry; the flags together refuse; an address with a scheme, trailing slash, or host
   carrying neither `.` nor `:` refuses; `--push` without a declared `repository` refuses.
-- `host_platform()` = the one host fact left: default targets are every service's default variant restricted to this machine's arch, and an empty default set refuses naming the arch + `--targets` (bake with no target arguments builds every
-  service, silently defeating the selection); `--targets` accepts exactly two spellings — bare name = default variant, `name/variant` = a declared variant (the dashed target name is bake-internal and refuses); unknown names/variants refuse
-  listing the vocabulary.
+- `host_platform()` = the one host fact left: the flagless default set is every service's first-declared variant restricted to this machine's arch, and an empty default set refuses naming the arch + `--targets` (bake with no target arguments
+  builds every service, silently defeating the selection); `--targets` spelling is shape-dictated — bare `name` for an axis-less service, `name/variant` for an axis service (a bare name on an axis service refuses naming its variants; the dashed
+  target name is bake-internal and refuses; repeated addresses ride through — bake owns set semantics); unknown names/variants refuse listing the vocabulary.
 - Per target: dockerfile by convention; platforms collapse to the host arch in load mode (a single declared platform rides through); args — every `base_images` key as `${KEY:-}` on every service, the axis
   ARG at its variant value, `{SERVICE}_SHA` as `${…:?err}`; tags `{namespace}/{target}:latest` + `:${SERVICE_SHA}`; `target:`-prefixed `additional_contexts`; registry cache refs under `{namespace}/build-cache:{target}` in push mode.
 - The incremental lock write rides every building run (the `uv sync` shape — anyone who builds also locks), landing only after target selection + its refusals; bake reads the fresh entries as environment (index form); a building run with
