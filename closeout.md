@@ -117,8 +117,9 @@ separate commits.
    plan-docker-builds green including the staleness check, build legs
    running on the committed tags; unity legs in flight at session close.
    The run completed: every leg green except `release-pr-builds`, which
-   failed pulling `images-digests-all:sha-a5430b3b…` — the Work-3 digest
-   shelving gap (entry under Work 4); fix in flight next session.
+   failed pulling `images-digests-all:sha-a5430b3b…` — the digest-shard
+   shelving gap (entry under Work 4): it returns to boatyard's build
+   verb as `0.6.5`; placeframe repins once that publishes.
   NEXT SESSION OPENS HERE: the placeframe-capture-tool sweep on its
   `compose-bundles` — the repin adds `project_name` (required from 0.6.0),
   install-zed rewrites onto `yaml.safe_load` + `tree-tags` + `build
@@ -487,12 +488,17 @@ Verify: the release published; `AGENTS.md` matches the shipped surface.
   builds_ref naming stays `builds_ref` throughout.
 - Tests: the three fixtures writing `docker-devkit.yaml` (test_prerelease,
   test_run_releases, test_config) → `boatyard.yml`.
-- The docker digest-manifest shelving moves onto the toolkit: docker-devkit's build verb
-  pushed one shard per leg to the builds shelf over bake's `metadata.json`; boatyard's
-  build sheds the shelf and leaves `metadata.json` as the handoff, so `build-docker.yml`
-  gains a toolkit shelving step after `boatyard build --push` (this item was lost from
-  the list until placeframe's second Integrate run failed pulling
-  `images-digests-all:sha-…`; restored 2026-11-06).
+- The docker digest-manifest shelving stays a boatyard build-verb behavior — never
+  this unit's to carry: docker-devkit's `build --push` pushed one shard per leg to
+  the builds shelf from inception (boatyard history `820915a`), the Nov 1 refactor
+  dropped it (`79a7087`, no recorded replacement), and a first re-draft of this item
+  wrongly moved it onto the toolkit — reversed 2026-11-06: the parse types
+  (`BakeMetadata`/`BakedImage`) and the authenticated registry surface
+  (`publish-compose`'s crane pushes) already live in boatyard, and a toolkit home
+  would duplicate the parse layer in a second repo and force `uses:` SHA bumps in
+  every consumer where a boatyard release rides the wave's existing repin. Restored
+  inside `build --push` (0.6.5); the toolkit keeps only the pull side
+  (`pull_digest_manifest`).
 - AGENTS.md: the config-file law line and the verb invocation spellings.
 
 Verify: the toolkit's own suite green.
@@ -571,10 +577,20 @@ shelf, and the ruling that the toolkit picks the push up was lost with an
 absorbed plan — both AGENTS files already described the intended state
 (boatyard: `metadata.json` is "the handoff the toolkit's builds_ref step
 reads"; toolkit: "the docker build legs push digest-manifest shards
-there"). Fix: a toolkit `shelve-digests` verb reading the handoff, added
-to `build-docker.yml` after `boatyard build --push` (the restored Work-3
-item); the wave's consumers bump their toolkit `uses:` pins to whatever
-toolkit SHA carries it.
+there"). Fix (ruled after re-investigation the same day): the shelving
+returns to boatyard's `build --push` — its home from inception
+(`820915a`: "a `build --push` run distills bake's `--metadata-file` …
+and pushes it through build-artifact-registry's `push_build`"), dropped
+by the Nov 1 refactor with no replacement; a toolkit home was drafted
+and rejected — it duplicates the `BakeMetadata` parse boatyard already
+runs for its coverage check and rides the wrong pin surface. Gating:
+repository-push mode only (`--push-to` never shelves — ad-hoc
+destination, capture-tool's flow), `REGISTRY` env required (the shelf
+root), shard key the sha256-8 of the leg's sorted baked targets.
+Released as `0.6.5`; the wave's pin target and `requires:` floor are
+`0.6.5` from here; the toolkit `uses:` pins stay at `f2d576a…`, and the
+two AGENTS lines describing the unbuilt toolkit step correct with the
+landing.
 
 Sweep mechanics discovered in infra-rathole, carried to the rest: the
 score-tool trio (score-compose 0.42.0, score-k8s 0.15.0, helm 3.22.1) must
