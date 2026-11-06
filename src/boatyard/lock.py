@@ -97,6 +97,16 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
             json.loads(bash_output(f"crane manifest {shlex.quote(reference)}"))
         ).manifests
 
+        matches = {
+            platform: [
+                child
+                for child in children
+                if child.annotations.get("vnd.docker.reference.type") != "attestation-manifest"
+                if child.platform is not None and f"{child.platform.os}/{child.platform.architecture}" == platform
+            ]
+            for platform in config.platforms
+        }
+
         if not children:
             # Record a manifest answer as the index and every platform entry.
             images[name] = ConfigLockEntry(
@@ -107,19 +117,12 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
 
         selected: dict[str, str] = {}
         for platform in config.platforms:
-            matches = [
-                child
-                for child in children
-                if child.annotations.get("vnd.docker.reference.type") != "attestation-manifest"
-                if child.platform is not None
-                and f"{child.platform.os}/{child.platform.architecture}" == platform
-            ]
-            if len(matches) != 1:
+            if len(matches[platform]) != 1:
                 raise ValueError(
                     f"base_images entry {name}: platform {platform} "
-                    f"matches {len(matches)} upstream manifests, expected exactly one"
+                    f"matches {len(matches[platform])} upstream manifests, expected exactly one"
                 )
-            selected[platform] = _child_digest(matches[0], f"base_images entry {name}")
+            selected[platform] = _child_digest(matches[platform][0], f"base_images entry {name}")
 
         images[name] = ConfigLockEntry(
             index=f"{base}@{index_digest}",
@@ -146,11 +149,7 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
     for name, reference, entry in config.remote_declared_entries():
         key = bundle_lock_key(name)
         committed_bundle = committed.bundles.get(key)
-        frozen = (
-            committed_bundle is not None
-            and not upgrade
-            and committed_bundle.reference.startswith(reference + "@")
-        )
+        frozen = committed_bundle is not None and not upgrade and committed_bundle.reference.startswith(reference + "@")
         if frozen and not entry.routes and not entry.ports:
             bundles[key] = committed_bundle  # pyright: ignore[reportArgumentType]
             continue
