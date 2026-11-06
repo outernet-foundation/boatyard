@@ -22,7 +22,6 @@ from boatyard.config.config import (
     Yaml,
     bundle_lock_key,
     compose_bundle_output_path,
-    compose_service_names,
     double_dollars,
     lock_key_prefix,
     refuse_unresolved_references,
@@ -250,10 +249,9 @@ def up(
 
 def _scan_local_bundle(name: str, service: ResolvedService, path: Path, *, refuse_edge: bool) -> list[str]:
     text = path.read_text(encoding="utf-8")
-    service_names = compose_service_names([text])
+    service_names = refuse_unresolved_references(name, service.routes, service.ports, [text], prefix=f"{name}-")
     if refuse_edge and EDGE_SERVICE_NAME in service_names:
         raise ValueError(f"{path.as_posix()}: the bundle override defines the reserved service {EDGE_SERVICE_NAME!r}")
-    refuse_unresolved_references(name, service.routes, service.ports, service_names, prefix=f"{name}-")
     return sorted(required_compose_holes(text))
 
 

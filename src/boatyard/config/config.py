@@ -722,24 +722,20 @@ def required_compose_holes(text: str) -> set[str]:
     }
 
 
-def compose_service_names(texts: list[str]) -> set[str]:
-    # Union the services keys across compose documents; a document without a services mapping contributes none.
-    names: set[str] = set()
-    for text in texts:
-        document = yaml.safe_load(text)
-        services = document.get("services") if is_mapping(document) else None
-        if is_mapping(services):
-            names.update(services)
-    return names
-
-
 def refuse_unresolved_references(
     entry_name: str,
     routes: list[RouteConfig],
     ports: list[PortDeclaration],
-    service_names: set[str],
+    texts: list[str],
     prefix: str = "",
-) -> None:
+) -> set[str]:
+    # Union the services keys across the compose texts; a document without a services mapping contributes none.
+    service_names: set[str] = set()
+    for text in texts:
+        document = yaml.safe_load(text)
+        services = document.get("services") if is_mapping(document) else None
+        if is_mapping(services):
+            service_names.update(services)
     references = {f"{prefix}{route.upstream.partition(':')[0]}": route.path for route in routes}
     references.update({f"{prefix}{port.service}": str(port.published) for port in ports})
     unknown = sorted(name for name in references if name not in service_names)
@@ -749,6 +745,7 @@ def refuse_unresolved_references(
             f"services entry {entry_name!r}: {references[name]!r} references {name!r}, "
             f"which resolves to no service in the bundle (services: {sorted(service_names)})"
         )
+    return service_names
 
 
 def mirrored_ref(reference: str, prefix: str) -> str:
