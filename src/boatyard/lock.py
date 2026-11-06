@@ -74,25 +74,39 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
     committed_path = config.root / LOCK_PATH
     committed = load_yaml_model(LockFile, committed_path) if committed_path.is_file() else LockFile()
 
-    # Resolve first-party bundles direct, copying frozen requires forward and validating declared references against the content.
+    # Resolve first-party bundles direct, recomputing requires from the pinned content and validating declared references against it.
     bundles: dict[str, ConfigLockBundle] = {}
     for name, reference, entry in config.remote_declared_entries():
         key = bundle_lock_key(name)
         committed_entry = committed.bundles.get(key)
-        record: ConfigLockBundle | None = None
 
         # Pin the frozen reference or resolve the declaration's fresh digest.
-        if committed_entry is not None and not upgrade and committed_entry.reference.startswith(reference + "@"):
-            record = committed_entry
+        pinned = (
+            committed_entry.reference
+            if committed_entry is not None and not upgrade and committed_entry.reference.startswith(reference + "@")
+            else f"{reference}@{resolve_remote_digest(reference)}"
+        )
 
-            # Carry a frozen bundle without declared routes forward unread.
-            if not entry.routes and not entry.ports:
-                bundles[key] = record
-                continue
+        # Read the bundle's compose files as inline base64 layer data, with crane blob as the fallback.
+        print(f"Reading bundle content for: {pinned}")
+        artifact = OciArtifactManifest.model_validate(json.loads(bash_output(f"crane manifest {shlex.quote(pinned)}")))
 
-        pinned = record.reference if record else f"{reference}@{resolve_remote_digest(reference)}"
+        # Strip the tag, treating a colon as a tag only when no slash follows it.
+        repository = pinned.rpartition("@")[0]
+        slash = repository.rfind("/")
+        colon = repository.rfind(":")
+        repository = repository[:colon] if colon > slash else repository
+        texts = [
+            base64.b64decode(layer.data).decode("utf-8")
+            if layer.data is not None
+            else bash_output(f"crane blob {shlex.quote(repository + '@' + layer.digest)}")
+            for layer in artifact.layers
+            if layer.media_type == COMPOSE_FILE_MEDIA_TYPE
+        ]
 
-        texts = _read_bundle_content(pinned)
+        # Refuse a bundle that carries no compose file layer.
+        if not texts:
+            raise ValueError(f"{pinned}: the compose bundle carries no compose file layer")
 
         # Refuse declared routes and ports that name no service in the bundle.
         service_names: set[str] = set()
@@ -103,10 +117,8 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
                 service_names.update(services)
         refuse_unresolved_references(name, entry.routes, entry.ports, service_names, prefix=f"{name}-")
 
-        # Record the frozen bundle or a fresh one with its required holes.
-        if record is None:
-            record = ConfigLockBundle(reference=pinned, requires=sorted(required_compose_holes("\n".join(texts))))
-        bundles[key] = record
+        # Record the pinned reference with its required holes.
+        bundles[key] = ConfigLockBundle(reference=pinned, requires=sorted(required_compose_holes("\n".join(texts))))
 
     images: dict[str, ConfigLockEntry] = {}
     for name, reference in config.base_images.items():
@@ -210,28 +222,6 @@ def resolve_remote_digest(reference: str) -> str:
     if re.fullmatch(SHA256_DIGEST_REGEX, output) is None:
         raise ValueError(f"crane digest output for {reference} must be one sha256 digest")
     return output
-
-
-def _read_bundle_content(pinned: str) -> list[str]:
-    # Read the bundle's compose files as inline base64 layer data, with crane blob as the fallback.
-    print(f"Reading bundle content for: {pinned}")
-    artifact = OciArtifactManifest.model_validate(json.loads(bash_output(f"crane manifest {shlex.quote(pinned)}")))
-    # Strip the tag, treating a colon as a tag only when no slash follows it.
-    repository = pinned.rpartition("@")[0]
-    slash = repository.rfind("/")
-    colon = repository.rfind(":")
-    repository = repository[:colon] if colon > slash else repository
-    texts = [
-        base64.b64decode(layer.data).decode("utf-8")
-        if layer.data is not None
-        else bash_output(f"crane blob {shlex.quote(repository + '@' + layer.digest)}")
-        for layer in artifact.layers
-        if layer.media_type == COMPOSE_FILE_MEDIA_TYPE
-    ]
-    # Refuse a bundle that carries no compose file layer.
-    if not texts:
-        raise ValueError(f"{pinned}: the compose bundle carries no compose file layer")
-    return texts
 
 
 def render_env_entries(entries: Mapping[str, str]) -> str:

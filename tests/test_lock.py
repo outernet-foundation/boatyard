@@ -760,7 +760,7 @@ class TestBundleRecording:
 
         assert result.exit_code == 0, result.output
         assert recorder.inspected == []
-        assert read_references == []
+        assert read_references == [f"{self.RATHOLE_BASE}@{DIGEST_B}"]
         assert _read_lock(tmp_path) == {
             "bundles": {"TUNNEL_RATHOLE_BUNDLE": {"reference": f"{self.RATHOLE_BASE}@{DIGEST_B}"}}
         }
