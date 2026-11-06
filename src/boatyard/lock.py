@@ -97,7 +97,7 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
             not upgrade
             and committed_entry is not None
             and _pinned_to(committed_entry.index, base)
-            and sorted(committed_entry.platforms) == sorted(config.platforms)
+            and set(committed_entry.platforms) == set(config.platforms)
         ):
             images[name] = committed_entry
         else:
@@ -107,14 +107,8 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
             index = OciIndex.model_validate(json.loads(bash_output(f"crane manifest {shlex.quote(reference)}")))
             index_digest = resolve_remote_digest(reference)
             children = index.manifests
-            if not children:
-                # Record a manifest answer as the index and every platform entry.
-                images[name] = ConfigLockEntry(
-                    index=f"{base}@{index_digest}",
-                    platforms=dict.fromkeys(config.platforms, f"{base}@{index_digest}"),
-                )
-            else:
-                selected: dict[str, str] = {}
+            selected: dict[str, str] = {}
+            if children:
                 for platform in config.platforms:
                     matches = [
                         child
@@ -136,14 +130,16 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
                             f"(declared platforms: {sorted(config.platforms)}; index platforms: {available})"
                         )
                     selected[platform] = _child_digest(matches[0], subject)
-                images[name] = ConfigLockEntry(
-                    index=f"{base}@{index_digest}",
-                    platforms={platform: f"{base}@{digest}" for platform, digest in selected.items()},
-                )
+            else:
+                # Record a manifest answer as the index and every platform entry.
+                selected = dict.fromkeys(config.platforms, index_digest)
+            images[name] = ConfigLockEntry(
+                index=f"{base}@{index_digest}",
+                platforms={platform: f"{base}@{digest}" for platform, digest in selected.items()},
+            )
 
     charts: dict[str, str] = {}
-    declared_charts = config.declared_charts
-    for chart_name, chart_reference in declared_charts.items():
+    for chart_name, chart_reference in config.declared_charts.items():
         key = chart_lock_key(chart_name)
         reference = chart_reference.removeprefix(OCI_REFERENCE_PREFIX)
         base = mirrored_ref(reference, prefix)
@@ -159,9 +155,8 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
     # immutable, so its recorded requires copies forward; declaring entries re-read the content
     # to validate their authored references against the bundle's actual services.
     bundles: dict[str, ConfigLockBundle] = {}
-    for name, declared, entry in config.remote_declared_entries():
+    for name, reference, entry in config.remote_declared_entries():
         key = bundle_lock_key(name)
-        reference = declared
         committed_bundle = committed.bundles.get(key)
         frozen_bundle = (
             committed_bundle
@@ -230,22 +225,22 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
         rendered = "{}\n"
     else:
         rendered = yaml.safe_dump(document, sort_keys=False, default_flow_style=False, width=10_000_000)
-    if check:
-        committed = committed_path.read_text(encoding="utf-8") if committed_path.is_file() else ""
-        if committed != rendered:
-            print(
-                "".join(
-                    difflib.unified_diff(
-                        committed.splitlines(keepends=True),
-                        rendered.splitlines(keepends=True),
-                        fromfile=f"committed {LOCK_PATH.as_posix()}",
-                        tofile=f"computed {LOCK_PATH.as_posix()}",
-                    )
+    if not check:
+        committed_path.write_text(rendered, encoding="utf-8")
+        return lock
+    committed_text = committed_path.read_text(encoding="utf-8") if committed_path.is_file() else ""
+    if committed_text != rendered:
+        print(
+            "".join(
+                difflib.unified_diff(
+                    committed_text.splitlines(keepends=True),
+                    rendered.splitlines(keepends=True),
+                    fromfile=f"committed {LOCK_PATH.as_posix()}",
+                    tofile=f"computed {LOCK_PATH.as_posix()}",
                 )
             )
-            raise ValueError("image lock is stale")
-    else:
-        committed_path.write_text(rendered, encoding="utf-8")
+        )
+        raise ValueError("image lock is stale")
     return lock
 
 
