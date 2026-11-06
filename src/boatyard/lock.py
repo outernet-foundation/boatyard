@@ -77,6 +77,7 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
     images: dict[str, ConfigLockEntry] = {}
     for name, reference in config.base_images.items():
         base = mirrored_ref(reference, prefix)
+        committed_entry = committed.images.get(name)
 
         # Record a digest-pinned declaration as-is under the mirror prefix.
         if DIGEST_TAIL_PATTERN.search(reference):
@@ -84,10 +85,9 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
             continue
 
         # Freeze the committed entry forward while its pinned tag and platform set hold.
-        committed_entry = committed.images.get(name)
         if (
-            not upgrade
-            and committed_entry is not None
+            committed_entry is not None
+            and not upgrade
             and committed_entry.index.startswith(base + "@")
             and set(committed_entry.platforms) == set(config.platforms)
         ):
@@ -134,29 +134,35 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
 
     # Freeze unchanged charts and resolve fresh tags to mirror-pinned digests.
     charts: dict[str, str] = {}
-    for chart_name, chart_reference in config.declared_charts.items():
-        key = chart_lock_key(chart_name)
-        reference = chart_reference.removeprefix(OCI_REFERENCE_PREFIX)
+    for name, reference in config.declared_charts.items():
+        key = chart_lock_key(name)
+        reference = reference.removeprefix(OCI_REFERENCE_PREFIX)
         base = mirrored_ref(reference, prefix)
-        committed_chart = committed.charts.get(key)
+        committed_entry = committed.charts.get(key)
+
+        # Record a digest-pinned declaration as-is under the mirror prefix.
         if DIGEST_TAIL_PATTERN.search(reference):
             charts[key] = base
-        elif committed_chart is not None and not upgrade and committed_chart.startswith(base + "@"):
-            charts[key] = committed_chart
-        else:
-            charts[key] = f"{base}@{resolve_remote_digest(reference)}"
+            continue
+
+        # Freeze the committed entry forward while its pinned tag holds.
+        if committed_entry is not None and not upgrade and committed_entry.startswith(base + "@"):
+            charts[key] = committed_entry
+            continue
+
+        charts[key] = f"{base}@{resolve_remote_digest(reference)}"
 
     # Resolve first-party bundles direct, copying frozen requires forward and validating declared references against the content.
     bundles: dict[str, ConfigLockBundle] = {}
     for name, reference, entry in config.remote_declared_entries():
         key = bundle_lock_key(name)
-        committed_bundle = committed.bundles.get(key)
+        committed_entry = committed.bundles.get(key)
         record: ConfigLockBundle | None = None
 
         # Pin the frozen reference or resolve the declaration's fresh digest.
-        if committed_bundle is not None and not upgrade and committed_bundle.reference.startswith(reference + "@"):
-            pinned = committed_bundle.reference
-            record = committed_bundle
+        if committed_entry is not None and not upgrade and committed_entry.reference.startswith(reference + "@"):
+            pinned = committed_entry.reference
+            record = committed_entry
         else:
             pinned = f"{reference}@{resolve_remote_digest(reference)}"
 
