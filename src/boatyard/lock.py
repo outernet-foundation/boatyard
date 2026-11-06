@@ -110,11 +110,13 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
             else f"{reference}@{resolve_remote_digest(reference)}"
         )
 
-        compose_texts = OciArtifactManifest.fetch_compose_texts(pinned)
-
         # Refuse declared routes and ports that name no service in the bundle, collecting its required holes.
-        scan = scan_bundle_texts(name, entry.routes, entry.ports, compose_texts)
-        bundles[key] = ConfigLockBundle(reference=pinned, requires=scan.requires)
+        bundles[key] = ConfigLockBundle(
+            reference=pinned,
+            requires=scan_bundle_texts(
+                name, entry.routes, entry.ports, OciArtifactManifest.fetch_compose_texts(pinned)
+            ).requires,
+        )
 
     images: dict[str, ConfigLockEntry] = {}
     for name, reference in config.base_images.items():
