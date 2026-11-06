@@ -97,23 +97,19 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
             json.loads(bash_output(f"crane manifest {shlex.quote(reference)}"))
         ).manifests
 
-        matches = {
-            platform: [
-                child
-                for child in children
-                if child.annotations.get("vnd.docker.reference.type") != "attestation-manifest"
-                if child.platform is not None and f"{child.platform.os}/{child.platform.architecture}" == platform
-            ]
-            for platform in config.platforms
-        }
-
         if not children:
-            # Record a manifest answer as the index and every platform entry.
-            images[name] = ConfigLockEntry(
-                index=f"{base}@{index_digest}",
-                platforms=dict.fromkeys(config.platforms, f"{base}@{index_digest}"),
-            )
-            continue
+            # A manifest answer is every platform's sole manifest.
+            matches = {platform: [OciDescriptor(digest=index_digest)] for platform in config.platforms}
+        else:
+            matches = {
+                platform: [
+                    child
+                    for child in children
+                    if child.annotations.get("vnd.docker.reference.type") != "attestation-manifest"
+                    if child.platform is not None and f"{child.platform.os}/{child.platform.architecture}" == platform
+                ]
+                for platform in config.platforms
+            }
 
         selected: dict[str, str] = {}
         for platform in config.platforms:
