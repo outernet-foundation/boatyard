@@ -226,7 +226,6 @@ def up(
             handle.write(yaml.safe_dump(document, sort_keys=False, default_flow_style=False))
         assembly = Path(handle.name)
         stack.callback(assembly.unlink, missing_ok=True)
-        compose_files = [assembly]
 
         # Build local images
         if build:
@@ -235,7 +234,7 @@ def up(
         # Hand off to docker compose
         up_command = compose_command(
             root,
-            compose_files,
+            assembly,
             "up",
             *["--pull", "missing", *(["--quiet-pull"] if quiet_pull else []), *(["-d"] if not attached else [])],
             env_file=env_file,

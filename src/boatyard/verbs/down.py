@@ -32,7 +32,7 @@ def down(
             assembly_root = Path(handle.name)
         stack.callback(assembly_root.unlink, missing_ok=True)
 
-        command = compose_command(root, [assembly_root], "down", "--remove-orphans")
+        command = compose_command(root, assembly_root, "down", "--remove-orphans")
         if volumes:
             command += " -v"
 
