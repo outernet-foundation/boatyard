@@ -14,7 +14,7 @@ Quick loop: `uv run pytest`, `uv run ruff check`; full gate: `uv run --locked sc
 One module per command under `verbs/`, each with its local bare `app = typer.Typer()` + `@app.command()` on the function; `cli.py` composes them with nameless `app.add_typer(...)` — flat top-level verbs (a named `add_typer` nests a group); one `boatyard`
 console script. Exception law: nothing is ever caught only to be re-raised as a different exception with added information — hand-raised guards and third-party exceptions surface raw, uncaught, with full traceback; `typer.BadParameter`
 owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry credentials), `verbs/score.py` (stale artifacts), and `lock.py` (stale lock). Flags live in the typer signatures in `verbs/*.py`; the flag laws: `build`'s
-`--push`/`--push-to` refuse together; `generate-score --target both` refuses (BadParameter) a one-substrate repo naming the matching narrower `--target` (the rendering pipelines carry no substrate-presence checks); `docker-build-matrix` answers a bare JSON array.
+`--push`/`--push-to` refuse together; `generate-score`'s `--target` default derives from the config (`both` where both substrates are declared, else the one present), and an explicitly spelled target naming an absent substrate refuses (BadParameter) naming the matching narrower spelling (the rendering pipelines carry no substrate-presence checks); `docker-build-matrix` answers a bare JSON array.
 `--lock-only`/`--check`/`--upgrade` belong to `lock`, never `build`; no `--gpu`, no `--compose-file` (the verbs own the compose invocation); `tree-tags` answers a bare string — no JSON, no `{SERVICE}_SHA` names.
 
 ## Modules
@@ -134,7 +134,7 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
   and generate (state-format coupling bounded by the pinned tool version); `--local` writes the gitignored local output with the local storage class; charts render through `helm template` against the
   lock's `{NAME}_CHART` entry (a chart without its lock entry refuses naming the lock verb; helm is a renderer, never a deployer); `stack/score/` stays read-only; output reproduces from a fresh clone.
 - Substrate law: compose renderings consume the lock's platform manifests (the artifact records the exact bytes one machine runs); k8s renderings consume the index form (kubelet resolves per node).
-- `ensure_tools` installs the three pinned tools into `/usr/local/bin`: version-probe each, fetch on absence or pin mismatch.
+- `ensure_tools` installs the tools the target needs (score-compose wherever the compose side renders; score-k8s + helm only where k8s renders) into `/usr/local/bin`: presence-probe with `shutil.which` (a missing binary never reaches a subprocess), then version-probe, fetch on absence or pin mismatch.
 - `--check` = the CI staleness gate: self-skips (exit 0) where nothing generates; otherwise regenerates in-process; any `git status` change over the outputs exits 1 printing the diff; `--check` + `--local` are mutually
   exclusive.
 - Post-passes on compose output are typed transformations on `ComposeDocument`, dumped exactly once — pydantic's declared-fields-first order is the artifacts' deterministic key order: a workload-major pass collapses `{workload}-{container}` services to the container name and inlines every `type: bind` volume as a top-level

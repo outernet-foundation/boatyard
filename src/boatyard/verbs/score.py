@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Annotated, NamedTuple
@@ -35,7 +36,10 @@ class ToolRequirement(NamedTuple):
 
 @app.command()
 def generate_score(
-    target: Annotated[Target, typer.Option(help="Which Score artifact to generate.")] = "both",
+    target: Annotated[
+        Target | None,
+        typer.Option(help="Which Score artifact to generate; the default derives from the config."),
+    ] = None,
     local: Annotated[
         bool,
         typer.Option(
@@ -59,6 +63,9 @@ def generate_score(
             return
         raise ValueError("boatyard.yml declares no local service entries and no k8s section")
     local_entries = config.local_service_entries()
+
+    if target is None:
+        target = "both" if (local_entries and config.k8s is not None) else ("compose" if local_entries else "k8s")
 
     if config.k8s is None and target in ("k8s", "both"):
         message = (
@@ -94,33 +101,39 @@ def generate_score(
         raise ValueError(f"{secrets_path.as_posix()}: the secrets declaration is required")
     secrets = load_yaml_model(SecretsDeclaration, secrets_path)
 
-    ensure_tools(
-        [
+    requirements = [
+        ToolRequirement(
+            binary="score-compose",
+            version=config.score_compose_version,
+            probe=f"score-compose {config.score_compose_version}",
+            archive=(
+                f"https://github.com/score-spec/score-compose/releases/download/{config.score_compose_version}/"
+                f"score-compose_{config.score_compose_version}_linux_amd64.tar.gz"
+            ),
+            extract="score-compose",
+        )
+    ]
+    if target in ("both", "k8s"):
+        requirements += [
             ToolRequirement(
-                binary=binary,
-                version=version,
-                probe=f"{binary} {version}",
+                binary="score-k8s",
+                version=config.score_k8s_version,
+                probe=f"score-k8s {config.score_k8s_version}",
                 archive=(
-                    f"https://github.com/score-spec/{binary}/releases/download/{version}/"
-                    f"{binary}_{version}_linux_amd64.tar.gz"
+                    f"https://github.com/score-spec/score-k8s/releases/download/{config.score_k8s_version}/"
+                    f"score-k8s_{config.score_k8s_version}_linux_amd64.tar.gz"
                 ),
-                extract=binary,
-            )
-            for binary, version in (
-                ("score-compose", config.score_compose_version),
-                ("score-k8s", config.score_k8s_version),
-            )
-        ]
-        + [
+                extract="score-k8s",
+            ),
             ToolRequirement(
                 binary="helm",
                 version=config.helm_version,
                 probe=f'"v{config.helm_version}"',
                 archive=f"https://get.helm.sh/helm-v{config.helm_version}-linux-amd64.tar.gz",
                 extract="--strip-components=1 linux-amd64/helm",
-            )
+            ),
         ]
-    )
+    ensure_tools(requirements)
 
     outputs: list[Path] = []
     if target in ("both", "compose"):
@@ -149,8 +162,10 @@ def generate_score(
 
 def ensure_tools(requirements: list[ToolRequirement]) -> None:
     for requirement in requirements:
-        if bash_check(f"{requirement.binary} version") and requirement.probe in bash_output(
-            f"{requirement.binary} version"
+        if (
+            shutil.which(requirement.binary) is not None
+            and bash_check(f"{requirement.binary} version")
+            and requirement.probe in bash_output(f"{requirement.binary} version")
         ):
             continue
         print(f"Install {requirement.binary} {requirement.version}")
