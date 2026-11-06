@@ -795,7 +795,7 @@ class TestServices:
             {
                 "requires": ">=0.1",
                 "project_name": "example",
-                "gateway": "8080",
+                "gateway": 8080,
                 "services": {"core": {"workloads": ["api.yaml"]}},
             },
         )
@@ -809,7 +809,7 @@ class TestServices:
             {
                 "requires": ">=0.1",
                 "project_name": "example",
-                "gateway": "8080",
+                "gateway": 8080,
                 "base_images": EDGE_BASE_IMAGES,
                 "platforms": EDGE_PLATFORMS,
                 "services": {
@@ -889,7 +889,7 @@ class TestAuthGroup:
         return {
             "requires": ">=0.1",
             "project_name": "example",
-            "gateway": "8080",
+            "gateway": 8080,
             "base_images": EDGE_BASE_IMAGES,
             "platforms": EDGE_PLATFORMS,
             "services": {"auth": {"options": options}},
@@ -953,7 +953,7 @@ class TestRoutes:
         return {
             "requires": ">=0.1",
             "project_name": "example",
-            "gateway": "8080",
+            "gateway": 8080,
             "base_images": EDGE_BASE_IMAGES,
             "platforms": EDGE_PLATFORMS,
             "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG, "routes": routes}},
@@ -965,7 +965,7 @@ class TestRoutes:
             {
                 "requires": ">=0.1",
                 "project_name": "example",
-                "gateway": "8080",
+                "gateway": 8080,
                 "services": {
                     "one": {
                         "options": {
@@ -1046,7 +1046,7 @@ class TestGatewayKey:
             {
                 "requires": ">=0.1",
                 "project_name": "example",
-                "gateway": "8443",
+                "gateway": 8443,
                 "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG}},
             },
         )
@@ -1063,7 +1063,7 @@ class TestGatewayKey:
                 "project_name": "example",
                 "platforms": ["linux/amd64"],
                 "base_images": {"CADDY_IMAGE": "docker.io/library/caddy:2.8.4-alpine"},
-                "gateway": "8080",
+                "gateway": 8080,
                 "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG}},
             },
         )
@@ -1078,7 +1078,7 @@ class TestGatewayKey:
             {
                 "requires": ">=0.1",
                 "project_name": "example",
-                "gateway": "8443",
+                "gateway": 8443,
                 "base_images": EDGE_BASE_IMAGES,
                 "platforms": EDGE_PLATFORMS,
                 "services": {
@@ -1108,7 +1108,7 @@ class TestGatewayKey:
             },
         )
 
-        with pytest.raises(ValidationError, match="literal port number or a"):
+        with pytest.raises(ValidationError, match="env slot; a literal port is an int"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
 
@@ -1118,7 +1118,7 @@ class TestPorts:
             "requires": ">=0.1",
             "repository": "ghcr.io/org/repo",
             "project_name": "example",
-            "gateway": "8080",
+            "gateway": 8080,
             "base_images": EDGE_BASE_IMAGES,
             "platforms": EDGE_PLATFORMS,
             "services": services,
@@ -1132,8 +1132,8 @@ class TestPorts:
                     "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
                     "routes": [{"path": "/*", "upstream": "livekit:8000"}],
                     "ports": [
-                        {"service": "livekit", "published": "${PORT:?err}", "target": "6178"},
-                        {"service": "livekit", "published": "6179", "target": "6179", "protocol": "udp"},
+                        {"service": "livekit", "published": "${PORT:?err}", "target": 6178},
+                        {"service": "livekit", "published": 6179, "target": 6179, "protocol": "udp"},
                     ],
                 }
             }),
@@ -1145,9 +1145,43 @@ class TestPorts:
         livekit = config.services["livekit"]
         assert isinstance(livekit, ServiceEntry)
         assert [(port.service, port.published, port.target, port.protocol) for port in livekit.ports] == [
-            ("livekit", "${PORT:?err}", "6178", "tcp"),
-            ("livekit", "6179", "6179", "udp"),
+            ("livekit", "${PORT:?err}", 6178, "tcp"),
+            ("livekit", 6179, 6179, "udp"),
         ]
+
+    def test_an_int_port_loads(self, tmp_path: Path) -> None:
+        write_config(
+            tmp_path,
+            self._ports_config({
+                "livekit": {
+                    "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
+                    "routes": [{"path": "/*", "upstream": "livekit:8000"}],
+                    "ports": [{"service": "livekit", "published": 6179, "target": 6179}],
+                }
+            }),
+        )
+
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
+
+        assert config is not None
+        livekit = config.services["livekit"]
+        assert isinstance(livekit, ServiceEntry)
+        assert [(port.published, port.target) for port in livekit.ports] == [(6179, 6179)]
+
+    def test_an_out_of_range_int_port_refuses(self, tmp_path: Path) -> None:
+        write_config(
+            tmp_path,
+            self._ports_config({
+                "livekit": {
+                    "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
+                    "routes": [{"path": "/*", "upstream": "livekit:8000"}],
+                    "ports": [{"service": "livekit", "published": 65536, "target": 6179}],
+                }
+            }),
+        )
+
+        with pytest.raises(ValidationError, match="outside the port range"):
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_a_string_port_refuses(self, tmp_path: Path) -> None:
         write_config(
@@ -1169,7 +1203,7 @@ class TestPorts:
         write_config(
             tmp_path,
             self._ports_config({
-                "tunnel": {"options": None, "ports": [{"service": "ngrok", "published": "4040", "target": "4040"}]},
+                "tunnel": {"options": None, "ports": [{"service": "ngrok", "published": 4040, "target": 4040}]},
                 "livekit": {
                     "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
                     "routes": [{"path": "/*", "upstream": "livekit:8000"}],
@@ -1192,7 +1226,7 @@ class TestPorts:
                             "service": "api",
                             "host_ip": "127.0.0.1",
                             "published": "${API_DEBUG_PORT:-5679}",
-                            "target": "5678",
+                            "target": 5678,
                         }
                     ],
                 },
@@ -1214,12 +1248,27 @@ class TestPorts:
                 "livekit": {
                     "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
                     "routes": [{"path": "/*", "upstream": "livekit:8000"}],
-                    "ports": [{"service": "livekit", "published": "eight", "target": "5678"}],
+                    "ports": [{"service": "livekit", "published": "eight", "target": 5678}],
                 }
             }),
         )
 
-        with pytest.raises(ValidationError, match="literal port number or a"):
+        with pytest.raises(ValidationError, match="env slot; a literal port is an int"):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
+    def test_a_digit_string_port_refuses(self, tmp_path: Path) -> None:
+        write_config(
+            tmp_path,
+            self._ports_config({
+                "livekit": {
+                    "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
+                    "routes": [{"path": "/*", "upstream": "livekit:8000"}],
+                    "ports": [{"service": "livekit", "published": "6179", "target": 6179}],
+                }
+            }),
+        )
+
+        with pytest.raises(ValidationError, match="env slot; a literal port is an int"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
 
@@ -1379,7 +1428,7 @@ def test_direct_model_construction_is_valid_for_tests(tmp_path: Path) -> None:
         "requires": ">=0.1",
         "repository": "ghcr.io/org/repo",
         "project_name": "example",
-        "gateway": "8080",
+        "gateway": 8080,
         "services": {"core": {"workloads": ["api.yaml"]}},
     })
     config.root = tmp_path
