@@ -1350,24 +1350,132 @@ def _k8s_only_repo(tmp_path: Path) -> None:
     )
 
 
-def test_generate_score_on_a_compose_only_repo_refuses_the_default_target(
+def test_generate_score_on_a_compose_only_repo_derives_compose_and_requests_only_the_compose_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _verb_repo(tmp_path)
+    (tmp_path / "stack" / "secrets.yaml").write_text("PUBLIC_URL: the public address\n", encoding="utf-8")
+    recorder = WorkloadContentsRecorder()
+    requested: list[list[score_verb_module.ToolRequirement]] = []
+
+    def _capture_tools(requirements: list[score_verb_module.ToolRequirement]) -> None:
+        requested.append(requirements)
+
+    monkeypatch.setattr(score_module, "bash", recorder.run)
+    monkeypatch.setattr(score_verb_module, "ensure_tools", _capture_tools)
+    monkeypatch.chdir(tmp_path)
+
+    score_verb_module.generate_score()
+
+    assert [requirement.binary for requirement in requested[0]] == ["score-compose"]
+    assert (tmp_path / "stack" / "generated" / "compose" / "compose.core.yaml").is_file()
+
+
+def test_generate_score_on_a_k8s_only_repo_derives_the_k8s_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _k8s_only_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match="the image lock is required"):
+        score_verb_module.generate_score()
+
+
+def test_generate_score_on_a_compose_only_repo_refuses_an_explicit_both(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _verb_repo(tmp_path)
     monkeypatch.chdir(tmp_path)
 
     with pytest.raises(typer.BadParameter, match="pass --target compose"):
-        score_verb_module.generate_score()
+        score_verb_module.generate_score(target="both")
 
 
-def test_generate_score_on_a_k8s_only_repo_refuses_the_default_target(
+def test_generate_score_on_a_k8s_only_repo_refuses_an_explicit_both(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _k8s_only_repo(tmp_path)
     monkeypatch.chdir(tmp_path)
 
     with pytest.raises(typer.BadParameter, match="pass --target k8s"):
-        score_verb_module.generate_score()
+        score_verb_module.generate_score(target="both")
+
+
+def test_ensure_tools_installs_a_binary_missing_from_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    monkeypatch.setenv("PATH", str(bin_dir))
+    commands: list[str] = []
+
+    def _record(command: str, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
+        commands.append(command)
+
+    monkeypatch.setattr(score_verb_module, "bash", _record)
+    requirement = score_verb_module.ToolRequirement(
+        binary="score-compose",
+        version="1.2.3",
+        probe="score-compose 1.2.3",
+        archive="https://example.com/score-compose_1.2.3_linux_amd64.tar.gz",
+        extract="score-compose",
+    )
+
+    score_verb_module.ensure_tools([requirement])
+
+    assert commands[0].startswith("curl -fsSL https://example.com/score-compose_1.2.3_linux_amd64.tar.gz")
+
+
+def test_ensure_tools_reinstalls_on_a_version_mismatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "score-compose"
+    stub.write_text('#!/bin/sh\necho "score-compose 0.0.0"\n', encoding="utf-8")
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    commands: list[str] = []
+
+    def _record(command: str, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
+        commands.append(command)
+
+    monkeypatch.setattr(score_verb_module, "bash", _record)
+    requirement = score_verb_module.ToolRequirement(
+        binary="score-compose",
+        version="1.2.3",
+        probe="score-compose 1.2.3",
+        archive="https://example.com/score-compose_1.2.3_linux_amd64.tar.gz",
+        extract="score-compose",
+    )
+
+    score_verb_module.ensure_tools([requirement])
+
+    assert commands[0].startswith("curl -fsSL https://example.com/score-compose_1.2.3_linux_amd64.tar.gz")
+
+
+def test_ensure_tools_skips_install_when_the_pinned_version_is_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "score-compose"
+    stub.write_text('#!/bin/sh\necho "score-compose 1.2.3"\n', encoding="utf-8")
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    commands: list[str] = []
+
+    def _record(command: str, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
+        commands.append(command)
+
+    monkeypatch.setattr(score_verb_module, "bash", _record)
+    requirement = score_verb_module.ToolRequirement(
+        binary="score-compose",
+        version="1.2.3",
+        probe="score-compose 1.2.3",
+        archive="https://example.com/score-compose_1.2.3_linux_amd64.tar.gz",
+        extract="score-compose",
+    )
+
+    score_verb_module.ensure_tools([requirement])
+
+    assert commands == []
 
 
 def test_generate_score_refuses_compose_on_a_k8s_only_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
