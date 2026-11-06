@@ -191,7 +191,7 @@ def _prepare(
 
 
 class TestDefaultTargets:
-    def test_defaults_are_every_service_default_cell(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_defaults_are_every_service_default_variant(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         recorder = _prepare(monkeypatch, tmp_path, [], variants=TORCH_AXIS)
 
         assert _bake_targets(recorder.commands) == [
@@ -269,7 +269,7 @@ class TestDefaultTargets:
         assert isinstance(result.exception, FileNotFoundError)
 
 
-class TestCellSelection:
+class TestVariantSelection:
     def _invoke(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, arguments: list[str]) -> list[str]:
         recorder = _prepare(
             monkeypatch,
@@ -280,28 +280,32 @@ class TestCellSelection:
         )
         return _bake_targets(recorder.commands)
 
-    def test_a_cell_address_builds_that_cell(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_a_variant_address_builds_that_variant(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         assert self._invoke(monkeypatch, tmp_path, ["--targets", "localizer/rocm"]) == ["localizer-rocm"]
 
-    def test_a_bare_name_selects_the_default_cell(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_a_bare_name_selects_the_default_variant(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         assert self._invoke(monkeypatch, tmp_path, ["--targets", "localizer"]) == ["localizer-cuda"]
 
-    def test_the_suffixed_target_name_stays_addressable(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        assert self._invoke(monkeypatch, tmp_path, ["--targets", "localizer-rocm"]) == ["localizer-rocm"]
+    def test_the_suffixed_target_name_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        result = self._refuse(monkeypatch, tmp_path, ["--targets", "localizer-rocm"])
+
+        assert "Unknown target 'localizer-rocm'" in result.output
 
     def test_repeated_addresses_build_once(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         assert self._invoke(monkeypatch, tmp_path, ["--targets", "postgres postgres"]) == ["postgres"]
 
-    def test_an_unknown_cell_refuses_listing_the_declared_values(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_an_unknown_variant_refuses_listing_the_declared_values(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         result = self._refuse(monkeypatch, tmp_path, ["--targets", "localizer/tpu"])
 
-        assert "Unknown cell 'tpu' for localizer" in result.output
+        assert "Unknown variant 'tpu' for localizer" in result.output
         assert "['cuda', 'rocm']" in result.output
 
-    def test_a_cell_on_an_unfanned_service_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_a_variant_on_an_unfanned_service_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         result = self._refuse(monkeypatch, tmp_path, ["--targets", "postgres/cuda"])
 
-        assert "postgres declares no variant cells" in result.output
+        assert "postgres declares no variants" in result.output
 
     def test_an_unknown_name_refuses_listing_the_vocabulary(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         result = self._refuse(monkeypatch, tmp_path, ["--targets", "ghost"])
@@ -546,7 +550,7 @@ class TestRenderBakeTagDerivation:
             f"{REPOSITORY}/api:${{API_SHA}}",
         ]
 
-    def test_variant_axes_derive_per_cell_targets_sharing_one_sha_env(
+    def test_variant_axes_derive_per_variant_targets_sharing_one_sha_env(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         recorder = _prepare(monkeypatch, tmp_path, [], dockerfiles={"localizer": FANNED}, variants=TORCH_AXIS)
@@ -608,7 +612,7 @@ class TestRenderBakeArgs:
 
 
 class TestRenderBakeContexts:
-    def test_contexts_render_target_prefixed_and_cell_matched(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_contexts_render_target_prefixed_and_variant_matched(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         recorder = _prepare(
             monkeypatch,
             tmp_path,

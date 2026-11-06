@@ -189,7 +189,7 @@ def _effective_axis(name: str, builds: dict[str, ServiceBuild], path: tuple[str,
     parent_axes = [_effective_axis(parent, builds, (*path, name)) for parent in build.contexts]
     if len(set(parent_axes)) > 1:
         raise ValueError(
-            f"workloads/{name}/{DOCKERFILE_NAME}: parents ({', '.join(build.contexts)}) disagree on variant cells"
+            f"workloads/{name}/{DOCKERFILE_NAME}: parents ({', '.join(build.contexts)}) disagree on variants"
         )
     if parent_axes:
         if build.axis is not None:

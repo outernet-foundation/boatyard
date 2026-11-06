@@ -319,12 +319,12 @@ class ConfigFile(BaseModel):
             if not values:
                 raise ValueError(f"variants.{axis}: must declare at least one value")
             seen: set[str] = set()
-            for cell in values:
-                if re.fullmatch(r"[a-z0-9][a-z0-9_-]*", cell) is None:
-                    raise ValueError(f"variants.{axis}: value {cell!r} must be a bare lowercase spelling like cuda")
-                if cell in seen:
-                    raise ValueError(f"variants.{axis}: value {cell!r} is declared twice")
-                seen.add(cell)
+            for variant in values:
+                if re.fullmatch(r"[a-z0-9][a-z0-9_-]*", variant) is None:
+                    raise ValueError(f"variants.{axis}: value {variant!r} must be a bare lowercase spelling like cuda")
+                if variant in seen:
+                    raise ValueError(f"variants.{axis}: value {variant!r} is declared twice")
+                seen.add(variant)
         return value
 
     @field_validator("platforms")

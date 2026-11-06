@@ -24,7 +24,9 @@ def build(
     targets: Annotated[
         list[str] | None,
         typer.Option(
-            "--targets", "-t", help="Build these targets: bare names select default cells, name/cell a declared cell."
+            "--targets",
+            "-t",
+            help="Build these targets: bare names select default variants, name/variant a declared variant.",
         ),
     ] = None,
     no_cache: Annotated[bool, typer.Option("--no-cache", help="Force rebuild by disabling cache usage.")] = False,

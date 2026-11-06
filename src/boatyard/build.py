@@ -107,32 +107,26 @@ def run_build(
 
     host = host_platform()
 
-    target_variants = {
-        target: variant for service in config.service_builds.values() for target, variant in service.target_variants
-    }
-
     if targets:
         resolved_targets: list[str] = []
         for address in targets:
             # Resolve each address to a target.
             if "/" in address:
-                service_name, _, cell = address.partition("/")
+                service_name, _, variant = address.partition("/")
                 service = config.service_builds.get(service_name)
                 if service is None:
                     raise typer.BadParameter(
                         f"Unknown target {address!r}. Available: {_address_vocabulary(config.service_builds)}"
                     )
                 if not service.variants:
-                    raise typer.BadParameter(f"{service_name} declares no variant cells")
-                if cell not in service.variants:
+                    raise typer.BadParameter(f"{service_name} declares no variants")
+                if variant not in service.variants:
                     raise typer.BadParameter(
-                        f"Unknown cell {cell!r} for {service_name}; it declares the cells {service.variants}"
+                        f"Unknown variant {variant!r} for {service_name}; it declares the variants {service.variants}"
                     )
-                target = f"{service_name}-{cell}"
+                target = f"{service_name}-{variant}"
             elif address in config.service_builds:
                 target = config.service_builds[address].target_variants[0][0]
-            elif address in target_variants:
-                target = address
             else:
                 raise typer.BadParameter(
                     f"Unknown target {address!r}. Available: {_address_vocabulary(config.service_builds)}"

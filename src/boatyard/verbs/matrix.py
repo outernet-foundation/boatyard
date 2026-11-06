@@ -18,7 +18,7 @@ def docker_build_matrix() -> None:
     if config is None:
         print(json.dumps([]))
         return
-    # Partition the services into dependency closures x variant cells.
+    # Partition the services into dependency closures x variants.
     services = config.service_builds
     parent = {service: service for service in services}
 
@@ -35,14 +35,15 @@ def docker_build_matrix() -> None:
     entries_by_variant: dict[tuple[str | None, str], list[str]] = {}
     for group in sorted(sorted(member_list) for member_list in members.values()):
         for name in group:
-            for target, variant in services[name].target_variants:
-                cell = variant if variant is not None else "common"
-                entries_by_variant.setdefault((services[name].axis, cell), []).append(target)
+            for variant in services[name].variants or [None]:
+                partition = variant if variant is not None else "common"
+                address = f"{name}/{variant}" if variant is not None else name
+                entries_by_variant.setdefault((services[name].axis, partition), []).append(address)
 
     print(
         json.dumps([
-            {"targets": " ".join(sorted(targets)), "variant": cell}
-            for (_axis, cell), targets in sorted(entries_by_variant.items(), key=lambda item: item[0][1])
+            {"targets": " ".join(sorted(addresses)), "variant": partition}
+            for (_axis, partition), addresses in sorted(entries_by_variant.items(), key=lambda item: item[0][1])
         ])
     )
 

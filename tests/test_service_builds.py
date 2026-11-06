@@ -188,12 +188,12 @@ class TestDeriveServices:
         with pytest.raises(ValueError, match="variant-bearing base"):
             _derive(tmp_path, {"TORCH_DEVICE": ["cuda", "rocm"]})
 
-    def test_parents_disagreeing_on_variant_cells_refuse(self, tmp_path: Path) -> None:
+    def test_parents_disagreeing_on_variants_refuse(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "fanned-base", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\nARG TORCH_DEVICE\n")
         write_dockerfile(tmp_path, "plain-base", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n")
         write_dockerfile(tmp_path, "dependent", "FROM fanned-base AS a\nFROM plain-base AS b\n")
 
-        with pytest.raises(ValueError, match="disagree on variant cells"):
+        with pytest.raises(ValueError, match="disagree on variants"):
             _derive(tmp_path, {"TORCH_DEVICE": ["cuda", "rocm"]})
 
     def test_sha_arg_naming_no_service_refuses(self, tmp_path: Path) -> None:

@@ -55,8 +55,8 @@ def test_bases_group_with_their_dependents_per_variant(monkeypatch: Any, tmp_pat
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout) == [
         {"targets": "api postgres", "variant": "common"},
-        {"targets": "localizer-cuda neural-networks-base-cuda reconstructor-cuda", "variant": "cuda"},
-        {"targets": "localizer-rocm neural-networks-base-rocm reconstructor-rocm", "variant": "rocm"},
+        {"targets": "localizer/cuda neural-networks-base/cuda reconstructor/cuda", "variant": "cuda"},
+        {"targets": "localizer/rocm neural-networks-base/rocm reconstructor/rocm", "variant": "rocm"},
     ]
 
 
@@ -77,8 +77,8 @@ def test_declared_values_reach_the_legs_verbatim(monkeypatch: Any, tmp_path: Pat
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout) == [
-        {"targets": "api-cuda", "variant": "cuda"},
-        {"targets": "api-rocm", "variant": "rocm"},
+        {"targets": "api/cuda", "variant": "cuda"},
+        {"targets": "api/rocm", "variant": "rocm"},
     ]
 
 
