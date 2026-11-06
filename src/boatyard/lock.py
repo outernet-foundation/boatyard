@@ -99,7 +99,7 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
         if (
             not upgrade
             and committed_entry is not None
-            and _pinned_to(committed_entry.index, base)
+            and committed_entry.index.startswith(base + "@")
             and set(committed_entry.platforms) == set(config.platforms)
         ):
             images[name] = committed_entry
@@ -154,7 +154,7 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
         committed_chart = committed.charts.get(key)
         if DIGEST_TAIL_PATTERN.search(reference):
             charts[key] = base
-        elif committed_chart is not None and not upgrade and _pinned_to(committed_chart, base):
+        elif committed_chart is not None and not upgrade and committed_chart.startswith(base + "@"):
             charts[key] = committed_chart
         else:
             charts[key] = f"{base}@{resolve_remote_digest(reference)}"
@@ -166,7 +166,11 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
     for name, reference, entry in config.remote_declared_entries():
         key = bundle_lock_key(name)
         committed_bundle = committed.bundles.get(key)
-        frozen = committed_bundle is not None and not upgrade and _pinned_to(committed_bundle.reference, reference)
+        frozen = (
+            committed_bundle is not None
+            and not upgrade
+            and committed_bundle.reference.startswith(reference + "@")
+        )
         if frozen and not entry.routes and not entry.ports:
             bundles[key] = committed_bundle  # pyright: ignore[reportArgumentType]
             continue
@@ -270,7 +274,3 @@ def _child_digest(child: OciDescriptor, subject: str) -> str:
     if not child.digest.startswith("sha256:"):
         raise ValueError(f"{subject}: upstream index child must carry a digest ({child!r})")
     return child.digest
-
-
-def _pinned_to(committed: str | None, reference: str) -> bool:
-    return committed is not None and committed.startswith(reference + "@")
