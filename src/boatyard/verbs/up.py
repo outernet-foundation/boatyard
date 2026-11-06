@@ -70,6 +70,14 @@ def up(
     for service in services:
         name = service.name
 
+        # Include a remote ref as its lock-pinned digest
+        if service.entry.ref is not None and name not in config_values.path_overrides:
+            key = bundle_lock_key(name)
+            pinned = lock.require(key, f"bundle {name!r}")
+            requirements[name] = lock.bundles[key].requires
+            includes.append(f"{OCI_REFERENCE_PREFIX}{pinned}")
+            continue
+
         # Include a local entry through its generated output
         if service.entry.ref is None:
             output = compose_bundle_output_path(config.root, name)
@@ -85,31 +93,23 @@ def up(
             continue
 
         # Include an overridden ref through its local path
-        if name in config_values.path_overrides:
-            candidate = config_values.path_overrides[name]
-            path = (candidate if candidate.is_absolute() else config.root / candidate).resolve()
-            if not path.is_file():
-                raise ValueError(f"path_overrides.{name}: {path.as_posix()} does not exist")
-            text = path.read_text(encoding="utf-8")
-            service_names = refuse_unresolved_references(name, service.routes, service.ports, [text], prefix=f"{name}-")
-            if EDGE_SERVICE_NAME in service_names:
-                raise ValueError(f"{path.as_posix()}: the bundle override defines the reserved service {EDGE_SERVICE_NAME!r}")
-            requirements[name] = sorted(required_compose_holes(text))
-            includes.append(path.as_posix())
-            # Fill the override's holes from the producer repo above the override
-            producer_root = _producer_root(path)
-            producer_config = ConfigFile.load(producer_root / DEFAULT_CONFIG_PATH)
-            producer_entries = LockFile.load(producer_root / LOCK_PATH, producer_config).manifest_references(
-                config_values.platform
-            )
-            entries.update({lock_key_prefix(name) + key: value for key, value in producer_entries.items()})
-            continue
-
-        # Include a remote ref as its lock-pinned digest
-        key = bundle_lock_key(name)
-        pinned = lock.require(key, f"bundle {name!r}")
-        requirements[name] = lock.bundles[key].requires
-        includes.append(f"{OCI_REFERENCE_PREFIX}{pinned}")
+        candidate = config_values.path_overrides[name]
+        path = (candidate if candidate.is_absolute() else config.root / candidate).resolve()
+        if not path.is_file():
+            raise ValueError(f"path_overrides.{name}: {path.as_posix()} does not exist")
+        text = path.read_text(encoding="utf-8")
+        service_names = refuse_unresolved_references(name, service.routes, service.ports, [text], prefix=f"{name}-")
+        if EDGE_SERVICE_NAME in service_names:
+            raise ValueError(f"{path.as_posix()}: the bundle override defines the reserved service {EDGE_SERVICE_NAME!r}")
+        requirements[name] = sorted(required_compose_holes(text))
+        includes.append(path.as_posix())
+        # Fill the override's holes from the producer repo above the override
+        producer_root = _producer_root(path)
+        producer_config = ConfigFile.load(producer_root / DEFAULT_CONFIG_PATH)
+        producer_entries = LockFile.load(producer_root / LOCK_PATH, producer_config).manifest_references(
+            config_values.platform
+        )
+        entries.update({lock_key_prefix(name) + key: value for key, value in producer_entries.items()})
 
     # Refuse bundles whose requirements no environment source fills; the ambient
     # shell fills nothing, so a shell-set hole name is named as ignored, not counted.
