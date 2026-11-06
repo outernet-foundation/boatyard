@@ -1,16 +1,8 @@
 from __future__ import annotations
 
 import shlex
-from collections.abc import Generator, Iterable, Mapping
-from contextlib import contextmanager
+from collections.abc import Iterable
 from pathlib import Path
-
-from boatyard.paths import VALUES_FILE
-
-
-def require_env_file(root: Path) -> None:
-    if not (root / VALUES_FILE).exists():
-        raise ValueError(f"{VALUES_FILE.as_posix()} is required")
 
 
 def compose_command(
@@ -30,21 +22,3 @@ def compose_command(
     if scrub:
         prefix = f"env{scrub} " + prefix
     return " ".join([prefix, *quoted_arguments])
-
-
-def render_env_entries(entries: Mapping[str, str]) -> str:
-    # Render the entries as sorted dotenv lines.
-    return "".join(f"{name}={reference}\n" for name, reference in sorted(entries.items()))
-
-
-@contextmanager
-def lock_env_unwind(path: Path) -> Generator[None]:
-    # Keep the env file on failure (path line only — its contents may carry
-    # secrets), unlink it on success.
-    try:
-        yield
-    except BaseException:
-        print(f"env file kept for inspection: {path}")
-        raise
-
-    path.unlink(missing_ok=True)

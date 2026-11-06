@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import os
-from contextlib import ExitStack
+from collections.abc import Generator, Mapping
+from contextlib import ExitStack, contextmanager
 from itertools import groupby
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -12,7 +13,7 @@ import yaml
 from bashrun.bash import bash_handoff
 
 from boatyard.bake import run_build
-from boatyard.compose import compose_command, lock_env_unwind, render_env_entries, require_env_file
+from boatyard.compose import compose_command
 from boatyard.config.config import (
     CADDY_IMAGE,
     ConfigFile,
@@ -263,3 +264,26 @@ def up(
             up_command += " -d"
 
         bash_handoff(up_command)
+
+
+def require_env_file(root: Path) -> None:
+    # Refuse a consumer repo missing the typed values file
+    if not (root / VALUES_FILE).exists():
+        raise ValueError(f"{VALUES_FILE.as_posix()} is required")
+
+
+def render_env_entries(entries: Mapping[str, str]) -> str:
+    # Render the entries as sorted dotenv lines
+    return "".join(f"{name}={reference}\n" for name, reference in sorted(entries.items()))
+
+
+@contextmanager
+def lock_env_unwind(path: Path) -> Generator[None]:
+    # Keep the env file on failure echoing only its path, since contents may carry secrets, and unlink it on success
+    try:
+        yield
+    except BaseException:
+        print(f"env file kept for inspection: {path}")
+        raise
+
+    path.unlink(missing_ok=True)
