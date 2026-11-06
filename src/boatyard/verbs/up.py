@@ -46,7 +46,7 @@ def up(
     ] = False,
     build: Annotated[
         bool,
-        typer.Option("--build", help="Build all images locally before bringing the stack up; skips pulling"),
+        typer.Option("--build", help="Build all images locally before bringing the stack up"),
     ] = False,
 ) -> None:
     # Load the config and the typed machine values from the working directory
@@ -246,10 +246,12 @@ def up(
             run_build(config=config)
 
         # Hand off to docker compose
+        arguments = ["--pull", "missing", *(["--quiet-pull"] if quiet_pull else []), *(["-d"] if not attached else [])]
         up_command = compose_command(
             root,
             compose_files,
             "up",
+            *arguments,
             env_file=env_file,
             slot_names=[
                 *config_values.variables,
@@ -257,12 +259,6 @@ def up(
                 *(name for required in requirements.values() for name in required),
             ],
         )
-        if not build:
-            up_command += " --pull missing"
-            if quiet_pull:
-                up_command += " --quiet-pull"
-        if not attached:
-            up_command += " -d"
 
         bash_handoff(up_command)
 
