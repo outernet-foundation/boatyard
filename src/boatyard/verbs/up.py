@@ -160,10 +160,10 @@ def up(
         for port in service.ports
     ]
 
-    # Render the edge and its Caddyfile when a route rides
+    # Render the edge and its Caddyfile when a gateway is declared
     document_services: dict[str, Yaml] = {}
     caddyfile: str | None = None
-    if routes:
+    if config.gateway is not None:
         edge: dict[str, Yaml] = {
             "image": f"${{{CADDY_IMAGE}:?err}}",
             "configs": [{"source": EDGE_CONFIG_NAME, "target": "/etc/caddy/Caddyfile"}],

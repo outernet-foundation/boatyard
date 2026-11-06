@@ -830,7 +830,6 @@ class TestQualifiedVocabulary:
             "requires": ">=0.1",
             "repository": "ghcr.io/org/repo",
             "project_name": "example",
-            "gateway": "8080",
             "services": services,
         }
 
@@ -1041,32 +1040,29 @@ class TestRoutes:
 
 
 class TestGatewayKey:
-    def test_routes_without_the_caddy_base_image_refuses(self, tmp_path: Path) -> None:
+    def test_a_gateway_without_the_caddy_base_image_refuses(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,
             {
                 "requires": ">=0.1",
                 "project_name": "example",
                 "gateway": "8443",
-                "services": {
-                    "livekit": {
-                        "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
-                        "routes": [{"path": "/*", "upstream": "livekit:8000"}],
-                    }
-                },
+                "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG}},
             },
         )
 
         with pytest.raises(ValueError, match="CADDY_IMAGE"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
-    def test_a_routeless_stack_carries_an_inert_gateway(self, tmp_path: Path) -> None:
+    def test_a_routeless_gateway_with_caddy_loads(self, tmp_path: Path) -> None:
         write_lock(tmp_path, bundles=bundle_entries("livekit"))
         write_config(
             tmp_path,
             {
                 "requires": ">=0.1",
                 "project_name": "example",
+                "platforms": ["linux/amd64"],
+                "base_images": {"CADDY_IMAGE": "docker.io/library/caddy:2.8.4-alpine"},
                 "gateway": "8080",
                 "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG}},
             },
@@ -1249,7 +1245,6 @@ class TestRepository:
                 "requires": ">=0.1",
                 "repository": "ghcr.io/org/repo",
                 "project_name": "example",
-                "gateway": "8080",
                 "services": {"rathole-client": {"workloads": ["rathole-client.yaml"]}},
             },
         )
@@ -1338,7 +1333,6 @@ class TestLockPairing:
             tmp_path,
             {
                 "requires": ">=0.1",
-                "gateway": "8080",
                 "services": {"livekit": {"ref": "oci://ghcr.io/x/y:" + SHA_TAG}},
                 "project_name": "example",
             },
@@ -1354,7 +1348,6 @@ class TestLockPairing:
             {
                 "requires": ">=0.1",
                 "repository": "ghcr.io/org/repo",
-                "gateway": "8080",
                 "services": {"core": {"workloads": ["api.yaml"]}},
                 "project_name": "example",
             },

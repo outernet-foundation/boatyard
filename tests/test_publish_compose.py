@@ -28,8 +28,6 @@ def _write_config(root: Path, sections: dict[str, Any] | None = None) -> None:
     payload: dict[str, Any] = {"requires": ">=0.0", "project_name": "demo"}
     if sections is not None:
         payload.update(sections)
-    if "services" in payload and "gateway" not in payload:
-        payload["gateway"] = "8080"
     (root / "boatyard.yml").write_text(
         yaml.safe_dump(payload, default_flow_style=False, sort_keys=False), encoding="utf-8"
     )

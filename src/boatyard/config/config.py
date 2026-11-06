@@ -226,11 +226,10 @@ class ConfigFile(BaseModel):
             or (isinstance(entry, ServiceGroup) and any(option.routes for option in entry.options.values()))
             for entry in self.services.values()
         )
-        if declares_routes:
-            if self.gateway is None:
-                raise ValueError("routes are declared; gateway is required")
-            if CADDY_IMAGE not in self.base_images:
-                raise ValueError("routes are declared; base_images must declare CADDY_IMAGE")
+        if declares_routes and self.gateway is None:
+            raise ValueError("routes are declared; gateway is required")
+        if self.gateway is not None and CADDY_IMAGE not in self.base_images:
+            raise ValueError("gateway is declared; base_images must declare CADDY_IMAGE")
         for chart in declared_charts:
             values = root / self.score_dir / "k8s" / "values" / f"{chart}.yaml"
             if not values.is_file():

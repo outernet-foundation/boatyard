@@ -51,12 +51,15 @@ def pinned_compose(tmp_path_factory: pytest.TempPathFactory) -> str:
     return str(binary)
 
 
-def _write_config(root: Path, sections: dict[str, object] | None = None) -> None:
-    payload: dict[str, object] = {"requires": ">=0.0", "project_name": "demo"}
+def _write_config(root: Path, sections: dict[str, Any] | None = None) -> None:
+    payload: dict[str, Any] = {"requires": ">=0.0", "project_name": "demo"}
     if sections is not None:
         payload.update(sections)
     if "services" in payload and "gateway" not in payload:
         payload["gateway"] = "8080"
+    if payload.get("gateway") is not None:
+        payload.setdefault("platforms", ["linux/amd64"])
+        payload["base_images"] = {"CADDY_IMAGE": "docker.io/library/caddy:2.8.4-alpine", **payload.get("base_images", {})}
     (root / "boatyard.yml").write_text(
         yaml.safe_dump(payload, default_flow_style=False, sort_keys=False), encoding="utf-8"
     )
@@ -88,13 +91,10 @@ def _write_lock(
     bundles: dict[str, str] | None = None,
 ) -> None:
     # Write one platform-manifest reference per declared platform beside the index.
-    declared = (
-        entries
-        if entries is not None
-        else {
-            "CADDY_IMAGE": MIRROR_PREFIX + "/docker.io/library/caddy:2.8.4-alpine@" + FAKE_DIGEST,
-        }
-    )
+    declared = {
+        "CADDY_IMAGE": MIRROR_PREFIX + "/docker.io/library/caddy:2.8.4-alpine@" + FAKE_DIGEST,
+        **(entries or {}),
+    }
     platforms = platform_entries if platform_entries is not None else {"linux/amd64": ""}
     document: dict[str, object] = {
         "platforms": list(platforms),
@@ -225,16 +225,15 @@ def _write_override_consumer(
         "repository": "ghcr.io/org/demo",
         "services": services,
     }
-    resolved_platforms = platforms if platforms is not None else (["linux/amd64"] if images else None)
-    if resolved_platforms is not None:
-        payload["platforms"] = resolved_platforms
+    resolved_platforms = platforms if platforms is not None else ["linux/amd64"]
+    payload["platforms"] = resolved_platforms
     if images:
         payload["base_images"] = dict.fromkeys(images, "docker.io/library/alpine:3.20")
     _write_config(root, payload)
     _write_lock(
         root,
         entries=dict(images),
-        platform_entries=dict.fromkeys(resolved_platforms or [], ""),
+        platform_entries=dict.fromkeys(resolved_platforms, ""),
     )
     _write_values_file(root, {"bundles": ["placeframe-cuda"], **(values or {})})
 
@@ -453,7 +452,7 @@ class TestSelectionLaw:
         [document] = recorder.documents
         assert document["include"] == ["oci://" + LIVEKIT_PINNED]
 
-    def test_an_options_only_repo_with_an_empty_selection_hands_compose_a_name_only_root(
+    def test_an_options_only_repo_with_an_empty_selection_hands_compose_an_edge_only_root(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         _write_config(
@@ -487,7 +486,13 @@ class TestSelectionLaw:
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        assert recorder.documents == [{"name": "demo"}]
+        [document] = recorder.documents
+        assert document["name"] == "demo"
+        assert list(document) == ["name", "services", "configs"]
+        assert document["services"]["edge"]["ports"] == [
+            {"target": "8443", "published": "8080", "protocol": "tcp"}
+        ]
+        assert document["configs"]["devkit-edge-caddyfile"]["content"] == ":8443 {\n}\n"
 
     def test_unknown_name_refuses_listing_the_vocabulary(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._invoke_up(tmp_path, monkeypatch, bundles="placeframe-cuda,ghost")
@@ -632,7 +637,17 @@ class TestUpMaterialization:
 
     def test_the_edge_refuses_without_the_caddy_lock_entry(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_consumer_tree(tmp_path)
-        _write_lock(tmp_path, entries={"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST})
+        tmp_path.joinpath(*LOCK_PATH.parts).write_text(
+            yaml.safe_dump({
+                "platforms": ["linux/amd64"],
+                "images": {},
+                "bundles": {
+                    "AUTH_KEYCLOAK_BUNDLE": {"reference": KEYCLOAK_PINNED},
+                    "LIVEKIT_BUNDLE": {"reference": LIVEKIT_PINNED},
+                },
+            }),
+            encoding="utf-8",
+        )
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -977,6 +992,7 @@ class TestLockRequirement:
             {
                 "project_name": "demo",
                 "repository": "ghcr.io/org/demo",
+                "gateway": None,
                 "services": {"apps": {"options": {"core": {"workloads": ["api.yaml"]}}}},
             },
         )
@@ -1018,7 +1034,7 @@ class TestLockEnvSynthesis:
 
         assert result.exit_code == 0, result.output
         [content] = recorder.env_contents
-        assert content == f"# boatyard.lock.yml\nALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
+        assert content == f"# boatyard.lock.yml\nALPINE_IMAGE={self.ALPINE_MANIFEST}\nCADDY_IMAGE={self.ALPINE_MANIFEST}\n"
 
     def test_a_selected_local_entry_reads_its_lock_keys_under_the_entry_prefix(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1044,7 +1060,7 @@ class TestLockEnvSynthesis:
         assert result.exit_code == 0, result.output
         [content] = recorder.env_contents
         assert content == (
-            f"# boatyard.lock.yml\nALPINE_IMAGE={self.ALPINE_MANIFEST}\nAPPS_CORE_ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
+            f"# boatyard.lock.yml\nALPINE_IMAGE={self.ALPINE_MANIFEST}\nAPPS_CORE_ALPINE_IMAGE={self.ALPINE_MANIFEST}\nAPPS_CORE_CADDY_IMAGE={self.ALPINE_MANIFEST}\nCADDY_IMAGE={self.ALPINE_MANIFEST}\n"
         )
 
     def test_two_consecutive_syntheses_are_byte_identical(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -1084,7 +1100,7 @@ class TestLockEnvSynthesis:
         result = self._invoke_up_with_lock(tmp_path, monkeypatch, recorder)
 
         assert result.exit_code == 0, result.output
-        assert recorder.env_contents[0] == f"# boatyard.lock.yml\nALPINE_IMAGE={arm64_manifest}\n"
+        assert recorder.env_contents[0] == f"# boatyard.lock.yml\nALPINE_IMAGE={arm64_manifest}\nCADDY_IMAGE={arm64_manifest}\n"
 
     def test_a_multi_platform_repo_without_a_selection_refuses_listing_declared(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1144,7 +1160,7 @@ class TestLockEnvSynthesis:
         assert len(kept) == 1
         assert kept[0].read_text(encoding="utf-8") == (
             f"# boatyard.values.yaml\nSECRET_TOKEN=supersecret\n"
-            f"# boatyard.lock.yml\nALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
+            f"# boatyard.lock.yml\nALPINE_IMAGE={self.ALPINE_MANIFEST}\nCADDY_IMAGE={self.ALPINE_MANIFEST}\n"
         )
         assert "supersecret" not in result.output
 
@@ -1215,13 +1231,14 @@ class TestBundleOverrides:
         assert document["include"] == [output.resolve().as_posix()]
         assert [_normalize(command, consumer) for command in recorder.commands] == [
             (
-                "env -u PLACEFRAME_CUDA_ALPINE_IMAGE -u PLACEFRAME_CUDA_LOKI_IMAGE "
+                "env -u CADDY_IMAGE -u PLACEFRAME_CUDA_ALPINE_IMAGE -u PLACEFRAME_CUDA_LOKI_IMAGE "
                 "docker compose -f ASSEMBLY --project-directory ROOT --env-file LOCKENV up --pull missing -d"
             )
         ]
         assert recorder.env_contents == [
             (
                 "# boatyard.lock.yml\n"
+                f"CADDY_IMAGE={MIRROR_PREFIX}/docker.io/library/caddy:2.8.4-alpine@{FAKE_DIGEST}\n"
                 f"PLACEFRAME_CUDA_ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
                 f"PLACEFRAME_CUDA_LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
             )
@@ -1248,6 +1265,7 @@ class TestBundleOverrides:
             (
                 "# boatyard.lock.yml\n"
                 f"ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{CONSUMER_ALPINE_DIGEST}\n"
+                f"CADDY_IMAGE={MIRROR_PREFIX}/docker.io/library/caddy:2.8.4-alpine@{FAKE_DIGEST}\n"
                 f"PLACEFRAME_CUDA_ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
                 f"PLACEFRAME_CUDA_LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
             )
@@ -1260,6 +1278,7 @@ class TestBundleOverrides:
         _write_override_consumer(
             consumer,
             {"path_overrides": {"placeframe-cuda": OVERRIDE_PATH}, "platform": "linux/arm64"},
+            platforms=["linux/amd64", "linux/arm64"],
         )
         recorder = self._invoke_up(monkeypatch, consumer)
 
@@ -1269,6 +1288,7 @@ class TestBundleOverrides:
         assert recorder.env_contents == [
             (
                 "# boatyard.lock.yml\n"
+                f"CADDY_IMAGE={MIRROR_PREFIX}/docker.io/library/caddy:2.8.4-alpine@{FAKE_DIGEST}\n"
                 f"PLACEFRAME_CUDA_ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
                 f"PLACEFRAME_CUDA_LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_ARM64_DIGEST}\n"
             )
@@ -1374,6 +1394,7 @@ class TestBundleOverrides:
         assert recorder.env_contents == [
             (
                 "# boatyard.lock.yml\n"
+                f"CADDY_IMAGE={MIRROR_PREFIX}/docker.io/library/caddy:2.8.4-alpine@{FAKE_DIGEST}\n"
                 f"PLACEFRAME_CUDA_ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
                 f"PLACEFRAME_CUDA_LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
             )
