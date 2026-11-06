@@ -25,7 +25,8 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
   `publish.py` publish preparation; `crane.py` pinned crane installer; `verbs/up.py` selection + rendering inlined in `up`; `verbs/*` one module per command. Model modules run root → leaves: root record first
   (`RootModel` subscripts quote forward refs; the one inversion is a parent whose field default constructs the child), functions callers-before-callees; imports absolute; `dockerfiles` ← `config/config` ← `config/lock` ← `lock` one-way. Also in `config/config.py` (the shared leaf): `Yaml`,
   `is_mapping`/`is_list`, `double_dollars` (the one `$`-doubling home), `PLACEHOLDER`/`COMPOSE_HOLE`/`ENV_NAME_PATTERN`, `EDGE_SERVICE_NAME`, `lock_key_prefix`, `chart_lock_key`, `bundle_lock_key`,
-  `compose_bundle_output_path` (the one compose-output path join), `qualified_option_name` (the one qualified-name join), `required_compose_holes` (the odd-parity hole scan), `refuse_unresolved_references`
+  `compose_bundle_output_path` (the one compose-output path join), `qualified_option_name` (the one qualified-name join), `required_compose_holes` (the odd-parity hole scan), `compose_service_names`
+  (the services-key scan over compose texts), `refuse_unresolved_references`
   (the shared route/port refusal; `prefix` composes the `{entry}-` namespace).
 
 ## ConfigFile schema
