@@ -36,7 +36,7 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
 - `base_images`: ALL_CAPS keys become build args; upstream-native `path:tag`/`path@digest` values; `{uv}`/`{python}` templates over toolchain pins (`{uv}` from `tool.uv.required-version`, exact `==` pin only; `{python}` from
   `.python-version`); a literal value in place of a template = the deliberate-skew escape hatch.
 - `variants`: ALL_CAPS axis → bare lowercase values, first = the default cell; declared, never probed. `platforms` required exactly when `base_images` is; charts arch-neutral, exempt.
-- `project_name` required iff `services`; `gateway` is optional until any route is declared (entry, group, or option) — then load refuses without it.
+- `project_name` required on every config; `gateway` is optional until any route is declared (entry, group, or option) — then load refuses without it.
 - `services`: groups (`options:` mutually exclusive) + bare riding entries; every entry/option is `ref:` (tag-pinned OCI include — digest/`latest`/range spellings refuse at load; any published channel spelling pins) or `workloads:`/`vars:`; workload references are flat `*.yaml` names (both sections; `metadata.name` pins on stems); an option's name outside its group is its
   qualified `group-dash-option` name; the vocabulary (qualified + bare spellings) refuses duplicates at load; `auth` reserved — options declare exactly one route; routes `/`-rooted, edge-wide unique, `strip_prefix` requires a wildcard; ports use the mapping form (service, published, target).
 - `k8s`: `workloads`, `vars`, `charts` name → `oci://…:tag|@digest`; the map key IS the `{NAME}_CHART` lock key; a section declaring neither workloads nor charts refuses.
@@ -110,7 +110,7 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
   keeps with a path-line-only echo (`lock_env_unwind` — its contents may carry secrets); `up` writes ONE per-run dotenv inline (`render_env_entries` from `verbs/up.py`): values then lock entries under `#` source headers; a key in both refuses loudly (the lock is its only source); `up` fills it from the consumer's lock bare (the root document's slots) plus a fan under every selected local entry's prefix, and each path-override producer's lock under the overridden entry's prefix (producer
   pins win; empty entries attach none — a bundles-only lock carries nothing compose consumes);
   `compose_command` = the one docker compose invocation spelling, prefixed `env -u K1 -u K2 …` (sorted) when `slot_names` is non-empty — the scrub defeating compose's shell-beats-env-file precedence; `up` passes values ∪ lock entries ∪ requirement names; `down` reads no values file, no lock, no selection — a name-only root + `--remove-orphans` removes
-  every container the project ever created; a config-less or `services:`-less repo refuses loudly on both verbs.
+  every container the project ever created; a config-less repo refuses at load and a `services:`-less repo refuses on `up` only.
 
 ## Build
 
