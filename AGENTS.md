@@ -24,8 +24,8 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
   `compose_command` (both verbs) + the up-only `require_env_file`/`lock_env_unwind`; `bake.py` build pipeline; `markers.py` marker resolution; `score.py` score shared base; `score_compose.py`/`score_k8s.py` rendering pipelines; `verbs/score.py` the score verb + `ensure_tools`;
   `publish.py` publish preparation; `crane.py` pinned crane installer; `verbs/up.py` selection + rendering inlined in `up`; `verbs/*` one module per command. Model modules run root → leaves: root record first
   (`RootModel` subscripts quote forward refs; the one inversion is a parent whose field default constructs the child), functions callers-before-callees; imports absolute; `dockerfiles` ← `config/config` ← `config/lock` ← `lock` one-way. Also in `config/config.py` (the shared leaf): `Yaml`,
-  `is_mapping`/`is_list`, `double_dollars` (the one `$`-doubling home), `PLACEHOLDER`/`COMPOSE_HOLE`/`ENV_NAME_PATTERN`, `EDGE_SERVICE_NAME`, `lock_key_prefix`, `chart_lock_key`, `bundle_lock_key`,
-  `compose_bundle_output_path` (the one compose-output path join), `qualified_option_name` (the one qualified-name join), `required_compose_holes` (the odd-parity hole scan over compose texts), `scan_bundle_texts`
+  `is_mapping`/`is_list`, `double_dollars` (the one `$`-doubling home), `PLACEHOLDER`/`COMPOSE_SLOT`/`ENV_NAME_PATTERN`, `EDGE_SERVICE_NAME`, `lock_key_prefix`, `chart_lock_key`, `bundle_lock_key`,
+  `compose_bundle_output_path` (the one compose-output path join), `qualified_option_name` (the one qualified-name join), `required_compose_slots` (the odd-parity slot scan over compose texts), `scan_bundle_texts`
   (the refuse-then-requires wrapper answering `BundleScan`), `refuse_unresolved_references`
   (the shared route/port refusal over compose texts; answers the services keys; `prefix` composes the `{entry}-` namespace).
 
@@ -46,7 +46,7 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
 - `mirrored_ref(reference, prefix)` = the only prefix join — injects the prefix, rejects an already-prefixed reference.
 - Derivation shape law: `ConfigFile` carries authored data and validation; a member may hold real derivation logic (`local_service_entries`, `declared_charts`, `resolve_services`), but a member that only delegates to another module's function is a
   pass-through — call the function at the consumer, `compute_service_shas` module-qualified (test seam); `root` defaults to the working directory, `resolve` injects the load root, excluded, never-authored.
-- `boatyard.values.yaml` (consumer root, gitignored) is the only machine-values source — the ambient shell fills nothing; `up` refuses without it (`require_env_file`), score generation and `down` run without it (`score_compose` reads `platform` as `None` on fresh checkouts). `ValuesFile.load(path, config)` hands the raw document to `model_validate` — the selection fold into `choices`, the selection refusals, and the path-override vocabulary/ref-entry refusals ride pydantic validators, with `ConfigFile` arriving via validation context. Typed fields (`bundles` list, `path_overrides` map keyed by qualified name, `public_url`, `platform`) carve the consumed spellings; every other key is a hole value on the open `variables` map (ALL_CAPS enforced — `ENV_NAME_PATTERN`). Path-override refusals (empty, URL-scheme, non-`stack/generated/compose/` layout) and the scheme-less `public_url` refusal are pydantic `ValidationError`s at parse; paths resolve in `up` against the repo root.
+- `boatyard.values.yaml` (consumer root, gitignored) is the only machine-values source — the ambient shell fills nothing; `up` refuses without it (`require_env_file`), score generation and `down` run without it (`score_compose` reads `platform` as `None` on fresh checkouts). `ValuesFile.load(path, config)` hands the raw document to `model_validate` — the selection fold into `choices`, the selection refusals, and the path-override vocabulary/ref-entry refusals ride pydantic validators, with `ConfigFile` arriving via validation context. Typed fields (`bundles` list, `path_overrides` map keyed by qualified name, `public_url`, `platform`) carve the consumed spellings; every other key is a slot value on the open `variables` map (ALL_CAPS enforced — `ENV_NAME_PATTERN`). Path-override refusals (empty, URL-scheme, non-`stack/generated/compose/` layout) and the scheme-less `public_url` refusal are pydantic `ValidationError`s at parse; paths resolve in `up` against the repo root.
 
 ## Service derivation
 
@@ -58,7 +58,7 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
 ## Lock
 
 - Format: top-level `platforms:` records the platform set the lock resolved for; `images:` name → `{index, platforms: {os/arch: reference}}` with every entry's platform keys equal to the top-level set; `charts:` name → flat digest-pinned reference; `bundles:` name → `{reference, requires}` — digest-pinned reference plus the
-  bundle's odd-parity `${NAME}` holes minus `:-`-defaulted ones, recorded at fresh resolution and recomputed from the pinned
+  bundle's odd-parity `${NAME}` slots minus `:-`-defaulted ones, recorded at fresh resolution and recomputed from the pinned
   artifact while the digest freezes (identical by content-addressing); `bundles:` keys are `{QUALIFIED_NAME}_BUNDLE` (qualified selection name upper-cased + `_BUNDLE`; a bare entry is its own name), arch-neutral; written only by the `lock` verb and
   `build`'s incremental freeze (`relock` inline), over declared names only — built-image digests are unrepresentable, orphans prune by construction; never hand-authored.
 - `LockFile.load(path, config)` = the only parser consumers use — config rides validation context (the `ValuesFile.load` precedent) and a missing lock reads as the empty lock paired against the config (`score` pre-gates with its own lock-required refusal); schema-only refusals fire on every parse (duplicate keys refuse naming the line; non-digest-pinned entries, cross-section name collisions reject; malformed or non-mapping documents surface raw pydantic/pyyaml errors; empty lock legal); the context-gated pairing validators refuse wholesale staleness naming the lock verb: recorded platforms ≠ `config.platforms`, an image entry's platform keys ≠ the top-level set, base_images/charts keys the lock lacks (coverage — bundles exempt, path overrides skip their entry), lock names the config no longer declares (orphans).
@@ -96,21 +96,21 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
   merges parent ports into included services and honors `!reset` — the merge needs compose ≥ 2.40.
 - Namespacing law: score renders every bundle resource under `{entry}-` (services, configs keys) on a per-bundle network carrying the bare name as a service alias — include collisions are structurally impossible,
   rendered hostnames still resolve, and accidental cross-bundle DNS fails instead of silently resolving: a bundle references only its own services; cross-bundle coupling rides the consumer's declared surface
-  (env holes, route upstreams). `up` composes `{entry}-` onto authored route upstreams and port owners; `boatyard.yml` stays bare. Local-output lock-key holes (the lock's key set draws the line)
-  rewrite under `lock_key_prefix(entry)` in the same spelling (`{ENTRY}_ALPINE_IMAGE`-style); consumer-surface holes (edge image, gateway/ports, secrets, consumer-interpolated files) stay bare; publish fans
+  (env slots, route upstreams). `up` composes `{entry}-` onto authored route upstreams and port owners; `boatyard.yml` stays bare. Local-output lock-key slots (the lock's key set draws the line)
+  rewrite under `lock_key_prefix(entry)` in the same spelling (`{ENTRY}_ALPINE_IMAGE`-style); consumer-surface slots (edge image, gateway/ports, secrets, consumer-interpolated files) stay bare; publish fans
   its bake substitution keys with the prefix mechanically.
 - Validation teeth: relock reads every declared bundle's content inline (the compose files ride as inline base64 layer data in `crane manifest`, `crane blob` the
   fallback) and refuses any namespaced `{entry}-` route upstream or port owner that resolves to no service in the bundle; `up` applies the same refusal to local outputs and path overrides by scanning the local
   file; `up` refuses a selected bundle whose recorded `requires` no environment source fills (boatyard.values.yaml or the
-  lock env file; lock-key holes are satisfied by construction; a shell-set unfilled name gains a "set in the shell and ignored" clause); a selected bundle output that does not exist refuses naming generate-score; `up` never invokes `docker compose config`.
-- Edge stanza: `image: ${CADDY_IMAGE:?err}` (the lock hole; the config-declared key is coverage-guaranteed in the lock), the Caddyfile configs entry, `gateway:` as published port, `FORWARDED_PROTO`/`FORWARDED_PORT` derived from `public_url` under a selected auth option (refusing when absent); the
+  lock env file; lock-key slots are satisfied by construction; a shell-set unfilled name gains a "set in the shell and ignored" clause); a selected bundle output that does not exist refuses naming generate-score; `up` never invokes `docker compose config`.
+- Edge stanza: `image: ${CADDY_IMAGE:?err}` (the lock slot; the config-declared key is coverage-guaranteed in the lock), the Caddyfile configs entry, `gateway:` as published port, `FORWARDED_PROTO`/`FORWARDED_PORT` derived from `public_url` under a selected auth option (refusing when absent); the
   edge does no token validation — re-protection is a bundle-shipped oauth2-proxy sidecar treaty; the service name `edge` is reserved.
 - Caddyfile: one site on internal `:8443`; `handle` blocks mutually exclusive (caddy sorts longest-path-first, declaration order cannot shadow); `handle_path` for `strip_prefix`; `header_up X-Forwarded-*` only on the auth route; `raw:`
   content rides verbatim (escape hatch, review flag); the whole file rides inline as `configs.content` with every `$` doubled.
 - Per-run files: lifetimes ride the caller-owned `ExitStack`, never an exception handler; the handoff execs — a successful run never unwinds, the files ride out in the OS temp dir; on failure the compose files unlink, the env file
-  keeps with a path-line-only echo (`lock_env_unwind` — its contents may carry secrets); `up` writes ONE per-run dotenv inline (`render_env_entries` from `lock.py`): values then lock entries under `#` source headers; a key in both refuses loudly (the lock is its only source); `up` fills it from the consumer's lock bare (the root document's holes) plus a fan under every selected local entry's prefix, and each path-override producer's lock under the overridden entry's prefix (producer
+  keeps with a path-line-only echo (`lock_env_unwind` — its contents may carry secrets); `up` writes ONE per-run dotenv inline (`render_env_entries` from `lock.py`): values then lock entries under `#` source headers; a key in both refuses loudly (the lock is its only source); `up` fills it from the consumer's lock bare (the root document's slots) plus a fan under every selected local entry's prefix, and each path-override producer's lock under the overridden entry's prefix (producer
   pins win; empty entries attach none — a bundles-only lock carries nothing compose consumes);
-  `compose_command` = the one docker compose invocation spelling, prefixed `env -u K1 -u K2 …` (sorted) when `hole_names` is non-empty — the scrub defeating compose's shell-beats-env-file precedence; `up` passes values ∪ lock entries ∪ requirement names; `down` reads no values file, no lock, no selection — a name-only root + `--remove-orphans` removes
+  `compose_command` = the one docker compose invocation spelling, prefixed `env -u K1 -u K2 …` (sorted) when `slot_names` is non-empty — the scrub defeating compose's shell-beats-env-file precedence; `up` passes values ∪ lock entries ∪ requirement names; `down` reads no values file, no lock, no selection — a name-only root + `--remove-orphans` removes
   every container the project ever created; a config-less or `services:`-less repo refuses loudly on both verbs.
 
 ## Build
@@ -139,7 +139,7 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
   exclusive.
 - Post-passes on compose output are typed transformations on `ComposeDocument`, dumped exactly once — pydantic's declared-fields-first order is the artifacts' deterministic key order: a workload-major pass collapses `{workload}-{container}` services to the container name and inlines every `type: bind` volume as a top-level
   `configs.content` entry — zero host-filesystem references in committed artifacts; the `$`-doubling exception rides the owning workload's consumer-interpolated declaration; workload-less services ride through under
-  their rendered names; the barrier pins the `ALPINE_IMAGE` lock hole, namespacing like every service (`{entry}-wait-for-resources`, `depends_on` rewritten per rendered dependency) and every lock-key hole under the
+  their rendered names; the barrier pins the `ALPINE_IMAGE` lock slot, namespacing like every service (`{entry}-wait-for-resources`, `depends_on` rewritten per rendered dependency) and every lock-key slot under the
   entry prefix; each collapsed service name is
   claimed once (collision loud); the `{entry}-` namespace pass covers services, configs keys, and the per-bundle network with bare aliases.
 - The image lock is required and non-empty; the compose target requires the `ALPINE_IMAGE` entry.
@@ -152,23 +152,23 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
 - Compilation resolves include markers, then lock markers, both before validation; the compiled form lives in a per-run tempdir under `score_dir`, never the committed tree; `--provisioners` paths stay POSIX-relative;
   authored key order controls dump order at every level; comments are dropped; registration derives by resource-type closure in sorted-filename order;
   orphan provisioner files silently no-ship.
-- Marker grammar: a single-key mapping (authored sources stay plain-YAML-parseable); `include:` inserts bytes verbatim, `include-yaml:` inserts parsed structure; neither transforms content (`${VAR}` holes pass through; `$`-handling is
+- Marker grammar: a single-key mapping (authored sources stay plain-YAML-parseable); `include:` inserts bytes verbatim, `include-yaml:` inserts parsed structure; neither transforms content (`${VAR}` slots pass through; `$`-handling is
   per-consumer); paths anchor at the repo root — absolute paths, `..` escapes, missing files, cycles = loud errors; text content is never scanned for markers; `lock: NAME`/`lock-image: NAME` substitute the full reference /
-  registry/repository/tag/digest (grafana's `digest_field: sha`), scoped to provisioner compiles and chart values (k8s provisioners have no env file); workloads use `${NAME}` holes; a literal `image:` (no `${`/`{{`
-  hole) refuses at every marker resolution — provisioner compiles and every chart values file, markers or not — and at the workload lens.
+  registry/repository/tag/digest (grafana's `digest_field: sha`), scoped to provisioner compiles and chart values (k8s provisioners have no env file); workloads use `${NAME}` slots; a literal `image:` (no `${`/`{{`
+  slot) refuses at every marker resolution — provisioner compiles and every chart values file, markers or not — and at the workload lens.
 
 ## Secrets
 
 - `stack/secrets.yaml` is required (missing refuses at generate-score; an empty file = the empty declaration) — `KEY: description` or `KEY: {description, mint: true}` (string specs coerce; keys ALL_CAPS); each rendering's consumed keys validate as a subset (pair-variance legal);
-  the cluster Secret derives `{project_name}-secrets`; k8s consumption = `secretKeyRef` naming it (`envFrom`/`extraEnvFrom` `secretRef`s impose no per-key constraint); compose consumption = `${ALL_CAPS}` brace holes with odd `$`-parity (`$$`-escaped
-  `configs.content` doesn't count; lock-key holes don't count — the per-run env file fills them); the mint list artifact (`stack/generated/secrets.txt`) generates from the declaration alone.
+  the cluster Secret derives `{project_name}-secrets`; k8s consumption = `secretKeyRef` naming it (`envFrom`/`extraEnvFrom` `secretRef`s impose no per-key constraint); compose consumption = `${ALL_CAPS}` brace slots with odd `$`-parity (`$$`-escaped
+  `configs.content` doesn't count; lock-key slots don't count — the per-run env file fills them); the mint list artifact (`stack/generated/secrets.txt`) generates from the declaration alone.
 
 ## Publish
 
 - Publishing happens iff local entries are declared — no flag, no section; artifact names derive from `repository` (`{repository}/{qualified-or-entry-name}`); `--plan` prints the entries as a bare JSON array (`[]` when none), no
-  login, no publish — the CI getter's derivation source; bake substitutes `${ALL_CAPS}` holes against `service_shas()` tree-tags + the lock's index projection, the lock keys fanned under the bundle prefix for the
-  artifact's namespaced spellings; unresolved vars stay holes in the artifact for the consumer's values file
-  (non-empty stubs exist only so publish's interpolation validation passes); authored `configs.content` rides verbatim (single-`$` holes = the include consumer's interpolation surface — `$`-doubling is score's concern, not publish's); image
+  login, no publish — the CI getter's derivation source; bake substitutes `${ALL_CAPS}` slots against `service_shas()` tree-tags + the lock's index projection, the lock keys fanned under the bundle prefix for the
+  artifact's namespaced spellings; unresolved vars stay slots in the artifact for the consumer's values file
+  (non-empty stubs exist only so publish's interpolation validation passes); authored `configs.content` rides verbatim (single-`$` slots = the include consumer's interpolation surface — `$`-doubling is score's concern, not publish's); image
   refs under `{repository}/` pin to `@sha256` via memoized `crane digest`; each entry publishes once under the `<sha>` tag, aliasing `<branch>` via `crane tag` (compose stamps wall-clock `created` — only the alias makes both tags name one digest); registry login reads `REGISTRY_USERNAME`/`REGISTRY_TOKEN`.
 
 ## Deployment-surface annotations

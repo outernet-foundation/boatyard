@@ -366,10 +366,6 @@ attachment and ordering; `edge` and collision teeth.
 
 ## Work 2 — Release 0.6.0 (operator)
 
-Precondition: the hole→slot vocabulary rename has landed and deleted its
-plan file (`hole-to-slot.md` owns it; refusal phrasings are consumer-facing
-and 0.6.0 freezes them).
-
 Hand branch/SHA to the operator: push `refactor` (now carrying Work 1),
 merge, tag through the normal release flow (the toolkit's binding owns it);
 the PyPI publish rides the flow — the name is registered, no placeholder
