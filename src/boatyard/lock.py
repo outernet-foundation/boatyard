@@ -83,15 +83,14 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
 
         # Pin the frozen reference or resolve the declaration's fresh digest.
         if committed_entry is not None and not upgrade and committed_entry.reference.startswith(reference + "@"):
-            pinned = committed_entry.reference
             record = committed_entry
-        else:
-            pinned = f"{reference}@{resolve_remote_digest(reference)}"
 
-        # Carry a frozen bundle without declared routes forward unread.
-        if record is not None and not entry.routes and not entry.ports:
-            bundles[key] = record
-            continue
+            # Carry a frozen bundle without declared routes forward unread.
+            if not entry.routes and not entry.ports:
+                bundles[key] = record
+                continue
+
+        pinned = record.reference if record else f"{reference}@{resolve_remote_digest(reference)}"
 
         # Read the bundle's compose files as inline base64 layer data, with crane blob as the fallback.
         print(f"Reading bundle content for: {pinned}")
