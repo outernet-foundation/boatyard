@@ -19,7 +19,7 @@ def _write_repo(root: Path, dockerfiles: dict[str, str], *, config: dict[str, An
         directory = root / "workloads" / service
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "Dockerfile").write_text(text, encoding="utf-8")
-    payload: dict[str, Any] = {"requires": ">=0"}
+    payload: dict[str, Any] = {"requires": ">=0", "project_name": "demo"}
     if dockerfiles:
         payload["repository"] = "ghcr.io/example"
     if config is not None:

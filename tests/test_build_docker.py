@@ -39,7 +39,7 @@ def _write_repo(
         directory = root / "workloads" / service
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "Dockerfile").write_text(text, encoding="utf-8")
-    payload: dict[str, Any] = {"requires": ">=0", "repository": repository}
+    payload: dict[str, Any] = {"requires": ">=0", "repository": repository, "project_name": "demo"}
     if base_images:
         payload["platforms"] = platforms or ["linux/amd64"]
         payload["base_images"] = base_images
@@ -791,7 +791,7 @@ class TestHostPlatform:
 class TestPushFlags:
     def _parse(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, arguments: list[str]) -> tuple[bool, str | None]:
         (tmp_path / "boatyard.yml").write_text(
-            yaml.safe_dump({"requires": ">=0.0", "repository": "ghcr.io/org/demo"}), encoding="utf-8"
+            yaml.safe_dump({"requires": ">=0.0", "project_name": "demo", "repository": "ghcr.io/org/demo"}), encoding="utf-8"
         )
         monkeypatch.chdir(tmp_path)
         recorded: list[tuple[bool, str | None]] = []
@@ -820,7 +820,7 @@ class TestPushFlags:
 
     def test_push_and_push_to_refuse_together(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         (tmp_path / "boatyard.yml").write_text(
-            yaml.safe_dump({"requires": ">=0.0", "repository": "ghcr.io/org/demo"}), encoding="utf-8"
+            yaml.safe_dump({"requires": ">=0.0", "project_name": "demo", "repository": "ghcr.io/org/demo"}), encoding="utf-8"
         )
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(build, "run_build", _record_failure)

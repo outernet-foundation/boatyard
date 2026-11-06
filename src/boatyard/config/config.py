@@ -123,7 +123,7 @@ class ConfigFile(BaseModel):
     base_images: dict[AllCapsName, str] = Field(default_factory=dict)
     variants: dict[AllCapsName, list[str]] = Field(default_factory=dict)
     platforms: list[str] = Field(default_factory=list)
-    project_name: str | None = None
+    project_name: str
     services: dict[str, ServiceMember] = Field(default_factory=dict)
     k8s: K8sConfig | None = None
     mirror_prefix: str = DEFAULT_MIRROR_PREFIX
@@ -393,10 +393,7 @@ class ConfigFile(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> Self:
-        # Require project_name exactly when services are declared.
         if self.services:
-            if not self.project_name:
-                raise ValueError("services are declared; project_name is required")
             any_local = any(not row.entry.remote for row in _flatten_service_members(self.services))
             if any_local and not self.repository:
                 raise ValueError("local entries (workloads:) are declared; repository is required")
@@ -697,12 +694,6 @@ def compose_bundle_output_path(root: Path, name: str) -> Path:
 
 def qualified_option_name(group: str, option_name: str) -> str:
     return f"{group}-{option_name}"
-
-
-def require_compose_stack(config: ConfigFile) -> ConfigFile:
-    if not config.services:
-        raise ValueError("boatyard.yml must declare services")
-    return config
 
 
 def lock_key_prefix(name: str) -> str:

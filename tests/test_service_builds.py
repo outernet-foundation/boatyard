@@ -18,7 +18,7 @@ def write_dockerfile(tmp_path: Path, service: str, text: str, top: str = "worklo
 
 
 def _derive(tmp_path: Path, axes: dict[str, list[str]] | None = None) -> dict[str, ServiceBuild]:
-    payload: dict[str, Any] = {"requires": ">=0", "repository": "ghcr.io/example"}
+    payload: dict[str, Any] = {"requires": ">=0", "project_name": "demo", "repository": "ghcr.io/example"}
     if axes is not None:
         payload["variants"] = axes
     (tmp_path / "boatyard.yml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")

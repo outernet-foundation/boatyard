@@ -25,7 +25,7 @@ DIGEST = "sha256:" + "a" * 64
 
 
 def _root_config(**sections: object) -> ConfigFile:
-    payload: dict[str, object] = {"requires": ">=0.1"}
+    payload: dict[str, object] = {"requires": ">=0.1", "project_name": "example"}
     payload.update(sections)
     if "services" in payload and "gateway" not in payload:
         payload["gateway"] = "8080"
@@ -1345,7 +1345,7 @@ def test_generate_score_writes_the_mint_list_from_the_declaration(
 
 def _k8s_only_repo(tmp_path: Path) -> None:
     (tmp_path / "boatyard.yml").write_text(
-        "requires: '>=0'\nrepository: ghcr.io/org/repo\nk8s:\n  workloads:\n    - api.yaml\n",
+        "requires: '>=0'\nproject_name: example\nrepository: ghcr.io/org/repo\nk8s:\n  workloads:\n    - api.yaml\n",
         encoding="utf-8",
     )
 

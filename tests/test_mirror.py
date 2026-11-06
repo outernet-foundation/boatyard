@@ -19,7 +19,7 @@ runner = CliRunner()
 
 
 def _write_config(root: Path, sections: dict[str, object] | None = None) -> None:
-    payload: dict[str, object] = {"requires": ">=0.0"}
+    payload: dict[str, object] = {"requires": ">=0.0", "project_name": "demo"}
     if sections is not None:
         payload.update(sections)
     (root / "boatyard.yml").write_text(

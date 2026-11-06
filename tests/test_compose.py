@@ -52,7 +52,7 @@ def pinned_compose(tmp_path_factory: pytest.TempPathFactory) -> str:
 
 
 def _write_config(root: Path, sections: dict[str, object] | None = None) -> None:
-    payload: dict[str, object] = {"requires": ">=0.0"}
+    payload: dict[str, object] = {"requires": ">=0.0", "project_name": "demo"}
     if sections is not None:
         payload.update(sections)
     if "services" in payload and "gateway" not in payload:
@@ -157,6 +157,7 @@ def _write_producer(root: Path, services: list[str], lock: dict[str, Any] | None
         (producer_root / "boatyard.yml").write_text(
             yaml.safe_dump({
                 "requires": ">=0.0",
+                "project_name": "producer",
                 "base_images": {
                     "LOKI_IMAGE": "docker.io/grafana/loki:3.0",
                     "ALPINE_IMAGE": "docker.io/library/alpine:3.20",
@@ -956,16 +957,17 @@ class TestDownTeardown:
         assert result.exit_code != 0
         assert isinstance(result.exception, FileNotFoundError)
 
-    def test_down_in_a_services_less_repo_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_down_in_a_services_less_repo_tears_down_by_name(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_config(tmp_path)
         _write_values_file(tmp_path, {"public_url": "https://example.dev"})
+        recorder = AssemblyRecorder()
+        monkeypatch.setattr(down, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["down"])
 
-        assert result.exit_code != 0
-        assert isinstance(result.exception, ValueError)
-        assert "must declare services" in str(result.exception)
+        assert result.exit_code == 0, result.output
+        assert recorder.documents == [{"name": "demo"}]
 
 
 class TestLockRequirement:

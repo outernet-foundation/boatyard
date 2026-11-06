@@ -31,6 +31,7 @@ def bundle_entries(*qualified_names: str) -> dict[str, dict[str, object]]:
 
 
 def write_config(tmp_path: Path, payload: dict[str, object]) -> None:
+    payload.setdefault("project_name", "example")
     (tmp_path / "boatyard.yml").write_text(
         yaml.safe_dump(payload, default_flow_style=False, sort_keys=False), encoding="utf-8"
     )
@@ -548,7 +549,7 @@ class TestK8sSection:
         assert config.k8s.vars == {"GPU_VARIANT": "cuda"}
 
     def test_null_section_reads_as_absent(self, tmp_path: Path) -> None:
-        (tmp_path / "boatyard.yml").write_text('requires: ">=0.1"\nk8s:\n', encoding="utf-8")
+        (tmp_path / "boatyard.yml").write_text('requires: ">=0.1"\nproject_name: example\nk8s:\n', encoding="utf-8")
 
         config = ConfigFile.load(tmp_path / "boatyard.yml")
 
@@ -782,17 +783,10 @@ class TestServices:
                 "services": {"empty": {"workloads": []}},
             })
 
-    def test_services_require_project_name(self, tmp_path: Path) -> None:
-        write_config(
-            tmp_path,
-            {
-                "requires": ">=0.1",
-                "gateway": "8080",
-                "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG}},
-            },
-        )
+    def test_a_config_without_project_name_refuses(self, tmp_path: Path) -> None:
+        (tmp_path / "boatyard.yml").write_text("requires: '>=0.1'\n", encoding="utf-8")
 
-        with pytest.raises(ValidationError, match="project_name is required"):
+        with pytest.raises(ValidationError, match="project_name"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_local_entries_require_repository(self, tmp_path: Path) -> None:

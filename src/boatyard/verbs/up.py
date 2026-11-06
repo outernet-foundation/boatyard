@@ -24,7 +24,6 @@ from boatyard.config.config import (
     compose_bundle_output_path,
     double_dollars,
     lock_key_prefix,
-    require_compose_stack,
     scan_bundle_texts,
 )
 from boatyard.config.lock import LockFile
@@ -58,7 +57,8 @@ def up(
     config_values = ValuesFile.load(root / VALUES_FILE, config)
 
     # Require the config to declare a compose stack
-    require_compose_stack(config)
+    if not config.services:
+        raise ValueError("boatyard.yml must declare services")
 
     # Resolve the chosen options into leaf services
     services = config.resolve_services(config_values.choices)

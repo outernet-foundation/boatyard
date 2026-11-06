@@ -120,7 +120,7 @@ def _write_repo(
     ref_services: dict[str, Any] | None = None,
     gateway: str | None = None,
 ) -> None:
-    payload: dict[str, Any] = {"requires": ">=0"}
+    payload: dict[str, Any] = {"requires": ">=0", "project_name": "demo"}
     if gateway is not None:
         payload["gateway"] = gateway
     if base_images:

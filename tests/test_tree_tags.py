@@ -39,7 +39,7 @@ def repo(tmp_path: Path) -> Path:
     _init_repo(tmp_path)
     (tmp_path / ".dockerignore").write_text("*\n!workloads/\n", encoding="utf-8")
     (tmp_path / "boatyard.yml").write_text(
-        yaml.safe_dump({"requires": ">=0", "repository": "ghcr.io/org/demo"}), encoding="utf-8"
+        yaml.safe_dump({"requires": ">=0", "repository": "ghcr.io/org/demo", "project_name": "demo"}), encoding="utf-8"
     )
     _write_service(tmp_path, "api")
     _write_service(tmp_path, "worker")
