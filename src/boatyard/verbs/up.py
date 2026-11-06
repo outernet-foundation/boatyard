@@ -147,11 +147,11 @@ def up(
             raise ValueError("an auth option is selected; public_url is required in boatyard.values.yaml")
         forwarded = config_values.public_url.forwarded
 
-    # Render the edge and its Caddyfile when a gateway is declared
-    document_services: dict[str, Yaml] = {}
+    # Render the edge stanza and its Caddyfile when a gateway is declared
+    edge_stanza: dict[str, Yaml] | None = None
     caddyfile: str | None = None
     if config.gateway is not None:
-        edge: dict[str, Yaml] = {
+        edge_stanza = {
             "image": f"${{{CADDY_IMAGE}:?err}}",
             "configs": [{"source": EDGE_CONFIG_NAME, "target": "/etc/caddy/Caddyfile"}],
             "ports": [{"target": str(EDGE_LISTEN_PORT), "published": config.gateway, "protocol": "tcp"}],
@@ -159,8 +159,7 @@ def up(
             "networks": dict.fromkeys(f"{service.name}-net" for service in services),
         }
         if forwarded is not None:
-            edge["environment"] = forwarded
-        document_services[EDGE_SERVICE_NAME] = edge
+            edge_stanza["environment"] = forwarded
 
         # Render one handle block per route in declaration order
         lines = [f":{EDGE_LISTEN_PORT} {{"]
@@ -185,7 +184,7 @@ def up(
         caddyfile = double_dollars("\n".join(lines) + "\n")
 
     # Group the ports under their namespaced owners into per-service stanzas
-    document_services.update({
+    port_stanzas: dict[str, dict[str, Yaml]] = {
         f"{service.name}-{owner}": {
             "ports": [port.model_dump(exclude={"service"}, exclude_none=True) for port in owner_ports]
         }
@@ -193,8 +192,10 @@ def up(
         for owner, owner_ports in groupby(
             sorted(service.ports, key=lambda port: port.service), key=lambda port: port.service
         )
-    })
-    # Assemble the root document
+    }
+
+    # Assemble the root document, sections omitted when empty
+    document_services = ({} if edge_stanza is None else {EDGE_SERVICE_NAME: edge_stanza}) | port_stanzas
     document: dict[str, Yaml] = {"name": config.project_name}
     if includes:
         document["include"] = includes
