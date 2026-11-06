@@ -101,7 +101,7 @@ def up(
             raise ValueError(f"{path.as_posix()}: the bundle override defines the reserved service {EDGE_SERVICE_NAME!r}")
         requirements[name] = scan.requires
         includes.append(path.as_posix())
-        # Fill the override's holes from the producer repo above the override
+        # Fill the override's slots from the producer repo above the override
         producer_root = _producer_root(path)
         producer_config = ConfigFile.load(producer_root / DEFAULT_CONFIG_PATH)
         producer_entries = LockFile.load(producer_root / LOCK_PATH, producer_config).manifest_references(
@@ -110,7 +110,7 @@ def up(
         entries.update({lock_key_prefix(name) + key: value for key, value in producer_entries.items()})
 
     # Refuse bundles whose requirements no environment source fills; the ambient
-    # shell fills nothing, so a shell-set hole name is named as ignored, not counted.
+    # shell fills nothing, so a shell-set slot name is named as ignored, not counted.
     filled = {variable for variable, value in {**config_values.variables, **entries}.items() if value}
     missing = {
         name: sorted(set(required) - filled) for name, required in requirements.items() if set(required) - filled
@@ -234,7 +234,7 @@ def up(
             compose_files,
             "up",
             env_file=env_file,
-            hole_names=[
+            slot_names=[
                 *config_values.variables,
                 *entries,
                 *(name for required in requirements.values() for name in required),

@@ -110,7 +110,7 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
             else f"{reference}@{resolve_remote_digest(reference)}"
         )
 
-        # Record the pinned reference with its required holes.
+        # Record the pinned reference with its required slots.
         bundles[key] = ConfigLockBundle(
             reference=pinned,
             requires=scan_bundle_texts(

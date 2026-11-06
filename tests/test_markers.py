@@ -42,7 +42,7 @@ def test_text_include_inserts_file_bytes_verbatim(tmp_path: Path) -> None:
     assert resolved == {"config.alloy": RIVER}
 
 
-def test_text_include_leaves_dollar_holes_untouched(tmp_path: Path) -> None:
+def test_text_include_leaves_dollar_slots_untouched(tmp_path: Path) -> None:
     write_repo({"config.yaml": "key: ${S3_ACCESS_KEY}\n"}, tmp_path)
 
     resolved = resolve_markers({"include": "config.yaml"}, MarkerContext(tmp_path, {}, "x.yaml"))
@@ -286,7 +286,7 @@ def test_untagged_literal_image_values_refuse_anywhere_in_the_tree() -> None:
         resolve_markers({"containers": [{"image": "postgres"}]}, MarkerContext(Path(), {}, "workload api"))
 
 
-def test_image_values_with_holes_and_plain_non_image_keys_pass() -> None:
+def test_image_values_with_slots_and_plain_non_image_keys_pass() -> None:
     node: Any = {
         "name": "plain-value",
         "image": "${API_SHA}",

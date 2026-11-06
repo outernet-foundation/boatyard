@@ -267,7 +267,7 @@ class TestBaseImages:
         with pytest.raises(ValidationError, match="path:tag"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
-    def test_env_hole_rejected(self, tmp_path: Path) -> None:
+    def test_env_slot_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "base_images": {"ALPINE_IMAGE": "${ALPINE_REF}"}})
 
         with pytest.raises(ValidationError, match="path:tag"):
@@ -508,7 +508,7 @@ class TestCharts:
         with pytest.raises(ValidationError, match="upstream-native OCI"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
-    def test_env_hole_rejected(self, tmp_path: Path) -> None:
+    def test_env_slot_rejected(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,
             {
@@ -1217,7 +1217,7 @@ class TestPorts:
 
         assert config is not None
 
-    def test_a_non_port_non_hole_field_refuses(self, tmp_path: Path) -> None:
+    def test_a_non_port_non_slot_field_refuses(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,
             self._ports_config({

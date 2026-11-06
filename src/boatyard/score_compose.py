@@ -13,7 +13,7 @@ from pydantic import (
 )
 
 from boatyard.config.config import (
-    COMPOSE_HOLE,
+    COMPOSE_SLOT,
     ComposeWorkloadDocument,
     WorkloadDocument,
     Yaml,
@@ -185,7 +185,7 @@ def generate_compose(
             if service_name in services_map:
                 continue
 
-            # Pin the barrier image to the lock hole
+            # Pin the barrier image to the lock slot
             if service_name == BARRIER_SERVICE:
                 barrier_service = document.services[BARRIER_SERVICE]
                 barrier_service.image = "${ALPINE_IMAGE:?err}"
@@ -248,20 +248,20 @@ def generate_compose(
                 document.configs[f"{name}-{path.name}"] = ComposeConfig(content=text)
                 service.configs.append(ComposeConfigReference(source=f"{name}-{path.name}", target=bind_volume.target))
 
-        # Scan consumed secrets and namespace the lock-key holes in one pass
+        # Scan consumed secrets and namespace the lock-key slots in one pass
         prefix = lock_key_prefix(name)
         text = dump_yaml(document.dump())
         namespaced: list[str] = []
         cursor = 0
-        for match in COMPOSE_HOLE.finditer(text):
+        for match in COMPOSE_SLOT.finditer(text):
             namespaced.append(text[cursor : match.start()])
             cursor = match.end()
             if len(match.group(1)) % 2 == 1:
-                hole = match.group(2)
-                if hole in images:
-                    namespaced.append(f"{match.group(1)}{{{prefix}{hole}{match.group(3) or ''}}}")
+                slot = match.group(2)
+                if slot in images:
+                    namespaced.append(f"{match.group(1)}{{{prefix}{slot}{match.group(3) or ''}}}")
                     continue
-                consumed.add(hole)
+                consumed.add(slot)
             namespaced.append(match.group(0))
         namespaced.append(text[cursor:])
         write_file(output_path, "".join(namespaced))

@@ -590,7 +590,7 @@ class WorkloadContentsRecorder:
             output.write_text(API_SERVICE_RENDERING, encoding="utf-8")
 
 
-def test_workload_image_holes_resolve_from_the_lock_into_the_rendered_copy(
+def test_workload_image_slots_resolve_from_the_lock_into_the_rendered_copy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
@@ -621,7 +621,7 @@ def test_workload_image_holes_resolve_from_the_lock_into_the_rendered_copy(
     )
 
 
-def test_workload_image_hole_with_no_lock_entry_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_workload_image_slot_with_no_lock_entry_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "api.yaml").write_text(
         "metadata:\n  name: api\ncontainers:\n  api:\n    image: ${API_IMAGE}\n",
@@ -1162,7 +1162,7 @@ containers:
   spike:
     image: ${SPIKE_IMAGE:?err}
     files:
-      /etc/spike/holes.toml:
+      /etc/spike/slots.toml:
         content: |
           doubled_err = "$${SPIKE_SET:?err}"
           doubled_default = "$${SPIKE_UNSET:-fallback}"
@@ -1199,7 +1199,7 @@ containers:
   spike:
     image: ghcr.io/example/spike:1.0
     files:
-      /etc/spike/holes.toml:
+      /etc/spike/slots.toml:
         content: |
           err = "${SPIKE_SET:?err}"
 """
@@ -1234,7 +1234,7 @@ def test_files_placeholders_materialize_undoubled(tmp_path: Path) -> None:
         env={**os.environ, "SPIKE_SET": "hello", "SPIKE_IMAGE": "ghcr.io/example/spike:1.0"},
     )
 
-    materialized = tmp_path / ".score-compose/mounts/files/spike-files-holes.toml"
+    materialized = tmp_path / ".score-compose/mounts/files/spike-files-slots.toml"
     assert materialized.read_text(encoding="utf-8") == A0_MATERIALIZED
 
     artifact = yaml.safe_load((tmp_path / "escaped-compose.yaml").read_text(encoding="utf-8"))
@@ -1243,8 +1243,8 @@ def test_files_placeholders_materialize_undoubled(tmp_path: Path) -> None:
     assert service["volumes"] == [
         {
             "type": "bind",
-            "source": ".score-compose/mounts/files/spike-files-holes.toml",
-            "target": "/etc/spike/holes.toml",
+            "source": ".score-compose/mounts/files/spike-files-slots.toml",
+            "target": "/etc/spike/slots.toml",
         }
     ]
 

@@ -702,7 +702,7 @@ class TestUpValidation:
         assert isinstance(result.exception, ValueError)
         assert "'3306' references 'placeframe-cuda-grafana'" in str(result.exception)
 
-    def test_a_local_output_hole_no_environment_source_fills_refuses(
+    def test_a_local_output_slot_no_environment_source_fills_refuses(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         _write_consumer_tree(tmp_path)

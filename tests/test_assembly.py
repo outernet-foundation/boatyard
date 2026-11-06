@@ -213,7 +213,7 @@ class TestPublicUrlDerivation:
 
 
 class TestEdgeStanza:
-    def test_the_stanza_carries_the_caddy_hole_config_mount_and_port(
+    def test_the_stanza_carries_the_caddy_slot_config_mount_and_port(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         document = _assembly_document(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])

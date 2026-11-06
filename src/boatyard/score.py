@@ -207,7 +207,7 @@ def render_score(
                 )
             write_file(state_path, dump_yaml(state.model_dump()))
 
-        # Expand each workload's ${NAME} holes into per-run copies
+        # Expand each workload's ${NAME} slots into per-run copies
         copies_directory = Path(stack.enter_context(TemporaryDirectory()))
         # List the variable sources lowest-priority first so later ones overwrite earlier ones
         variable_values = {
@@ -222,7 +222,7 @@ def render_score(
             for variable, value in variable_values.items():
                 expanded = expanded.replace(f"${{{variable}}}", value)
 
-            # Refuse holes that no source fills
+            # Refuse slots that no source fills
             leftover = PLACEHOLDER.search(expanded)
             if leftover is not None:
                 raise ValueError(

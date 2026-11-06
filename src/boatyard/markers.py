@@ -15,7 +15,7 @@ LOCK_MARKER = "lock"
 LOCK_IMAGE_MARKER = "lock-image"
 LOCK_MARKERS = (LOCK_MARKER, LOCK_IMAGE_MARKER)
 IMAGE_FIELD = "image"
-IMAGE_HOLE_PATTERN = re.compile(r"\$\{|{{")
+IMAGE_SLOT_PATTERN = re.compile(r"\$\{|{{")
 
 
 class LockImageSpec(BaseModel):
@@ -178,7 +178,7 @@ def lock_image_fields(value: Yaml, images: dict[str, str], source: str) -> dict[
 
 def _check_literal_image(node: dict[str, Yaml], source: str) -> None:
     image = node.get(IMAGE_FIELD)
-    if isinstance(image, str) and IMAGE_HOLE_PATTERN.search(image) is None:
+    if isinstance(image, str) and IMAGE_SLOT_PATTERN.search(image) is None:
         raise ValueError(f"{source}: image {image!r} must consume the lock (lock: NAME / lock-image: NAME)")
 
 

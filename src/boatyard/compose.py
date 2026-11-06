@@ -18,14 +18,14 @@ def compose_command(
     compose_files: list[Path],
     *arguments: str,
     env_file: Path | None = None,
-    hole_names: Iterable[str] = (),
+    slot_names: Iterable[str] = (),
 ) -> str:
     # Spell the one docker compose invocation; the env -u scrub defeats compose's
-    # shell-beats-env-file precedence for every hole name.
+    # shell-beats-env-file precedence for every slot name.
     quoted_arguments = [shlex.quote(argument) for argument in arguments]
     files_arguments = " ".join(f"-f {shlex.quote(str(compose_file))}" for compose_file in compose_files)
     env_argument = f" --env-file {shlex.quote(str(env_file))}" if env_file is not None else ""
-    scrub = "".join(f" -u {shlex.quote(name)}" for name in sorted(set(hole_names)))
+    scrub = "".join(f" -u {shlex.quote(name)}" for name in sorted(set(slot_names)))
     prefix = f"docker compose {files_arguments} --project-directory {shlex.quote(str(root))}{env_argument}"
     if scrub:
         prefix = f"env{scrub} " + prefix

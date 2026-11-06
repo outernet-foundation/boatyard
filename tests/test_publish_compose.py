@@ -120,7 +120,7 @@ class TestPublishGating:
 
 
 class TestBakeSources:
-    def test_substitutes_known_vars_and_keeps_consumer_holes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_substitutes_known_vars_and_keeps_consumer_slots(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.chdir(tmp_path)
         (tmp_path / "nested").mkdir()
         (tmp_path / "nested" / "compose.yml").write_text(

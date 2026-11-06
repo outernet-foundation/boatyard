@@ -651,7 +651,7 @@ class TestBundleRecording:
         assert entry["reference"].startswith("ghcr.io/org/repo/")
         assert not entry["reference"].startswith(MIRROR_PREFIX)
 
-    def test_required_holes_record_sorted_under_the_bundle_key(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_required_slots_record_sorted_under_the_bundle_key(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         bundle_text = (
             "services:\n  rathole:\n    image: busybox:1.36\n"
             "    environment:\n"
@@ -661,7 +661,7 @@ class TestBundleRecording:
             "      E_VAR: $$ESCAPED\n"
             "    configs:\n"
             "      - source: conf\n        target: /etc/conf\n"
-            "configs:\n  conf:\n    content: |\n      hole=${Z_REQUIRED}\n"
+            "configs:\n  conf:\n    content: |\n      slot=${Z_REQUIRED}\n"
         )
 
         result, _, _ = self._invoke(monkeypatch, tmp_path, [], bundle_text=bundle_text)

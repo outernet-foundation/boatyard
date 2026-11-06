@@ -40,14 +40,14 @@ PYTHON_VERSION_PATH = Path(".python-version")
 
 ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
-# Match ${ALL_CAPS} placeholder holes in workload files.
+# Match ${ALL_CAPS} placeholder slots in workload files.
 PLACEHOLDER = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
 
-# Match a compose brace hole with its preceding dollar run.
-COMPOSE_HOLE = re.compile(r"(\$+)\{([A-Z][A-Z0-9_]*)(:[^{}]*)?\}")
+# Match a compose brace slot with its preceding dollar run.
+COMPOSE_SLOT = re.compile(r"(\$+)\{([A-Z][A-Z0-9_]*)(:[^{}]*)?\}")
 
-# Match compose env holes: ${NAME}, ${NAME:?err}, ${NAME:-default}.
-ENV_HOLE_PATTERN = re.compile(r"^\$\{[A-Z][A-Z0-9_]*(?::[^{}]*)?\}$")
+# Match compose env slots: ${NAME}, ${NAME:?err}, ${NAME:-default}.
+ENV_SLOT_PATTERN = re.compile(r"^\$\{[A-Z][A-Z0-9_]*(?::[^{}]*)?\}$")
 PORT_PATTERN = re.compile(r"^[0-9]+$")
 
 type Yaml = str | int | float | bool | list[Yaml] | dict[str, Yaml] | None
@@ -58,13 +58,13 @@ class BundleScan(NamedTuple):
     requires: list[str]
 
 
-def _require_port_or_hole(value: str) -> str:
-    if PORT_PATTERN.fullmatch(value) is None and ENV_HOLE_PATTERN.fullmatch(value) is None:
-        raise ValueError(f"{value!r} must be a literal port number or a ${{…}} env hole")
+def _require_port_or_slot(value: str) -> str:
+    if PORT_PATTERN.fullmatch(value) is None and ENV_SLOT_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"{value!r} must be a literal port number or a ${{…}} env slot")
     return value
 
 
-PortOrHole = Annotated[str, AfterValidator(_require_port_or_hole)]
+PortOrSlot = Annotated[str, AfterValidator(_require_port_or_slot)]
 
 
 def _require_all_caps_name(value: str) -> str:
@@ -118,7 +118,7 @@ class ConfigFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     requires: str
-    gateway: PortOrHole | None = None
+    gateway: PortOrSlot | None = None
     repository: str | None = None
     base_images: dict[AllCapsName, str] = Field(default_factory=dict)
     variants: dict[AllCapsName, list[str]] = Field(default_factory=dict)
@@ -511,8 +511,8 @@ class PortDeclaration(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     service: str
-    published: PortOrHole
-    target: PortOrHole
+    published: PortOrSlot
+    target: PortOrSlot
     protocol: Literal["tcp", "udp"] = "tcp"
     host_ip: str | None = None
 
@@ -583,9 +583,9 @@ class WorkloadContainer(BaseModel):
 
     @field_validator("image")
     @classmethod
-    def _require_image_hole(cls, value: str | None) -> str | None:
+    def _require_image_slot(cls, value: str | None) -> str | None:
         if value is not None and "${" not in value and "{{" not in value:
-            raise ValueError(f"image {value!r} must bind to the lock or a service sha via a ${{NAME}} hole")
+            raise ValueError(f"image {value!r} must bind to the lock or a service sha via a ${{NAME}} slot")
         return value
 
 
@@ -723,22 +723,22 @@ def scan_bundle_texts(
     ports: list[PortDeclaration],
     texts: list[str],
 ) -> BundleScan:
-    # Refuse declared routes and ports that name no service in the bundle and answer its requirement holes.
+    # Refuse declared routes and ports that name no service in the bundle and answer its requirement slots.
     service_names = refuse_unresolved_references(entry_name, routes, ports, texts, prefix=f"{entry_name}-")
-    return BundleScan(service_names=service_names, requires=sorted(required_compose_holes(texts)))
+    return BundleScan(service_names=service_names, requires=sorted(required_compose_slots(texts)))
 
 
-def required_compose_holes(texts: list[str]) -> set[str]:
-    # Odd $-parity holes are interpolation the consumer must fill; a :- default spells optional
-    # and $$-escaped literals are not holes at all.
-    holes: set[str] = set()
+def required_compose_slots(texts: list[str]) -> set[str]:
+    # Odd $-parity slots are interpolation the consumer must fill; a :- default spells optional
+    # and $$-escaped literals are not slots at all.
+    slots: set[str] = set()
     for text in texts:
-        holes.update(
+        slots.update(
             match.group(2)
-            for match in COMPOSE_HOLE.finditer(text)
+            for match in COMPOSE_SLOT.finditer(text)
             if len(match.group(1)) % 2 == 1 and not (match.group(3) or "").startswith(":-")
         )
-    return holes
+    return slots
 
 
 def refuse_unresolved_references(
