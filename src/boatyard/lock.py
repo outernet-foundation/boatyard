@@ -13,7 +13,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from boatyard.config.config import (
     OCI_REFERENCE_PREFIX,
     ConfigFile,
-    ServiceEntry,
     Yaml,
     bundle_lock_key,
     chart_lock_key,
@@ -74,6 +73,60 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
     # Read the committed lock schema-only; drift is relock's input, never refused.
     committed_path = config.root / LOCK_PATH
     committed = load_yaml_model(LockFile, committed_path) if committed_path.is_file() else LockFile()
+
+    # Resolve first-party bundles direct, copying frozen requires forward and validating declared references against the content.
+    bundles: dict[str, ConfigLockBundle] = {}
+    for name, reference, entry in config.remote_declared_entries():
+        key = bundle_lock_key(name)
+        committed_entry = committed.bundles.get(key)
+        record: ConfigLockBundle | None = None
+
+        # Pin the frozen reference or resolve the declaration's fresh digest.
+        if committed_entry is not None and not upgrade and committed_entry.reference.startswith(reference + "@"):
+            pinned = committed_entry.reference
+            record = committed_entry
+        else:
+            pinned = f"{reference}@{resolve_remote_digest(reference)}"
+
+        # Carry a frozen bundle without declared routes forward unread.
+        if record is not None and not entry.routes and not entry.ports:
+            bundles[key] = record
+            continue
+
+        # Read the bundle's compose files as inline base64 layer data, with crane blob as the fallback.
+        print(f"Reading bundle content for: {pinned}")
+        artifact = OciArtifactManifest.model_validate(json.loads(bash_output(f"crane manifest {shlex.quote(pinned)}")))
+
+        # Strip the tag, treating a colon as a tag only when no slash follows it.
+        repository = pinned.rpartition("@")[0]
+        slash = repository.rfind("/")
+        colon = repository.rfind(":")
+        repository = repository[:colon] if colon > slash else repository
+        texts = [
+            base64.b64decode(layer.data).decode("utf-8")
+            if layer.data is not None
+            else bash_output(f"crane blob {shlex.quote(repository + '@' + layer.digest)}")
+            for layer in artifact.layers
+            if layer.media_type == COMPOSE_FILE_MEDIA_TYPE
+        ]
+
+        # Refuse a bundle that carries no compose file layer.
+        if not texts:
+            raise ValueError(f"{pinned}: the compose bundle carries no compose file layer")
+
+        # Refuse declared routes and ports that name no service in the bundle.
+        service_names: set[str] = set()
+        for text in texts:
+            bundle_document = yaml.safe_load(text)
+            services = bundle_document.get("services") if is_mapping(bundle_document) else None
+            if is_mapping(services):
+                service_names.update(services)
+        refuse_unresolved_references(name, entry.routes, entry.ports, service_names, prefix=f"{name}-")
+
+        # Record the frozen bundle or a fresh one with its required holes.
+        if record is None:
+            record = ConfigLockBundle(reference=pinned, requires=sorted(required_compose_holes("\n".join(texts))))
+        bundles[key] = record
 
     images: dict[str, ConfigLockEntry] = {}
     for name, reference in config.base_images.items():
@@ -153,37 +206,12 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
 
         charts[key] = f"{base}@{resolve_remote_digest(reference)}"
 
-    # Resolve first-party bundles direct, copying frozen requires forward and validating declared references against the content.
-    bundles: dict[str, ConfigLockBundle] = {}
-    for name, reference, entry in config.remote_declared_entries():
-        key = bundle_lock_key(name)
-        committed_entry = committed.bundles.get(key)
-        record: ConfigLockBundle | None = None
-
-        # Pin the frozen reference or resolve the declaration's fresh digest.
-        if committed_entry is not None and not upgrade and committed_entry.reference.startswith(reference + "@"):
-            pinned = committed_entry.reference
-            record = committed_entry
-        else:
-            pinned = f"{reference}@{resolve_remote_digest(reference)}"
-
-        # Carry a frozen bundle without declared routes forward unread.
-        if record is not None and not entry.routes and not entry.ports:
-            bundles[key] = record
-            continue
-
-        # Read the bundle's content and refuse declared references that name no service in it.
-        texts = _read_bundle_content(pinned, name, entry)
-
-        # Record the frozen bundle or a fresh one with its required holes.
-        if record is None:
-            record = ConfigLockBundle(reference=pinned, requires=sorted(required_compose_holes("\n".join(texts))))
-        bundles[key] = record
-
     # Assemble the lock and render its canonical form: sections in field order, nested keys sorted.
     lock = LockFile(platforms=list(config.platforms), images=images, charts=charts, bundles=bundles)
     document = {key: _canonical(value) for key, value in lock.model_dump(exclude_defaults=True).items()}
-    rendered = yaml.safe_dump(document, sort_keys=False, default_flow_style=False, width=10_000_000) if document else "{}\n"
+    rendered = (
+        yaml.safe_dump(document, sort_keys=False, default_flow_style=False, width=10_000_000) if document else "{}\n"
+    )
     # Write the rendered lock over the committed file.
     if not check:
         committed_path.write_text(rendered, encoding="utf-8")
@@ -214,36 +242,6 @@ def _child_digest(child: OciDescriptor, subject: str) -> str:
     if not child.digest.startswith("sha256:"):
         raise ValueError(f"{subject}: upstream index child must carry a digest ({child!r})")
     return child.digest
-
-
-def _read_bundle_content(pinned: str, name: str, entry: ServiceEntry) -> list[str]:
-    # Read the bundle's compose files as inline base64 layer data, with crane blob as the fallback.
-    print(f"Reading bundle content for: {pinned}")
-    artifact = OciArtifactManifest.model_validate(json.loads(bash_output(f"crane manifest {shlex.quote(pinned)}")))
-    # Strip the tag, treating a colon as a tag only when no slash follows it.
-    repository = pinned.rpartition("@")[0]
-    slash = repository.rfind("/")
-    colon = repository.rfind(":")
-    repository = repository[:colon] if colon > slash else repository
-    texts = [
-        base64.b64decode(layer.data).decode("utf-8")
-        if layer.data is not None
-        else bash_output(f"crane blob {shlex.quote(repository + '@' + layer.digest)}")
-        for layer in artifact.layers
-        if layer.media_type == COMPOSE_FILE_MEDIA_TYPE
-    ]
-    # Refuse a bundle that carries no compose file layer.
-    if not texts:
-        raise ValueError(f"{pinned}: the compose bundle carries no compose file layer")
-    # Refuse declared routes and ports that name no service in the bundle.
-    service_names: set[str] = set()
-    for text in texts:
-        bundle_document = yaml.safe_load(text)
-        services = bundle_document.get("services") if is_mapping(bundle_document) else None
-        if is_mapping(services):
-            service_names.update(services)
-    refuse_unresolved_references(name, entry.routes, entry.ports, service_names, prefix=f"{name}-")
-    return texts
 
 
 def _canonical(value: Yaml) -> Yaml:
