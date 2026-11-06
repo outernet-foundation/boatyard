@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import difflib
 import json
 import re
 import shlex
@@ -209,20 +208,10 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
     if not check:
         committed_path.write_text(rendered, encoding="utf-8")
         return lock
-    # Diff the computed lock against the committed file and refuse staleness.
+    # Refuse staleness when the committed lock is not the computed canonical bytes.
     committed_text = committed_path.read_text(encoding="utf-8") if committed_path.is_file() else ""
     if committed_text != rendered:
-        print(
-            "".join(
-                difflib.unified_diff(
-                    committed_text.splitlines(keepends=True),
-                    rendered.splitlines(keepends=True),
-                    fromfile=f"committed {LOCK_PATH.as_posix()}",
-                    tofile=f"computed {LOCK_PATH.as_posix()}",
-                )
-            )
-        )
-        raise ValueError("image lock is stale")
+        raise SystemExit("image lock is stale. Run 'boatyard lock' and commit the result.")
     return lock
 
 
