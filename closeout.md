@@ -114,8 +114,11 @@ separate commits.
   `a5430b3b` (a literal `fixup!` subject — folding it into `e2819c07` needs
   a force-push + CI rerun; left as-is deliberately); the regen correctly
   no-ops under 0.6.4. Second Integrate run (42212833180):
-  plan-docker-builds green including the staleness check, build legs
-  running on the committed tags; unity legs in flight at session close.
+   plan-docker-builds green including the staleness check, build legs
+   running on the committed tags; unity legs in flight at session close.
+   The run completed: every leg green except `release-pr-builds`, which
+   failed pulling `images-digests-all:sha-a5430b3b…` — the Work-3 digest
+   shelving gap (entry under Work 4); fix in flight next session.
   NEXT SESSION OPENS HERE: the placeframe-capture-tool sweep on its
   `compose-bundles` — the repin adds `project_name` (required from 0.6.0),
   install-zed rewrites onto `yaml.safe_load` + `tree-tags` + `build
@@ -484,6 +487,12 @@ Verify: the release published; `AGENTS.md` matches the shipped surface.
   builds_ref naming stays `builds_ref` throughout.
 - Tests: the three fixtures writing `docker-devkit.yaml` (test_prerelease,
   test_run_releases, test_config) → `boatyard.yml`.
+- The docker digest-manifest shelving moves onto the toolkit: docker-devkit's build verb
+  pushed one shard per leg to the builds shelf over bake's `metadata.json`; boatyard's
+  build sheds the shelf and leaves `metadata.json` as the handoff, so `build-docker.yml`
+  gains a toolkit shelving step after `boatyard build --push` (this item was lost from
+  the list until placeframe's second Integrate run failed pulling
+  `images-digests-all:sha-…`; restored 2026-11-06).
 - AGENTS.md: the config-file law line and the verb invocation spellings.
 
 Verify: the toolkit's own suite green.
@@ -550,6 +559,22 @@ fixed on `dev`, released as `0.6.4`; the wave's pin target and
   clean image (ignored bytes bake unnamed); no push guard (YAGNI).
   Verified by the second Integrate run (42212833180) — the staleness
   check green on the committed tags.
+
+Found in the placeframe sweep's second Integrate run (42212833180,
+2026-11-06 — `release-pr-builds` died pulling
+`images-digests-all:sha-a5430b3b…`, not found; every other job green):
+the Work-3 toolkit cutover dropped the docker digest-manifest shelving.
+docker-devkit's build verb had pushed one shard per leg
+(`sha-{full}-{sha256(sorted targets)[:8]}` over bake's `metadata.json`,
+boatyard history `9ab7c09`/`79a7087`); boatyard deliberately shed the
+shelf, and the ruling that the toolkit picks the push up was lost with an
+absorbed plan — both AGENTS files already described the intended state
+(boatyard: `metadata.json` is "the handoff the toolkit's builds_ref step
+reads"; toolkit: "the docker build legs push digest-manifest shards
+there"). Fix: a toolkit `shelve-digests` verb reading the handoff, added
+to `build-docker.yml` after `boatyard build --push` (the restored Work-3
+item); the wave's consumers bump their toolkit `uses:` pins to whatever
+toolkit SHA carries it.
 
 Sweep mechanics discovered in infra-rathole, carried to the rest: the
 score-tool trio (score-compose 0.42.0, score-k8s 0.15.0, helm 3.22.1) must
