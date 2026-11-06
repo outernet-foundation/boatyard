@@ -68,8 +68,7 @@ class OciArtifactManifest(BaseModel):
 def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) -> LockFile:
     install_crane()
     prefix = config.mirror_prefix
-    # The write path's committed read: drift between the committed lock and the config
-    # is relock's input, never refused here.
+    # Read the committed lock schema-only; drift is relock's input, never refused.
     committed_path = config.root / LOCK_PATH
     committed = load_yaml_model(LockFile, committed_path) if committed_path.is_file() else LockFile()
 
@@ -98,7 +97,7 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
         ).manifests
 
         if not children:
-            # A manifest answer is every platform's sole manifest.
+            # Treat a manifest answer as every platform's sole manifest.
             matches = {platform: [OciDescriptor(digest=index_digest)] for platform in config.platforms}
         else:
             matches = {
@@ -138,9 +137,7 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
         else:
             charts[key] = f"{base}@{resolve_remote_digest(reference)}"
 
-    # First-party bundles resolve direct, never mirror-prefixed. A frozen digest's artifact is
-    # immutable, so its recorded requires copies forward; declaring entries re-read the content
-    # to validate their authored references against the bundle's actual services.
+    # Resolve first-party bundles direct, copying frozen requires forward and validating declared references against the content.
     bundles: dict[str, ConfigLockBundle] = {}
     for name, reference, entry in config.remote_declared_entries():
         key = bundle_lock_key(name)
@@ -150,11 +147,10 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
             bundles[key] = committed_bundle  # pyright: ignore[reportArgumentType]
             continue
         pinned = committed_bundle.reference if frozen else f"{reference}@{resolve_remote_digest(reference)}"  # pyright: ignore[reportOptionalMemberAccess]
-        # Compose bundles are OCI artifacts whose compose files ride as inline base64 layer data;
-        # export cannot read them, the manifest data and the blob fallback can.
+        # Read the bundle's compose files as inline base64 layer data, with crane blob as the fallback.
         print(f"Reading bundle content for: {pinned}")
         artifact = OciArtifactManifest.model_validate(json.loads(bash_output(f"crane manifest {shlex.quote(pinned)}")))
-        # A colon is a tag only when no slash follows it; earlier colons are registry ports.
+        # Strip the tag, treating a colon as a tag only when no slash follows it.
         repository = pinned.rpartition("@")[0]
         slash = repository.rfind("/")
         colon = repository.rfind(":")
