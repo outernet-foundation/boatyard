@@ -53,7 +53,8 @@ def up(
     # Load the config and the typed machine values from the working directory
     root = Path.cwd()
     config = ConfigFile.load(root / DEFAULT_CONFIG_PATH)
-    require_env_file(root)
+    if not (root / VALUES_FILE).exists():
+        raise ValueError(f"{VALUES_FILE.as_posix()} is required")
     config_values = ValuesFile.load(root / VALUES_FILE, config)
 
     # Require the config to declare a compose stack
@@ -264,12 +265,6 @@ def up(
             up_command += " -d"
 
         bash_handoff(up_command)
-
-
-def require_env_file(root: Path) -> None:
-    # Refuse a consumer repo missing the typed values file
-    if not (root / VALUES_FILE).exists():
-        raise ValueError(f"{VALUES_FILE.as_posix()} is required")
 
 
 def render_env_entries(entries: Mapping[str, str]) -> str:
