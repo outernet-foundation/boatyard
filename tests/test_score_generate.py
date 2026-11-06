@@ -28,7 +28,7 @@ def _root_config(**sections: object) -> ConfigFile:
     payload: dict[str, object] = {"requires": ">=0.1", "project_name": "example"}
     payload.update(sections)
     if "services" in payload and "gateway" not in payload:
-        payload["gateway"] = "8080"
+        payload["gateway"] = 8080
     return ConfigFile.model_validate(payload)
 
 
