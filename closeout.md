@@ -99,22 +99,31 @@ separate commits.
   five (cutover, toolkit bump, docs flip, one `Run generate-score`, tests), the
   pre-sweep old-basis `301b8f09 Run generate-score` dropped (artifacts-only), a
   `sweep-backup` branch held the pre-rebase chain during the rework and may be
-  deleted; final tree byte-identical to the pre-rebase tip, and the clean-clone
-  `generate-score --check` passes at the new tip. Verified locally: ruff,
+  deleted; final tree byte-identical to the pre-rebase tip; the session's
+  "clean-clone `--check` passes" claim was false — no 0.6.3 checkout passes
+  it (CI self-contaminates; see the 0.6.4 entry under Work 4). Verified
+  locally: ruff,
   format, basedpyright (the only errors are pre-existing torch-resolution gaps —
   the venv lacks the cuda extra and the sync was deliberately skipped), scripts
   pytest 17, `lock --check`, matrix (three partitions incl. the TORCH_DEVICE
   fans), `publish-compose --plan` (four qualified bundles), lint-workflows at
-  `f2d576a`. First Integrate run (42203772626, 2026-11-06): the docker-build leg
-  FAILED — operator canceled the run; the failure is undiagnosed. NEXT SESSION
-  OPENS HERE: pull the failed docker-build job's log from that run first thing,
-  root-cause before touching anything (the regen's tree tags name images CI must
-  build; candidates: the variant-fanned build args, the `{uv}`/`{python}`
-  templates, the postgres-wrapper preflight leg — but read the log, don't
-  guess), fix under direction, re-run CI, and only then continue the sweep —
-  placeframe-capture-tool, then lbe-toolkit, then Make-it-Sing (`git switch
-  compose-bundles` first). Also unverified locally (needs the cuda sync / CI):
-  the full preflight sidecar end-to-end and generate-clients.
+  `f2d576a`. First Integrate run (42203772626, 2026-11-06): the docker-build
+  leg FAILED at `generate-score --check`; root-caused next session (the
+  0.6.4 entry under Work 4 — 0.6.3's walk hashed the check's own uv-sync
+  byproducts; the committed tags were correct). The 0.6.4 repin went up as
+  `a5430b3b` (a literal `fixup!` subject — folding it into `e2819c07` needs
+  a force-push + CI rerun; left as-is deliberately); the regen correctly
+  no-ops under 0.6.4. Second Integrate run (42212833180):
+  plan-docker-builds green including the staleness check, build legs
+  running on the committed tags; unity legs in flight at session close.
+  NEXT SESSION OPENS HERE: the placeframe-capture-tool sweep on its
+  `compose-bundles` — the repin adds `project_name` (required from 0.6.0),
+  install-zed rewrites onto `yaml.safe_load` + `tree-tags` + `build
+  --push-to`, and the arm64 platform-manifest relock gating the ZED-box AOA
+  deploy (`zed-aoa-diagnosis-handoff.md` gates on exactly this); then
+  lbe-toolkit, then Make-it-Sing (`git switch compose-bundles` first).
+  Also unverified locally for placeframe (needs the cuda sync / CI): the
+  full preflight sidecar end-to-end and generate-clients.
 - The values-file session (2026-11-04, battery green) landed atop Work 1 and
   rewrote the consumer surface: `.env` is dead — `boatyard.values.yaml`
   (gitignored, typed; `ConfigValues` in `values_file.py`) is the only
@@ -154,12 +163,15 @@ These rulings bind every work unit below.
   artifact formats (`stack/generated/**`). Nothing lands that a consumer could
   only use by importing `boatyard`; every consumer touch is CLI, declarations,
   or artifacts.
-- Content identity hashes the working tree, never git state: the hash reads
-  the same source the build compiles (the `.dockerignore` allowlist, one
-  shared matcher), so dirt is content and a lying tag is unrepresentable.
-  "The tag of commit X" means "the tag of a clean checkout of X";
-  clean-checkout reproducibility is the CI-side invariant — no workflow step
-  writes into a hashed path before `build` / `generate-score --check`.
+- Content identity hashes git-visible state: the `.dockerignore` allowlist
+  walk intersects `git ls-files --cached --others --exclude-standard`
+  (system and global excludes blanked) at raw on-disk bytes — tracked and
+  untracked-not-ignored files hash, ignored files never do. The tag is an
+  input name reproducing from any tree of the same git-visible state; the
+  registry digest in the lock is the content address. "The tag of commit X"
+  means "the tag of any checkout of X" — reproducibility holds by
+  construction (flipped 2026-11-06 in 0.6.4; the prior disk-walk basis
+  hashed the checker's own uv-sync byproducts, recorded under Work 4).
 - Three-class principle: authored facts in the config, registry-resolved facts
   in the lock, tree-derived facts computed on demand and never committed.
 - Fail closed: unknown name, missing lock entry, template composing a
@@ -229,6 +241,9 @@ because they are one cluster in the selection machinery; an override shipped
 flip are atomic per repo, riding Work 4's wave.
 
 ### Disk-state service hashes
+
+(The hashing basis flipped to git-visible in 0.6.4 — see the Work 4 entry;
+the allowlist grammar and git-index staging below stand unchanged.)
 
 The old hash read git objects while the build compiled the disk; every
 lying-tag vector (a dirty build under a stale tag, an untracked file entering
@@ -516,6 +531,26 @@ target and `requires:` floor are `0.6.3` from here (infra-rathole's landed
   environment; the old devkit's os.environ export was the channel 0.4.9
   consumers depended on.
 
+Found in the placeframe sweep's failed Integrate run (42203772626,
+2026-11-06 — `plan-docker-builds`' `generate-score --check` exited 1),
+fixed on `dev`, released as `0.6.4`; the wave's pin target and
+`requires:` floor are `0.6.4` from here:
+- The 0.6.3 disk walk hashed gitignored files under the allowlist — the
+  check's own `uv run --locked` sync writes them
+  (`packages/generated/python/*/…egg-info/`, `build/`) before the walk
+  runs, so CI's checkout contaminated itself and minted tags (`c51eb…`
+  set) no committed mint could match; the committed placeframe tags
+  (`f2bb…` set) were correct all along (first diagnosed as a dirty-tree
+  mint — wrong; the mint was clean). The walk now intersects the
+  allowlist with git-visible files at raw on-disk bytes: tracked and
+  untracked-not-ignored files hash, ignored files never do, and
+  `generate-score` mints identically from any tree — the clean-clone
+  mint discipline dies. Accepted residual, ruled deliberately: a local
+  build with ignored dirt under the allowlist shares its tag with the
+  clean image (ignored bytes bake unnamed); no push guard (YAGNI).
+  Verified by the second Integrate run (42212833180) — the staleness
+  check green on the committed tags.
+
 Sweep mechanics discovered in infra-rathole, carried to the rest: the
 score-tool trio (score-compose 0.42.0, score-k8s 0.15.0, helm 3.22.1) must
 pre-exist in `/usr/local/bin` to run generate-score locally (the defect
@@ -531,19 +566,19 @@ repo with one. The Make-it-Sing phase must watch the rathole bundle's
 default local addrs (`gateway:8443`, `livekit:6178`): they now sit on the
 bundle's private network, where consumer service names may not resolve —
 its `up` assembly (the path-override verify) surfaces whether the
-`TUNNEL_*_ADDR` slots need explicit values. Placeframe added: its checkout
-carries ignored dirt under the `.dockerignore` allowlist (`__pycache__`,
-`egg-info/`, the vendored deep-image-retrieval `.venv`) and dirt hashes, so
-committed regenerations must mint from a clean clone of the branch tip — a
-dirty-tree regen commits machine-local tags and fails CI's
-`generate-score --check` (recorded in placeframe's `stack/AGENTS.md`).
+  `TUNNEL_*_ADDR` slots need explicit values. Placeframe added: its checkout
+  carries ignored dirt under the `.dockerignore` allowlist (`__pycache__`,
+  `egg-info/`, the vendored deep-image-retrieval `.venv`) — inert for
+  hashing since the 0.6.4 git-visible flip (regen mints from any tree);
+  placeframe's `stack/AGENTS.md` clean-clone regen line rides its next
+  touch.
 
 Common to all five, order within a repo code → lockfiles → prose:
 
-1. Dependency: `docker-devkit…` → `boatyard==0.6.1` (or `>=`); `uv lock
-   --upgrade-package boatyard`. `requires:` floor → `>=0.6.1` (0.6.0 carries
-   the two sweep defects; infra-rathole landed `>=0.6.0` before this ruling —
-   bump it in passing when next touched).
+1. Dependency: `docker-devkit…` → `boatyard==0.6.4` (or `>=`); `uv lock
+   --upgrade-package boatyard`. `requires:` floor → `>=0.6.4` (0.6.4
+   carries the git-visible hashing flip; placeframe landed at 0.6.4 via its
+   repin; infra-rathole's older floor bumps in passing when next touched).
 2. `git mv docker-devkit.yaml boatyard.yml`; `git mv docker-devkit.lock
    boatyard.lock.yml`, then truncate the lock to the empty file before the
    relock — the old env format never parses at relock's committed
