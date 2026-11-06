@@ -214,23 +214,21 @@ def up(
     # Materialize the per-run files and hand off
     with ExitStack() as stack:
         # Write the one per-run dotenv from consumer values and lock entries
-        env_file: Path | None = None
-        if config_values.variables or entries:
-            shared = sorted(set(config_values.variables) & set(entries))
-            if shared:
-                raise ValueError(
-                    f"{VALUES_FILE.name} sets {shared}, which the lock env file also fills; "
-                    f"the lock is their only source — remove them from {VALUES_FILE.name}"
-                )
-            env_document = ""
-            if config_values.variables:
-                env_document += f"# {VALUES_FILE.name}\n{render_env_entries(config_values.variables)}"
-            if entries:
-                env_document += f"# {LOCK_PATH.name}\n{render_env_entries(entries)}"
-            with NamedTemporaryFile("w", suffix=".env", prefix="devkit-env-", delete=False, encoding="utf-8") as handle:
-                handle.write(env_document)
-            env_file = Path(handle.name)
-            stack.enter_context(lock_env_unwind(env_file))
+        shared = sorted(set(config_values.variables) & set(entries))
+        if shared:
+            raise ValueError(
+                f"{VALUES_FILE.name} sets {shared}, which the lock env file also fills; "
+                f"the lock is their only source — remove them from {VALUES_FILE.name}"
+            )
+        env_document = ""
+        if config_values.variables:
+            env_document += f"# {VALUES_FILE.name}\n{render_env_entries(config_values.variables)}"
+        if entries:
+            env_document += f"# {LOCK_PATH.name}\n{render_env_entries(entries)}"
+        with NamedTemporaryFile("w", suffix=".env", prefix="devkit-env-", delete=False, encoding="utf-8") as handle:
+            handle.write(env_document)
+        env_file = Path(handle.name)
+        stack.enter_context(lock_env_unwind(env_file))
 
         # Write the materialized root document to its per-run assembly file
         with NamedTemporaryFile(

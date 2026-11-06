@@ -1007,7 +1007,7 @@ class TestLockRequirement:
 
         assert result.exit_code == 0, result.output
         assert [_normalize(command, tmp_path) for command in recorder.commands] == [
-            "docker compose -f ASSEMBLY --project-directory ROOT up --pull missing -d"
+            "docker compose -f ASSEMBLY --project-directory ROOT --env-file LOCKENV up --pull missing -d"
         ]
 
 
