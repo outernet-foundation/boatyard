@@ -18,7 +18,6 @@ from boatyard.config.config import (
     ConfigFile,
     EDGE_SERVICE_NAME,
     OCI_REFERENCE_PREFIX,
-    ResolvedService,
     Yaml,
     bundle_lock_key,
     compose_bundle_output_path,
@@ -78,7 +77,9 @@ def up(
                 raise ValueError(
                     f"selected entry {name!r} has no bundle output {output.as_posix()}; generate-score writes it"
                 )
-            requirements[name] = _scan_local_bundle(name, service, output, refuse_edge=False)
+            text = output.read_text(encoding="utf-8")
+            refuse_unresolved_references(name, service.routes, service.ports, [text], prefix=f"{name}-")
+            requirements[name] = sorted(required_compose_holes(text))
             includes.append(output.resolve().as_posix())
             entries.update({lock_key_prefix(name) + key: value for key, value in consumer_entries.items()})
             continue
@@ -89,7 +90,11 @@ def up(
             path = (candidate if candidate.is_absolute() else config.root / candidate).resolve()
             if not path.is_file():
                 raise ValueError(f"path_overrides.{name}: {path.as_posix()} does not exist")
-            requirements[name] = _scan_local_bundle(name, service, path, refuse_edge=True)
+            text = path.read_text(encoding="utf-8")
+            service_names = refuse_unresolved_references(name, service.routes, service.ports, [text], prefix=f"{name}-")
+            if EDGE_SERVICE_NAME in service_names:
+                raise ValueError(f"{path.as_posix()}: the bundle override defines the reserved service {EDGE_SERVICE_NAME!r}")
+            requirements[name] = sorted(required_compose_holes(text))
             includes.append(path.as_posix())
             # Fill the override's holes from the producer repo above the override
             producer_root = _producer_root(path)
@@ -245,14 +250,6 @@ def up(
             up_command += " -d"
 
         bash_handoff(up_command)
-
-
-def _scan_local_bundle(name: str, service: ResolvedService, path: Path, *, refuse_edge: bool) -> list[str]:
-    text = path.read_text(encoding="utf-8")
-    service_names = refuse_unresolved_references(name, service.routes, service.ports, [text], prefix=f"{name}-")
-    if refuse_edge and EDGE_SERVICE_NAME in service_names:
-        raise ValueError(f"{path.as_posix()}: the bundle override defines the reserved service {EDGE_SERVICE_NAME!r}")
-    return sorted(required_compose_holes(text))
 
 
 def _producer_root(path: Path) -> Path:
