@@ -16,6 +16,7 @@ from boatyard.config.config import (
     Yaml,
     bundle_lock_key,
     chart_lock_key,
+    compose_service_names,
     is_list,
     is_mapping,
     mirrored_ref,
@@ -109,13 +110,9 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
             raise ValueError(f"{pinned}: the compose bundle carries no compose file layer")
 
         # Refuse declared routes and ports that name no service in the bundle.
-        service_names: set[str] = set()
-        for text in texts:
-            bundle_document = yaml.safe_load(text)
-            services = bundle_document.get("services") if is_mapping(bundle_document) else None
-            if is_mapping(services):
-                service_names.update(services)
-        refuse_unresolved_references(name, entry.routes, entry.ports, service_names, prefix=f"{name}-")
+        refuse_unresolved_references(
+            name, entry.routes, entry.ports, compose_service_names(texts), prefix=f"{name}-"
+        )
 
         # Record the pinned reference with its required holes.
         bundles[key] = ConfigLockBundle(reference=pinned, requires=sorted(required_compose_holes("\n".join(texts))))

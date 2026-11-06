@@ -22,8 +22,8 @@ from boatyard.config.config import (
     Yaml,
     bundle_lock_key,
     compose_bundle_output_path,
+    compose_service_names,
     double_dollars,
-    is_mapping,
     lock_key_prefix,
     refuse_unresolved_references,
     require_compose_stack,
@@ -249,18 +249,12 @@ def up(
 
 
 def _scan_local_bundle(name: str, service: ResolvedService, path: Path, *, refuse_edge: bool) -> list[str]:
-    loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
-    loaded_services = loaded.get("services") if is_mapping(loaded) else None
-    if refuse_edge and is_mapping(loaded_services) and EDGE_SERVICE_NAME in loaded_services:
+    text = path.read_text(encoding="utf-8")
+    service_names = compose_service_names([text])
+    if refuse_edge and EDGE_SERVICE_NAME in service_names:
         raise ValueError(f"{path.as_posix()}: the bundle override defines the reserved service {EDGE_SERVICE_NAME!r}")
-    refuse_unresolved_references(
-        name,
-        service.routes,
-        service.ports,
-        set(loaded_services) if is_mapping(loaded_services) else set(),
-        prefix=f"{name}-",
-    )
-    return sorted(required_compose_holes(path.read_text(encoding="utf-8")))
+    refuse_unresolved_references(name, service.routes, service.ports, service_names, prefix=f"{name}-")
+    return sorted(required_compose_holes(text))
 
 
 def _producer_root(path: Path) -> Path:

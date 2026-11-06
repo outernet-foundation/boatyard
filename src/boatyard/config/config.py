@@ -20,6 +20,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+import yaml
 
 from boatyard.dockerfiles import (
     DOCKERFILE_NAME,
@@ -719,6 +720,17 @@ def required_compose_holes(text: str) -> set[str]:
         for match in COMPOSE_HOLE.finditer(text)
         if len(match.group(1)) % 2 == 1 and not (match.group(3) or "").startswith(":-")
     }
+
+
+def compose_service_names(texts: list[str]) -> set[str]:
+    # Union the services keys across compose documents; a document without a services mapping contributes none.
+    names: set[str] = set()
+    for text in texts:
+        document = yaml.safe_load(text)
+        services = document.get("services") if is_mapping(document) else None
+        if is_mapping(services):
+            names.update(services)
+    return names
 
 
 def refuse_unresolved_references(
