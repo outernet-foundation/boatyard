@@ -19,8 +19,7 @@ from boatyard.config.config import (
     is_list,
     is_mapping,
     mirrored_ref,
-    refuse_unresolved_references,
-    required_compose_holes,
+    scan_bundle_texts,
 )
 from boatyard.crane import install_crane
 from boatyard.config.lock import (
@@ -113,13 +112,9 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
 
         compose_texts = OciArtifactManifest.fetch_compose_texts(pinned)
 
-        # Refuse declared routes and ports that name no service in the bundle.
-        refuse_unresolved_references(name, entry.routes, entry.ports, compose_texts, prefix=f"{name}-")
-
-        # Record the pinned reference with its required holes.
-        bundles[key] = ConfigLockBundle(
-            reference=pinned, requires=sorted(required_compose_holes("\n".join(compose_texts)))
-        )
+        # Refuse declared routes and ports that name no service in the bundle, collecting its required holes.
+        scan = scan_bundle_texts(name, entry.routes, entry.ports, compose_texts)
+        bundles[key] = ConfigLockBundle(reference=pinned, requires=scan.requires)
 
     images: dict[str, ConfigLockEntry] = {}
     for name, reference in config.base_images.items():

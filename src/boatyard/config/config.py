@@ -53,6 +53,11 @@ PORT_PATTERN = re.compile(r"^[0-9]+$")
 type Yaml = str | int | float | bool | list[Yaml] | dict[str, Yaml] | None
 
 
+class BundleScan(NamedTuple):
+    service_names: set[str]
+    requires: list[str]
+
+
 def _require_port_or_hole(value: str) -> str:
     if PORT_PATTERN.fullmatch(value) is None and ENV_HOLE_PATTERN.fullmatch(value) is None:
         raise ValueError(f"{value!r} must be a literal port number or a ${{…}} env hole")
@@ -712,14 +717,28 @@ def bundle_lock_key(name: str) -> str:
     return lock_key_prefix(name) + "BUNDLE"
 
 
-def required_compose_holes(text: str) -> set[str]:
+def scan_bundle_texts(
+    entry_name: str,
+    routes: list[RouteConfig],
+    ports: list[PortDeclaration],
+    texts: list[str],
+) -> BundleScan:
+    # Refuse declared routes and ports that name no service in the bundle and answer its requirement holes.
+    service_names = refuse_unresolved_references(entry_name, routes, ports, texts, prefix=f"{entry_name}-")
+    return BundleScan(service_names=service_names, requires=sorted(required_compose_holes(texts)))
+
+
+def required_compose_holes(texts: list[str]) -> set[str]:
     # Odd $-parity holes are interpolation the consumer must fill; a :- default spells optional
     # and $$-escaped literals are not holes at all.
-    return {
-        match.group(2)
-        for match in COMPOSE_HOLE.finditer(text)
-        if len(match.group(1)) % 2 == 1 and not (match.group(3) or "").startswith(":-")
-    }
+    holes: set[str] = set()
+    for text in texts:
+        holes.update(
+            match.group(2)
+            for match in COMPOSE_HOLE.finditer(text)
+            if len(match.group(1)) % 2 == 1 and not (match.group(3) or "").startswith(":-")
+        )
+    return holes
 
 
 def refuse_unresolved_references(
