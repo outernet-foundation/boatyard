@@ -386,7 +386,10 @@ Verify: the release published; `AGENTS.md` matches the shipped surface.
   (`build --push`, `mirror`, `publish-compose --plan`, `generate-score
   --check`, `docker-build-matrix`); fix the `--lock-only` ghost → `uv run
   --locked boatyard lock --check`; the build line drops its `--gpu` argument
-  and `GPU:` env translation (matrix targets carry variant cells). The
+  and `GPU:` env translation — matrix `targets` now carry `--targets`
+  addresses (bare `name` / `name/variant`), which flow through the
+  `TARGETS:` env indirection unchanged, and the dashed target spelling
+  (`name-variant`) is bake-internal and refuses on the CLI. The
   builds_ref naming stays `builds_ref` throughout.
 - Tests: the three fixtures writing `docker-devkit.yaml` (test_prerelease,
   test_run_releases, test_config) → `boatyard.yml`.

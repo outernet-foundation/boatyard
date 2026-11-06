@@ -35,7 +35,7 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
   `lifecycle_prefix`) refuse.
 - `base_images`: ALL_CAPS keys become build args; upstream-native `path:tag`/`path@digest` values; `{uv}`/`{python}` templates over toolchain pins (`{uv}` from `tool.uv.required-version`, exact `==` pin only; `{python}` from
   `.python-version`); a literal value in place of a template = the deliberate-skew escape hatch.
-- `variants`: ALL_CAPS axis → bare lowercase values, first = the default cell; declared, never probed. `platforms` required exactly when `base_images` is; charts arch-neutral, exempt.
+- `variants`: ALL_CAPS axis → bare lowercase values, first = the default variant; declared, never probed. `platforms` required exactly when `base_images` is; charts arch-neutral, exempt.
 - `project_name` required on every config; `gateway` is optional — routes require it, and declaring it requires `CADDY_IMAGE` and renders the edge, routes or not (caddy == gateway).
 - `services`: groups (`options:` mutually exclusive) + bare riding entries; every entry/option is `ref:` (tag-pinned OCI include — digest/`latest`/range spellings refuse at load; any published channel spelling pins) or `workloads:`/`vars:`; workload references are flat `*.yaml` names (both sections; `metadata.name` pins on stems); an option's name outside its group is its
   qualified `group-dash-option` name; the vocabulary (qualified + bare spellings) refuses duplicates at load; `auth` reserved — options declare exactly one route; routes `/`-rooted, edge-wide unique, `strip_prefix` requires a wildcard; ports use the mapping form (service, published, target).
@@ -50,7 +50,7 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
 ## Service derivation
 
 - The Dockerfile-derived build set computes in `dockerfiles.py`'s `derive_services`, never authored: Dockerfile dirs one level below a top-level dir = services (spanning several top-level dirs refuses); context edges from bare-identifier `FROM`s naming a
-  sibling (stage names skipped); a literal `FROM` or slash-bearing `COPY --from=` refuses (base images ride as build args); `ARG <axis>` fans over the axis's declared values, dependents inherit the base's cells exactly (independent axes
+  sibling (stage names skipped); a literal `FROM` or slash-bearing `COPY --from=` refuses (base images ride as build args); `ARG <axis>` fans over the axis's declared values, dependents inherit the base's variants exactly (independent axes
   over fanned bases, disagreeing parents, cycles refuse); `ARG {SERVICE}_SHA` declares the stamp receiver.
 - `.dockerignore` = the allowlist the sha machinery hashes over a disk walk, staged per service into a temp git index (`git -c core.autocrlf=false update-index --add --stdin`, `git write-tree` minting the `tree-` OID); an empty service set returns `{}` without walking.
 
@@ -117,10 +117,11 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
 - `run_build` renders the deterministic per-run bake file (authored key order, byte-identical for identical configs; bake validates its own input — no document model); it takes the already-loaded `config` — the build verb owns its flag refusals; a failed bake re-raises with the rendered content attached.
 - Push axis: `--push` (bool) pushes for the config's `repository`; `--push-to <addr>` re-roots tags + cache refs under that registry; the flags together refuse; an address with a scheme, trailing slash, or host
   carrying neither `.` nor `:` refuses; `--push` without a declared `repository` refuses.
-- `host_platform()` = the one host fact left: default targets are every service's default cell restricted to this machine's arch, and an empty default set refuses naming the arch + `--targets` (bake with no target arguments builds every
-  service, silently defeating the selection); `--targets`: bare name = default cell, `name/cell`, suffixed target name; unknown names/cells refuse listing the vocabulary.
+- `host_platform()` = the one host fact left: default targets are every service's default variant restricted to this machine's arch, and an empty default set refuses naming the arch + `--targets` (bake with no target arguments builds every
+  service, silently defeating the selection); `--targets` accepts exactly two spellings — bare name = default variant, `name/variant` = a declared variant (the dashed target name is bake-internal and refuses); unknown names/variants refuse
+  listing the vocabulary.
 - Per target: dockerfile by convention; platforms collapse to the host arch in load mode (a single declared platform rides through); args — every `base_images` key as `${KEY:-}` on every service, the axis
-  ARG at its cell value, `{SERVICE}_SHA` as `${…:?err}`; tags `{namespace}/{target}:latest` + `:${SERVICE_SHA}`; `target:`-prefixed `additional_contexts`; registry cache refs under `{namespace}/build-cache:{target}` in push mode.
+  ARG at its variant value, `{SERVICE}_SHA` as `${…:?err}`; tags `{namespace}/{target}:latest` + `:${SERVICE_SHA}`; `target:`-prefixed `additional_contexts`; registry cache refs under `{namespace}/build-cache:{target}` in push mode.
 - The incremental lock write rides every building run (the `uv sync` shape — anyone who builds also locks), landing only after target selection + its refusals; bake reads the fresh entries as environment (index form); a building run with
   zero derived services refuses naming the lock verb.
 - `metadata.json`: cwd-stable, unlinked before the run, coverage-checked against the requested targets after; local default-target builds run the daemon
@@ -143,7 +144,7 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
   claimed once (collision loud); the `{entry}-` namespace pass covers services, configs keys, and the per-bundle network with bare aliases.
 - The image lock is required and non-empty; the compose target requires the `ALPINE_IMAGE` entry.
 - `$`-doubling law, stated once: a literal `$` doubles whenever file text rides inside a compose document (edge Caddyfile, publish's file-sourced configs, score's bind inlining); text outside a compose document (k8s-side inclusion, k8s manifests) never doubles.
-- `docker-build-matrix` cell schema (`targets`, `variant`) = a named contract with the binding — renaming a key breaks its fanout YAML; one partition per closure × variant cell.
+- `docker-build-matrix` leg schema (`targets`, `variant`) = a named contract with the binding — renaming a key breaks its fanout YAML; one partition per closure × variant; `targets` carries `--targets` addresses (bare `name` / `name/variant`), never dashed target names.
 
 ## Provisioners and markers
 
