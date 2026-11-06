@@ -240,7 +240,7 @@ class TestPublishComposeVerb:
             "    environment:\n"
             '      LIVEKIT_API_KEY: "${LIVEKIT_API_KEY:?err}"\n'
             "  ingress:\n"
-            '    image: "${LIVEKIT_TIER_CADDY_IMAGE:?err}"\n'
+            '    image: "${LIVEKIT_TIER__LOCK__CADDY_IMAGE:?err}"\n'
             "    configs:\n"
             "      - source: caddyfile\n"
             "        target: /etc/caddy/Caddyfile\n"

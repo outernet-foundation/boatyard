@@ -11,7 +11,7 @@ import typer
 from bashrun.bash import bash, bash_output
 
 from boatyard import dockerfiles
-from boatyard.config.config import ConfigFile, compose_bundle_output_path, lock_key_prefix
+from boatyard.config.config import ConfigFile, compose_bundle_output_path, env_lock_slot
 from boatyard.crane import install_crane
 from boatyard.config.lock import LOCK_PATH, LockFile
 from boatyard.paths import DEFAULT_CONFIG_PATH
@@ -97,7 +97,7 @@ def publish_compose(
             substitutions = {
                 **service_shas,
                 **lock_entries,
-                **{lock_key_prefix(bundle_name) + key: value for key, value in lock_entries.items()},
+                **{env_lock_slot(bundle_name, key): value for key, value in lock_entries.items()},
             }
             baked_path = bake_sources(baked_directory, output.as_posix(), substitutions)
 
