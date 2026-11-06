@@ -11,7 +11,7 @@ from typer.testing import CliRunner
 
 from boatyard.cli import app
 from boatyard.verbs import build
-from boatyard import bake as bake_module
+from boatyard import build as build_module
 from boatyard import dockerfiles as dockerfiles_module
 from boatyard import lock as lock_module
 from boatyard.config.lock import LOCK_PATH
@@ -170,10 +170,10 @@ def _prepare(
     variants: dict[str, list[str]] | None = None,
 ) -> BakeRunner:
     recorder = BakeRunner()
-    monkeypatch.setattr(bake_module, "bash", recorder.run)
+    monkeypatch.setattr(build_module, "bash", recorder.run)
     monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
-    monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
-    monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
+    monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
+    monkeypatch.setattr(build_module, "host_platform", _amd64_host)
     monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
     monkeypatch.chdir(tmp_path)
     _write_repo(
@@ -216,10 +216,10 @@ class TestDefaultTargets:
         ]
 
     def test_foreign_arch_repo_refuses_bare_build(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(bake_module, "bash", BakeRunner().run)
+        monkeypatch.setattr(build_module, "bash", BakeRunner().run)
         monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
-        monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
+        monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL}, platforms=["linux/arm64"])
@@ -311,10 +311,10 @@ class TestCellSelection:
         assert "localizer/rocm" in result.output
 
     def _refuse(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, arguments: list[str]) -> Any:
-        monkeypatch.setattr(bake_module, "bash", BakeRunner().run)
+        monkeypatch.setattr(build_module, "bash", BakeRunner().run)
         monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
-        monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
+        monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
         monkeypatch.chdir(tmp_path)
         _write_repo(
@@ -352,10 +352,10 @@ class TestBakeFailure:
         def _fail(command: str) -> None:
             raise CalledProcessError(returncode=1, cmd=command)
 
-        monkeypatch.setattr(bake_module, "bash", _fail)
+        monkeypatch.setattr(build_module, "bash", _fail)
         monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
-        monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
+        monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": EXTERNAL})
@@ -417,10 +417,10 @@ class TestPushDestination:
         assert (tmp_path / "metadata.json").is_file()
 
     def test_a_target_with_no_tagged_references_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(bake_module, "bash", BakeRunner(_baked("zed-capture", refs="", digest=DIGEST_A)).run)
+        monkeypatch.setattr(build_module, "bash", BakeRunner(_baked("zed-capture", refs="", digest=DIGEST_A)).run)
         monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
-        monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
+        monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL})
@@ -431,10 +431,10 @@ class TestPushDestination:
         assert isinstance(result.exception, ValueError)
 
     def test_bake_output_not_covering_the_targets_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(bake_module, "bash", MissingTargetRunner().run)
+        monkeypatch.setattr(build_module, "bash", MissingTargetRunner().run)
         monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
-        monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
+        monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL})
@@ -455,10 +455,10 @@ class TestPushDestination:
         self._refuse_address(monkeypatch, tmp_path, ["--push-to", "zed-capture"])
 
     def _refuse_address(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, arguments: list[str]) -> None:
-        monkeypatch.setattr(bake_module, "bash", BakeRunner().run)
+        monkeypatch.setattr(build_module, "bash", BakeRunner().run)
         monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
-        monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
-        monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
+        monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL})
@@ -493,9 +493,9 @@ LOCK_DOCKERFILES: dict[str, str] = {"api": EXTERNAL}
 class TestBakeSeesLockValues:
     def test_bake_sees_mirror_prefixed_lock_values(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         probe = BakeEnvProbe()
-        monkeypatch.setattr(bake_module, "bash", probe.run)
-        monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
-        monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
+        monkeypatch.setattr(build_module, "bash", probe.run)
+        monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         _fixed_registry(monkeypatch)
         monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.chdir(tmp_path)
@@ -773,19 +773,19 @@ class TestHostPlatform:
         for machine in ("x86_64", "AMD64"):
             monkeypatch.setattr(platform, "machine", lambda machine=machine: machine)
 
-            assert bake_module.host_platform() == "linux/amd64"
+            assert build_module.host_platform() == "linux/amd64"
 
     def test_arm64_spellings_map_to_linux_arm64(self, monkeypatch: pytest.MonkeyPatch) -> None:
         for machine in ("aarch64", "ARM64"):
             monkeypatch.setattr(platform, "machine", lambda machine=machine: machine)
 
-            assert bake_module.host_platform() == "linux/arm64"
+            assert build_module.host_platform() == "linux/arm64"
 
     def test_other_architectures_refuse(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(platform, "machine", lambda: "riscv64")
 
         with pytest.raises(ValueError, match="Unsupported host architecture"):
-            bake_module.host_platform()
+            build_module.host_platform()
 
 
 class TestPushFlags:
