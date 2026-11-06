@@ -141,24 +141,11 @@ def up(
         )
 
     # Derive the forwarded environment from public_url under the auth option
-    auth_service = next((service for service in services if service.auth), None)
     forwarded = None
-    if auth_service is not None:
+    if any(service.auth for service in services):
         if config_values.public_url is None:
             raise ValueError("an auth option is selected; public_url is required in boatyard.values.yaml")
         forwarded = config_values.public_url.forwarded
-
-    # Namespace routes and ports under their declaring entries
-    routes = [
-        route.model_copy(update={"upstream": f"{service.name}-{route.upstream}"})
-        for service in services
-        for route in service.routes
-    ]
-    ports = [
-        port.model_copy(update={"service": f"{service.name}-{port.service}"})
-        for service in services
-        for port in service.ports
-    ]
 
     # Render the edge and its Caddyfile when a gateway is declared
     document_services: dict[str, Yaml] = {}
@@ -177,29 +164,34 @@ def up(
 
         # Render one handle block per route in declaration order
         lines = [f":{EDGE_LISTEN_PORT} {{"]
-        for route in routes:
-            matcher = "" if route.path == "/*" else f" {route.path}"
-            if route.raw is not None:
-                block = ["\t\t" + line for line in route.raw.splitlines()]
-            elif auth_service is not None and route.path == auth_service.routes[0].path:
-                block = [
-                    f"\t\treverse_proxy {route.upstream} {{",
-                    "\t\t\theader_up X-Forwarded-Proto {$FORWARDED_PROTO}",
-                    "\t\t\theader_up X-Forwarded-Port {$FORWARDED_PORT}",
-                    "\t\t}",
-                ]
-            else:
-                block = [f"\t\treverse_proxy {route.upstream}"]
-            head = "\thandle_path" if route.strip_prefix else "\thandle"
-            lines.extend((f"{head}{matcher} {{", *block, "\t}"))
+        for service in services:
+            for index, route in enumerate(service.routes):
+                upstream = f"{service.name}-{route.upstream}"
+                matcher = "" if route.path == "/*" else f" {route.path}"
+                if route.raw is not None:
+                    block = ["\t\t" + line for line in route.raw.splitlines()]
+                elif service.auth and index == 0:
+                    block = [
+                        f"\t\treverse_proxy {upstream} {{",
+                        "\t\t\theader_up X-Forwarded-Proto {$FORWARDED_PROTO}",
+                        "\t\t\theader_up X-Forwarded-Port {$FORWARDED_PORT}",
+                        "\t\t}",
+                    ]
+                else:
+                    block = [f"\t\treverse_proxy {upstream}"]
+                head = "\thandle_path" if route.strip_prefix else "\thandle"
+                lines.extend((f"{head}{matcher} {{", *block, "\t}"))
         lines.append("}")
         caddyfile = double_dollars("\n".join(lines) + "\n")
 
-    # Group the namespaced ports into per-service stanzas
+    # Group the ports under their namespaced owners into per-service stanzas
     document_services.update({
-        service: {"ports": [port.model_dump(exclude={"service"}, exclude_none=True) for port in service_ports]}
-        for service, service_ports in groupby(
-            sorted(ports, key=lambda port: port.service), key=lambda port: port.service
+        f"{service.name}-{owner}": {
+            "ports": [port.model_dump(exclude={"service"}, exclude_none=True) for port in owner_ports]
+        }
+        for service in services
+        for owner, owner_ports in groupby(
+            sorted(service.ports, key=lambda port: port.service), key=lambda port: port.service
         )
     })
     # Assemble the root document
