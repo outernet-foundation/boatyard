@@ -6,7 +6,6 @@ import json
 import re
 import shlex
 from collections.abc import Mapping
-from pathlib import Path
 
 import yaml
 from bashrun.bash import bash_output
@@ -30,7 +29,6 @@ from boatyard.config.lock import (
     ConfigLockBundle,
     ConfigLockEntry,
 )
-from boatyard.paths import DEFAULT_CONFIG_PATH
 from boatyard.temp import SHA256_DIGEST_REGEX
 from boatyard.yaml import load_yaml_model
 
@@ -65,18 +63,6 @@ class OciArtifactManifest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     layers: list[OciDescriptor] = Field(default_factory=list)
-
-
-def run_lock(*, upgrade: bool = False, check: bool = False) -> None:
-    config_path = Path.cwd() / DEFAULT_CONFIG_PATH
-    if not config_path.is_file():
-        print("no boatyard.yml; no lock declarations to relock")
-        return
-    config = ConfigFile.load(config_path)
-    if not config.base_images and not config.declared_charts and not config.remote_declared_entries():
-        print("no lock declarations (none of base_images, k8s.charts, service refs); nothing to relock")
-        return
-    relock(config, upgrade=upgrade, check=check)
 
 
 def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) -> LockFile:
