@@ -702,6 +702,26 @@ class TestUpValidation:
         assert isinstance(result.exception, ValueError)
         assert "'3306' references 'placeframe-cuda-grafana'" in str(result.exception)
 
+    def test_a_local_output_defining_the_edge_service_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        # A hand-edited generated output can spell the reserved name; the scan refuses it at bring-up.
+        cuda = _write_consumer_tree(tmp_path)
+        cuda.write_text(
+            yaml.safe_dump({
+                "services": {
+                    "placeframe-cuda-api": {"image": "demo/api:1"},
+                    "placeframe-cuda-grafana": {"image": "demo/grafana:1"},
+                    "edge": {"image": "demo/edge:1"},
+                }
+            }),
+            encoding="utf-8",
+        )
+
+        result = self._invoke_up(tmp_path, monkeypatch)
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, ValueError)
+        assert "reserved service 'edge'" in str(result.exception)
+
     def test_a_local_output_slot_no_environment_source_fills_refuses(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
@@ -1409,10 +1429,9 @@ class TestBundleOverrides:
     def test_an_override_defining_the_edge_service_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         consumer = tmp_path / "consumer"
         consumer.mkdir()
-        # A hand-authored override file outside the namespace scheme can still spell the
-        # reserved service name; the refusal guards that hand-written surface.
-        producer_output = tmp_path / "producer" / "stack" / "generated" / "compose" / "compose.placeframe-cuda.yaml"
-        producer_output.parent.mkdir(parents=True, exist_ok=True)
+        # A hand-authored file outside the namespace scheme can still spell the
+        # reserved service name; the refusal guards every locally included bundle file.
+        producer_output = _write_producer(tmp_path, ["api"], _producer_lock(["linux/amd64"]))
         producer_output.write_text(
             yaml.safe_dump({"services": {"api": {"image": "demo/api:1"}, "edge": {"image": "demo/edge:1"}}}),
             encoding="utf-8",

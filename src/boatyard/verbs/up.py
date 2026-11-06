@@ -18,6 +18,7 @@ from boatyard.config.config import (
     ConfigFile,
     EDGE_SERVICE_NAME,
     OCI_REFERENCE_PREFIX,
+    ResolvedService,
     Yaml,
     bundle_lock_key,
     compose_bundle_output_path,
@@ -84,10 +85,10 @@ def up(
                 raise ValueError(
                     f"selected entry {name!r} has no bundle output {output.as_posix()}; generate-score writes it"
                 )
-            text = output.read_text(encoding="utf-8")
-            requirements[name] = scan_bundle_texts(name, service.routes, service.ports, [text]).requires
-            includes.append(output.resolve().as_posix())
-            entries.update({lock_key_prefix(name) + key: value for key, value in consumer_entries.items()})
+            requires, include, prefixed_entries = _stage_local_bundle(name, service, output, consumer_entries)
+            requirements[name] = requires
+            includes.append(include)
+            entries.update(prefixed_entries)
             continue
 
         # Include an overridden ref through its local path
@@ -95,19 +96,17 @@ def up(
         path = (candidate if candidate.is_absolute() else config.root / candidate).resolve()
         if not path.is_file():
             raise ValueError(f"path_overrides.{name}: {path.as_posix()} does not exist")
-        text = path.read_text(encoding="utf-8")
-        scan = scan_bundle_texts(name, service.routes, service.ports, [text])
-        if EDGE_SERVICE_NAME in scan.service_names:
-            raise ValueError(f"{path.as_posix()}: the bundle override defines the reserved service {EDGE_SERVICE_NAME!r}")
-        requirements[name] = scan.requires
-        includes.append(path.as_posix())
         # Fill the override's slots from the producer repo above the override
         producer_root = _producer_root(path)
         producer_config = ConfigFile.load(producer_root / DEFAULT_CONFIG_PATH)
         producer_entries = LockFile.load(producer_root / LOCK_PATH, producer_config).manifest_references(
             config_values.platform
         )
-        entries.update({lock_key_prefix(name) + key: value for key, value in producer_entries.items()})
+
+        requires, include, prefixed_entries = _stage_local_bundle(name, service, path, producer_entries)
+        requirements[name] = requires
+        includes.append(include)
+        entries.update(prefixed_entries)
 
     # Refuse bundles whose requirements no environment source fills; the ambient
     # shell fills nothing, so a shell-set slot name is named as ignored, not counted.
@@ -255,3 +254,18 @@ def _producer_root(path: Path) -> Path:
         if (ancestor / DEFAULT_CONFIG_PATH).is_file():
             return ancestor
     raise ValueError(f"{path.as_posix()}: no boatyard.yml-bearing repo root above the bundle override")
+
+
+def _stage_local_bundle(
+    name: str,
+    service: ResolvedService,
+    path: Path,
+    source_entries: dict[str, str],
+) -> tuple[list[str], str, dict[str, str]]:
+    text = path.read_text(encoding="utf-8")
+    scan = scan_bundle_texts(name, service.routes, service.ports, [text])
+    if EDGE_SERVICE_NAME in scan.service_names:
+        raise ValueError(f"{path.as_posix()}: the included bundle defines the reserved service {EDGE_SERVICE_NAME!r}")
+    include = path.resolve().as_posix()
+    prefixed_entries = {lock_key_prefix(name) + key: value for key, value in source_entries.items()}
+    return scan.requires, include, prefixed_entries
