@@ -459,8 +459,9 @@ the CI-green verify), fixed and released as `0.6.1`:
   environment. Rider: compose-only runs still install score-k8s + helm.
 
 Found in the placeframe sweep (2026-11-06), fixed on `dev` (full preflight
-green), unreleased — the wave's pin target becomes the release carrying it
-(placeframe's `requires:` floor and dep pin ride up with it):
+green), released as `0.6.2`; the wave's pin target and `requires:` floor
+become `0.6.2` (infra-rathole's landed `==0.6.1` pin and `>=0.6.1` floor
+bump in passing when next touched):
 - `PortOrSlot` was string-typed, so a natural YAML int port
   (`published: 4040`) refused with a coercion error and only the quoted
   digit-string loaded. Literal ports are now int-typed (strict; digit strings
