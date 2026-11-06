@@ -168,19 +168,26 @@ def up(
             for index, route in enumerate(service.routes):
                 upstream = f"{service.name}-{route.upstream}"
                 matcher = "" if route.path == "/*" else f" {route.path}"
-                if route.raw is not None:
-                    block = ["\t\t" + line for line in route.raw.splitlines()]
-                elif service.auth and index == 0:
-                    block = [
-                        f"\t\treverse_proxy {upstream} {{",
-                        "\t\t\theader_up X-Forwarded-Proto {$FORWARDED_PROTO}",
-                        "\t\t\theader_up X-Forwarded-Port {$FORWARDED_PORT}",
-                        "\t\t}",
-                    ]
-                else:
-                    block = [f"\t\treverse_proxy {upstream}"]
                 head = "\thandle_path" if route.strip_prefix else "\thandle"
-                lines.extend((f"{head}{matcher} {{", *block, "\t}"))
+                if route.raw is not None:
+                    lines.extend((f"{head}{matcher} {{", *["\t\t" + line for line in route.raw.splitlines()], "\t}"))
+                    continue
+
+                if service.auth and index == 0:
+                    lines.extend((
+                        f"{head}{matcher} {{",
+                        *[
+                            f"\t\treverse_proxy {upstream} {{",
+                            "\t\t\theader_up X-Forwarded-Proto {$FORWARDED_PROTO}",
+                            "\t\t\theader_up X-Forwarded-Port {$FORWARDED_PORT}",
+                            "\t\t}",
+                        ],
+                        "\t}",
+                    ))
+                    continue
+
+                lines.extend((f"{head}{matcher} {{", *[f"\t\treverse_proxy {upstream}"], "\t}"))
+
         lines.append("}")
         caddyfile = double_dollars("\n".join(lines) + "\n")
 
