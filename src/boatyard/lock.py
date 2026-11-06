@@ -125,7 +125,8 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
                 child
                 for child in children
                 if child.annotations.get("vnd.docker.reference.type") != "attestation-manifest"
-                if _concrete_platform(child) == platform
+                if child.platform is not None
+                and f"{child.platform.os}/{child.platform.architecture}" == platform
             ]
             if len(matches) != 1:
                 raise ValueError(
@@ -252,15 +253,6 @@ def resolve_remote_digest(reference: str) -> str:
 
 def render_env_entries(entries: Mapping[str, str]) -> str:
     return "".join(f"{name}={reference}\n" for name, reference in sorted(entries.items()))
-
-
-def _concrete_platform(child: OciDescriptor) -> str | None:
-    platform = child.platform
-    if platform is None or platform.os is None or platform.architecture is None:
-        return None
-    if platform.os == "unknown" or platform.architecture == "unknown":
-        return None
-    return f"{platform.os}/{platform.architecture}"
 
 
 def _child_digest(child: OciDescriptor, subject: str) -> str:
