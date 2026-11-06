@@ -219,7 +219,7 @@ class TestEdgeStanza:
         document = _assembly_document(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
 
         assert document["services"]["edge"] == {
-            "image": "${CADDY_IMAGE:?err}",
+            "image": CADDY_LOCK_ENTRY,
             "configs": [{"source": "devkit-edge-caddyfile", "target": "/etc/caddy/Caddyfile"}],
             "ports": [{"target": "8443", "published": "${GATEWAY_PORT:?err}", "protocol": "tcp"}],
             "networks": {"livekit-net": None},

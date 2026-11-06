@@ -699,6 +699,14 @@ def lock_key_prefix(name: str) -> str:
     return name.upper().replace("-", "_") + "_"
 
 
+LOCK_SLOT_MARKER = "__LOCK__"
+
+
+def env_lock_slot(entry_name: str, lock_key: str) -> str:
+    # The marker reserves the fan spelling against values-file keys; the values parse refuses it
+    return entry_name.upper().replace("-", "_") + LOCK_SLOT_MARKER + lock_key
+
+
 def chart_lock_key(name: str) -> str:
     return lock_key_prefix(name) + "CHART"
 

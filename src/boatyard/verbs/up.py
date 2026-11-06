@@ -23,7 +23,7 @@ from boatyard.config.config import (
     bundle_lock_key,
     compose_bundle_output_path,
     double_dollars,
-    lock_key_prefix,
+    env_lock_slot,
     scan_bundle_texts,
 )
 from boatyard.config.lock import LockFile
@@ -66,7 +66,7 @@ def up(
     # Project the consumer lock's manifest references and seed the assembly accumulators
     lock = LockFile.load(config.root / LOCK_PATH, config)
     consumer_entries = lock.manifest_references(config_values.platform)
-    entries: dict[str, str] = dict(consumer_entries)
+    entries: dict[str, str] = {}
     includes: list[Yaml] = []
     requirements: dict[str, list[str]] = {}
 
@@ -121,10 +121,10 @@ def up(
                 f"the included bundle defines the reserved service {EDGE_SERVICE_NAME!r}"
             )
 
-        # Record the entry's requirements, include the file by absolute path, and fan its lock keys under the prefix
+        # Record the entry's requirements, include the file by absolute path, and fan its lock keys under the marker
         requirements[name] = scan.requires
         includes.append(bundle_compose_path.resolve().as_posix())
-        entries.update({lock_key_prefix(name) + key: value for key, value in lock_references.items()})
+        entries.update({env_lock_slot(name, key): value for key, value in lock_references.items()})
 
     # Refuse bundles whose requirements no environment source fills, naming shell-set slots as ignored
     filled = {variable for variable, value in {**config_values.variables, **entries}.items() if value}
@@ -157,7 +157,7 @@ def up(
     # Render the edge and its Caddyfile when a gateway is declared
     if config.gateway is not None:
         edge: dict[str, Yaml] = {
-            "image": f"${{{CADDY_IMAGE}:?err}}",
+            "image": consumer_entries[CADDY_IMAGE],
             "configs": [{"source": EDGE_CONFIG_NAME, "target": "/etc/caddy/Caddyfile"}],
             "ports": [{"target": str(EDGE_LISTEN_PORT), "published": config.gateway, "protocol": "tcp"}],
             # Attach the edge to every selected bundle's network
@@ -209,12 +209,6 @@ def up(
     # Materialize the per-run files and hand off
     with ExitStack() as stack:
         # Write the one per-run dotenv from consumer values and lock entries
-        shared = sorted(set(config_values.variables) & set(entries))
-        if shared:
-            raise ValueError(
-                f"{VALUES_FILE.name} sets {shared}, which the lock env file also fills; "
-                f"the lock is their only source — remove them from {VALUES_FILE.name}"
-            )
         env_document = ""
         if config_values.variables:
             env_document += f"# {VALUES_FILE.name}\n{render_env_entries(config_values.variables)}"

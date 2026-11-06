@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator, mod
 
 from boatyard.config.config import (
     ENV_NAME_PATTERN,
+    LOCK_SLOT_MARKER,
     ConfigFile,
     Yaml,
     is_mapping,
@@ -167,6 +168,19 @@ class ValuesFile(BaseModel):
         unknown = sorted(key for key in variables if ENV_NAME_PATTERN.fullmatch(key) is None)
         if unknown:
             raise ValueError(f"{source}: keys {unknown} are not ALL_CAPS environment names")
+        return variables
+
+    @field_validator("variables")
+    @classmethod
+    def _require_lock_marker_free_names(cls, variables: dict[str, str], info: ValidationInfo) -> dict[str, str]:
+        context: dict[str, object] = info.context or {}
+        source = context.get("path", VALUES_FILE.name)
+        reserved = sorted(name for name in variables if LOCK_SLOT_MARKER in name)
+        if reserved:
+            raise ValueError(
+                f"{source}: keys {reserved} carry the reserved {LOCK_SLOT_MARKER} marker; "
+                f"the lock fills those slots — never set them by hand"
+            )
         return variables
 
     @classmethod

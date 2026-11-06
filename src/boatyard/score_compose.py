@@ -19,7 +19,7 @@ from boatyard.config.config import (
     Yaml,
     compose_bundle_output_path,
     double_dollars,
-    lock_key_prefix,
+    env_lock_slot,
     ConfigFile,
 )
 from boatyard.config.lock import LOCK_PATH, LockFile
@@ -249,7 +249,6 @@ def generate_compose(
                 service.configs.append(ComposeConfigReference(source=f"{name}-{path.name}", target=bind_volume.target))
 
         # Scan consumed secrets and namespace the lock-key slots in one pass
-        prefix = lock_key_prefix(name)
         text = dump_yaml(document.dump())
         namespaced: list[str] = []
         cursor = 0
@@ -259,7 +258,7 @@ def generate_compose(
             if len(match.group(1)) % 2 == 1:
                 slot = match.group(2)
                 if slot in images:
-                    namespaced.append(f"{match.group(1)}{{{prefix}{slot}{match.group(3) or ''}}}")
+                    namespaced.append(f"{match.group(1)}{{{env_lock_slot(name, slot)}{match.group(3) or ''}}}")
                     continue
                 consumed.add(slot)
             namespaced.append(match.group(0))

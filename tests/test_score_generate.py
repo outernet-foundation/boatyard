@@ -542,7 +542,7 @@ def test_generate_compose_renames_the_barrier_and_its_references_per_entry(
         "core-wait-for-resources": {"condition": "service_started"}
     }
     assert document["services"]["core-pf-postgres"]["depends_on"] == ["core-wait-for-resources"]
-    assert document["services"]["core-wait-for-resources"]["image"] == "${CORE_ALPINE_IMAGE:?err}"
+    assert document["services"]["core-wait-for-resources"]["image"] == "${CORE__LOCK__ALPINE_IMAGE:?err}"
 
 
 def test_generate_compose_barrier_names_differ_per_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -570,8 +570,8 @@ def test_generate_compose_barrier_names_differ_per_entry(tmp_path: Path, monkeyp
 
     core = yaml.safe_load((tmp_path / "stack/generated/compose/compose.core.yaml").read_text(encoding="utf-8"))
     edge = yaml.safe_load((tmp_path / "stack/generated/compose/compose.edge.yaml").read_text(encoding="utf-8"))
-    assert core["services"]["core-wait-for-resources"]["image"] == "${CORE_ALPINE_IMAGE:?err}"
-    assert edge["services"]["edge-wait-for-resources"]["image"] == "${EDGE_ALPINE_IMAGE:?err}"
+    assert core["services"]["core-wait-for-resources"]["image"] == "${CORE__LOCK__ALPINE_IMAGE:?err}"
+    assert edge["services"]["edge-wait-for-resources"]["image"] == "${EDGE__LOCK__ALPINE_IMAGE:?err}"
 
 
 class WorkloadContentsRecorder:
