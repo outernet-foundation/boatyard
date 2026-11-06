@@ -65,17 +65,21 @@ separate commits.
   toolkit SHA bump incl. its local setup-release-devkit composite, the docs
   flip). Battery green locally (ruff, format, basedpyright, matrix `[]`,
   plan, `lock --check`, lint-workflows at the new pin); zero
-  docker-devkit/`--lock-only`/`--gpu`/hole mentions remain. CI-green is
-  blocked on the two boatyard defects above — the branch awaits the fix
-  release and the operator push.
+  docker-devkit/`--lock-only`/`--gpu`/hole mentions remain. Landed: the
+  branch was rebased to a clean three commits on `origin/dev` (bundle+cutover
+  code pinning `0.6.1`; `Run generate-score`; docs), force-pushed, and the
+  rathole-client bundle is published carrying the 0.6.1 rendering —
+  Make-it-Sing's ref flip targets the fresh digest's sha tag.
 - Both boatyard defects fixed on `dev` (2026-11-06, `abd6236` prose +
   `dde430a` code, full preflight green): `generate-score`'s `--target`
   default now derives from the config (explicit misspellings still refuse),
   and `ensure_tools` presence-probes with `shutil.which` plus installs only
   the tools the target needs. Verified end-to-end: the dev verb, bare
   invocation against swept infra-rathole, regenerates byte-identically.
-  Next: operator releases (0.6.1 expected) → repin infra-rathole → next
-  consumer sweep (lbe-toolkit or Make-it-Sing, one per session).
+   Released as 0.6.1; the sweep's remaining consumers pin it from the start.
+   Sweep order set (2026-11-06): placeframe, placeframe-capture-tool,
+   lbe-toolkit, then Make-it-Sing (its local checkout needs `git switch
+   compose-bundles` before editing).
 - The values-file session (2026-11-04, battery green) landed atop Work 1 and
   rewrote the consumer surface: `.env` is dead — `boatyard.values.yaml`
   (gitignored, typed; `ConfigValues` in `values_file.py`) is the only
@@ -162,7 +166,8 @@ These rulings bind every work unit below.
 1  build-out   the iteration unit on the refactor branch: disk-state service
                hashes, qualified selection grammar, ref tag grammar + _BUNDLE
                lock entries, path-form bundle overrides
-2  release     boatyard 0.6.0 — operator; one release, the pin target
+2  release     boatyard 0.6.0, then 0.6.1 (the mid-wave defect fixes) —
+               operator; the wave pins 0.6.1, never bare 0.6.0
 3  toolkit     cutover onto boatyard spellings; the SHA the wave bumps to
 4  sweep       all five consumers repin once, relock, rename, drop imports,
                adopt the iteration unit
@@ -440,9 +445,7 @@ wherever the release actually landed. Upstream defects the sweep surfaces in
 github-actions-toolkit or boatyard itself are fixable mid-wave — surface, fix
 the upstream, record here; the wave's pin target follows whatever release
 carries the fixes. Found in infra-rathole (both boatyard 0.6.0, both blocked
-the CI-green verify) and fixed on boatyard `dev` at `dde430a` — awaiting the
-operator release (0.6.1 expected; every consumer pin — including swept
-infra-rathole's — repins to it in a one-line + `uv lock` commit):
+the CI-green verify), fixed and released as `0.6.1`:
 - `generate-score` defaults `--target both` and a one-substrate repo refuses
   under that default — the toolkit getter hardcodes the bare
   `generate-score --check`, so every compose-only repo (infra-rathole,
@@ -454,6 +457,16 @@ infra-rathole's — repins to it in a one-line + `uv lock` commit):
   a missing binary — the install path is unreachable on a fresh machine
   (runner or sandbox); `generate-score` 0.6.0 has never run clean off a fresh
   environment. Rider: compose-only runs still install score-k8s + helm.
+
+Found in the placeframe sweep (2026-11-06), fixed on `dev` (full preflight
+green), unreleased — the wave's pin target becomes the release carrying it
+(placeframe's `requires:` floor and dep pin ride up with it):
+- `PortOrSlot` was string-typed, so a natural YAML int port
+  (`published: 4040`) refused with a coercion error and only the quoted
+  digit-string loaded. Literal ports are now int-typed (strict; digit strings
+  refuse naming the env-slot alternative), env slots stay the string branch,
+  and the edge emission drops its `str()` coercion. infra-rathole declares no
+  ports; unswept configs flip in their own sweeps.
 
 Sweep mechanics discovered in infra-rathole, carried to the rest: the
 score-tool trio (score-compose 0.42.0, score-k8s 0.15.0, helm 3.22.1) must
@@ -474,8 +487,10 @@ its `up` assembly (the path-override verify) surfaces whether the
 
 Common to all five, order within a repo code → lockfiles → prose:
 
-1. Dependency: `docker-devkit…` → `boatyard==0.6.0` (or `>=`); `uv lock
-   --upgrade-package boatyard`. `requires:` floor → `>=0.6.0`.
+1. Dependency: `docker-devkit…` → `boatyard==0.6.1` (or `>=`); `uv lock
+   --upgrade-package boatyard`. `requires:` floor → `>=0.6.1` (0.6.0 carries
+   the two sweep defects; infra-rathole landed `>=0.6.0` before this ruling —
+   bump it in passing when next touched).
 2. `git mv docker-devkit.yaml boatyard.yml`; `git mv docker-devkit.lock
    boatyard.lock.yml`, then truncate the lock to the empty file before the
    relock — the old env format never parses at relock's committed
