@@ -80,6 +80,41 @@ separate commits.
    Sweep order set (2026-11-06): placeframe, placeframe-capture-tool,
    lbe-toolkit, then Make-it-Sing (its local checkout needs `git switch
    compose-bundles` before editing).
+- Placeframe swept (2026-11-06, pushed; PR "Compose bundles" open on its
+  `compose-bundles`): repin (`boatyard==0.6.3`, `requires >=0.6.3`, DEP002 for
+  the CLI-only dep, pyyaml added for the values-file reads), renames + empty-lock
+  relock (platforms amd64, variants `TORCH_DEVICE: [cuda, rocm]`, tunnel ports to
+  the mapping form with int literals), the keycloak/ngrok marker→`${NAME}` hole
+  flips, ngrok's target `door`→`edge`, preflight onto `boatyard build --targets
+  postgres` + `tree-tags postgres` (image-ref and coupling checks die with the
+  imports), api_auth/sweep_postprocess onto `yaml.safe_load` (typed via pydantic
+  TypeAdapter), both score test modules rewritten to assert the committed
+  artifacts (no boatyard imports, no skipif gates), toolkit `uses:` →
+  `f2d576a…` (nine refs across four files), the docs flip (six AGENTS files +
+  README + secrets/Dockerfile/score-file comments: boatyard names, `uv run
+  boatyard <verb>`, values-file spellings, hole→slot, `edge`, no `up --dev` —
+  the dev overlay is unbuilt trigger-gated design and the dev-toggles
+  annotations ride inert), and one clean-basis regeneration. Before pushing, the
+  branch was rebased onto `origin/dev`: the twelve-commit sweep collapsed to
+  five (cutover, toolkit bump, docs flip, one `Run generate-score`, tests), the
+  pre-sweep old-basis `301b8f09 Run generate-score` dropped (artifacts-only), a
+  `sweep-backup` branch held the pre-rebase chain during the rework and may be
+  deleted; final tree byte-identical to the pre-rebase tip, and the clean-clone
+  `generate-score --check` passes at the new tip. Verified locally: ruff,
+  format, basedpyright (the only errors are pre-existing torch-resolution gaps —
+  the venv lacks the cuda extra and the sync was deliberately skipped), scripts
+  pytest 17, `lock --check`, matrix (three partitions incl. the TORCH_DEVICE
+  fans), `publish-compose --plan` (four qualified bundles), lint-workflows at
+  `f2d576a`. First Integrate run (42203772626, 2026-11-06): the docker-build leg
+  FAILED — operator canceled the run; the failure is undiagnosed. NEXT SESSION
+  OPENS HERE: pull the failed docker-build job's log from that run first thing,
+  root-cause before touching anything (the regen's tree tags name images CI must
+  build; candidates: the variant-fanned build args, the `{uv}`/`{python}`
+  templates, the postgres-wrapper preflight leg — but read the log, don't
+  guess), fix under direction, re-run CI, and only then continue the sweep —
+  placeframe-capture-tool, then lbe-toolkit, then Make-it-Sing (`git switch
+  compose-bundles` first). Also unverified locally (needs the cuda sync / CI):
+  the full preflight sidecar end-to-end and generate-clients.
 - The values-file session (2026-11-04, battery green) landed atop Work 1 and
   rewrote the consumer surface: `.env` is dead — `boatyard.values.yaml`
   (gitignored, typed; `ConfigValues` in `values_file.py`) is the only
@@ -459,9 +494,7 @@ the CI-green verify), fixed and released as `0.6.1`:
   environment. Rider: compose-only runs still install score-k8s + helm.
 
 Found in the placeframe sweep (2026-11-06), fixed on `dev` (full preflight
-green), released as `0.6.2`; the wave's pin target and `requires:` floor
-become `0.6.2` (infra-rathole's landed `==0.6.1` pin and `>=0.6.1` floor
-bump in passing when next touched):
+green), released as `0.6.2`:
 - `PortOrSlot` was string-typed, so a natural YAML int port
   (`published: 4040`) refused with a coercion error and only the quoted
   digit-string loaded. Literal ports are now int-typed (strict; digit strings
@@ -470,8 +503,9 @@ bump in passing when next touched):
   ports; unswept configs flip in their own sweeps.
 
 Found in the placeframe sweep (2026-11-06), fixed on `dev` (full preflight
-green), unreleased — rides the same release as the port fix if it hasn't
-cut yet, else the next:
+green), released as `0.6.3` together with the port fix; the wave's pin
+target and `requires:` floor are `0.6.3` from here (infra-rathole's landed
+`==0.6.1` pin and `>=0.6.1` floor bump in passing when next touched):
 - `render_score` expanded workload `${SHA}` slots in-process but never
   exported the values to the score tool subprocess, so provisioner templates
   reading `{{ env "AUTH_INITIALIZER_SHA" }}` (placeframe carries fifteen
@@ -497,7 +531,12 @@ repo with one. The Make-it-Sing phase must watch the rathole bundle's
 default local addrs (`gateway:8443`, `livekit:6178`): they now sit on the
 bundle's private network, where consumer service names may not resolve —
 its `up` assembly (the path-override verify) surfaces whether the
-`TUNNEL_*_ADDR` slots need explicit values.
+`TUNNEL_*_ADDR` slots need explicit values. Placeframe added: its checkout
+carries ignored dirt under the `.dockerignore` allowlist (`__pycache__`,
+`egg-info/`, the vendored deep-image-retrieval `.venv`) and dirt hashes, so
+committed regenerations must mint from a clean clone of the branch tip — a
+dirty-tree regen commits machine-local tags and fails CI's
+`generate-score --check` (recorded in placeframe's `stack/AGENTS.md`).
 
 Common to all five, order within a repo code → lockfiles → prose:
 
