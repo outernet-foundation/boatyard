@@ -8,7 +8,7 @@ from typer.testing import CliRunner
 
 from boatyard.cli import app
 from boatyard.config import values
-from boatyard.config.config import ConfigFile
+from boatyard.config.config import ConfigFile, PortOrSlot
 from boatyard.verbs import up
 from boatyard.config.lock import LOCK_PATH
 
@@ -39,7 +39,7 @@ def _write_edge_tree(
     routes: list[dict[str, object]],
     *,
     auth: bool = False,
-    gateway: str | None = "${GATEWAY_PORT:?err}",
+    gateway: PortOrSlot | None = "${GATEWAY_PORT:?err}",
     public_url: str = "http://192.168.8.10:58080",
 ) -> None:
     services: dict[str, object] = {
@@ -102,7 +102,7 @@ def _assembly_document(
     routes: list[dict[str, object]],
     *,
     auth: bool = False,
-    gateway: str | None = "${GATEWAY_PORT:?err}",
+    gateway: PortOrSlot | None = "${GATEWAY_PORT:?err}",
     public_url: str = "http://192.168.8.10:58080",
 ) -> dict[str, Any]:
     _write_edge_tree(tmp_path, monkeypatch, routes, auth=auth, gateway=gateway, public_url=public_url)
@@ -221,16 +221,14 @@ class TestEdgeStanza:
         assert document["services"]["edge"] == {
             "image": CADDY_LOCK_ENTRY,
             "configs": [{"source": "devkit-edge-caddyfile", "target": "/etc/caddy/Caddyfile"}],
-            "ports": [{"target": "8443", "published": "${GATEWAY_PORT:?err}", "protocol": "tcp"}],
+            "ports": [{"target": 8443, "published": "${GATEWAY_PORT:?err}", "protocol": "tcp"}],
             "networks": {"livekit-net": None},
         }
 
     def test_the_published_port_uses_a_literal_gateway(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        document = _assembly_document(
-            tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], gateway="8080"
-        )
+        document = _assembly_document(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], gateway=8080)
 
-        assert document["services"]["edge"]["ports"] == [{"target": "8443", "published": "8080", "protocol": "tcp"}]
+        assert document["services"]["edge"]["ports"] == [{"target": 8443, "published": 8080, "protocol": "tcp"}]
 
     def test_routes_without_a_gateway_refuse_at_load(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _write_edge_tree(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], gateway=None)

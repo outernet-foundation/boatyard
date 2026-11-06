@@ -159,7 +159,7 @@ def up(
         edge: dict[str, Yaml] = {
             "image": consumer_entries[CADDY_IMAGE],
             "configs": [{"source": EDGE_CONFIG_NAME, "target": "/etc/caddy/Caddyfile"}],
-            "ports": [{"target": str(EDGE_LISTEN_PORT), "published": config.gateway, "protocol": "tcp"}],
+            "ports": [{"target": EDGE_LISTEN_PORT, "published": config.gateway, "protocol": "tcp"}],
             # Attach the edge to every selected bundle's network
             "networks": dict.fromkeys(f"{service.name}-net" for service in services),
         }
