@@ -115,13 +115,13 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
 ## Build
 
 - `run_build` renders the deterministic per-run bake file (authored key order, byte-identical for identical configs; bake validates its own input — no document model); it takes the already-loaded `config` — the build verb owns its flag refusals; a failed bake re-raises with the rendered content attached.
-- Push axis: `--push` (bool) pushes for the config's `repository`; `--push-to <addr>` re-roots tags + cache refs under that registry; the flags together refuse; an address with a scheme, trailing slash, or host
+- Push axis: `--push` (bool) pushes for the config's `repository`; `--push-to <addr>` re-roots tags under that registry (ad-hoc destination — no cache refs); the flags together refuse; an address with a scheme, trailing slash, or host
   carrying neither `.` nor `:` refuses; `--push` without a declared `repository` refuses.
 - `host_platform()` = the one host fact left: the flagless default set is every service's first-declared variant restricted to this machine's arch, and an empty default set refuses naming the arch + `--targets` (bake with no target arguments
   builds every service, silently defeating the selection); `--targets` spelling is shape-dictated — bare `name` for an axis-less service, `name/variant` for an axis service (a bare name on an axis service refuses naming its variants; the dashed
   target name is bake-internal and refuses; repeated addresses ride through — bake owns set semantics); unknown names/variants refuse listing the vocabulary.
 - Per target: dockerfile by convention; platforms collapse to the host arch in load mode (a single declared platform rides through); args — every `base_images` key as `${KEY:-}` on every service, the axis
-  ARG at its variant value, `{SERVICE}_SHA` as `${…:?err}`; tags `{namespace}/{target}:latest` + `:${SERVICE_SHA}`; `target:`-prefixed `additional_contexts`; registry cache refs under `{namespace}/build-cache:{target}` in push mode.
+  ARG at its variant value, `{SERVICE}_SHA` as `${…:?err}`; tags `{namespace}/{target}:latest` + `:${SERVICE_SHA}`; `target:`-prefixed `additional_contexts`; registry cache refs under `{namespace}/build-cache:{target}` in `--push` mode.
 - The incremental lock write rides every building run (the `uv sync` shape — anyone who builds also locks), landing only after target selection + its refusals; bake reads the fresh entries as environment (index form); a building run with
   zero derived services refuses naming the lock verb.
 - `metadata.json`: cwd-stable, unlinked before the run, coverage-checked against the requested targets after; a repository push distills it into the shelved shard (Mirror namespace); local default-target builds run the daemon
