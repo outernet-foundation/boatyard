@@ -164,33 +164,33 @@ def up(
 
         # Render one handle block per route in declaration order
         lines = [f":{EDGE_LISTEN_PORT} {{"]
-        for service in services:
-            for index, route in enumerate(service.routes):
-                upstream = f"{service.name}-{route.upstream}"
-                opener = (
-                    ("\thandle_path" if route.strip_prefix else "\thandle")
-                    + ("" if route.path == "/*" else f" {route.path}")
-                    + " {"
-                )
-                if route.raw is not None:
-                    lines.extend((opener, *["\t\t" + line for line in route.raw.splitlines()], "\t}"))
-                    continue
+        for service, index, route in (
+            (service, index, route) for service in services for index, route in enumerate(service.routes)
+        ):
+            upstream = f"{service.name}-{route.upstream}"
+            opener = (
+                ("\thandle_path" if route.strip_prefix else "\thandle")
+                + ("" if route.path == "/*" else f" {route.path}")
+                + " {"
+            )
+            if route.raw is not None:
+                lines.extend((opener, *["\t\t" + line for line in route.raw.splitlines()], "\t}"))
+                continue
 
-                if service.auth and index == 0:
-                    lines.extend((
-                        opener,
-                        *[
-                            f"\t\treverse_proxy {upstream} {{",
-                            "\t\t\theader_up X-Forwarded-Proto {$FORWARDED_PROTO}",
-                            "\t\t\theader_up X-Forwarded-Port {$FORWARDED_PORT}",
-                            "\t\t}",
-                        ],
-                        "\t}",
-                    ))
-                    continue
+            if service.auth and index == 0:
+                lines.extend((
+                    opener,
+                    *[
+                        f"\t\treverse_proxy {upstream} {{",
+                        "\t\t\theader_up X-Forwarded-Proto {$FORWARDED_PROTO}",
+                        "\t\t\theader_up X-Forwarded-Port {$FORWARDED_PORT}",
+                        "\t\t}",
+                    ],
+                    "\t}",
+                ))
+                continue
 
-                lines.extend((opener, *[f"\t\treverse_proxy {upstream}"], "\t}"))
-
+            lines.extend((opener, *[f"\t\treverse_proxy {upstream}"], "\t}"))
         lines.append("}")
         caddyfile = double_dollars("\n".join(lines) + "\n")
 
