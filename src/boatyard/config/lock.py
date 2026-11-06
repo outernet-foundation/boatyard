@@ -78,14 +78,14 @@ class LockFile(BaseModel):
             return cls.model_validate({}, context=context)
         return load_yaml_model(cls, path, context)
 
-    def require(self, name: str, subject: str, hint: str = "the lock verb writes it") -> str:
+    def require(self, name: str, subject: str) -> str:
         if name in self.images:
             return self.images[name].index
         if name in self.charts:
             return self.charts[name]
         if name in self.bundles:
             return self.bundles[name].reference
-        raise ValueError(f"{subject}: {LOCK_PATH.as_posix()} lacks the {name} entry ({hint})")
+        raise ValueError(f"{subject}: {LOCK_PATH.as_posix()} lacks the {name} entry (run boatyard lock)")
 
     def index_references(self) -> dict[str, str]:
         return {**{name: entry.index for name, entry in self.images.items()}, **self.charts}

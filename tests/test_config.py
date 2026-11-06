@@ -1545,5 +1545,5 @@ class TestConfigLockParse:
     def test_require_refuses_naming_the_lock_verb(self, tmp_path: Path) -> None:
         lock = LockFile.model_validate({})
 
-        with pytest.raises(ValueError, match=r"lacks the CADDY_IMAGE entry.*lock verb writes it"):
+        with pytest.raises(ValueError, match=r"lacks the CADDY_IMAGE entry.*run boatyard lock"):
             lock.require("CADDY_IMAGE", "routes are declared")

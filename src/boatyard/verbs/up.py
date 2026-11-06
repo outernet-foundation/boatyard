@@ -103,7 +103,7 @@ def up(
 
         # Include a remote ref as its lock-pinned digest
         key = bundle_lock_key(name)
-        pinned = lock.require(key, f"bundle {name!r}", hint="run boatyard lock")
+        pinned = lock.require(key, f"bundle {name!r}")
         requirements[name] = lock.bundles[key].requires
         includes.append(f"{OCI_REFERENCE_PREFIX}{pinned}")
 
