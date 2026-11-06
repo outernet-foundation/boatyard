@@ -206,46 +206,46 @@ def up(
     if document_services:
         document["services"] = document_services
 
-    # Materialize the per-run files and hand off
     with ExitStack() as stack:
-        # Write the one per-run dotenv from consumer values and lock entries
-        env_document = "".join(
-            f"# {header}\n{render_env_entries(section)}"
-            for header, section in ((VALUES_FILE.name, config_values.variables), (LOCK_PATH.name, entries))
-            if section
-        )
+        # Materialize the env file
         with NamedTemporaryFile("w", suffix=".env", prefix="devkit-env-", delete=False, encoding="utf-8") as handle:
-            handle.write(env_document)
-        env_file = Path(handle.name)
-        stack.enter_context(lock_env_unwind(env_file))
+            handle.write(
+                "".join(
+                    f"# {header}\n{render_env_entries(section)}"
+                    for header, section in ((VALUES_FILE.name, config_values.variables), (LOCK_PATH.name, entries))
+                    if section
+                )
+            )
+        materialized_env_file = Path(handle.name)
+        stack.enter_context(lock_env_unwind(materialized_env_file))
 
-        # Write the materialized root document to its per-run assembly file
+        # Materialize the compose file
         with NamedTemporaryFile(
             "w", suffix=".yaml", prefix="devkit-assembly-", delete=False, encoding="utf-8"
         ) as handle:
             handle.write(yaml.safe_dump(document, sort_keys=False, default_flow_style=False))
-        assembly = Path(handle.name)
-        stack.callback(assembly.unlink, missing_ok=True)
+        materialized_compose_file = Path(handle.name)
+        stack.callback(materialized_compose_file.unlink, missing_ok=True)
 
         # Build local images
         if build:
             run_build(config=config)
 
         # Hand off to docker compose
-        up_command = compose_command(
-            root,
-            assembly,
-            "up",
-            *["--pull", "missing", *(["--quiet-pull"] if quiet_pull else []), *(["-d"] if not attached else [])],
-            env_file=env_file,
-            slot_names=[
-                *config_values.variables,
-                *entries,
-                *(name for required in requirements.values() for name in required),
-            ],
+        bash_handoff(
+            compose_command(
+                root,
+                materialized_compose_file,
+                "up",
+                *["--pull", "missing", *(["--quiet-pull"] if quiet_pull else []), *(["-d"] if not attached else [])],
+                env_file=materialized_env_file,
+                slot_names=[
+                    *config_values.variables,
+                    *entries,
+                    *(name for required in requirements.values() for name in required),
+                ],
+            )
         )
-
-        bash_handoff(up_command)
 
 
 def render_env_entries(entries: Mapping[str, str]) -> str:
