@@ -434,7 +434,7 @@ class TestPushDestination:
         assert build_block["cache_from"] == [f"type=registry,ref={REPOSITORY}/build-cache:zed-capture"]
         assert "--push" in recorder.commands[0].split()
 
-    def test_an_address_push_re_roots_tags_and_cache_refs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_an_address_push_re_roots_tags_without_cache_refs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         recorder = _prepare(
             monkeypatch,
             tmp_path,
@@ -447,13 +447,8 @@ class TestPushDestination:
             f"{LOCAL_REGISTRY}/zed-capture:latest",
             f"{LOCAL_REGISTRY}/zed-capture:${{ZED_CAPTURE_SHA}}",
         ]
-        assert build_block["cache_to"] == [
-            (
-                f"type=registry,ref={LOCAL_REGISTRY}/build-cache:zed-capture,"
-                "mode=max,image-manifest=true,oci-mediatypes=true"
-            )
-        ]
-        assert build_block["cache_from"] == [f"type=registry,ref={LOCAL_REGISTRY}/build-cache:zed-capture"]
+        assert "cache_to" not in build_block
+        assert "cache_from" not in build_block
 
     def test_push_leaves_the_metadata_file_in_the_working_directory(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -762,7 +757,7 @@ class TestRenderBakeCache:
             f"type=registry,ref={REPOSITORY}/build-cache:localizer-cuda"
         ]
 
-    def test_a_destination_re_roots_tags_and_cache_refs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_a_destination_re_roots_tags_without_cache_refs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         recorder = _prepare(
             monkeypatch,
             tmp_path,
@@ -778,13 +773,8 @@ class TestRenderBakeCache:
             f"{LOCAL_REGISTRY}/localizer-cuda:latest",
             f"{LOCAL_REGISTRY}/localizer-cuda:${{LOCALIZER_SHA}}",
         ]
-        assert build_block["cache_to"] == [
-            (
-                f"type=registry,ref={LOCAL_REGISTRY}/build-cache:localizer-cuda,"
-                "mode=max,image-manifest=true,oci-mediatypes=true"
-            )
-        ]
-        assert build_block["cache_from"] == [f"type=registry,ref={LOCAL_REGISTRY}/build-cache:localizer-cuda"]
+        assert "cache_to" not in build_block
+        assert "cache_from" not in build_block
 
     def test_load_mode_renders_no_cache_refs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         recorder = _prepare(monkeypatch, tmp_path, [], dockerfiles={"api": EXTERNAL})

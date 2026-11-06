@@ -18,6 +18,7 @@ from boatyard.config.config import (
     CADDY_IMAGE,
     ConfigFile,
     EDGE_SERVICE_NAME,
+    LOCK_SLOT_MARKER,
     OCI_REFERENCE_PREFIX,
     Yaml,
     bundle_lock_key,
@@ -126,10 +127,14 @@ def up(
         includes.append(bundle_compose_path.resolve().as_posix())
         entries.update({env_lock_slot(name, key): value for key, value in lock_references.items()})
 
-    # Refuse bundles whose requirements no environment source fills, naming shell-set slots as ignored
+    # Refuse bundles whose requirements no environment source fills, naming shell-set slots as ignored.
+    # Lock-key slots (carrying the LOCK_SLOT_MARKER) are satisfied by construction — the lock env file
+    # fills them — so they are excluded from the consumer-facing fill check.
     filled = {variable for variable, value in {**config_values.variables, **entries}.items() if value}
     missing = {
-        name: sorted(set(required) - filled) for name, required in requirements.items() if set(required) - filled
+        name: sorted(unfilled)
+        for name, required in requirements.items()
+        if (unfilled := {slot for slot in required if LOCK_SLOT_MARKER not in slot} - filled)
     }
     if missing:
         name, absent = min(missing.items())

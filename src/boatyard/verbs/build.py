@@ -19,7 +19,7 @@ def build(
     ] = False,
     push_to: Annotated[
         str | None,
-        typer.Option("--push-to", help="Push images and registry caches to this registry address instead."),
+        typer.Option("--push-to", help="Push images to this registry address instead."),
     ] = None,
     targets: Annotated[
         list[str] | None,
