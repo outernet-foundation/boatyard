@@ -105,7 +105,6 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
             images[name] = committed_entry
             continue
 
-        subject = f"base_images entry {name}"
         print(f"Resolving digests for: {reference}")
         index_digest = resolve_remote_digest(reference)
         children = OciIndex.model_validate(
@@ -129,17 +128,19 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
                 if _concrete_platform(child) == platform
             ]
             if len(matches) > 1:
-                digests = ", ".join(_child_digest(child, subject) for child in matches)
-                raise ValueError(f"{subject}: platform {platform} matches multiple upstream manifests ({digests})")
+                digests = ", ".join(_child_digest(child, f"base_images entry {name}") for child in matches)
+                raise ValueError(
+                    f"base_images entry {name}: platform {platform} matches multiple upstream manifests ({digests})"
+                )
             if not matches:
                 available = sorted({
                     concrete for child in children if (concrete := _concrete_platform(child)) is not None
                 })
                 raise ValueError(
-                    f"{subject}: the upstream index carries no {platform} manifest "
+                    f"base_images entry {name}: the upstream index carries no {platform} manifest "
                     f"(declared platforms: {sorted(config.platforms)}; index platforms: {available})"
                 )
-            selected[platform] = _child_digest(matches[0], subject)
+            selected[platform] = _child_digest(matches[0], f"base_images entry {name}")
 
         images[name] = ConfigLockEntry(
             index=f"{base}@{index_digest}",
