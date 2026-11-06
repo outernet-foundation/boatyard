@@ -153,12 +153,23 @@ def compute_service_shas(repo_root: Path, service_builds: dict[str, ServiceBuild
             )
         includes.append(path)
 
-    # Collect allowlisted files
-    allowed = [
+    # Collect allowlisted files present on disk
+    disk_files = [
         path
         for path in (entry.relative_to(repo_root).as_posix() for entry in repo_root.rglob("*") if entry.is_file())
         if any(path == include or path.startswith(include + "/") for include in includes)
     ]
+
+    # Keep only git-visible files (tracked and untracked-not-ignored); ignored files never hash.
+    visible = set(
+        bash_output(
+            "git -c core.excludesFile=/dev/null ls-files --cached --others --exclude-standard -z",
+            cwd=repo_root,
+            env={"GIT_CONFIG_NOSYSTEM": "1"},
+        ).split("\0")
+    )
+
+    allowed = [path for path in disk_files if path in visible]
 
     # Partition into shared and per-service paths, dropping workload-root files owned by no service.
     shared_paths = [path for path in allowed if not path.startswith(workload_prefix)]
@@ -168,7 +179,7 @@ def compute_service_shas(repo_root: Path, service_builds: dict[str, ServiceBuild
     for service_dir in sorted(service_dirs):
         with TemporaryDirectory() as tmpdir:
             index_env = {"GIT_INDEX_FILE": str(Path(tmpdir) / "index")}
-            # Conversion pinned off so blobs hash the raw disk bytes the build compiles.
+            # Conversion pinned off so blobs hash the raw on-disk bytes; git derives modes and symlinks from disk.
             bash(
                 "git -c core.autocrlf=false update-index --add --stdin",
                 cwd=repo_root,
