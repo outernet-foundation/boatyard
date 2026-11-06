@@ -174,6 +174,7 @@ def _prepare(
     monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
     monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
     monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
+    monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
     monkeypatch.chdir(tmp_path)
     _write_repo(
         tmp_path,
@@ -219,6 +220,7 @@ class TestDefaultTargets:
         monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
+        monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL}, platforms=["linux/arm64"])
 
@@ -313,6 +315,7 @@ class TestCellSelection:
         monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
+        monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
         monkeypatch.chdir(tmp_path)
         _write_repo(
             tmp_path,
@@ -353,6 +356,7 @@ class TestBakeFailure:
         monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
+        monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": EXTERNAL})
 
@@ -417,6 +421,7 @@ class TestPushDestination:
         monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
+        monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL})
 
@@ -430,6 +435,7 @@ class TestPushDestination:
         monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
+        monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL})
 
@@ -453,6 +459,7 @@ class TestPushDestination:
         monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
         monkeypatch.setattr(bake_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(bake_module, "host_platform", _amd64_host)
+        monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL})
 

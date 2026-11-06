@@ -80,7 +80,7 @@ def run_lock(*, upgrade: bool = False, check: bool = False) -> None:
 
 
 def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) -> LockFile:
-
+    install_crane()
     prefix = config.mirror_prefix
     # The write path's committed read: drift between the committed lock and the config
     # is relock's input, never refused here.
@@ -102,7 +102,6 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
             images[name] = committed_entry
         else:
             subject = f"base_images entry {name}"
-            install_crane()
             print(f"Resolving digests for: {reference}")
             index = OciIndex.model_validate(json.loads(bash_output(f"crane manifest {shlex.quote(reference)}")))
             index_digest = resolve_remote_digest(reference)
@@ -165,7 +164,6 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
         pinned = committed_bundle.reference if frozen else f"{reference}@{resolve_remote_digest(reference)}"  # pyright: ignore[reportOptionalMemberAccess]
         # Compose bundles are OCI artifacts whose compose files ride as inline base64 layer data;
         # export cannot read them, the manifest data and the blob fallback can.
-        install_crane()
         print(f"Reading bundle content for: {pinned}")
         artifact = OciArtifactManifest.model_validate(json.loads(bash_output(f"crane manifest {shlex.quote(pinned)}")))
         # A colon is a tag only when no slash follows it; earlier colons are registry ports.
@@ -239,7 +237,6 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
 
 
 def resolve_remote_digest(reference: str) -> str:
-    install_crane()
     print(f"Resolving digest for: {reference}")
     output = bash_output(f"crane digest {shlex.quote(reference)}").strip()
     if re.fullmatch(SHA256_DIGEST_REGEX, output) is None:
