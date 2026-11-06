@@ -99,7 +99,10 @@ These rulings bind every work unit below.
 - Vocabulary stays concrete: `door`, `shelf`, `PublishLeg`, `build_legs`,
   `fan`/`own_fan`, and the gpu detection machinery are retired; nothing
   reintroduces them or mints new metaphor names in code, tests, refusal
-  strings, or docs.
+  strings, or docs. The env-interpolation vocabulary is `slot` — `hole` is
+  retired everywhere boatyard owns the word: the boatyard-local rename
+  (`hole-to-slot.md` at the repo root) lands on this branch before Work 2,
+  and consumer prose flips in Work 4's docs pass.
 - The domain-record refactor is frozen; a straggler derivation that surfaces
   folds as ordinary work, not a reopened arc.
 - Digests live exclusively in `boatyard.lock.yml`, written only by the `lock`
@@ -363,6 +366,10 @@ attachment and ordering; `edge` and collision teeth.
 
 ## Work 2 — Release 0.6.0 (operator)
 
+Precondition: the hole→slot vocabulary rename has landed and deleted its
+plan file (`hole-to-slot.md` owns it; refusal phrasings are consumer-facing
+and 0.6.0 freezes them).
+
 Hand branch/SHA to the operator: push `refactor` (now carrying Work 1),
 merge, tag through the normal release flow (the toolkit's binding owns it);
 the PyPI publish rides the flow — the name is registered, no placeholder
@@ -438,9 +445,14 @@ code → lockfiles → prose:
    repo. `--lock-only` is a dead flag everywhere → `boatyard lock` (plus
    `--upgrade` where the old text said `--lock-only --upgrade`). Shell-spelled
    examples (`BUNDLES=x boatyard up`, `PLATFORM=x …`) flip to editing
-   `boatyard.values.yaml`; runbook text describing the failure echo of the
-   per-run env file updates to the kept-path line (contents never print —
-   secrets may ride); `.env.sample` references point at the new sample file.
+    `boatyard.values.yaml`; runbook text describing the failure echo of the
+    per-run env file updates to the kept-path line (contents never print —
+    secrets may ride); `.env.sample` references point at the new sample file.
+    The vocabulary flip rides this pass: `hole`→`slot` in consumer prose
+    describing env interpolation (placeframe's `stack/AGENTS.md` is the
+    densest; grep each repo — audit-time counts, whole-word noise included:
+    infra-rathole 84, Make-it-Sing 59, placeframe-capture-tool 26,
+    lbe-toolkit 23).
 9. Consumer env reads go through `yaml.safe_load` of
     `boatyard.values.yaml` — the file is plain YAML, so no consumer-local
     dotenv grammar module exists (the earlier plan for one dissolved with
