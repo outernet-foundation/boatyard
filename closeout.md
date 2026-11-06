@@ -14,30 +14,68 @@ this file and the code disagree, reconcile this file before touching code
 verify with the target repo's battery; commit as you go, prose and code in
 separate commits.
 
-## Snapshot (verified 2026-11-03)
+## Snapshot (verified 2026-11-06)
 
-- boatyard branch `refactor`: all consumer-contract work, the module-tiers
-  refactor, the score unification, the boatyard rename + CLI refactors, and
-  Work 1 in full —   the disk-state service-hash phase (design signed off,
-  battery green, `pathspec` dropped), the qualified-selection-names phase
-  (qualified selection grammar, flat vocabulary law repealed into a
-  qualified-vocabulary collision check, options identified by qualified name
-  in bundle outputs, publish legs, and selection), the ref-grammar phase
-  (tag-only `ref:` grammar with digest/`latest`/range refusals;
-  `{QUALIFIED_NAME}_BUNDLE` lock entries written by the lock verb, resolving
-  direct via `crane digest`, declaration-incremental; cross-section collision
-  refusal; missing-entry refusal naming the relock; bundle probes via crane
-  under the stderr-classification law; includes carry the lock's digest ref),
-  and the bundle-override phase (path overrides over the ref tag grammar,
-  riding the values file's typed `path_overrides` map; probe and lock-entry skip;
-  path-form teeth — exists, parses, `edge` refusal, service collisions;
-  producer-lock attachment three parents up, its entries riding the one
-  merged per-run env file under the entry prefix;
-  `producer_env_entries` selects platforms
-  from the producer lock's recorded platforms) — are landed locally, ahead
-  of origin — unpushed. Work 1 is complete; the branch is ready for Work 2's
-  operator handoff. `publish.yml` is wired (`packages.boatyard`,
-  `major_minor: "0.6"`, `registry: pypi`).
+- Work 1 landed: the `refactor` branch was squashed to a four-commit structure
+  on `dev` (AGENTS.md prose; code; docs/design prose; closeout.md), pushed as
+  `big-refactor`, merged as PR #23. One CI sharp edge surfaced and closed:
+  typer force-enables its rich terminal whenever `GITHUB_ACTIONS` (or
+  `FORCE_COLOR`/`PY_COLORS`) is set, so CLI-error panels render ANSI-colored
+  and a styled token (`localizer/<variant>`) splits on an escape boundary —
+  `tests/conftest.py` sets `_TYPER_FORCE_DISABLE_TERMINAL=1` (typer's own
+  knob, honored before any typer import); `NO_COLOR` does not defeat it.
+- Work 2 complete (2026-11-06): `boatyard 0.6.0` published on PyPI (wheel +
+  sdist; the `0.6.0.dev170` prerelease rode the PR channel); the GitHub repo
+  rename happened (`outernet-foundation/boatyard`, old docker-devkit URLs
+  redirect — consumers still fix links in Work 4); the optional final
+  docker-devkit signpost release was skipped; AGENTS.md matches the shipped
+  surface. `publish.yml` stays wired (`packages.boatyard`, `major_minor:
+  "0.6"`, `registry: pypi`).
+- Work 3 landed (2026-11-06): toolkit `dev` advanced to
+  `f2d576acbceeca8afb324152aad8e4928d5a769b` (operator-direct push of the
+  `boatyard-cutover` branch, this repo's own landing mode; the pre-work tip
+  was an ancestor, so no history rewrite). That SHA is Work 4's `uses:` pin.
+  The landing carries the `BOATYARD_CONFIG_PATH` presence probe in
+  `config.py`, the docker workflows onto `uv run --locked boatyard <verb>`
+  spellings (`build --push` sans `--gpu`/`GPU:`, `mirror`, `publish-compose
+  --plan`/`--branch`, `generate-score --check`, `docker-build-matrix`, and
+  the lock-freshness gate as `boatyard lock --check`), the three test
+  fixtures writing `boatyard.yml`, and the AGENTS.md config-file law line +
+  verb spellings. Toolkit battery green at that SHA (pytest 199, ruff,
+  basedpyright, lint-workflows). `build-unity.yml` carries no docker-devkit
+  spellings (an earlier count said two; its verbs are unity-devkit's, outside
+  the cutover); the remote `boatyard-cutover` branch still points at the same
+  SHA and may be deleted.
+- Work 4 opened (2026-11-06): the archaeology greps re-ran against the
+  `compose-bundles` tips — every consumer's sweep base is its `compose-bundles`
+  branch (in all five repos the conversion exists there; lbe-toolkit's and
+  infra-rathole's `origin/dev` carry no `docker-devkit.yaml` at all, and
+  Make-it-Sing's local checkout sits on a diverged feature branch — switch to
+  its `compose-bundles` before editing). The pins and import inventory below
+  re-verified true. Scope facts the steps don't carry: `merge=ours` exists only
+  in capture-tool's `.gitattributes`; `stack/secrets.yaml` exists only in
+  placeframe; capture-tool's config lacks `project_name` (0.6.0 requires it —
+  its sweep adds it); placeframe's real `--gpu` doc line is
+  `stack/AGENTS.md:116` (the rest is vendored dirtorch, not consumer prose);
+  PyPI and ghcr are reachable from the sandbox, so relocks run here. Next: the
+  per-repo sweeps; every consumer's toolkit `uses:` bumps to
+  `f2d576acbceeca8afb324152aad8e4928d5a769b`.
+- infra-rathole swept (2026-11-06, five commits on its `compose-bundles`:
+  repin+rename+relock, the secrets contract, `Run generate-score`, the
+  toolkit SHA bump incl. its local setup-release-devkit composite, the docs
+  flip). Battery green locally (ruff, format, basedpyright, matrix `[]`,
+  plan, `lock --check`, lint-workflows at the new pin); zero
+  docker-devkit/`--lock-only`/`--gpu`/hole mentions remain. CI-green is
+  blocked on the two boatyard defects above — the branch awaits the fix
+  release and the operator push.
+- Both boatyard defects fixed on `dev` (2026-11-06, `abd6236` prose +
+  `dde430a` code, full preflight green): `generate-score`'s `--target`
+  default now derives from the config (explicit misspellings still refuse),
+  and `ensure_tools` presence-probes with `shutil.which` plus installs only
+  the tools the target needs. Verified end-to-end: the dev verb, bare
+  invocation against swept infra-rathole, regenerates byte-identically.
+  Next: operator releases (0.6.1 expected) → repin infra-rathole → next
+  consumer sweep (lbe-toolkit or Make-it-Sing, one per session).
 - The values-file session (2026-11-04, battery green) landed atop Work 1 and
   rewrote the consumer surface: `.env` is dead — `boatyard.values.yaml`
   (gitignored, typed; `ConfigValues` in `values_file.py`) is the only
@@ -50,8 +88,6 @@ separate commits.
   refusing loudly (the lock is its only source); `lock_env_unwind` keeps
   the file with a path-line-only echo (contents may carry secrets); the
   open values map enforces ALL_CAPS env names.
-- PyPI: `boatyard` registered, nothing published. GitHub repo rename
-  (docker-devkit → boatyard) is an operator item, status unverified.
 - No `lock-env` verb exists (a stale name in the absorbed ADR): lock env is
   synthesized per-run inside `compose.py`/`bake.py` at the compose/bake edges.
 - Consumers and toolkit, all verified still on docker-devkit spellings: 
@@ -65,10 +101,10 @@ separate commits.
 | infra-rathole | dev group `==0.4.9.dev165` | none (CLI only) |
 | github-actions-toolkit | never a dependency (resolver-cycle law) | — |
 
-The five consumers sit on branch `compose-bundles` (the stale checkout state
-they were left on, not a deliverable); the toolkit on `dev`. Re-verify with
-grep at session open before editing — the import inventory maps each site to a
-dissolution below.
+Every consumer's Work-4 sweep builds on its `compose-bundles` branch — the
+correct base in all five repos (the wave's commits land there and ride its
+merge to `dev`); the toolkit on `dev`. Re-verify with grep at session open
+before editing — the import inventory maps each site to a dissolution below.
 
 ## Standing constraints
 
@@ -400,15 +436,52 @@ Verify: the toolkit's own suite green.
 ## Work 4 — Consumer sweep (one wave)
 
 Open by re-running the archaeology greps to re-derive the edit list against
-wherever the release actually landed. Common to all five, order within a repo
-code → lockfiles → prose:
+wherever the release actually landed. Upstream defects the sweep surfaces in
+github-actions-toolkit or boatyard itself are fixable mid-wave — surface, fix
+the upstream, record here; the wave's pin target follows whatever release
+carries the fixes. Found in infra-rathole (both boatyard 0.6.0, both blocked
+the CI-green verify) and fixed on boatyard `dev` at `dde430a` — awaiting the
+operator release (0.6.1 expected; every consumer pin — including swept
+infra-rathole's — repins to it in a one-line + `uv lock` commit):
+- `generate-score` defaults `--target both` and a one-substrate repo refuses
+  under that default — the toolkit getter hardcodes the bare
+  `generate-score --check`, so every compose-only repo (infra-rathole,
+  lbe-toolkit, Make-it-Sing) fails the gate. Correct fix is boatyard-side:
+  the default derives from the config (k8s present + local entries → both;
+  one substrate → that one), the explicit misspelling refusals stay, the
+  toolkit stays shape-blind.
+- `ensure_tools` probes with `bash_check`, which raises FileNotFoundError on
+  a missing binary — the install path is unreachable on a fresh machine
+  (runner or sandbox); `generate-score` 0.6.0 has never run clean off a fresh
+  environment. Rider: compose-only runs still install score-k8s + helm.
+
+Sweep mechanics discovered in infra-rathole, carried to the rest: the
+score-tool trio (score-compose 0.42.0, score-k8s 0.15.0, helm 3.22.1) must
+pre-exist in `/usr/local/bin` to run generate-score locally (the defect
+above); local regeneration on compose-only repos spells `--target compose`;
+the 0.6.0 rendering rewrites every bundle artifact (`{entry}-` namespaced
+services and configs keys on a private `{entry}-net` with the bare name as
+alias, `{ENTRY}__LOCK__KEY` image slots, `name:` last) — the diff is
+expected, rides each repo's `Run generate-score` commit, and consumer AGENTS
+prose claiming the workload-container name "collapses back" is stale
+everywhere it appears; infra-rathole carries a third toolkit-SHA home (its
+local `setup-release-devkit` composite, `RELEASE_DEVKIT_COMMIT`) — the only
+repo with one. The Make-it-Sing phase must watch the rathole bundle's
+default local addrs (`gateway:8443`, `livekit:6178`): they now sit on the
+bundle's private network, where consumer service names may not resolve —
+its `up` assembly (the path-override verify) surfaces whether the
+`TUNNEL_*_ADDR` slots need explicit values.
+
+Common to all five, order within a repo code → lockfiles → prose:
 
 1. Dependency: `docker-devkit…` → `boatyard==0.6.0` (or `>=`); `uv lock
    --upgrade-package boatyard`. `requires:` floor → `>=0.6.0`.
 2. `git mv docker-devkit.yaml boatyard.yml`; `git mv docker-devkit.lock
-   boatyard.lock.yml` (content unchanged — the `lock` verb's re-resolve
-   rewrites the env format as structured YAML in one step; no per-entry
-   migration exists).
+   boatyard.lock.yml`, then truncate the lock to the empty file before the
+   relock — the old env format never parses at relock's committed
+   schema-only read, and the empty lock bootstraps the structured YAML from
+   nothing (digests are content-stable: infra-rathole's RATHOLE index digest
+   carried forward identically; no per-entry migration exists).
 3. `.gitattributes`: `docker-devkit.lock merge=ours` → `boatyard.lock.yml
    merge=ours`.
 4. Relock completes `platforms` where the config refusal forces it (every
@@ -456,9 +529,13 @@ code → lockfiles → prose:
     `boatyard.values.yaml` — the file is plain YAML, so no consumer-local
     dotenv grammar module exists (the earlier plan for one dissolved with
     the typed values file).
-10. `stack/secrets.yaml` is required from 0.6.0 — consumers lacking it add the
-    file (an empty file is legal: the empty declaration, no keys consumable)
-    and commit the mint artifact `stack/generated/secrets.txt` it generates.
+10. `stack/secrets.yaml` is required from 0.6.0 where generate-score runs —
+    and it is the env contract, not only secrets: every ALL_CAPS slot a
+    rendering consumes must be declared (mint: true only for real secrets;
+    values-file knobs declare plain). An empty file passes only a repo whose
+    renderings consume nothing; a self-skipping repo (placeframe-capture-tool
+    — the self-skip fires before the secrets read) needs no file at all.
+    infra-rathole's declares its six include-time slots, none minting.
 
 Per-repo:
 
@@ -496,7 +573,9 @@ Per-repo:
   executable images and the ZED-box AOA deployment unblocks
   (`zed-aoa-diagnosis-handoff.md` gates the deploy on exactly this; update
   only its still-live instructions). The repin touches both declarations (the
-  root exact pin and the `scripts/` member floor).
+  root exact pin and the `scripts/` member floor); the config gains
+  `project_name` (required from 0.6.0 — the build-only repo never carried
+  one).
 - **Make-it-Sing, lbe-toolkit** — standard renames and the step-6/7 flips;
   Make-it-Sing's local (never committed) `BUNDLE_OVERRIDE_PLACEFRAME_CUDA`
   becomes the `path_overrides: {placeframe-cuda: …}` map entry; lbe-toolkit's
