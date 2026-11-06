@@ -13,14 +13,14 @@ Quick loop: `uv run pytest`, `uv run ruff check`; full gate: `uv run --locked sc
 
 One module per command under `verbs/`, each with its local bare `app = typer.Typer()` + `@app.command()` on the function; `cli.py` composes them with nameless `app.add_typer(...)` — flat top-level verbs (a named `add_typer` nests a group); one `boatyard`
 console script. Exception law: nothing is ever caught only to be re-raised as a different exception with added information — hand-raised guards and third-party exceptions surface raw, uncaught, with full traceback; `typer.BadParameter`
-owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry credentials), `verbs/score.py` (stale artifacts), and `lock.py` (stale lock). Flags live in the typer signatures in `verbs/*.py`; the flag laws: `build`'s
+owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry credentials), `verbs/score.py` (stale artifacts), `lock.py` (stale lock), and `build.py` (the shelving `REGISTRY` env). Flags live in the typer signatures in `verbs/*.py`; the flag laws: `build`'s
 `--push`/`--push-to` refuse together; `generate-score`'s `--target` default derives from the config (`both` where both substrates are declared, else the one present), and an explicitly spelled target naming an absent substrate refuses (BadParameter) naming the matching narrower spelling (the rendering pipelines carry no substrate-presence checks); `docker-build-matrix` answers a bare JSON array.
 `--lock-only`/`--check`/`--upgrade` belong to `lock`, never `build`; no `--gpu`, no `--compose-file` (the verbs own the compose invocation); `tree-tags` answers a bare string — no JSON, no `{SERVICE}_SHA` names.
 
 ## Modules
 
 `config/config.py` schema + load; `ConfigFile.resolve_services(choices)` folds a selection into leaf services; `dockerfiles.py` Dockerfile declarations + sha machinery (`ServiceBuild`, `derive_services`); `config/lock.py` lock schema + paired `LockFile.load(path, config)` + the projection members; `yaml.py` `load_yaml_model` + its duplicate-key walk (the YAML→pydantic parse boundary); `config/values.py` the typed values file; `paths.py` the consumer-repo document paths (`DEFAULT_CONFIG_PATH`/`VALUES_FILE`/`LOCK_PATH`); `temp.py` the shared digest/platform regex spellings
-  (`ValuesFile.load`, `PublicUrl`); `lock.py` relock engine + crane resolution; `compose.py` the compose invocation spelling `compose_command` (both verbs); `build.py` build pipeline; `markers.py` marker resolution; `score.py` score shared base; `score_compose.py`/`score_k8s.py` rendering pipelines; `verbs/score.py` the score verb + `ensure_tools`;
+  (`ValuesFile.load`, `PublicUrl`); `lock.py` relock engine + crane resolution; `compose.py` the compose invocation spelling `compose_command` (both verbs); `build.py` build pipeline + the digest-shard shelving; `markers.py` marker resolution; `score.py` score shared base; `score_compose.py`/`score_k8s.py` rendering pipelines; `verbs/score.py` the score verb + `ensure_tools`;
   `publish.py` publish preparation; `crane.py` pinned crane installer; `verbs/up.py` selection + rendering inlined in `up` + the up-only `render_env_entries`/`lock_env_unwind`; `verbs/*` one module per command. Model modules run root → leaves: root record first
   (`RootModel` subscripts quote forward refs; the one inversion is a parent whose field default constructs the child), functions callers-before-callees; imports absolute; `dockerfiles` ← `config/config` ← `config/lock` ← `lock` one-way. Also in `config/config.py` (the shared leaf): `Yaml`,
   `is_mapping`/`is_list`, `double_dollars` (the one `$`-doubling home), `PLACEHOLDER`/`COMPOSE_SLOT`/`ENV_NAME_PATTERN`, `EDGE_SERVICE_NAME`, `lock_key_prefix`, `chart_lock_key`, `bundle_lock_key`, `env_lock_slot`/`LOCK_SLOT_MARKER`,
@@ -77,7 +77,7 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
 - The `mirror` verb probes presence per reference over every recorded digest (`crane digest`; partially mirrored still triggers the copy; probe failure falls through to `crane copy`, the loud gate — probe errors never classified); one
   `crane copy {ref} {prefix}/{ref}` per lacking reference copies the whole index; every declared `base_images`/charts reference is a target — nothing filtered; zero declared targets = a loud error; the
   footer splits copied/present; crane's installer always runs so the pin, not a preexisting binary, decides the version.
-- `build --push` leaves bake's `metadata.json` in the working directory — the handoff the toolkit's builds_ref step reads; boatyard reads no `REGISTRY` facts.
+- `build --push` (repository mode) shelves one digest-manifest shard per matrix leg on the builds shelf: `sha-{HEAD}-{sha256-8 of the leg's sorted baked targets}` over `{REGISTRY}/builds/images-digests-all`, manifest `{target: {ref, digest, tags}}`; the toolkit's release verb enumerates a SHA's shards and merges. `--push-to` never shelves (ad-hoc destination, capture-tool's flow); a repository push without `REGISTRY` env refuses naming it.
 
 ## Compose assembly and selection
 
@@ -124,7 +124,7 @@ owns the CLI-flag layer; `raise SystemExit` only in `verbs/publish.py` (registry
   ARG at its variant value, `{SERVICE}_SHA` as `${…:?err}`; tags `{namespace}/{target}:latest` + `:${SERVICE_SHA}`; `target:`-prefixed `additional_contexts`; registry cache refs under `{namespace}/build-cache:{target}` in push mode.
 - The incremental lock write rides every building run (the `uv sync` shape — anyone who builds also locks), landing only after target selection + its refusals; bake reads the fresh entries as environment (index form); a building run with
   zero derived services refuses naming the lock verb.
-- `metadata.json`: cwd-stable, unlinked before the run, coverage-checked against the requested targets after; local default-target builds run the daemon
+- `metadata.json`: cwd-stable, unlinked before the run, coverage-checked against the requested targets after; a repository push distills it into the shelved shard (Mirror namespace); local default-target builds run the daemon
   GC-limit check (`MIN_KEEP_STORAGE_GB` = 60; absent/null `defaultKeepStorage` refuses with a sample snippet, an explicit zero is a set value refusing below the floor; no readable daemon.json warns and continues).
 
 ## Score generation
