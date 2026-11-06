@@ -151,13 +151,17 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
     for name, reference, entry in config.remote_declared_entries():
         key = bundle_lock_key(name)
         committed_bundle = committed.bundles.get(key)
-        frozen = committed_bundle is not None and not upgrade and committed_bundle.reference.startswith(reference + "@")
-        # Carry a frozen bundle without declared routes forward unread.
-        if frozen and not entry.routes and not entry.ports:
-            bundles[key] = committed_bundle  # pyright: ignore[reportArgumentType]
-            continue
+        record: ConfigLockBundle | None = None
         # Pin the frozen reference or resolve the declaration's fresh digest.
-        pinned = committed_bundle.reference if frozen else f"{reference}@{resolve_remote_digest(reference)}"  # pyright: ignore[reportOptionalMemberAccess]
+        if committed_bundle is not None and not upgrade and committed_bundle.reference.startswith(reference + "@"):
+            pinned = committed_bundle.reference
+            record = committed_bundle
+        else:
+            pinned = f"{reference}@{resolve_remote_digest(reference)}"
+        # Carry a frozen bundle without declared routes forward unread.
+        if record is not None and not entry.routes and not entry.ports:
+            bundles[key] = record
+            continue
         # Read the bundle's compose files as inline base64 layer data, with crane blob as the fallback.
         print(f"Reading bundle content for: {pinned}")
         artifact = OciArtifactManifest.model_validate(json.loads(bash_output(f"crane manifest {shlex.quote(pinned)}")))
@@ -176,12 +180,6 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
         # Refuse a bundle that carries no compose file layer.
         if not texts:
             raise ValueError(f"{pinned}: the compose bundle carries no compose file layer")
-        # Record the frozen bundle or a fresh one with its required holes.
-        bundles[key] = (  # pyright: ignore[reportArgumentType]
-            committed_bundle
-            if frozen
-            else ConfigLockBundle(reference=pinned, requires=sorted(required_compose_holes("\n".join(texts))))
-        )
         # Refuse declared routes and ports that name no service in the bundle.
         service_names: set[str] = set()
         for text in texts:
@@ -190,6 +188,10 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
             if is_mapping(services):
                 service_names.update(services)
         refuse_unresolved_references(name, entry.routes, entry.ports, service_names, prefix=f"{name}-")
+        # Record the frozen bundle or a fresh one with its required holes.
+        if record is None:
+            record = ConfigLockBundle(reference=pinned, requires=sorted(required_compose_holes("\n".join(texts))))
+        bundles[key] = record
 
     # Assemble the lock from the computed sections.
     lock = LockFile(platforms=list(config.platforms), images=images, charts=charts, bundles=bundles)
