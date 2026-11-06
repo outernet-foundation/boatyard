@@ -8,8 +8,13 @@ import yaml
 from pydantic import ValidationError
 from typer.testing import CliRunner
 
-from docker_devkit import crane, publish_compose
-from docker_devkit.config import LOCK_PATH, load_config
+from boatyard.cli import app
+from boatyard import dockerfiles as dockerfiles_module
+from boatyard import crane
+from boatyard import publish as publish_compose
+from boatyard.verbs import publish as publish_verb
+from boatyard.config.config import ConfigFile
+from boatyard.config.lock import LOCK_PATH
 
 REPOSITORY = "ghcr.io/outernet-foundation/lbe-toolkit"
 FAKE_SHA = "a" * 40
@@ -20,10 +25,10 @@ runner = CliRunner()
 
 
 def _write_config(root: Path, sections: dict[str, Any] | None = None) -> None:
-    payload: dict[str, Any] = {"requires": ">=0.0"}
+    payload: dict[str, Any] = {"requires": ">=0.0", "project_name": "demo"}
     if sections is not None:
         payload.update(sections)
-    (root / "docker-devkit.yaml").write_text(
+    (root / "boatyard.yml").write_text(
         yaml.safe_dump(payload, default_flow_style=False, sort_keys=False), encoding="utf-8"
     )
 
@@ -68,10 +73,10 @@ def _invoke_publishing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Publi
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("REGISTRY_USERNAME", "publisher")
     monkeypatch.setenv("REGISTRY_TOKEN", "secret")
-    monkeypatch.setattr(publish_compose, "bash", recorder.run)
+    monkeypatch.setattr(publish_verb, "bash", recorder.run)
     monkeypatch.setattr(crane, "bash", recorder.run)
-    monkeypatch.setattr(publish_compose, "bash_output", _command_output)
-    monkeypatch.setattr(publish_compose, "compute_service_shas", _service_shas)
+    monkeypatch.setattr(publish_verb, "bash_output", _command_output)
+    monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _service_shas)
     monkeypatch.setattr(publish_compose, "resolve_remote_digest", DigestResolver().resolve)
     return recorder
 
@@ -100,7 +105,7 @@ class TestPublishGating:
         _write_config(tmp_path, {"publish-compose": {"repository": REPOSITORY}})
 
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            load_config(tmp_path)
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_bundles_without_repository_refuse_at_load(self, tmp_path: Path):
         _write_config(
@@ -109,11 +114,11 @@ class TestPublishGating:
         )
 
         with pytest.raises(ValidationError, match="repository is required"):
-            load_config(tmp_path)
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
 
 class TestBakeSources:
-    def test_substitutes_known_vars_and_keeps_consumer_holes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_substitutes_known_vars_and_keeps_consumer_slots(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.chdir(tmp_path)
         (tmp_path / "nested").mkdir()
         (tmp_path / "nested" / "compose.yml").write_text(
@@ -126,10 +131,10 @@ class TestBakeSources:
             encoding="utf-8",
         )
 
-        baked_paths = publish_compose.bake_sources(tmp_path / "baked", ["nested/compose.yml"], {"API_SHA": "tree-abc"})
+        baked_path = publish_compose.bake_sources(tmp_path / "baked", "nested/compose.yml", {"API_SHA": "tree-abc"})
 
-        assert baked_paths == [tmp_path / "baked" / "nested" / "compose.yml"]
-        assert baked_paths[0].read_text(encoding="utf-8") == (
+        assert baked_path == tmp_path / "baked" / "nested" / "compose.yml"
+        assert baked_path.read_text(encoding="utf-8") == (
             "services:\n"
             "  api:\n"
             '    image: "registry/api:tree-abc"\n'
@@ -162,7 +167,7 @@ class TestFinalizeBaked:
         monkeypatch.setattr(publish_compose, "resolve_remote_digest", resolver.resolve)
         monkeypatch.chdir(tmp_path)
 
-        publish_compose.finalize_baked([baked], REPOSITORY)
+        publish_compose.finalize_baked(baked, REPOSITORY)
 
         document = yaml.safe_load(baked.read_text(encoding="utf-8"))
         assert document["services"]["token"]["image"] == f"{REPOSITORY}/livekit-token@{FAKE_DIGEST}"
@@ -185,26 +190,23 @@ class TestFinalizeBaked:
         )
         monkeypatch.chdir(tmp_path)
 
-        publish_compose.finalize_baked([baked], REPOSITORY)
+        publish_compose.finalize_baked(baked, REPOSITORY)
 
         document = yaml.safe_load(baked.read_text(encoding="utf-8"))
         assert document["configs"]["client-toml"] == {"content": 'remote_addr = "${TUNNEL_CONTROL_ENDPOINT:?err}"\n'}
 
     def test_pins_repeated_references_through_one_resolution(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         reference = f"{REPOSITORY}/livekit-token:tree-abc"
-        first = tmp_path / "one.yml"
-        first.write_text(f"services:\n  a:\n    image: {reference}\n", encoding="utf-8")
-        second = tmp_path / "two.yml"
-        second.write_text(f"services:\n  b:\n    image: {reference}\n", encoding="utf-8")
+        baked = tmp_path / "compose.yml"
+        baked.write_text(f"services:\n  a:\n    image: {reference}\n  b:\n    image: {reference}\n", encoding="utf-8")
         resolver = DigestResolver()
         monkeypatch.setattr(publish_compose, "resolve_remote_digest", resolver.resolve)
 
-        publish_compose.finalize_baked([first, second], REPOSITORY)
+        publish_compose.finalize_baked(baked, REPOSITORY)
 
         pinned = f"{REPOSITORY}/livekit-token@{FAKE_DIGEST}"
         assert resolver.calls == [reference]
-        assert first.read_text(encoding="utf-8") == f"services:\n  a:\n    image: {pinned}\n"
-        assert second.read_text(encoding="utf-8") == f"services:\n  b:\n    image: {pinned}\n"
+        assert baked.read_text(encoding="utf-8") == f"services:\n  a:\n    image: {pinned}\n  b:\n    image: {pinned}\n"
 
 
 class TestPublishComposeVerb:
@@ -215,11 +217,19 @@ class TestPublishComposeVerb:
             or {
                 "repository": REPOSITORY,
                 "project_name": "livekit-tier",
+                "platforms": ["linux/amd64"],
+                "base_images": {"CADDY_IMAGE": "docker.io/library/caddy:2.8.4-alpine"},
                 "services": {"livekit-tier": {"workloads": ["livekit-token.yaml"]}},
             },
         )
         (tmp_path / "workloads").mkdir()
-        (tmp_path / LOCK_PATH).write_text(f"CADDY_IMAGE={CADDY_LOCK_REF}\n", encoding="utf-8")
+        (tmp_path / LOCK_PATH).write_text(
+            yaml.safe_dump({
+                "platforms": ["linux/amd64"],
+                "images": {"CADDY_IMAGE": {"index": CADDY_LOCK_REF, "platforms": {"linux/amd64": CADDY_LOCK_REF}}},
+            }),
+            encoding="utf-8",
+        )
         (tmp_path / "Caddyfile").write_text("reverse_proxy {$UPSTREAM}\n", encoding="utf-8")
         artifact = tmp_path / "stack" / "generated" / "compose" / "compose.livekit-tier.yaml"
         artifact.parent.mkdir(parents=True)
@@ -230,7 +240,7 @@ class TestPublishComposeVerb:
             "    environment:\n"
             '      LIVEKIT_API_KEY: "${LIVEKIT_API_KEY:?err}"\n'
             "  ingress:\n"
-            '    image: "${CADDY_IMAGE:?err}"\n'
+            '    image: "${LIVEKIT_TIER_CADDY_IMAGE:?err}"\n'
             "    configs:\n"
             "      - source: caddyfile\n"
             "        target: /etc/caddy/Caddyfile\n"
@@ -249,7 +259,7 @@ class TestPublishComposeVerb:
         self._write_tree(tmp_path)
         recorder = self._invoke(monkeypatch, tmp_path)
 
-        result = runner.invoke(publish_compose.app, [])
+        result = runner.invoke(app, ["publish-compose"])
 
         assert result.exit_code == 0, result.output
         assert recorder.commands[0].startswith("docker login ghcr.io -u publisher")
@@ -274,7 +284,7 @@ class TestPublishComposeVerb:
         summary_path = tmp_path / "job-summary.md"
         monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
 
-        result = runner.invoke(publish_compose.app, [])
+        result = runner.invoke(app, ["publish-compose"])
 
         assert result.exit_code == 0, result.output
         summary = summary_path.read_text(encoding="utf-8")
@@ -289,10 +299,10 @@ class TestPublishComposeVerb:
         monkeypatch.setenv("REGISTRY_USERNAME", "publisher")
         monkeypatch.setenv("REGISTRY_TOKEN", "secret")
 
-        result = runner.invoke(publish_compose.app, [])
+        result = runner.invoke(app, ["publish-compose"])
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, RuntimeError)
+        assert isinstance(result.exception, ValueError)
 
     def test_errors_without_registry_credentials(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._write_tree(tmp_path)
@@ -300,17 +310,29 @@ class TestPublishComposeVerb:
         monkeypatch.delenv("REGISTRY_USERNAME", raising=False)
         monkeypatch.delenv("REGISTRY_TOKEN", raising=False)
 
-        result = runner.invoke(publish_compose.app, [])
+        result = runner.invoke(app, ["publish-compose"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, SystemExit)
 
 
 class TestBundleMode:
-    def _write_tree(self, tmp_path: Path, sections: dict[str, object] | None = None) -> None:
-        _write_config(tmp_path, sections or ROOT_BUNDLE_SECTION)
+    def _write_tree(self, tmp_path: Path, sections: dict[str, Any] | None = None) -> None:
+        merged: dict[str, Any] = {
+            **(sections or ROOT_BUNDLE_SECTION),
+            "platforms": ["linux/amd64"],
+            "base_images": {"ALPINE_IMAGE": "alpine:3.20"},
+        }
+        _write_config(tmp_path, merged)
         (tmp_path / "workloads").mkdir()
-        (tmp_path / LOCK_PATH).write_text(f"ALPINE_IMAGE=alpine:3.20@sha256:{'a' * 64}\n", encoding="utf-8")
+        alpine = "alpine:3.20@sha256:" + "a" * 64
+        (tmp_path / LOCK_PATH).write_text(
+            yaml.safe_dump({
+                "platforms": ["linux/amd64"],
+                "images": {"ALPINE_IMAGE": {"index": alpine, "platforms": {"linux/amd64": alpine}}},
+            }),
+            encoding="utf-8",
+        )
         compose_dir = tmp_path / "stack" / "generated" / "compose"
         compose_dir.mkdir(parents=True)
         for name in ("compose.core-cuda.yaml", "compose.core-rocm.yaml", "compose.gateway-open.yaml"):
@@ -322,7 +344,7 @@ class TestBundleMode:
         monkeypatch.delenv("REGISTRY_USERNAME", raising=False)
         monkeypatch.delenv("REGISTRY_TOKEN", raising=False)
 
-        result = runner.invoke(publish_compose.app, ["--plan"])
+        result = runner.invoke(app, ["publish-compose", "--plan"])
 
         assert result.exit_code == 0, result.output
         assert json.loads(result.output) == [
@@ -337,7 +359,7 @@ class TestBundleMode:
         self._write_tree(tmp_path)
         recorder = _invoke_publishing(monkeypatch, tmp_path)
 
-        result = runner.invoke(publish_compose.app, ["--bundle", "core-cuda"])
+        result = runner.invoke(app, ["publish-compose", "--bundle", "core-cuda"])
 
         assert result.exit_code == 0, result.output
         publish_commands = [command for command in recorder.commands if command.startswith("docker compose")]
@@ -354,7 +376,7 @@ class TestBundleMode:
         self._write_tree(tmp_path)
         recorder = _invoke_publishing(monkeypatch, tmp_path)
 
-        result = runner.invoke(publish_compose.app, [])
+        result = runner.invoke(app, ["publish-compose"])
 
         assert result.exit_code == 0, result.output
         publish_commands = [command for command in recorder.commands if command.startswith("docker compose")]
@@ -381,7 +403,7 @@ class TestBundleMode:
         self._write_tree(tmp_path)
         _invoke_publishing(monkeypatch, tmp_path)
 
-        result = runner.invoke(publish_compose.app, ["--bundle", "core-fabric"])
+        result = runner.invoke(app, ["publish-compose", "--bundle", "core-fabric"])
 
         assert result.exit_code != 0
 
@@ -393,7 +415,7 @@ class TestPlan:
         monkeypatch.delenv("REGISTRY_USERNAME", raising=False)
         monkeypatch.delenv("REGISTRY_TOKEN", raising=False)
 
-        result = runner.invoke(publish_compose.app, ["--plan"])
+        result = runner.invoke(app, ["publish-compose", "--plan"])
 
         assert result.exit_code == 0, result.output
         assert json.loads(result.output) == []
@@ -403,7 +425,7 @@ class TestPlan:
         monkeypatch.delenv("REGISTRY_USERNAME", raising=False)
         monkeypatch.delenv("REGISTRY_TOKEN", raising=False)
 
-        result = runner.invoke(publish_compose.app, ["--plan"])
+        result = runner.invoke(app, ["publish-compose", "--plan"])
 
         assert result.exit_code == 0, result.output
         assert json.loads(result.output) == []

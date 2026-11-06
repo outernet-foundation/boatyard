@@ -1,42 +1,39 @@
 import os
 import shutil
+from hashlib import sha256
 from importlib.resources import files
 from pathlib import Path
 
 import pytest
+import typer
 import yaml
 from bashrun.bash import CalledProcessError, bash, bash_output
 from pydantic import ValidationError
 
-from docker_devkit import score_generate
-from docker_devkit.config import DockerDevkitConfig
-from docker_devkit.documents import BindVolume, ComposeService
-from docker_devkit.score_generate import (
-    generate_k8s,
-    tool_requirements,
-    write_generated_file,
-)
-from docker_devkit.provisioners import compiled_provisioners
+from boatyard.config import config as config_module
+from boatyard import score as score_module
+from boatyard import score_compose as score_compose_module
+from boatyard import score_k8s as score_k8s_module
+from boatyard.verbs import score as score_verb_module
+from boatyard.config.config import ConfigFile, WorkloadDocument
+from boatyard.config.lock import LockFile
+from boatyard.score import SecretsDeclaration, write_file
+from boatyard.score_compose import BindVolume, ComposeService
+from boatyard.score_k8s import generate_k8s
 
 DIGEST = "sha256:" + "a" * 64
 
 
-def _root_config(**sections: object) -> DockerDevkitConfig:
-    payload: dict[str, object] = {"requires": ">=0.1"}
+def _root_config(**sections: object) -> ConfigFile:
+    payload: dict[str, object] = {"requires": ">=0.1", "project_name": "example"}
     payload.update(sections)
-    return DockerDevkitConfig.model_validate(payload)
+    if "services" in payload and "gateway" not in payload:
+        payload["gateway"] = "8080"
+    return ConfigFile.model_validate(payload)
 
 
-def test_tool_requirements_skip_score_k8s_for_compose_only() -> None:
-    config = _root_config(
-        repository="ghcr.io/org/repo",
-        project_name="rathole",
-        services={"rathole-client": {"workloads": ["rathole-client.yaml"]}},
-    )
-
-    binaries = [item.binary for item in tool_requirements(config, "both")]
-
-    assert binaries == ["score-compose"]
+def _empty_secrets() -> SecretsDeclaration:
+    return SecretsDeclaration.model_validate({})
 
 
 def test_tool_pin_defaults_live_on_the_root_model() -> None:
@@ -52,31 +49,6 @@ def test_tool_pin_defaults_live_on_the_root_model() -> None:
     )
 
     assert overridden.helm_version == "3.23.0"
-
-
-def test_tool_requirements_gate_helm_on_charts_and_target() -> None:
-    with_charts = _root_config(k8s={"workloads": ["api.yaml"], "charts": {"loki": "oci://r/chart:1.0.0"}})
-
-    assert [item.binary for item in tool_requirements(with_charts, "both")] == ["score-compose", "score-k8s", "helm"]
-    assert [item.binary for item in tool_requirements(with_charts, "compose")] == ["score-compose"]
-
-    without_charts = _root_config(k8s={"workloads": ["api.yaml"]})
-
-    assert [item.binary for item in tool_requirements(without_charts, "both")] == ["score-compose", "score-k8s"]
-
-
-def test_tool_requirements_carry_fetch_facts_for_every_tool() -> None:
-    with_charts = _root_config(k8s={"workloads": ["api.yaml"], "charts": {"loki": "oci://r/chart:1.0.0"}})
-
-    for item in tool_requirements(with_charts, "both"):
-        assert item.version
-        assert item.release.startswith("https://")
-        assert item.archive.startswith("https://")
-        assert item.extract
-
-    helm = tool_requirements(with_charts, "both")[-1]
-
-    assert helm.extract == "--strip-components=1 linux-amd64/helm"
 
 
 def test_bind_volume_carries_required_source_and_target() -> None:
@@ -105,7 +77,7 @@ def test_write_normalises_file_mode(tmp_path: Path) -> None:
     path.write_text("placeholder", encoding="utf-8")
     path.chmod(0o755)
 
-    write_generated_file(path, "content\n")
+    write_file(path, "content\n")
 
     assert path.stat().st_mode & 0o777 == 0o644
     assert path.read_text(encoding="utf-8") == "content\n"
@@ -116,6 +88,9 @@ HELM_RENDERED = "apiVersion: v1\nkind: Secret\nmetadata:\n  name: chart\n"
 MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
 CHART_REF = "oci://ghcr.io/grafana/helm-charts/loki:7.3.0"
 MIRRORED_CHART = f"{MIRROR_PREFIX}/ghcr.io/grafana/helm-charts/loki@{DIGEST}"
+PLATFORM_DIGEST = "sha256:" + "b" * 64
+LOKI_INDEX = f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.5.0@{DIGEST}"
+LOKI_MANIFEST = f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.5.0@{PLATFORM_DIGEST}"
 LOCK_IMAGES = {
     "GRAFANA_IMAGE": "ghcr.io/outernet-foundation/mirror/docker.io/grafana/grafana:11.6.0@" + DIGEST,
     "LOKI_CHART": MIRRORED_CHART,
@@ -128,13 +103,18 @@ class K8sBashRecorder:
         self.output_path = output_path
         self.state_path = state_path
         self.commands: list[str] = []
+        self.state_at_generate: dict[str, str] = {}
 
-    def run(self, command: str, *, cwd: Path | None = None) -> None:
+    def run(self, command: str, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
         self.commands.append(command)
+        if command.startswith("score-k8s init"):
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            self.state_path.write_text("workloads: {}\n", encoding="utf-8")
         if command.startswith("score-k8s generate"):
             self.output_path.parent.mkdir(parents=True, exist_ok=True)
             self.output_path.write_text(WORKLOAD_MANIFEST, encoding="utf-8")
             self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            self.state_at_generate[self.output_path.name] = self.state_path.read_text(encoding="utf-8")
             self.state_path.write_text("workloads: {}\n", encoding="utf-8")
 
 
@@ -143,14 +123,14 @@ class HelmRecorder:
         self.commands: list[str] = []
         self.values_contents: list[str] = []
 
-    def run(self, command: str) -> str:
+    def run(self, command: str, env: dict[str, str] | None = None) -> str:
         self.commands.append(command)
         for argument in command.split("--values ")[1:]:
             self.values_contents.append(Path(argument.split()[0]).read_text(encoding="utf-8"))
         return HELM_RENDERED
 
 
-def _charts_config() -> DockerDevkitConfig:
+def _charts_config() -> ConfigFile:
     return _root_config(k8s={"charts": {"loki": CHART_REF}})
 
 
@@ -161,36 +141,48 @@ def _write_values(tmp_path: Path, text: str) -> None:
 
 
 def _generate_with_chart(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, config: DockerDevkitConfig, images: dict[str, str]
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, config: ConfigFile, images: dict[str, str]
 ) -> HelmRecorder:
     output = Path("stack/generated/k8s/manifests.yaml")
     k8s = K8sBashRecorder(tmp_path / output, tmp_path / "stack/generated/k8s/.score-k8s/state.yaml")
     helm = HelmRecorder()
-    monkeypatch.setattr(score_generate, "bash", k8s.run)
-    monkeypatch.setattr(score_generate, "bash_output", helm.run)
-    generate_k8s(tmp_path, config, output, images)
+    monkeypatch.setattr(score_module, "bash", k8s.run)
+    monkeypatch.setattr(score_k8s_module, "bash_output", helm.run)
+    assert config.k8s is not None
+    config.root = tmp_path
+    lock = LockFile.model_validate({
+        "images": {name: {"index": ref} for name, ref in images.items() if not name.endswith("_CHART")},
+        "charts": {name: ref for name, ref in images.items() if name.endswith("_CHART")},
+    })
+    generate_k8s(config, config.k8s, lock, {}, local=False, secrets=_empty_secrets())
     return helm
 
 
-def test_values_without_markers_pass_through_as_the_committed_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_values_without_markers_resolve_into_the_tempdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _write_values(tmp_path, "service:\n  port: 3000\n")
     config = _charts_config()
 
     helm = _generate_with_chart(monkeypatch, tmp_path, config, LOCK_IMAGES)
 
-    assert helm.commands == [
-        (f"helm template loki oci://{MIRRORED_CHART} --values {(tmp_path / VALUES_PATH).as_posix()}")
-    ]
+    argument = helm.commands[0].split("--values ")[1].split()[0]
+    assert argument != (tmp_path / VALUES_PATH).as_posix()
+    assert argument.endswith("values/loki.yaml")
     assert helm.values_contents == ["service:\n  port: 3000\n"]
+
+
+def test_values_without_markers_refuse_a_literal_image(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_values(tmp_path, "image: ghcr.io/example/app:v1\n")
+    config = _charts_config()
+
+    with pytest.raises(ValueError, match=r"loki\.yaml.*'ghcr.io/example/app:v1' must consume the lock"):
+        _generate_with_chart(monkeypatch, tmp_path, config, LOCK_IMAGES)
 
 
 def test_a_missing_chart_lock_entry_refuses_naming_the_chart(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _write_values(tmp_path, "service:\n  port: 3000\n")
     config = _charts_config()
 
-    with pytest.raises(RuntimeError, match=r"chart 'loki'.*LOKI_CHART"):
+    with pytest.raises(ValueError, match=r"chart 'loki'.*LOKI_CHART"):
         _generate_with_chart(monkeypatch, tmp_path, config, {})
 
 
@@ -261,12 +253,112 @@ def test_values_lock_markers_resolve_after_includes(tmp_path: Path, monkeypatch:
     assert resolved["image"]["digest"] == DIGEST
 
 
+class TestMarkerSubstrateResolution:
+    def _multi_arch_lock(self) -> LockFile:
+        return LockFile.model_validate({
+            "platforms": ["linux/amd64", "linux/arm64"],
+            "images": {
+                "LOKI_IMAGE": {
+                    "index": LOKI_INDEX,
+                    "platforms": {"linux/amd64": LOKI_MANIFEST, "linux/arm64": LOKI_INDEX},
+                }
+            },
+            "charts": {"LOKI_CHART": MIRRORED_CHART},
+        })
+
+    def _compose_seam(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, platforms: list[str]) -> str:
+        (tmp_path / "stack" / "score").mkdir(parents=True)
+        (tmp_path / "stack" / "score" / "api.yaml").write_text(
+            "metadata:\n  name: api\ncontainers:\n  api:\n    image: ${LOKI_IMAGE}\n", encoding="utf-8"
+        )
+        loki_platforms = {
+            platform: LOKI_MANIFEST if platform == "linux/amd64" else LOKI_INDEX for platform in platforms
+        }
+        alpine_platforms = dict.fromkeys(platforms, ALPINE_LOCK["ALPINE_IMAGE"])
+        (tmp_path / "boatyard.lock.yml").write_text(
+            yaml.safe_dump({
+                "platforms": platforms,
+                "images": {
+                    "LOKI_IMAGE": {"index": LOKI_INDEX, "platforms": loki_platforms},
+                    "ALPINE_IMAGE": {"index": ALPINE_LOCK["ALPINE_IMAGE"], "platforms": alpine_platforms},
+                },
+            }),
+            encoding="utf-8",
+        )
+        platform_lines = "".join(f"  - {platform}\n" for platform in platforms)
+        base_image_lines = (
+            "base_images:\n"
+            "  LOKI_IMAGE: docker.io/grafana/loki:3.5.0\n"
+            "  ALPINE_IMAGE: docker.io/library/alpine:3.21.0\n"
+        )
+        (tmp_path / "boatyard.yml").write_text(
+            "requires: '>=0'\n"
+            "repository: ghcr.io/org/repo\n"
+            "project_name: example\n"
+            f"platforms:\n{platform_lines}"
+            f"{base_image_lines}"
+            "services:\n"
+            "  core:\n"
+            "    workloads:\n"
+            "      - api.yaml\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "stack" / "secrets.yaml").write_text("", encoding="utf-8")
+        recorder = WorkloadContentsRecorder()
+
+        def _skip_tools(requirements: list[score_verb_module.ToolRequirement]) -> None:
+            return None
+
+        monkeypatch.setattr(score_module, "bash", recorder.run)
+        monkeypatch.setattr(score_verb_module, "ensure_tools", _skip_tools)
+        monkeypatch.chdir(tmp_path)
+        score_verb_module.generate_score(target="compose")
+        return recorder.workload_contents["api.yaml"]
+
+    def test_compose_generation_receives_the_selected_platform_manifests(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+
+        contents = self._compose_seam(monkeypatch, tmp_path, platforms=["linux/amd64"])
+
+        assert f"image: {LOKI_MANIFEST}" in contents
+
+    def test_compose_generation_selects_the_platform_the_environment_names(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "boatyard.values.yaml").write_text("platform: linux/arm64\n", encoding="utf-8")
+
+        contents = self._compose_seam(monkeypatch, tmp_path, platforms=["linux/amd64", "linux/arm64"])
+
+        assert f"image: {LOKI_INDEX}" in contents
+
+    def test_k8s_marker_resolution_selects_the_index(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _write_values(tmp_path, "image:\n  lock: LOKI_IMAGE\n")
+        output = Path("stack/generated/k8s/manifests.yaml")
+        k8s = K8sBashRecorder(tmp_path / output, tmp_path / "stack/generated/k8s/.score-k8s/state.yaml")
+        helm = HelmRecorder()
+        monkeypatch.setattr(score_module, "bash", k8s.run)
+        monkeypatch.setattr(score_k8s_module, "bash_output", helm.run)
+        config = _root_config(
+            platforms=["linux/amd64"],
+            k8s={"workloads": [], "charts": {"loki": CHART_REF}},
+        )
+        config.root = tmp_path
+        lock = self._multi_arch_lock()
+        assert config.k8s is not None
+
+        generate_k8s(config, config.k8s, lock, {}, local=False, secrets=_empty_secrets())
+
+        resolved = yaml.safe_load(helm.values_contents[0])
+        assert resolved["image"] == LOKI_INDEX
+
+
 class ComposeBashRecorder:
     def __init__(self, generated: str) -> None:
         self.generated = generated
         self.commands: list[str] = []
 
-    def run(self, command: str, *, cwd: Path | None = None) -> None:
+    def run(self, command: str, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
         self.commands.append(command)
         if command.startswith("score-compose generate"):
             output = Path(command.rsplit("--output ", 1)[1].split()[0])
@@ -286,36 +378,52 @@ GENERATED_COMPOSE = (
     "    image: pg:16\n"
 )
 
+API_SERVICE_RENDERING = "services:\n  api-api:\n    image: ghcr.io/org/api:1\n"
 
-def _generate_compose(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, generated: str) -> Path:
+
+def _generate_compose(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    generated: str,
+    secrets: SecretsDeclaration,
+    workload: str = "api",
+    container: str | None = None,
+) -> Path:
+    container_name = workload if container is None else container
     (tmp_path / "stack" / "score").mkdir(parents=True)
-    (tmp_path / "stack" / "score" / "api.yaml").write_text("containers: {}\n", encoding="utf-8")
+    (tmp_path / "stack" / "score" / f"{workload}.yaml").write_text(
+        f"metadata:\n  name: {workload}\ncontainers:\n  {container_name}: {{}}\n", encoding="utf-8"
+    )
     (tmp_path / "workloads" / "api").mkdir(parents=True)
     (tmp_path / "workloads" / "api" / "config.yaml").write_text("key: ${FOO}\n", encoding="utf-8")
     recorder = ComposeBashRecorder(generated)
-    monkeypatch.setattr(score_generate, "bash", recorder.run)
+    monkeypatch.setattr(score_module, "bash", recorder.run)
     config = _root_config(
         repository="ghcr.io/org/repo",
         project_name="example",
-        services={"core": {"workloads": ["api.yaml"]}},
+        platforms=["linux/amd64"],
+        services={"core": {"workloads": [f"{workload}.yaml"]}},
     )
+    config.root = tmp_path
 
-    score_generate.generate_compose(tmp_path, config, {})
+    score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), {}, secrets=secrets)
     return tmp_path / "stack" / "generated" / "compose" / "compose.core.yaml"
 
 
 def test_generate_compose_collapses_doubled_names_and_inlines_binds(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    output = _generate_compose(monkeypatch, tmp_path, GENERATED_COMPOSE)
+    output = _generate_compose(monkeypatch, tmp_path, GENERATED_COMPOSE, _empty_secrets())
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
-    assert list(document["services"]) == ["api", "pf-postgres"]
-    api = document["services"]["api"]
+    assert list(document["services"]) == ["core-api", "core-pf-postgres"]
+    api = document["services"]["core-api"]
     assert api["image"] == "ghcr.io/org/api:1"
     assert "volumes" not in api
-    assert api["configs"] == [{"source": "config.yaml", "target": "/etc/placeframe/config.yaml"}]
-    assert document["configs"] == {"config.yaml": {"content": "key: $${FOO}\n"}}
+    assert api["networks"] == {"core-net": {"aliases": ["api"]}}
+    assert api["configs"] == [{"source": "core-config.yaml", "target": "/etc/placeframe/config.yaml"}]
+    assert document["configs"] == {"core-config.yaml": {"content": "key: $${FOO}\n"}}
+    assert document["networks"] == {"core-net": {}}
 
 
 def test_generate_compose_collapses_doubled_names_with_no_binds(
@@ -325,33 +433,90 @@ def test_generate_compose_collapses_doubled_names_with_no_binds(
         monkeypatch,
         tmp_path,
         "services:\n  gateway-gateway:\n    image: ghcr.io/org/gateway:1\n",
+        _empty_secrets(),
+        workload="gateway",
     )
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
-    assert list(document["services"]) == ["gateway"]
-    assert document["services"]["gateway"]["image"] == "ghcr.io/org/gateway:1"
+    assert list(document["services"]) == ["core-gateway"]
+    assert document["services"]["core-gateway"]["image"] == "ghcr.io/org/gateway:1"
     assert "configs" not in document
+    assert document["networks"] == {"core-net": {}}
 
 
 def test_generate_compose_refuses_a_rename_collision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     colliding = GENERATED_COMPOSE + "  api:\n    image: ghcr.io/org/api:2\n"
 
-    with pytest.raises(SystemExit, match="collides"):
-        _generate_compose(monkeypatch, tmp_path, colliding)
+    with pytest.raises(ValueError, match="claimed by more than one"):
+        _generate_compose(monkeypatch, tmp_path, colliding, _empty_secrets())
 
 
-def test_generate_compose_leaves_undoubled_names_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_generate_compose_refuses_a_container_and_residual_service_sharing_a_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    generated = (
+        "services:\n  api-sidecar:\n    image: ghcr.io/org/api:1\n  sidecar:\n    image: ghcr.io/org/sidecar:1\n"
+    )
+
+    with pytest.raises(ValueError, match="claimed by more than one"):
+        _generate_compose(monkeypatch, tmp_path, generated, _empty_secrets(), workload="api", container="sidecar")
+
+
+def test_generate_compose_carries_a_coincidentally_prefixed_service_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    generated = GENERATED_COMPOSE + "  api-migrations:\n    image: ghcr.io/org/migrate:1\n"
+
+    output = _generate_compose(monkeypatch, tmp_path, generated, _empty_secrets())
+
+    document = yaml.safe_load(output.read_text(encoding="utf-8"))
+    assert list(document["services"]) == ["core-api", "core-pf-postgres", "core-api-migrations"]
+
+
+def test_generate_compose_strips_the_workload_prefix_from_differing_container_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     output = _generate_compose(
         monkeypatch,
         tmp_path,
         "services:\n  tunnel-rathole-rathole-client:\n    image: ghcr.io/org/rathole-client:1\n",
+        _empty_secrets(),
+        workload="tunnel-rathole",
+        container="rathole-client",
     )
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
-    assert list(document["services"]) == ["tunnel-rathole-rathole-client"]
+    assert list(document["services"]) == ["core-rathole-client"]
+    assert document["services"]["core-rathole-client"]["image"] == "ghcr.io/org/rathole-client:1"
 
 
-GATED_COMPOSE = (
+def test_generate_compose_refuses_a_container_name_shared_across_workloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "stack" / "score").mkdir(parents=True)
+    (tmp_path / "stack" / "score" / "alpha.yaml").write_text(
+        "metadata:\n  name: alpha\ncontainers:\n  sidecar: {}\n", encoding="utf-8"
+    )
+    (tmp_path / "stack" / "score" / "beta.yaml").write_text(
+        "metadata:\n  name: beta\ncontainers:\n  sidecar: {}\n", encoding="utf-8"
+    )
+    recorder = ComposeBashRecorder(
+        "services:\n  alpha-sidecar:\n    image: ghcr.io/org/alpha:1\n  beta-sidecar:\n    image: ghcr.io/org/beta:1\n"
+    )
+    monkeypatch.setattr(score_module, "bash", recorder.run)
+    config = _root_config(
+        repository="ghcr.io/org/repo",
+        project_name="example",
+        platforms=["linux/amd64"],
+        services={"core": {"workloads": ["alpha.yaml", "beta.yaml"]}},
+    )
+    config.root = tmp_path
+
+    with pytest.raises(ValueError, match="claimed by more than one"):
+        score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), {}, secrets=_empty_secrets())
+
+
+COMPOSE_WITH_BARRIER = (
     "services:\n"
     "  api-api:\n"
     "    image: ghcr.io/org/api:1\n"
@@ -366,52 +531,54 @@ GATED_COMPOSE = (
 )
 
 
-def test_generate_compose_renames_the_gate_and_its_references_per_entry(
+def test_generate_compose_renames_the_barrier_and_its_references_per_entry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    output = _generate_compose(monkeypatch, tmp_path, GATED_COMPOSE)
+    output = _generate_compose(monkeypatch, tmp_path, COMPOSE_WITH_BARRIER, _empty_secrets())
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
-    assert list(document["services"]) == ["api", "pf-postgres", "wait-for-resources-core"]
-    assert document["services"]["api"]["depends_on"] == {"wait-for-resources-core": {"condition": "service_started"}}
-    assert document["services"]["pf-postgres"]["depends_on"] == ["wait-for-resources-core"]
+    assert list(document["services"]) == ["core-api", "core-pf-postgres", "core-wait-for-resources"]
+    assert document["services"]["core-api"]["depends_on"] == {
+        "core-wait-for-resources": {"condition": "service_started"}
+    }
+    assert document["services"]["core-pf-postgres"]["depends_on"] == ["core-wait-for-resources"]
+    assert document["services"]["core-wait-for-resources"]["image"] == "${CORE__LOCK__ALPINE_IMAGE:?err}"
 
 
-def test_generate_compose_gate_names_differ_per_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_generate_compose_barrier_names_differ_per_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
-    (tmp_path / "stack" / "score" / "api.yaml").write_text("containers: {}\n", encoding="utf-8")
-    (tmp_path / "stack" / "score" / "edge.yaml").write_text("containers: {}\n", encoding="utf-8")
-    recorder = ComposeBashRecorder(GATED_COMPOSE)
-    monkeypatch.setattr(score_generate, "bash", recorder.run)
+    (tmp_path / "stack" / "score" / "api.yaml").write_text(
+        "metadata:\n  name: api\ncontainers:\n  api: {}\n", encoding="utf-8"
+    )
+    (tmp_path / "stack" / "score" / "edge.yaml").write_text(
+        "metadata:\n  name: edge\ncontainers: {}\n", encoding="utf-8"
+    )
+    recorder = ComposeBashRecorder(COMPOSE_WITH_BARRIER)
+    monkeypatch.setattr(score_module, "bash", recorder.run)
     config = _root_config(
         repository="ghcr.io/org/repo",
         project_name="example",
+        platforms=["linux/amd64"],
         services={
             "core": {"workloads": ["api.yaml"]},
             "edge": {"workloads": ["edge.yaml"]},
         },
     )
+    config.root = tmp_path
 
-    score_generate.generate_compose(tmp_path, config, {})
+    score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), {}, secrets=_empty_secrets())
 
     core = yaml.safe_load((tmp_path / "stack/generated/compose/compose.core.yaml").read_text(encoding="utf-8"))
     edge = yaml.safe_load((tmp_path / "stack/generated/compose/compose.edge.yaml").read_text(encoding="utf-8"))
-    assert "wait-for-resources-core" in core["services"]
-    assert "wait-for-resources-edge" in edge["services"]
-
-
-def test_generate_compose_refuses_a_gate_rename_collision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    colliding = GATED_COMPOSE + "  wait-for-resources-core:\n    image: ghcr.io/org/api:2\n"
-
-    with pytest.raises(SystemExit, match="collides"):
-        _generate_compose(monkeypatch, tmp_path, colliding)
+    assert core["services"]["core-wait-for-resources"]["image"] == "${CORE__LOCK__ALPINE_IMAGE:?err}"
+    assert edge["services"]["edge-wait-for-resources"]["image"] == "${EDGE__LOCK__ALPINE_IMAGE:?err}"
 
 
 class WorkloadContentsRecorder:
     def __init__(self) -> None:
         self.workload_contents: dict[str, str] = {}
 
-    def run(self, command: str, *, cwd: Path | None = None) -> None:
+    def run(self, command: str, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
         if command.startswith("score-compose generate"):
             for argument in command.split()[2:]:
                 if argument.startswith("--output"):
@@ -420,50 +587,61 @@ class WorkloadContentsRecorder:
                 self.workload_contents[path.name] = path.read_text(encoding="utf-8")
             output = Path(command.rsplit("--output ", 1)[1].split()[0])
             output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text("services: {}\n", encoding="utf-8")
+            output.write_text(API_SERVICE_RENDERING, encoding="utf-8")
 
 
-def test_workload_lock_markers_resolve_into_the_rendered_copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_workload_image_slots_resolve_from_the_lock_into_the_rendered_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "api.yaml").write_text(
-        "containers:\n  api:\n    image:\n      lock: API_IMAGE\n",
+        "metadata:\n  name: api\ncontainers:\n  api:\n    image: ${API_IMAGE}\n",
         encoding="utf-8",
     )
     recorder = WorkloadContentsRecorder()
-    monkeypatch.setattr(score_generate, "bash", recorder.run)
+    monkeypatch.setattr(score_module, "bash", recorder.run)
     config = _root_config(
         repository="ghcr.io/org/repo",
         project_name="example",
+        platforms=["linux/amd64"],
         services={"core": {"workloads": ["api.yaml"]}},
     )
+    config.root = tmp_path
 
-    score_generate.generate_compose(tmp_path, config, {"API_IMAGE": "ghcr.io/org/api@sha256:" + "a" * 64})
+    score_compose_module.generate_compose(
+        config,
+        _lock_for_images({"API_IMAGE": "ghcr.io/org/api@sha256:" + "a" * 64, **ALPINE_LOCK}),
+        {},
+        secrets=_empty_secrets(),
+    )
 
     assert (
         recorder.workload_contents["api.yaml"]
-        == "containers:\n  api:\n    image: ghcr.io/org/api@sha256:" + "a" * 64 + "\n"
+        == "metadata:\n  name: api\ncontainers:\n  api:\n    image: ghcr.io/org/api@sha256:" + "a" * 64 + "\n"
     )
 
 
-def test_workload_lock_marker_naming_no_lock_entry_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_workload_image_slot_with_no_lock_entry_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "api.yaml").write_text(
-        "containers:\n  api:\n    image:\n      lock: API_IMAGE\n",
+        "metadata:\n  name: api\ncontainers:\n  api:\n    image: ${API_IMAGE}\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(score_generate, "bash", WorkloadContentsRecorder().run)
+    recorder = WorkloadContentsRecorder()
+    monkeypatch.setattr(score_module, "bash", recorder.run)
     config = _root_config(
         repository="ghcr.io/org/repo",
         project_name="example",
+        platforms=["linux/amd64"],
         services={"core": {"workloads": ["api.yaml"]}},
     )
+    config.root = tmp_path
 
-    with pytest.raises(RuntimeError, match=r"workload api\.yaml.*API_IMAGE.*does not exist"):
-        score_generate.generate_compose(tmp_path, config, {})
+    with pytest.raises(ValueError, match=r"api\.yaml.*API_IMAGE.*image lock"):
+        score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), {}, secrets=_empty_secrets())
 
 
 SHIPPED_TEMPLATES = {
-    "wait-for-resources-image.tpl",
     "probe-adapter-healthchecks.tpl",
     "restart.tpl",
     "gpu-cuda.tpl",
@@ -474,7 +652,7 @@ SHIPPED_TEMPLATES = {
 
 
 def test_shipped_patch_templates_resolve() -> None:
-    directory = files("docker_devkit") / "patch_templates"
+    directory = files("boatyard") / "score_patch_templates"
 
     assert {item.name for item in directory.iterdir()} == SHIPPED_TEMPLATES
     for name in SHIPPED_TEMPLATES:
@@ -485,45 +663,31 @@ SELF_GATING_FALLBACK = "{{- if not $matched }}\n[]\n{{- end }}"
 
 
 def test_self_gating_templates_fall_back_to_an_empty_patches_document() -> None:
-    # score-compose and score-k8s refuse a document-less template output (comment-only or
-    # empty renders fail at unmarshal), so a template that can emit zero ops must end with
-    # the empty-list fallback and set the matched flag where it emits ops. The gate-pin
-    # template emits unconditionally and is exempt.
-    directory = files("docker_devkit") / "patch_templates"
+    directory = files("boatyard") / "score_patch_templates"
 
-    for name in SHIPPED_TEMPLATES - {"wait-for-resources-image.tpl"}:
+    for name in SHIPPED_TEMPLATES:
         text = (directory / name).read_text(encoding="utf-8")
         assert SELF_GATING_FALLBACK in text
         assert "{{- $matched = true }}" in text
 
 
 def test_the_healthcheck_template_ships_both_probe_adapter_spells() -> None:
-    text = (files("docker_devkit") / "patch_templates" / "probe-adapter-healthchecks.tpl").read_text(encoding="utf-8")
+    text = (files("boatyard") / "score_patch_templates" / "probe-adapter-healthchecks.tpl").read_text(encoding="utf-8")
 
-    assert score_generate.PROBE_ADAPTERS == ("python-urllib", "bash-http")
+    assert config_module.PROBE_ADAPTERS == ("python-urllib", "bash-http")
     assert "urllib.request.urlopen" in text
     assert "/dev/tcp/127.0.0.1" in text
 
 
 def test_the_bash_http_spell_escapes_its_dollar_for_compose_interpolation() -> None:
-    # The healthcheck test string is app-owned data the consumer's include-time
-    # interpolation scans: an un-doubled $status renders as an empty compose
-    # variable and the case statement dies as a syntax error (keycloak verified
-    # unhealthy on a live daemon exactly this way), so the spell must carry the
-    # compose-escaped $$status.
-    text = (files("docker_devkit") / "patch_templates" / "probe-adapter-healthchecks.tpl").read_text(encoding="utf-8")
+    text = (files("boatyard") / "score_patch_templates" / "probe-adapter-healthchecks.tpl").read_text(encoding="utf-8")
 
     assert "$$status" in text
     assert "$status" not in text.replace("$$status", "")
 
 
 def test_the_bash_http_spell_uses_the_slash_port_spelling() -> None:
-    # bash intercepts /dev/tcp/host/port — slash only. A colon-separated port
-    # (127.0.0.1:9000) is not a net redirection at all: bash falls through to
-    # opening the literal file and the healthcheck dies with ENOENT (verified
-    # against the live keycloak container — the colon form failed while the
-    # slash form connected on the same socket).
-    text = (files("docker_devkit") / "patch_templates" / "probe-adapter-healthchecks.tpl").read_text(encoding="utf-8")
+    text = (files("boatyard") / "score_patch_templates" / "probe-adapter-healthchecks.tpl").read_text(encoding="utf-8")
 
     assert "/dev/tcp/127.0.0.1/{{ .port }}" in text
     assert "/dev/tcp/127.0.0.1:{{ .port }}" not in text
@@ -544,13 +708,23 @@ PROVISIONER_WITHOUT_SERVICES = """
     key: value
 """
 
-GATE_LOCK = {"ALPINE_IMAGE": "ghcr.io/outernet-foundation/mirror/docker.io/library/alpine:3.21.0@" + DIGEST}
+ALPINE_LOCK = {"ALPINE_IMAGE": "ghcr.io/outernet-foundation/mirror/docker.io/library/alpine:3.21.0@" + DIGEST}
 
 
-def _bundle_config(**bundle: object) -> DockerDevkitConfig:
+def _lock_for_images(images: dict[str, str]) -> LockFile:
+    return LockFile.model_validate({
+        "platforms": ["linux/amd64"],
+        "images": {
+            name: {"index": reference, "platforms": {"linux/amd64": reference}} for name, reference in images.items()
+        },
+    })
+
+
+def _bundle_config(**bundle: object) -> ConfigFile:
     return _root_config(
         repository="ghcr.io/org/repo",
         project_name="example",
+        platforms=["linux/amd64"],
         services={"core": {"workloads": ["api.yaml"], **bundle}},  # type: ignore[arg-type]
     )
 
@@ -558,57 +732,38 @@ def _bundle_config(**bundle: object) -> DockerDevkitConfig:
 def _compose_init_templates(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    config: DockerDevkitConfig,
+    config: ConfigFile,
     images: dict[str, str],
     sources: dict[str, str],
+    generated: str = "services: {}\n",
 ) -> list[list[str]]:
-    # One template-name list per bundle rendering, in declaration order.
+    # Return one template-name list per bundle rendering, in declaration order.
     for relative, text in sources.items():
         source = tmp_path / relative
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_text(text, encoding="utf-8")
-    recorder = ComposeBashRecorder("services: {}\n")
-    monkeypatch.setattr(score_generate, "bash", recorder.run)
-    score_generate.generate_compose(tmp_path, config, images)
+    recorder = ComposeBashRecorder(generated)
+    monkeypatch.setattr(score_module, "bash", recorder.run)
+    config.root = tmp_path
+    score_compose_module.generate_compose(
+        config, _lock_for_images({**images, **ALPINE_LOCK}), {}, secrets=_empty_secrets()
+    )
     inits = [command for command in recorder.commands if command.startswith("score-compose init")]
     return [[Path(token).name for token in command.split() if token.endswith(".tpl")] for command in inits]
 
 
-WORKLOAD_REFERENCING_CONFIG = """
+def _workload_referencing(resource: str, name: str) -> str:
+    return f"""
 resources:
-  config:
-    type: example-config
-containers: {}
-"""
-
-WORKLOAD_REFERENCING_STATE = """
-resources:
-  state:
-    type: example-state
-containers: {}
+  {resource}:
+    type: example-{resource}
+metadata:
+  name: {name}
+containers: {{}}
 """
 
 
-def test_gate_pin_registers_when_provisioners_declare_services(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config = _bundle_config()
-
-    templates = _compose_init_templates(
-        monkeypatch,
-        tmp_path,
-        config,
-        GATE_LOCK,
-        {
-            "stack/score/api.yaml": WORKLOAD_REFERENCING_CONFIG,
-            "stack/score/compose/config.yaml": PROVISIONER_WITH_SERVICES,
-        },
-    )
-
-    assert templates == [
-        ["probe-adapter-healthchecks.tpl", "restart.tpl", "wait-for-resources-image.tpl"],
-    ]
-
-
-def test_gate_pin_stays_unregistered_without_provisioner_services(
+def test_barrier_pin_stays_unregistered_without_provisioner_services(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = _bundle_config()
@@ -619,7 +774,7 @@ def test_gate_pin_stays_unregistered_without_provisioner_services(
         config,
         {},
         {
-            "stack/score/api.yaml": WORKLOAD_REFERENCING_STATE,
+            "stack/score/api.yaml": _workload_referencing("state", "api"),
             "stack/score/compose/state.yaml": PROVISIONER_WITHOUT_SERVICES,
         },
     )
@@ -627,28 +782,18 @@ def test_gate_pin_stays_unregistered_without_provisioner_services(
     assert templates == [["probe-adapter-healthchecks.tpl", "restart.tpl"]]
 
 
-def test_gate_pin_refuses_a_gate_forming_run_without_the_lock_entry(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_generate_compose_requires_the_alpine_image_lock_entry(tmp_path: Path) -> None:
     config = _bundle_config()
+    config.root = tmp_path
 
-    with pytest.raises(RuntimeError, match="ALPINE_IMAGE"):
-        _compose_init_templates(
-            monkeypatch,
-            tmp_path,
-            config,
-            {},
-            {
-                "stack/score/api.yaml": WORKLOAD_REFERENCING_CONFIG,
-                "stack/score/compose/config.yaml": PROVISIONER_WITH_SERVICES,
-            },
-        )
+    with pytest.raises(ValueError, match="must carry the ALPINE_IMAGE entry"):
+        score_compose_module.generate_compose(config, LockFile.model_validate({}), {}, secrets=_empty_secrets())
 
 
 def test_provisioners_register_by_resource_type_closure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sources = {
-        "stack/score/api.yaml": WORKLOAD_REFERENCING_STATE,
-        "stack/score/gateway.yaml": WORKLOAD_REFERENCING_CONFIG,
+        "stack/score/api.yaml": _workload_referencing("state", "api"),
+        "stack/score/gateway.yaml": _workload_referencing("config", "gateway"),
         "stack/score/compose/config.yaml": PROVISIONER_WITH_SERVICES,
         "stack/score/compose/state.yaml": PROVISIONER_WITHOUT_SERVICES,
         "stack/score/compose/orphan.yaml": "- uri: template://example/orphan\n  type: orphan-type\n",
@@ -658,22 +803,24 @@ def test_provisioners_register_by_resource_type_closure(tmp_path: Path, monkeypa
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_text(text, encoding="utf-8")
     config = _bundle_config(workloads=["api.yaml", "gateway.yaml"])
+    config.root = tmp_path
+    config.platforms = ["linux/amd64"]
     recorder = ComposeBashRecorder("services: {}\n")
-    monkeypatch.setattr(score_generate, "bash", recorder.run)
+    monkeypatch.setattr(score_module, "bash", recorder.run)
 
-    score_generate.generate_compose(tmp_path, config, GATE_LOCK)
+    score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), {}, secrets=_empty_secrets())
 
     init = next(command for command in recorder.commands if command.startswith("score-compose init"))
     provisioners = [token for token in init.split() if token.endswith(".yaml")]
-    # Both referenced files compile (deterministic filename order); the orphan — a type
-    # nothing references — silently no-ships.
     assert [Path(token).name for token in provisioners] == ["config.yaml", "state.yaml"]
 
 
 WORKLOAD_WITH_LIVENESS = """
+metadata:
+  name: api
 containers:
   api:
-    image: ghcr.io/org/api:1
+    image: ${API_IMAGE:?err}
     livenessProbe:
       httpGet:
         path: /health
@@ -682,11 +829,12 @@ containers:
 
 WORKLOAD_WITH_READINESS = """
 metadata:
+  name: api
   annotations:
     outernet.internal/probe-adapter: python-urllib
 containers:
   api:
-    image: ghcr.io/org/api:1
+    image: ${API_IMAGE:?err}
     readinessProbe:
       httpGet:
         path: /ready
@@ -694,9 +842,11 @@ containers:
 """
 
 WORKLOAD_WITH_UNADAPTED_READINESS = """
+metadata:
+  name: api
 containers:
   api:
-    image: ghcr.io/org/api:1
+    image: ${API_IMAGE:?err}
     readinessProbe:
       httpGet:
         path: /ready
@@ -704,12 +854,10 @@ containers:
 """
 
 
-def test_httpget_probe_without_the_adapter_annotation_refuses_naming_the_workload(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_httpget_probe_without_the_adapter_annotation_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _bundle_config()
 
-    with pytest.raises(SystemExit, match=r"api\.yaml.*readinessProbe httpGet.*probe-adapter"):
+    with pytest.raises(ValidationError, match=r"readinessProbe httpGet.*probe-adapter"):
         _compose_init_templates(
             monkeypatch,
             tmp_path,
@@ -720,7 +868,7 @@ def test_httpget_probe_without_the_adapter_annotation_refuses_naming_the_workloa
             },
         )
 
-    with pytest.raises(SystemExit, match=r"api\.yaml.*livenessProbe httpGet.*probe-adapter"):
+    with pytest.raises(ValidationError, match=r"livenessProbe httpGet.*probe-adapter"):
         _compose_init_templates(
             monkeypatch,
             tmp_path,
@@ -732,21 +880,32 @@ def test_httpget_probe_without_the_adapter_annotation_refuses_naming_the_workloa
         )
 
 
-def test_unknown_probe_adapter_values_refuse_naming_the_workload(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_unknown_probe_adapter_values_refuse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _bundle_config()
 
-    with pytest.raises(SystemExit, match=r"api\.yaml.*supported adapters"):
+    with pytest.raises(ValidationError, match=r"supported adapters"):
         _compose_init_templates(
             monkeypatch,
             tmp_path,
             config,
             {},
             {
-                "stack/score/api.yaml": "metadata:\n  annotations:\n    outernet.internal/probe-adapter: curl\ncontainers: {}\n",
+                "stack/score/api.yaml": "metadata:\n  name: api\n  annotations:\n    outernet.internal/probe-adapter: curl\ncontainers: {}\n",
             },
         )
+
+
+def test_workload_resources_parse_typed() -> None:
+    document = WorkloadDocument.parse(
+        {"resources": {"db": {"type": "example-db"}}, "metadata": {"name": "api"}}, "api.yaml"
+    )
+
+    assert document.resources["db"].type == "example-db"
+
+
+def test_workload_resources_without_a_type_refuse() -> None:
+    with pytest.raises(ValidationError, match=r"resources\.db\.type"):
+        WorkloadDocument.parse({"resources": {"db": {"id": "main"}}, "metadata": {"name": "api"}}, "api.yaml")
 
 
 def test_adapted_probe_bearing_workloads_register_the_healthcheck_template(
@@ -762,17 +921,16 @@ def test_adapted_probe_bearing_workloads_register_the_healthcheck_template(
         {
             "stack/score/api.yaml": WORKLOAD_WITH_READINESS,
         },
+        generated=API_SERVICE_RENDERING,
     )
 
     assert templates == [["probe-adapter-healthchecks.tpl", "restart.tpl"]]
 
 
-def test_restart_values_outside_the_compose_enum_refuse_naming_the_workload(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_restart_values_outside_the_compose_enum_refuse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _bundle_config()
 
-    with pytest.raises(SystemExit, match=r"api\.yaml.*restart policies"):
+    with pytest.raises(ValidationError, match=r"restart policies"):
         _compose_init_templates(
             monkeypatch,
             tmp_path,
@@ -780,7 +938,7 @@ def test_restart_values_outside_the_compose_enum_refuse_naming_the_workload(
             {},
             {
                 "stack/score/api.yaml": (
-                    "metadata:\n  annotations:\n    outernet.internal/restart: always-please\ncontainers: {}\n"
+                    "metadata:\n  name: api\n  annotations:\n    outernet.internal/restart: always-please\ncontainers: {}\n"
                 ),
             },
         )
@@ -796,7 +954,7 @@ def test_restart_annotation_with_an_enum_value_passes(tmp_path: Path, monkeypatc
         {},
         {
             "stack/score/api.yaml": (
-                "metadata:\n  annotations:\n    outernet.internal/restart: on-failure\ncontainers: {}\n"
+                "metadata:\n  name: api\n  annotations:\n    outernet.internal/restart: on-failure\ncontainers: {}\n"
             ),
         },
     )
@@ -804,27 +962,40 @@ def test_restart_annotation_with_an_enum_value_passes(tmp_path: Path, monkeypatc
     assert templates == [["probe-adapter-healthchecks.tpl", "restart.tpl"]]
 
 
-def test_publish_annotation_refuses_naming_its_death(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_bare_literal_workload_image_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _bundle_config()
 
-    with pytest.raises(SystemExit, match=r"api\.yaml.*outernet\.internal/publish.*died"):
+    with pytest.raises(ValidationError, match=r"image.*must bind"):
         _compose_init_templates(
             monkeypatch,
             tmp_path,
             config,
             {},
             {
-                "stack/score/api.yaml": (
-                    'metadata:\n  annotations:\n    outernet.internal/publish: "8000/8000"\ncontainers: {}\n'
-                ),
+                "stack/score/api.yaml": "metadata:\n  name: api\ncontainers:\n  api:\n    image: ghcr.io/example/api:1\n",
             },
         )
+
+
+def test_a_workload_without_metadata_name_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _bundle_config()
+
+    with pytest.raises(ValidationError, match=r"metadata\.name must be 'api'"):
+        _compose_init_templates(monkeypatch, tmp_path, config, {}, {"stack/score/api.yaml": "containers: {}\n"})
+
+
+def test_a_workload_name_mismatching_the_file_stem_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _bundle_config()
+    source = "metadata:\n  name: apis\ncontainers: {}\n"
+
+    with pytest.raises(ValidationError, match=r"metadata\.name must be 'api'"):
+        _compose_init_templates(monkeypatch, tmp_path, config, {}, {"stack/score/api.yaml": source})
 
 
 def test_consumer_interpolated_names_must_match_declared_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _bundle_config()
 
-    with pytest.raises(SystemExit, match=r"api\.yaml.*files:"):
+    with pytest.raises(ValidationError, match=r"names no declared files"):
         _compose_init_templates(
             monkeypatch,
             tmp_path,
@@ -833,6 +1004,7 @@ def test_consumer_interpolated_names_must_match_declared_files(tmp_path: Path, m
             {
                 "stack/score/api.yaml": (
                     "metadata:\n"
+                    "  name: api\n"
                     "  annotations:\n"
                     "    outernet.internal/consumer-interpolated: /etc/rathole/client.toml\n"
                     "containers: {}\n"
@@ -843,11 +1015,12 @@ def test_consumer_interpolated_names_must_match_declared_files(tmp_path: Path, m
 
 WORKLOAD_WITH_INTERPOLATED_FILE = """\
 metadata:
+  name: rathole-client
   annotations:
     outernet.internal/consumer-interpolated: /etc/rathole/client.toml
 containers:
   rathole-client:
-    image: ghcr.io/org/rathole:1
+    image: ${RATHOLE_IMAGE:?err}
     files:
       /etc/rathole/client.toml:
         content: |
@@ -866,16 +1039,13 @@ INTERPOLATED_GENERATED_COMPOSE = (
 
 
 class MaterializingComposeRecorder(ComposeBashRecorder):
-    # score-compose materialises files: content into its state dir at generate; the
-    # recorder recreates that so the inliner can read it (the per-bundle state-dir
-    # reset deletes anything pre-created).
     def __init__(self, generated: str, materialized: Path, text: str) -> None:
         super().__init__(generated)
         self.materialized = materialized
         self.text = text
 
-    def run(self, command: str, *, cwd: Path | None = None) -> None:
-        super().run(command, cwd=cwd)
+    def run(self, command: str, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
+        super().run(command, cwd=cwd, env=env)
         if command.startswith("score-compose generate"):
             self.materialized.parent.mkdir(parents=True, exist_ok=True)
             self.materialized.write_text(self.text, encoding="utf-8")
@@ -887,24 +1057,33 @@ def test_consumer_interpolated_binds_ride_undoubled(tmp_path: Path, monkeypatch:
     (score_dir / "rathole-client.yaml").write_text(WORKLOAD_WITH_INTERPOLATED_FILE, encoding="utf-8")
     recorder = MaterializingComposeRecorder(
         INTERPOLATED_GENERATED_COMPOSE,
-        score_dir / ".score-compose/mounts/files/rathole-client-files-client.toml",
+        tmp_path / "stack/generated/compose/.score-compose/mounts/files/rathole-client-files-client.toml",
         'remote_addr = "${TUNNEL_CONTROL_ENDPOINT:?err}"\n',
     )
-    monkeypatch.setattr(score_generate, "bash", recorder.run)
+    monkeypatch.setattr(score_module, "bash", recorder.run)
     config = _root_config(
         repository="ghcr.io/org/repo",
         project_name="example",
+        platforms=["linux/amd64"],
         services={"rathole-client": {"workloads": ["rathole-client.yaml"]}},
     )
+    config.root = tmp_path
 
-    score_generate.generate_compose(tmp_path, config, {})
+    score_compose_module.generate_compose(
+        config,
+        _lock_for_images(ALPINE_LOCK),
+        {},
+        secrets=SecretsDeclaration.model_validate({"TUNNEL_CONTROL_ENDPOINT": "tunnel"}),
+    )
 
     output = tmp_path / "stack" / "generated" / "compose" / "compose.rathole-client.yaml"
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
-    service = document["services"]["rathole-client"]
-    assert service["configs"] == [{"source": "rathole-client-files-client.toml", "target": "/etc/rathole/client.toml"}]
+    service = document["services"]["rathole-client-rathole-client"]
+    assert service["configs"] == [
+        {"source": "rathole-client-rathole-client-files-client.toml", "target": "/etc/rathole/client.toml"}
+    ]
     assert (
-        document["configs"]["rathole-client-files-client.toml"]["content"]
+        document["configs"]["rathole-client-rathole-client-files-client.toml"]["content"]
         == 'remote_addr = "${TUNNEL_CONTROL_ENDPOINT:?err}"\n'
     )
 
@@ -915,6 +1094,7 @@ def test_gpu_compose_templates_register_per_the_renderings_variant(
     config = _root_config(
         repository="ghcr.io/org/repo",
         project_name="example",
+        platforms=["linux/amd64"],
         services={
             "core-cuda": {"workloads": ["api.yaml"], "vars": {"GPU_VARIANT": "cuda"}},
             "core-rocm": {"workloads": ["api.yaml"], "vars": {"GPU_VARIANT": "rocm"}},
@@ -927,7 +1107,7 @@ def test_gpu_compose_templates_register_per_the_renderings_variant(
         config,
         {},
         {
-            "stack/score/api.yaml": "containers: {}\n",
+            "stack/score/api.yaml": "metadata:\n  name: api\ncontainers: {}\n",
         },
     )
 
@@ -939,14 +1119,16 @@ def test_gpu_compose_templates_register_per_the_renderings_variant(
 
 def test_k8s_builtin_templates_register_on_every_init(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
-    (tmp_path / "stack" / "score" / "api.yaml").write_text("containers: {}\n", encoding="utf-8")
+    (tmp_path / "stack" / "score" / "api.yaml").write_text("metadata:\n  name: api\ncontainers: {}\n", encoding="utf-8")
     output = Path("stack/generated/k8s/manifests.yaml")
     recorder = K8sBashRecorder(tmp_path / output, tmp_path / "stack/generated/k8s/.score-k8s/state.yaml")
-    monkeypatch.setattr(score_generate, "bash", recorder.run)
-    monkeypatch.setattr(score_generate, "bash_output", HelmRecorder().run)
+    monkeypatch.setattr(score_module, "bash", recorder.run)
+    monkeypatch.setattr(score_k8s_module, "bash_output", HelmRecorder().run)
     config = _root_config(k8s={"workloads": ["api.yaml"]})
+    config.root = tmp_path
 
-    generate_k8s(tmp_path, config, output, {})
+    assert config.k8s is not None
+    generate_k8s(config, config.k8s, LockFile.model_validate({}), {}, local=False, secrets=_empty_secrets())
 
     init = next(command for command in recorder.commands if command.startswith("score-k8s init"))
     assert [Path(token).name for token in init.split() if token.endswith(".tpl")] == [
@@ -955,8 +1137,23 @@ def test_k8s_builtin_templates_register_on_every_init(tmp_path: Path, monkeypatc
     ]
 
 
-# The A0 spike verdict, pinned against the real binary: the suite runs without the
-# score tools, so these tests skip wherever score-compose is absent or off-pin.
+def test_k8s_instance_suffixes_are_preseeded_deterministically(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "stack" / "score").mkdir(parents=True)
+    (tmp_path / "stack" / "score" / "api.yaml").write_text("metadata:\n  name: api\ncontainers: {}\n", encoding="utf-8")
+    output = Path("stack/generated/k8s/manifests.yaml")
+    recorder = K8sBashRecorder(tmp_path / output, tmp_path / "stack/generated/k8s/.score-k8s/state.yaml")
+    monkeypatch.setattr(score_module, "bash", recorder.run)
+    monkeypatch.setattr(score_k8s_module, "bash_output", HelmRecorder().run)
+    config = _root_config(k8s={"workloads": ["api.yaml"]})
+    config.root = tmp_path
+
+    assert config.k8s is not None
+    generate_k8s(config, config.k8s, LockFile.model_validate({}), {}, local=False, secrets=_empty_secrets())
+
+    seeded = yaml.safe_load(recorder.state_at_generate[output.name])
+    assert seeded["workloads"]["api"]["instance_suffix"] == "-" + sha256(b"api").hexdigest()[:10]
+
+
 A0_ESCAPED_WORKLOAD = """\
 apiVersion: score.dev/v1b1
 metadata:
@@ -965,7 +1162,7 @@ containers:
   spike:
     image: ${SPIKE_IMAGE:?err}
     files:
-      /etc/spike/holes.toml:
+      /etc/spike/slots.toml:
         content: |
           doubled_err = "$${SPIKE_SET:?err}"
           doubled_default = "$${SPIKE_UNSET:-fallback}"
@@ -1002,7 +1199,7 @@ containers:
   spike:
     image: ghcr.io/example/spike:1.0
     files:
-      /etc/spike/holes.toml:
+      /etc/spike/slots.toml:
         content: |
           err = "${SPIKE_SET:?err}"
 """
@@ -1022,7 +1219,7 @@ containers:
 def _skip_unless_pinned_score_compose() -> None:
     if shutil.which("score-compose") is None:
         pytest.skip("score-compose is not on PATH; the A0 pin needs the pinned binary")
-    pinned = DockerDevkitConfig.model_fields["score_compose_version"].default
+    pinned = ConfigFile.model_fields["score_compose_version"].default
     if f"score-compose {pinned} (" not in bash_output("score-compose version"):
         pytest.skip(f"score-compose on PATH is not the pinned {pinned}")
 
@@ -1037,7 +1234,7 @@ def test_files_placeholders_materialize_undoubled(tmp_path: Path) -> None:
         env={**os.environ, "SPIKE_SET": "hello", "SPIKE_IMAGE": "ghcr.io/example/spike:1.0"},
     )
 
-    materialized = tmp_path / ".score-compose/mounts/files/spike-files-holes.toml"
+    materialized = tmp_path / ".score-compose/mounts/files/spike-files-slots.toml"
     assert materialized.read_text(encoding="utf-8") == A0_MATERIALIZED
 
     artifact = yaml.safe_load((tmp_path / "escaped-compose.yaml").read_text(encoding="utf-8"))
@@ -1046,8 +1243,8 @@ def test_files_placeholders_materialize_undoubled(tmp_path: Path) -> None:
     assert service["volumes"] == [
         {
             "type": "bind",
-            "source": ".score-compose/mounts/files/spike-files-holes.toml",
-            "target": "/etc/spike/holes.toml",
+            "source": ".score-compose/mounts/files/spike-files-slots.toml",
+            "target": "/etc/spike/slots.toml",
         }
     ]
 
@@ -1077,63 +1274,107 @@ def test_variable_placeholders_refuse_or_stay_escaped(tmp_path: Path) -> None:
         bash("score-compose generate refused-variables.yaml --output refused.yaml", cwd=tmp_path)
 
 
-ORDER_INDEPENDENCE_PROVISIONER = """\
-- uri: template://example/order
-  type: order-provisioner
-  services:
-    order-service:
-      image: ghcr.io/example/service:1
-"""
-
-ORDER_INDEPENDENCE_SECOND_PROVISIONER = """\
-- uri: template://example/other
-  type: other-provisioner
-  services:
-    other-service:
-      image: ghcr.io/example/other:1
-"""
-
-
-def test_provisioner_registration_order_does_not_change_generated_output(tmp_path: Path) -> None:
-    # Provisioner registration derives by closure in deterministic filename order; the
-    # committed artifacts were generated under the old config-declared order. This pins
-    # that score-compose's output is order-independent, wherever the pinned binary exists.
-    # The fixtures ride the real compile path (authored mappings -> string form) and the
-    # workload references both types, so both provisioners actually instantiate.
-    _skip_unless_pinned_score_compose()
-    source = tmp_path / "score"
-    source.mkdir()
-    (source / "first.yaml").write_text(ORDER_INDEPENDENCE_PROVISIONER, encoding="utf-8")
-    (source / "second.yaml").write_text(ORDER_INDEPENDENCE_SECOND_PROVISIONER, encoding="utf-8")
-    workload = tmp_path / "workload.yaml"
-    workload.write_text(
-        "apiVersion: score.dev/v1b1\n"
-        "metadata:\n"
-        "  name: order\n"
-        "containers:\n"
-        "  order:\n"
-        "    image: ghcr.io/example/order:1\n"
-        "resources:\n"
-        "  first:\n"
-        "    type: order-provisioner\n"
-        "  second:\n"
-        "    type: other-provisioner\n",
+def _verb_repo(tmp_path: Path) -> None:
+    (tmp_path / "stack" / "score").mkdir(parents=True)
+    (tmp_path / "stack" / "score" / "api.yaml").write_text(
+        "metadata:\n  name: api\ncontainers:\n  api:\n    image: ${LOKI_IMAGE}\n", encoding="utf-8"
+    )
+    (tmp_path / "boatyard.lock.yml").write_text(
+        yaml.safe_dump({
+            "platforms": ["linux/amd64"],
+            "images": {
+                "LOKI_IMAGE": {
+                    "index": LOKI_INDEX,
+                    "platforms": {"linux/amd64": LOKI_MANIFEST},
+                },
+                "ALPINE_IMAGE": {
+                    "index": ALPINE_LOCK["ALPINE_IMAGE"],
+                    "platforms": {"linux/amd64": ALPINE_LOCK["ALPINE_IMAGE"]},
+                },
+            },
+        }),
+        encoding="utf-8",
+    )
+    (tmp_path / "boatyard.yml").write_text(
+        "requires: '>=0'\n"
+        "repository: ghcr.io/org/repo\n"
+        "project_name: example\n"
+        "platforms:\n"
+        "  - linux/amd64\n"
+        "base_images:\n"
+        "  LOKI_IMAGE: docker.io/grafana/loki:3.5.0\n"
+        "  ALPINE_IMAGE: docker.io/library/alpine:3.21.0\n"
+        "services:\n"
+        "  core:\n"
+        "    workloads:\n"
+        "      - api.yaml\n",
         encoding="utf-8",
     )
 
-    outputs: dict[str, str] = {}
-    with compiled_provisioners(source, ["first.yaml", "second.yaml"], tmp_path, {}) as compiled:
-        registrations = {
-            "forward": compiled.paths,
-            "reversed": list(reversed(compiled.paths)),
-        }
-        for label, paths in registrations.items():
-            sandbox = tmp_path / label
-            sandbox.mkdir()
-            flags = "".join(f" --provisioners {path.as_posix()}" for path in paths)
-            bash(f"score-compose init --project order --no-sample{flags}", cwd=sandbox)
-            bash(f"score-compose generate {workload.as_posix()} --output {sandbox.as_posix()}/out.yaml", cwd=sandbox)
-            outputs[label] = (sandbox / "out.yaml").read_text(encoding="utf-8")
 
-    assert "order-service" in outputs["forward"]
-    assert outputs["forward"] == outputs["reversed"]
+def test_generate_score_refuses_a_missing_secrets_declaration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _verb_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match="secrets declaration is required"):
+        score_verb_module.generate_score(target="compose")
+
+
+def test_generate_score_writes_the_mint_list_from_the_declaration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _verb_repo(tmp_path)
+    (tmp_path / "stack" / "secrets.yaml").write_text(
+        "PUBLIC_URL: the public address\nS3_ACCESS_KEY:\n  description: s3 credentials\n  mint: true\n",
+        encoding="utf-8",
+    )
+    recorder = WorkloadContentsRecorder()
+
+    def _skip_tools(requirements: list[score_verb_module.ToolRequirement]) -> None:
+        return None
+
+    monkeypatch.setattr(score_module, "bash", recorder.run)
+    monkeypatch.setattr(score_verb_module, "ensure_tools", _skip_tools)
+    monkeypatch.chdir(tmp_path)
+
+    score_verb_module.generate_score(target="compose")
+
+    mint = (tmp_path / "stack" / "generated" / "secrets.txt").read_text(encoding="utf-8")
+    assert mint == "# Generated by generate-score from the secrets declaration\nS3_ACCESS_KEY\n"
+
+
+def _k8s_only_repo(tmp_path: Path) -> None:
+    (tmp_path / "boatyard.yml").write_text(
+        "requires: '>=0'\nproject_name: example\nrepository: ghcr.io/org/repo\nk8s:\n  workloads:\n    - api.yaml\n",
+        encoding="utf-8",
+    )
+
+
+def test_generate_score_on_a_compose_only_repo_refuses_the_default_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _verb_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(typer.BadParameter, match="pass --target compose"):
+        score_verb_module.generate_score()
+
+
+def test_generate_score_on_a_k8s_only_repo_refuses_the_default_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _k8s_only_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(typer.BadParameter, match="pass --target k8s"):
+        score_verb_module.generate_score()
+
+
+def test_generate_score_refuses_compose_on_a_k8s_only_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _k8s_only_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(
+        typer.BadParameter, match="--target compose: this config declares no local service entries \\(k8s-only\\)"
+    ):
+        score_verb_module.generate_score(target="compose")
