@@ -90,52 +90,61 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
     images: dict[str, ConfigLockEntry] = {}
     for name, reference in config.base_images.items():
         base = mirrored_ref(reference, prefix)
-        committed_entry = committed.images.get(name)
+
         if DIGEST_TAIL_PATTERN.search(reference):
             images[name] = ConfigLockEntry(index=base, platforms=dict.fromkeys(config.platforms, base))
-        elif (
+            continue
+
+        committed_entry = committed.images.get(name)
+        if (
             not upgrade
             and committed_entry is not None
             and _pinned_to(committed_entry.index, base)
             and set(committed_entry.platforms) == set(config.platforms)
         ):
             images[name] = committed_entry
-        else:
-            subject = f"base_images entry {name}"
-            print(f"Resolving digests for: {reference}")
-            index = OciIndex.model_validate(json.loads(bash_output(f"crane manifest {shlex.quote(reference)}")))
-            index_digest = resolve_remote_digest(reference)
-            children = index.manifests
-            selected: dict[str, str] = {}
-            if children:
-                for platform in config.platforms:
-                    matches = [
-                        child
-                        for child in children
-                        if child.annotations.get("vnd.docker.reference.type") != "attestation-manifest"
-                        if _concrete_platform(child) == platform
-                    ]
-                    if len(matches) > 1:
-                        digests = ", ".join(_child_digest(child, subject) for child in matches)
-                        raise ValueError(
-                            f"{subject}: platform {platform} matches multiple upstream manifests ({digests})"
-                        )
-                    if not matches:
-                        available = sorted({
-                            concrete for child in children if (concrete := _concrete_platform(child)) is not None
-                        })
-                        raise ValueError(
-                            f"{subject}: the upstream index carries no {platform} manifest "
-                            f"(declared platforms: {sorted(config.platforms)}; index platforms: {available})"
-                        )
-                    selected[platform] = _child_digest(matches[0], subject)
-            else:
-                # Record a manifest answer as the index and every platform entry.
-                selected = dict.fromkeys(config.platforms, index_digest)
+            continue
+
+        subject = f"base_images entry {name}"
+        print(f"Resolving digests for: {reference}")
+        index_digest = resolve_remote_digest(reference)
+        children = OciIndex.model_validate(
+            json.loads(bash_output(f"crane manifest {shlex.quote(reference)}"))
+        ).manifests
+
+        if not children:
+            # Record a manifest answer as the index and every platform entry.
             images[name] = ConfigLockEntry(
                 index=f"{base}@{index_digest}",
-                platforms={platform: f"{base}@{digest}" for platform, digest in selected.items()},
+                platforms=dict.fromkeys(config.platforms, f"{base}@{index_digest}"),
             )
+            continue
+
+        selected: dict[str, str] = {}
+        for platform in config.platforms:
+            matches = [
+                child
+                for child in children
+                if child.annotations.get("vnd.docker.reference.type") != "attestation-manifest"
+                if _concrete_platform(child) == platform
+            ]
+            if len(matches) > 1:
+                digests = ", ".join(_child_digest(child, subject) for child in matches)
+                raise ValueError(f"{subject}: platform {platform} matches multiple upstream manifests ({digests})")
+            if not matches:
+                available = sorted({
+                    concrete for child in children if (concrete := _concrete_platform(child)) is not None
+                })
+                raise ValueError(
+                    f"{subject}: the upstream index carries no {platform} manifest "
+                    f"(declared platforms: {sorted(config.platforms)}; index platforms: {available})"
+                )
+            selected[platform] = _child_digest(matches[0], subject)
+
+        images[name] = ConfigLockEntry(
+            index=f"{base}@{index_digest}",
+            platforms={platform: f"{base}@{digest}" for platform, digest in selected.items()},
+        )
 
     charts: dict[str, str] = {}
     for chart_name, chart_reference in config.declared_charts.items():
