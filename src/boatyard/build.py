@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
@@ -12,6 +13,8 @@ from typing import Self
 import typer
 import yaml
 from bashrun.bash import bash, bash_check, bash_output
+from build_artifact_registry.builds import push_build
+from build_artifact_registry.setup_oras import install_oras
 from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, model_validator
 
 from boatyard import dockerfiles
@@ -21,6 +24,10 @@ from boatyard.lock import relock
 
 
 METADATA_PATH = Path("metadata.json")
+
+DIGEST_PROJECT = "images-digests"
+DIGEST_PLATFORM = "all"
+DIGEST_FILE_NAME = "images-digests.json"
 
 MIN_KEEP_STORAGE_GB = 60
 
@@ -40,6 +47,8 @@ class BakedImage(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     image_name: str = Field(default="", alias="image.name")
+    digest: str = Field(default="", alias="containerimage.digest")
+    ref: str = ""
     tags: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -48,8 +57,9 @@ class BakedImage(BaseModel):
             reference = reference.strip()
             if not reference:
                 continue
-            _repository, separator, tag = reference.split("@", 1)[0].rpartition(":")
+            repository, separator, tag = reference.split("@", 1)[0].rpartition(":")
             if separator:
+                self.ref = repository
                 self.tags.append(tag)
         return self
 
@@ -221,6 +231,29 @@ def run_build(
     baked = BakeMetadata.model_validate(metadata_json)
     if not set(resolved_targets) <= baked.root.keys():
         raise ValueError("Bake output does not cover the requested targets")
+
+    if push:
+        # Shard one manifest per leg so parallel builds cannot collide on a shared tag
+        registry = os.environ.get("REGISTRY", "")
+        if not registry:
+            raise SystemExit("REGISTRY not set — a repository push shelves the digest manifest under it")
+        install_oras()
+        manifest = {
+            target: {"ref": image.ref, "digest": image.digest, "tags": image.tags}
+            for target, image in baked.root.items()
+        }
+        key = hashlib.sha256(",".join(sorted(baked.root)).encode("utf-8")).hexdigest()[:8]
+        sha = bash_output("git rev-parse HEAD").strip()
+        with TemporaryDirectory(prefix="digest-manifest-") as staging:
+            (Path(staging) / DIGEST_FILE_NAME).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+            push_build(
+                f"{registry}/builds",
+                DIGEST_PROJECT,
+                DIGEST_PLATFORM,
+                f"sha-{sha}-{key}",
+                Path(staging),
+                [DIGEST_FILE_NAME],
+            )
 
 
 def check_gc_limits(candidates: list[Path] | None = None) -> None:
