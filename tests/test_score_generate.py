@@ -14,6 +14,7 @@ from boatyard.config import config as config_module
 from boatyard import score as score_module
 from boatyard import score_compose as score_compose_module
 from boatyard import score_k8s as score_k8s_module
+from boatyard import score_generate as score_generate_module
 from boatyard.verbs import score as score_verb_module
 from boatyard.config.config import ConfigFile, WorkloadDocument
 from boatyard.config.lock import LockFile
@@ -307,11 +308,11 @@ class TestMarkerSubstrateResolution:
         recorder = WorkloadContentsRecorder()
         self.recorder = recorder
 
-        def _skip_tools(requirements: list[score_verb_module.ToolRequirement]) -> None:
+        def _skip_tools(requirements: list[score_generate_module.ToolRequirement]) -> None:
             return None
 
         monkeypatch.setattr(score_module, "bash", recorder.run)
-        monkeypatch.setattr(score_verb_module, "ensure_tools", _skip_tools)
+        monkeypatch.setattr(score_generate_module, "ensure_tools", _skip_tools)
         monkeypatch.chdir(tmp_path)
         score_verb_module.generate_score(target="compose")
         return recorder.workload_contents["api.yaml"]
@@ -1344,11 +1345,11 @@ def test_generate_score_writes_the_mint_list_from_the_declaration(
     )
     recorder = WorkloadContentsRecorder()
 
-    def _skip_tools(requirements: list[score_verb_module.ToolRequirement]) -> None:
+    def _skip_tools(requirements: list[score_generate_module.ToolRequirement]) -> None:
         return None
 
     monkeypatch.setattr(score_module, "bash", recorder.run)
-    monkeypatch.setattr(score_verb_module, "ensure_tools", _skip_tools)
+    monkeypatch.setattr(score_generate_module, "ensure_tools", _skip_tools)
     monkeypatch.chdir(tmp_path)
 
     score_verb_module.generate_score(target="compose")
@@ -1370,19 +1371,50 @@ def test_generate_score_on_a_compose_only_repo_derives_compose_and_requests_only
     _verb_repo(tmp_path)
     (tmp_path / "stack" / "secrets.yaml").write_text("PUBLIC_URL: the public address\n", encoding="utf-8")
     recorder = WorkloadContentsRecorder()
-    requested: list[list[score_verb_module.ToolRequirement]] = []
+    requested: list[list[score_generate_module.ToolRequirement]] = []
 
-    def _capture_tools(requirements: list[score_verb_module.ToolRequirement]) -> None:
+    def _capture_tools(requirements: list[score_generate_module.ToolRequirement]) -> None:
         requested.append(requirements)
 
     monkeypatch.setattr(score_module, "bash", recorder.run)
-    monkeypatch.setattr(score_verb_module, "ensure_tools", _capture_tools)
+    monkeypatch.setattr(score_generate_module, "ensure_tools", _capture_tools)
     monkeypatch.chdir(tmp_path)
 
     score_verb_module.generate_score()
 
     assert [requirement.binary for requirement in requested[0]] == ["score-compose"]
     assert (tmp_path / "stack" / "generated" / "compose" / "compose.core.yaml").is_file()
+
+
+def test_generate_artifacts_on_a_k8s_only_repo_requests_no_compose_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "stack" / "score" / "k8s" / "values").mkdir(parents=True)
+    (tmp_path / "stack" / "score" / "k8s" / "values" / "loki.yaml").write_text("chart: {}\n", encoding="utf-8")
+    (tmp_path / "boatyard.lock.yml").write_text(
+        yaml.safe_dump({"charts": {"LOKI_CHART": MIRRORED_CHART}}), encoding="utf-8"
+    )
+    (tmp_path / "stack" / "secrets.yaml").write_text("", encoding="utf-8")
+    config = _root_config(
+        repository="ghcr.io/org/repo",
+        k8s={"workloads": ["api.yaml"], "charts": {"loki": CHART_REF}},
+    )
+    config.root = tmp_path
+    requested: list[list[score_generate_module.ToolRequirement]] = []
+
+    def _capture_tools(requirements: list[score_generate_module.ToolRequirement]) -> None:
+        requested.append(requirements)
+
+    def _stub_generate_k8s(*args: object, **kwargs: object) -> Path:
+        return tmp_path / "manifests.yaml"
+
+    monkeypatch.setattr(score_generate_module, "ensure_tools", _capture_tools)
+    monkeypatch.setattr(score_generate_module, "generate_k8s", _stub_generate_k8s)
+
+    outputs = score_generate_module.generate_artifacts(config)
+
+    assert [requirement.binary for requirement in requested[0]] == ["score-k8s", "helm"]
+    assert outputs == [tmp_path / "manifests.yaml", tmp_path / "stack" / "generated" / "secrets.txt"]
 
 
 def test_generate_score_on_a_k8s_only_repo_derives_the_k8s_target(
@@ -1424,8 +1456,8 @@ def test_ensure_tools_installs_a_binary_missing_from_path(tmp_path: Path, monkey
     def _record(command: str, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
         commands.append(command)
 
-    monkeypatch.setattr(score_verb_module, "bash", _record)
-    requirement = score_verb_module.ToolRequirement(
+    monkeypatch.setattr(score_generate_module, "bash", _record)
+    requirement = score_generate_module.ToolRequirement(
         binary="score-compose",
         version="1.2.3",
         probe="score-compose 1.2.3",
@@ -1433,7 +1465,7 @@ def test_ensure_tools_installs_a_binary_missing_from_path(tmp_path: Path, monkey
         extract="score-compose",
     )
 
-    score_verb_module.ensure_tools([requirement])
+    score_generate_module.ensure_tools([requirement])
 
     assert commands[0].startswith("curl -fsSL https://example.com/score-compose_1.2.3_linux_amd64.tar.gz")
 
@@ -1450,8 +1482,8 @@ def test_ensure_tools_reinstalls_on_a_version_mismatch(tmp_path: Path, monkeypat
     def _record(command: str, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
         commands.append(command)
 
-    monkeypatch.setattr(score_verb_module, "bash", _record)
-    requirement = score_verb_module.ToolRequirement(
+    monkeypatch.setattr(score_generate_module, "bash", _record)
+    requirement = score_generate_module.ToolRequirement(
         binary="score-compose",
         version="1.2.3",
         probe="score-compose 1.2.3",
@@ -1459,7 +1491,7 @@ def test_ensure_tools_reinstalls_on_a_version_mismatch(tmp_path: Path, monkeypat
         extract="score-compose",
     )
 
-    score_verb_module.ensure_tools([requirement])
+    score_generate_module.ensure_tools([requirement])
 
     assert commands[0].startswith("curl -fsSL https://example.com/score-compose_1.2.3_linux_amd64.tar.gz")
 
@@ -1478,8 +1510,8 @@ def test_ensure_tools_skips_install_when_the_pinned_version_is_present(
     def _record(command: str, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
         commands.append(command)
 
-    monkeypatch.setattr(score_verb_module, "bash", _record)
-    requirement = score_verb_module.ToolRequirement(
+    monkeypatch.setattr(score_generate_module, "bash", _record)
+    requirement = score_generate_module.ToolRequirement(
         binary="score-compose",
         version="1.2.3",
         probe="score-compose 1.2.3",
@@ -1487,7 +1519,7 @@ def test_ensure_tools_skips_install_when_the_pinned_version_is_present(
         extract="score-compose",
     )
 
-    score_verb_module.ensure_tools([requirement])
+    score_generate_module.ensure_tools([requirement])
 
     assert commands == []
 
