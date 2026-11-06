@@ -488,7 +488,7 @@ class TestSelectionLaw:
         assert result.exit_code == 0, result.output
         [document] = recorder.documents
         assert document["name"] == "demo"
-        assert list(document) == ["name", "services", "configs"]
+        assert list(document) == ["name", "configs", "services"]
         assert document["services"]["edge"]["ports"] == [
             {"target": "8443", "published": "8080", "protocol": "tcp"}
         ]

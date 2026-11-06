@@ -147,9 +147,23 @@ def up(
             raise ValueError("an auth option is selected; public_url is required in boatyard.values.yaml")
         forwarded = config_values.public_url.forwarded
 
+    # Group the ports under their namespaced owners into per-service stanzas
+    document_services: dict[str, Yaml] = {
+        f"{service.name}-{owner}": {
+            "ports": [port.model_dump(exclude={"service"}, exclude_none=True) for port in owner_ports]
+        }
+        for service in services
+        for owner, owner_ports in groupby(
+            sorted(service.ports, key=lambda port: port.service), key=lambda port: port.service
+        )
+    }
+
+    # Assemble the root document, sections omitted when empty
+    document: dict[str, Yaml] = {"name": config.project_name}
+    if includes:
+        document["include"] = includes
+
     # Render the edge and its Caddyfile when a gateway is declared
-    document_services: dict[str, Yaml] = {}
-    caddyfile: str | None = None
     if config.gateway is not None:
         edge: dict[str, Yaml] = {
             "image": f"${{{CADDY_IMAGE}:?err}}",
@@ -192,26 +206,10 @@ def up(
 
             lines.extend((opener, *[f"\t\treverse_proxy {upstream}"], "\t}"))
         lines.append("}")
-        caddyfile = double_dollars("\n".join(lines) + "\n")
+        document["configs"] = {EDGE_CONFIG_NAME: {"content": double_dollars("\n".join(lines) + "\n")}}
 
-    # Group the ports under their namespaced owners into per-service stanzas
-    document_services.update({
-        f"{service.name}-{owner}": {
-            "ports": [port.model_dump(exclude={"service"}, exclude_none=True) for port in owner_ports]
-        }
-        for service in services
-        for owner, owner_ports in groupby(
-            sorted(service.ports, key=lambda port: port.service), key=lambda port: port.service
-        )
-    })
-    # Assemble the root document
-    document: dict[str, Yaml] = {"name": config.project_name}
-    if includes:
-        document["include"] = includes
     if document_services:
         document["services"] = document_services
-    if caddyfile is not None:
-        document["configs"] = {EDGE_CONFIG_NAME: {"content": caddyfile}}
 
     # Materialize the per-run files and hand off
     with ExitStack() as stack:
