@@ -65,6 +65,30 @@ class OciArtifactManifest(BaseModel):
 
     layers: list[OciDescriptor] = Field(default_factory=list)
 
+    @classmethod
+    def fetch_compose_texts(cls, pinned: str) -> list[str]:
+        # Read the bundle's compose files as inline base64 layer data, with crane blob as the fallback.
+        print(f"Reading bundle content for: {pinned}")
+        artifact = cls.model_validate(json.loads(bash_output(f"crane manifest {shlex.quote(pinned)}")))
+
+        # Strip the tag, treating a colon as a tag only when no slash follows it.
+        repository = pinned.rpartition("@")[0]
+        slash = repository.rfind("/")
+        colon = repository.rfind(":")
+        repository = repository[:colon] if colon > slash else repository
+        compose_texts = [
+            base64.b64decode(layer.data).decode("utf-8")
+            if layer.data is not None
+            else bash_output(f"crane blob {shlex.quote(repository + '@' + layer.digest)}")
+            for layer in artifact.layers
+            if layer.media_type == COMPOSE_FILE_MEDIA_TYPE
+        ]
+
+        # Refuse a bundle that carries no compose file layer.
+        if not compose_texts:
+            raise ValueError(f"{pinned}: the compose bundle carries no compose file layer")
+        return compose_texts
+
 
 def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) -> LockFile:
     # Install the pinned crane and derive the mirror prefix.
@@ -87,32 +111,15 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
             else f"{reference}@{resolve_remote_digest(reference)}"
         )
 
-        # Read the bundle's compose files as inline base64 layer data, with crane blob as the fallback.
-        print(f"Reading bundle content for: {pinned}")
-        artifact = OciArtifactManifest.model_validate(json.loads(bash_output(f"crane manifest {shlex.quote(pinned)}")))
-
-        # Strip the tag, treating a colon as a tag only when no slash follows it.
-        repository = pinned.rpartition("@")[0]
-        slash = repository.rfind("/")
-        colon = repository.rfind(":")
-        repository = repository[:colon] if colon > slash else repository
-        texts = [
-            base64.b64decode(layer.data).decode("utf-8")
-            if layer.data is not None
-            else bash_output(f"crane blob {shlex.quote(repository + '@' + layer.digest)}")
-            for layer in artifact.layers
-            if layer.media_type == COMPOSE_FILE_MEDIA_TYPE
-        ]
-
-        # Refuse a bundle that carries no compose file layer.
-        if not texts:
-            raise ValueError(f"{pinned}: the compose bundle carries no compose file layer")
+        compose_texts = OciArtifactManifest.fetch_compose_texts(pinned)
 
         # Refuse declared routes and ports that name no service in the bundle.
-        refuse_unresolved_references(name, entry.routes, entry.ports, texts, prefix=f"{name}-")
+        refuse_unresolved_references(name, entry.routes, entry.ports, compose_texts, prefix=f"{name}-")
 
         # Record the pinned reference with its required holes.
-        bundles[key] = ConfigLockBundle(reference=pinned, requires=sorted(required_compose_holes("\n".join(texts))))
+        bundles[key] = ConfigLockBundle(
+            reference=pinned, requires=sorted(required_compose_holes("\n".join(compose_texts)))
+        )
 
     images: dict[str, ConfigLockEntry] = {}
     for name, reference in config.base_images.items():
