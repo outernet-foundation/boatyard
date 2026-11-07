@@ -9,6 +9,7 @@ from bashrun.bash import bash, bash_output
 from typer.testing import CliRunner
 
 from boatyard.cli import app
+from boatyard import dockerfiles as dockerfiles_module
 from boatyard.verbs import down, up
 from boatyard.config.lock import LOCK_PATH
 
@@ -249,6 +250,10 @@ def _write_workload(root: Path, name: str, service_name: str) -> None:
 
 def _silent_handoff(_command: str) -> None:
     return None
+
+
+def _producer_tree_shas(root: Path, builds: object) -> dict[str, str]:
+    return {"API_SHA": "tree-producer"} if "producer" in root.parts else {"API_SHA": "tree-consumer"}
 
 
 def _failing_handoff(_command: str) -> None:
@@ -790,6 +795,34 @@ class TestUpValidation:
         assert isinstance(result.exception, ValueError)
         assert "bundle 'livekit' requires ['LIVEKIT_TOKEN']" in str(result.exception)
 
+    def test_a_tree_slot_requirement_is_satisfied_by_construction(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _write_consumer_tree(tmp_path)
+        cuda = tmp_path / "stack" / "generated" / "compose" / "compose.placeframe-cuda.yaml"
+        cuda.write_text(
+            "services:\n"
+            "  placeframe-cuda-api:\n"
+            "    image: demo/api:${PLACEFRAME_CUDA__BOATYARD_TREE__API_SHA}\n"
+            "    networks:\n"
+            "      placeframe-cuda-net:\n"
+            "        aliases:\n"
+            "          - api\n"
+            "  placeframe-cuda-grafana:\n"
+            "    image: demo/grafana:1\n"
+            "    networks:\n"
+            "      placeframe-cuda-net:\n"
+            "        aliases:\n"
+            "          - grafana\n"
+            "networks:\n"
+            "  placeframe-cuda-net: null\n",
+            encoding="utf-8",
+        )
+
+        result = self._invoke_up(tmp_path, monkeypatch)
+
+        assert result.exit_code == 0, result.output
+
     def test_a_requirement_filled_by_the_env_file_passes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_consumer_tree(tmp_path, extra_values={"LIVEKIT_TOKEN": "set"})
         root_lock = tmp_path.joinpath(*LOCK_PATH.parts)
@@ -1045,8 +1078,8 @@ class TestLockEnvSynthesis:
         [content] = recorder.env_contents
         assert content == (
             f"# boatyard.lock.yml\n"
-            f"APPS_CORE__LOCK__ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
-            f"APPS_CORE__LOCK__CADDY_IMAGE={self.ALPINE_MANIFEST}\n"
+            f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
+            f"APPS_CORE__BOATYARD_LOCK__CADDY_IMAGE={self.ALPINE_MANIFEST}\n"
         )
 
     def test_a_selected_local_entry_reads_its_lock_keys_under_the_entry_prefix(
@@ -1073,8 +1106,40 @@ class TestLockEnvSynthesis:
         assert result.exit_code == 0, result.output
         [content] = recorder.env_contents
         assert content == (
-            f"# boatyard.lock.yml\nAPPS_CORE__LOCK__ALPINE_IMAGE={self.ALPINE_MANIFEST}\nAPPS_CORE__LOCK__CADDY_IMAGE={self.ALPINE_MANIFEST}\n"
+            f"# boatyard.lock.yml\nAPPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={self.ALPINE_MANIFEST}\nAPPS_CORE__BOATYARD_LOCK__CADDY_IMAGE={self.ALPINE_MANIFEST}\n"
         )
+
+    def test_a_selected_local_entry_carries_its_tree_tags_under_the_entry_prefix(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _write_config(
+            tmp_path,
+            {
+                "project_name": "demo",
+                "base_images": ALPINE_BASE_IMAGES,
+                "repository": "ghcr.io/org/demo",
+                "services": {"apps": {"options": {"core": {"workloads": ["api.yaml"]}}}},
+            },
+        )
+        _write_bundle_output(tmp_path, "apps-core", ["api"])
+        _write_workload(tmp_path, "api.yaml", "api")
+        _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST})
+        _write_values_file(tmp_path, {"bundles": ["apps-core"]})
+        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _producer_tree_shas)
+        recorder = LockEnvRecorder()
+
+        result = self._invoke_up_with_lock(tmp_path, monkeypatch, recorder)
+
+        assert result.exit_code == 0, result.output
+        [content] = recorder.env_contents
+        assert content == (
+            f"# boatyard.lock.yml\n"
+            f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
+            f"APPS_CORE__BOATYARD_LOCK__CADDY_IMAGE={self.ALPINE_MANIFEST}\n"
+            f"# tree tags\n"
+            f"APPS_CORE__BOATYARD_TREE__API_SHA=tree-consumer\n"
+        )
+        assert " -u APPS_CORE__BOATYARD_TREE__API_SHA " in recorder.commands[0]
 
     def test_two_consecutive_syntheses_are_byte_identical(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path, base_images=ALPINE_BASE_IMAGES)
@@ -1117,8 +1182,8 @@ class TestLockEnvSynthesis:
         assert result.exit_code == 0, result.output
         assert recorder.env_contents[0] == (
             f"# boatyard.lock.yml\n"
-            f"APPS_CORE__LOCK__ALPINE_IMAGE={arm64_manifest}\n"
-            f"APPS_CORE__LOCK__CADDY_IMAGE={arm64_manifest}\n"
+            f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={arm64_manifest}\n"
+            f"APPS_CORE__BOATYARD_LOCK__CADDY_IMAGE={arm64_manifest}\n"
         )
 
     def test_a_multi_platform_repo_without_a_selection_refuses_listing_declared(
@@ -1247,15 +1312,15 @@ class TestBundleOverrides:
         assert document["include"] == [output.resolve().as_posix()]
         assert [_normalize(command, consumer) for command in recorder.commands] == [
             (
-                "env -u PLACEFRAME_CUDA__LOCK__ALPINE_IMAGE -u PLACEFRAME_CUDA__LOCK__LOKI_IMAGE "
+                "env -u PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE -u PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE "
                 "docker compose -f ASSEMBLY --project-directory ROOT --env-file LOCKENV up --pull missing -d"
             )
         ]
         assert recorder.env_contents == [
             (
                 "# boatyard.lock.yml\n"
-                f"PLACEFRAME_CUDA__LOCK__ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
-                f"PLACEFRAME_CUDA__LOCK__LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
+                f"PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
+                f"PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
             )
         ]
 
@@ -1277,8 +1342,33 @@ class TestBundleOverrides:
         assert recorder.env_contents == [
             (
                 "# boatyard.lock.yml\n"
-                f"PLACEFRAME_CUDA__LOCK__ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
-                f"PLACEFRAME_CUDA__LOCK__LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
+                f"PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
+                f"PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
+            )
+        ]
+
+    def test_the_producer_tree_fills_the_overridden_entrys_fan(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        consumer = tmp_path / "consumer"
+        consumer.mkdir()
+        _write_producer(tmp_path, ["api", "grafana"], _producer_lock(["linux/amd64"]))
+        _write_override_consumer(
+            consumer,
+            {"path_overrides": {"placeframe-cuda": OVERRIDE_PATH}},
+            platforms=["linux/amd64"],
+        )
+        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _producer_tree_shas)
+        recorder = self._invoke_up(monkeypatch, consumer)
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code == 0, result.output
+        assert recorder.env_contents == [
+            (
+                "# boatyard.lock.yml\n"
+                f"PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
+                f"PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
+                "# tree tags\n"
+                "PLACEFRAME_CUDA__BOATYARD_TREE__API_SHA=tree-producer\n"
             )
         ]
 
@@ -1299,8 +1389,8 @@ class TestBundleOverrides:
         assert recorder.env_contents == [
             (
                 "# boatyard.lock.yml\n"
-                f"PLACEFRAME_CUDA__LOCK__ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
-                f"PLACEFRAME_CUDA__LOCK__LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_ARM64_DIGEST}\n"
+                f"PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
+                f"PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_ARM64_DIGEST}\n"
             )
         ]
 
@@ -1404,8 +1494,8 @@ class TestBundleOverrides:
         assert recorder.env_contents == [
             (
                 "# boatyard.lock.yml\n"
-                f"PLACEFRAME_CUDA__LOCK__ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
-                f"PLACEFRAME_CUDA__LOCK__LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
+                f"PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
+                f"PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
             )
         ]
 
@@ -1556,7 +1646,9 @@ class TestValuesFileLaw:
 
     def test_a_values_key_spelling_the_lock_marker_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path, base_images=ALPINE_BASE_IMAGES)
-        _write_values_file(tmp_path, {"TUNNEL__LOCK__ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20"})
+        _write_values_file(
+            tmp_path, {"TUNNEL__BOATYARD_LOCK__ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20"}
+        )
         _write_lock(
             tmp_path,
             {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST},
@@ -1568,7 +1660,24 @@ class TestValuesFileLaw:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "carry the reserved __LOCK__ marker" in str(result.exception)
+        assert "carry a reserved __BOATYARD_LOCK__/__BOATYARD_TREE__ marker" in str(result.exception)
+        assert "never set them by hand" in str(result.exception)
+
+    def test_a_values_key_spelling_the_tree_marker_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        _write_ref_tree(tmp_path, base_images=ALPINE_BASE_IMAGES)
+        _write_values_file(tmp_path, {"TUNNEL__BOATYARD_TREE__API_SHA": "tree-abc"})
+        _write_lock(
+            tmp_path,
+            {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST},
+            bundles=TUNNEL_BUNDLES,
+        )
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, ValueError)
+        assert "carry a reserved __BOATYARD_LOCK__/__BOATYARD_TREE__ marker" in str(result.exception)
         assert "never set them by hand" in str(result.exception)
 
     def test_a_values_key_outside_the_env_name_grammar_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

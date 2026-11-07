@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 from typing import Literal, Self
@@ -14,12 +15,14 @@ from pydantic import (
 
 from boatyard.config.config import (
     COMPOSE_SLOT,
+    TREE_SLOT_MARKER,
     ComposeWorkloadDocument,
     WorkloadDocument,
     Yaml,
     compose_bundle_output_path,
     double_dollars,
     env_lock_slot,
+    env_tree_slot,
     ConfigFile,
 )
 from boatyard.config.lock import LOCK_PATH, LockFile
@@ -36,6 +39,9 @@ from boatyard.config.values import ValuesFile
 from boatyard.paths import VALUES_FILE
 
 TOOL = "score-compose"
+
+TREE_SENTINEL_PATTERN = re.compile(re.escape(TREE_SLOT_MARKER) + r"([A-Z][A-Z0-9_]*)__")
+
 
 BARRIER_SERVICE = "wait-for-resources"
 HEALTHCHECK_TEMPLATE = "probe-adapter-healthchecks.tpl"
@@ -163,7 +169,7 @@ def generate_compose(
             ],
             output=output_path,
             images=images,
-            service_shas=service_shas,
+            service_shas={sha: f"{TREE_SLOT_MARKER}{sha}__" for sha in service_shas},
         )
 
         # Parse the rendering into the typed document
@@ -248,8 +254,16 @@ def generate_compose(
                 document.configs[f"{name}-{path.name}"] = ComposeConfig(content=text)
                 service.configs.append(ComposeConfigReference(source=f"{name}-{path.name}", target=bind_volume.target))
 
-        # Scan consumed secrets and namespace the lock-key slots in one pass
+        # Rewrite the sha sentinels, scan the consumed secrets, and namespace the lock-key slots
         text = dump_yaml(document.dump())
+        slotted: list[str] = []
+        cursor = 0
+        for match in TREE_SENTINEL_PATTERN.finditer(text):
+            slotted.append(text[cursor : match.start()])
+            cursor = match.end()
+            slotted.append("${" + env_tree_slot(name, match.group(1)) + "}")
+        slotted.append(text[cursor:])
+        text = "".join(slotted)
         namespaced: list[str] = []
         cursor = 0
         for match in COMPOSE_SLOT.finditer(text):
@@ -259,6 +273,9 @@ def generate_compose(
                 slot = match.group(2)
                 if slot in images:
                     namespaced.append(f"{match.group(1)}{{{env_lock_slot(name, slot)}{match.group(3) or ''}}}")
+                    continue
+                if TREE_SLOT_MARKER in slot:
+                    namespaced.append(match.group(0))
                     continue
                 consumed.add(slot)
             namespaced.append(match.group(0))

@@ -236,11 +236,11 @@ class TestPublishComposeVerb:
         artifact.write_text(
             "services:\n"
             "  livekit-token:\n"
-            f"    image: {REPOSITORY}/livekit-token:${{LIVEKIT_TOKEN_SHA:?err}}\n"
+            f"    image: {REPOSITORY}/livekit-token:${{LIVEKIT_TIER__BOATYARD_TREE__LIVEKIT_TOKEN_SHA:?err}}\n"
             "    environment:\n"
             '      LIVEKIT_API_KEY: "${LIVEKIT_API_KEY:?err}"\n'
             "  ingress:\n"
-            '    image: "${LIVEKIT_TIER__LOCK__CADDY_IMAGE:?err}"\n'
+            '    image: "${LIVEKIT_TIER__BOATYARD_LOCK__CADDY_IMAGE:?err}"\n'
             "    configs:\n"
             "      - source: caddyfile\n"
             "        target: /etc/caddy/Caddyfile\n"

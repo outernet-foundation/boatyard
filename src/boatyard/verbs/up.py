@@ -12,19 +12,21 @@ import typer
 import yaml
 from bashrun.bash import bash_handoff
 
+from boatyard import dockerfiles
 from boatyard.build import run_build
 from boatyard.compose import compose_command
 from boatyard.config.config import (
     CADDY_IMAGE,
     ConfigFile,
     EDGE_SERVICE_NAME,
-    LOCK_SLOT_MARKER,
     OCI_REFERENCE_PREFIX,
+    RESERVED_SLOT_MARKERS,
     Yaml,
     bundle_lock_key,
     compose_bundle_output_path,
     double_dollars,
     env_lock_slot,
+    env_tree_slot,
     scan_bundle_texts,
 )
 from boatyard.config.lock import LockFile
@@ -68,6 +70,8 @@ def up(
     lock = LockFile.load(config.root / LOCK_PATH, config)
     consumer_entries = lock.manifest_references(config_values.platform)
     entries: dict[str, str] = {}
+    tree_entries: dict[str, str] = {}
+    shas_by_root: dict[Path, dict[str, str]] = {}
     includes: list[Yaml] = []
     requirements: dict[str, list[str]] = {}
 
@@ -91,6 +95,7 @@ def up(
                     f"selected entry {name!r} has no bundle output {bundle_compose_path.as_posix()}; generate-score writes it"
                 )
             lock_references = consumer_entries
+            tree_root, tree_builds = config.root, config.service_builds
         else:
             # Include an overridden ref through its local path
             candidate = config_values.path_overrides[name]
@@ -109,9 +114,11 @@ def up(
                 )
 
             # Project the producer lock's manifest references under the consumer's platform
-            lock_references = LockFile.load(
-                producer_root / LOCK_PATH, ConfigFile.load(producer_root / DEFAULT_CONFIG_PATH)
-            ).manifest_references(config_values.platform)
+            producer_config = ConfigFile.load(producer_root / DEFAULT_CONFIG_PATH)
+            lock_references = LockFile.load(producer_root / LOCK_PATH, producer_config).manifest_references(
+                config_values.platform
+            )
+            tree_root, tree_builds = producer_root, producer_config.service_builds
 
         # Scan the bundle file for its requirements and refuse the reserved edge service
         text = bundle_compose_path.read_text(encoding="utf-8")
@@ -127,14 +134,22 @@ def up(
         includes.append(bundle_compose_path.resolve().as_posix())
         entries.update({env_lock_slot(name, key): value for key, value in lock_references.items()})
 
+        # Fan the source tree's content tags under the entry beside the lock fans
+        if tree_root not in shas_by_root:
+            shas_by_root[tree_root] = dockerfiles.compute_service_shas(tree_root, tree_builds)
+        tree_entries.update({env_tree_slot(name, sha): value for sha, value in shas_by_root[tree_root].items()})
+
     # Refuse bundles whose requirements no environment source fills, naming shell-set slots as ignored.
-    # Lock-key slots (carrying the LOCK_SLOT_MARKER) are satisfied by construction — the lock env file
+    # Marker-bearing slots (lock and tree) are satisfied by construction — the per-run env file
     # fills them — so they are excluded from the consumer-facing fill check.
-    filled = {variable for variable, value in {**config_values.variables, **entries}.items() if value}
+    filled = {variable for variable, value in config_values.variables.items() if value}
     missing = {
         name: sorted(unfilled)
         for name, required in requirements.items()
-        if (unfilled := {slot for slot in required if LOCK_SLOT_MARKER not in slot} - filled)
+        if (
+            unfilled := {slot for slot in required if not any(marker in slot for marker in RESERVED_SLOT_MARKERS)}
+            - filled
+        )
     }
     if missing:
         name, absent = min(missing.items())
@@ -217,7 +232,11 @@ def up(
             handle.write(
                 "".join(
                     f"# {header}\n{render_env_entries(section)}"
-                    for header, section in ((VALUES_FILE.name, config_values.variables), (LOCK_PATH.name, entries))
+                    for header, section in (
+                        (VALUES_FILE.name, config_values.variables),
+                        (LOCK_PATH.name, entries),
+                        ("tree tags", tree_entries),
+                    )
                     if section
                 )
             )
@@ -247,6 +266,7 @@ def up(
                 slot_names=[
                     *config_values.variables,
                     *entries,
+                    *tree_entries,
                     *(name for required in requirements.values() for name in required),
                 ],
             )

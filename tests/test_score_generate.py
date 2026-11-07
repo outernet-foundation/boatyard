@@ -555,7 +555,7 @@ def test_generate_compose_renames_the_barrier_and_its_references_per_entry(
         "core-wait-for-resources": {"condition": "service_started"}
     }
     assert document["services"]["core-pf-postgres"]["depends_on"] == ["core-wait-for-resources"]
-    assert document["services"]["core-wait-for-resources"]["image"] == "${CORE__LOCK__ALPINE_IMAGE:?err}"
+    assert document["services"]["core-wait-for-resources"]["image"] == "${CORE__BOATYARD_LOCK__ALPINE_IMAGE:?err}"
 
 
 def test_generate_compose_barrier_names_differ_per_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -583,12 +583,13 @@ def test_generate_compose_barrier_names_differ_per_entry(tmp_path: Path, monkeyp
 
     core = yaml.safe_load((tmp_path / "stack/generated/compose/compose.core.yaml").read_text(encoding="utf-8"))
     edge = yaml.safe_load((tmp_path / "stack/generated/compose/compose.edge.yaml").read_text(encoding="utf-8"))
-    assert core["services"]["core-wait-for-resources"]["image"] == "${CORE__LOCK__ALPINE_IMAGE:?err}"
-    assert edge["services"]["edge-wait-for-resources"]["image"] == "${EDGE__LOCK__ALPINE_IMAGE:?err}"
+    assert core["services"]["core-wait-for-resources"]["image"] == "${CORE__BOATYARD_LOCK__ALPINE_IMAGE:?err}"
+    assert edge["services"]["edge-wait-for-resources"]["image"] == "${EDGE__BOATYARD_LOCK__ALPINE_IMAGE:?err}"
 
 
 class WorkloadContentsRecorder:
-    def __init__(self) -> None:
+    def __init__(self, generated: str = API_SERVICE_RENDERING) -> None:
+        self.generated = generated
         self.workload_contents: dict[str, str] = {}
         self.command_envs: dict[str, dict[str, str] | None] = {}
 
@@ -602,7 +603,7 @@ class WorkloadContentsRecorder:
                 self.workload_contents[path.name] = path.read_text(encoding="utf-8")
             output = Path(command.rsplit("--output ", 1)[1].split()[0])
             output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text(API_SERVICE_RENDERING, encoding="utf-8")
+            output.write_text(self.generated, encoding="utf-8")
 
 
 def test_workload_image_slots_resolve_from_the_lock_into_the_rendered_copy(
@@ -654,6 +655,59 @@ def test_workload_image_slot_with_no_lock_entry_refuses(tmp_path: Path, monkeypa
 
     with pytest.raises(ValueError, match=r"api\.yaml.*API_IMAGE.*image lock"):
         score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), {}, secrets=_empty_secrets())
+
+
+SENTINEL_RENDERING = "services:\n  api-api:\n    image: ghcr.io/org/api:__BOATYARD_TREE__API_SHA__\n"
+
+
+def _generate_compose_with_shas(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, service_shas: dict[str, str]
+) -> tuple[WorkloadContentsRecorder, str]:
+    (tmp_path / "stack" / "score").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "stack" / "score" / "api.yaml").write_text(
+        "metadata:\n  name: api\ncontainers:\n  api:\n    image: ghcr.io/org/api:${API_SHA}\n",
+        encoding="utf-8",
+    )
+    recorder = WorkloadContentsRecorder(SENTINEL_RENDERING)
+    monkeypatch.setattr(score_module, "bash", recorder.run)
+    config = _root_config(
+        repository="ghcr.io/org/repo",
+        project_name="example",
+        platforms=["linux/amd64"],
+        services={"core": {"workloads": ["api.yaml"]}},
+    )
+    config.root = tmp_path
+
+    score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), service_shas, secrets=_empty_secrets())
+    output = tmp_path / "stack" / "generated" / "compose" / "compose.core.yaml"
+    return recorder, output.read_text(encoding="utf-8")
+
+
+def test_workload_sha_slots_render_as_marker_protected_tree_slots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder, artifact = _generate_compose_with_shas(monkeypatch, tmp_path, {"API_SHA": "tree-" + "a" * 40})
+
+    assert (
+        recorder.workload_contents["api.yaml"]
+        == "metadata:\n  name: api\ncontainers:\n  api:\n    image: ghcr.io/org/api:__BOATYARD_TREE__API_SHA__\n"
+    )
+    generate_env = recorder.command_envs["score-compose generate"]
+    assert generate_env is not None
+    assert generate_env["API_SHA"] == "__BOATYARD_TREE__API_SHA__"
+    assert "image: ghcr.io/org/api:${CORE__BOATYARD_TREE__API_SHA}" in artifact
+    assert "tree-" not in artifact
+    assert score_compose_module.TREE_SENTINEL_PATTERN.search(artifact) is None
+
+
+def test_compose_artifacts_are_invariant_to_service_source_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _recorder, first = _generate_compose_with_shas(monkeypatch, tmp_path, {"API_SHA": "tree-" + "a" * 40})
+    (tmp_path / "stack" / "generated" / "compose" / "compose.core.yaml").unlink()
+    _recorder, second = _generate_compose_with_shas(monkeypatch, tmp_path, {"API_SHA": "tree-" + "b" * 40})
+
+    assert first == second
 
 
 SHIPPED_TEMPLATES = {
