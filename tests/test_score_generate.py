@@ -11,13 +11,17 @@ from bashrun.bash import CalledProcessError, bash, bash_output
 from pydantic import ValidationError
 
 from boatyard.config import config as config_module
+from boatyard import dockerfiles as dockerfiles_module
 from boatyard import score as score_module
 from boatyard import score_compose as score_compose_module
 from boatyard import score_k8s as score_k8s_module
 from boatyard import score_generate as score_generate_module
 from boatyard.verbs import score as score_verb_module
-from boatyard.config.config import ConfigFile, WorkloadDocument
+from boatyard.config.config import ConfigFile, K8sConfig, WorkloadDocument
+from boatyard.config.k8s_pins import render_pins
 from boatyard.config.lock import LockFile
+from boatyard.dockerfiles import ServiceBuild
+from boatyard.paths import K8S_PINS_PATH
 from boatyard.score import SecretsDeclaration, write_file
 from boatyard.score_compose import BindVolume, ComposeService
 from boatyard.score_k8s import generate_k8s
@@ -105,13 +109,20 @@ class K8sBashRecorder:
         self.state_path = state_path
         self.commands: list[str] = []
         self.state_at_generate: dict[str, str] = {}
+        self.command_envs: dict[str, dict[str, str] | None] = {}
+        self.workload_contents: dict[str, str] = {}
 
     def run(self, command: str, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
         self.commands.append(command)
+        self.command_envs[command.split()[1]] = env
         if command.startswith("score-k8s init"):
             self.state_path.parent.mkdir(parents=True, exist_ok=True)
             self.state_path.write_text("workloads: {}\n", encoding="utf-8")
         if command.startswith("score-k8s generate"):
+            for argument in command.split()[2:]:
+                if argument == "--output":
+                    break
+                self.workload_contents[Path(argument).name] = Path(argument).read_text(encoding="utf-8")
             self.output_path.parent.mkdir(parents=True, exist_ok=True)
             self.output_path.write_text(WORKLOAD_MANIFEST, encoding="utf-8")
             self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -151,11 +162,12 @@ def _generate_with_chart(
     monkeypatch.setattr(score_k8s_module, "bash_output", helm.run)
     assert config.k8s is not None
     config.root = tmp_path
+    (tmp_path / K8S_PINS_PATH).write_text(render_pins({}), encoding="utf-8")
     lock = LockFile.model_validate({
         "images": {name: {"index": ref} for name, ref in images.items() if not name.endswith("_CHART")},
         "charts": {name: ref for name, ref in images.items() if name.endswith("_CHART")},
     })
-    generate_k8s(config, config.k8s, lock, {}, local=False, secrets=_empty_secrets())
+    generate_k8s(config, config.k8s, lock, local=False, secrets=_empty_secrets())
     return helm
 
 
@@ -357,10 +369,11 @@ class TestMarkerSubstrateResolution:
             k8s={"workloads": [], "charts": {"loki": CHART_REF}},
         )
         config.root = tmp_path
+        (tmp_path / K8S_PINS_PATH).write_text(render_pins({}), encoding="utf-8")
         lock = self._multi_arch_lock()
         assert config.k8s is not None
 
-        generate_k8s(config, config.k8s, lock, {}, local=False, secrets=_empty_secrets())
+        generate_k8s(config, config.k8s, lock, local=False, secrets=_empty_secrets())
 
         resolved = yaml.safe_load(helm.values_contents[0])
         assert resolved["image"] == LOKI_INDEX
@@ -419,7 +432,7 @@ def _generate_compose(
     )
     config.root = tmp_path
 
-    score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), {}, secrets=secrets)
+    score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), secrets=secrets)
     return tmp_path / "stack" / "generated" / "compose" / "compose.core.yaml"
 
 
@@ -526,7 +539,7 @@ def test_generate_compose_refuses_a_container_name_shared_across_workloads(
     config.root = tmp_path
 
     with pytest.raises(ValueError, match="claimed by more than one"):
-        score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), {}, secrets=_empty_secrets())
+        score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), secrets=_empty_secrets())
 
 
 COMPOSE_WITH_BARRIER = (
@@ -579,7 +592,7 @@ def test_generate_compose_barrier_names_differ_per_entry(tmp_path: Path, monkeyp
     )
     config.root = tmp_path
 
-    score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), {}, secrets=_empty_secrets())
+    score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), secrets=_empty_secrets())
 
     core = yaml.safe_load((tmp_path / "stack/generated/compose/compose.core.yaml").read_text(encoding="utf-8"))
     edge = yaml.safe_load((tmp_path / "stack/generated/compose/compose.edge.yaml").read_text(encoding="utf-8"))
@@ -627,7 +640,6 @@ def test_workload_image_slots_resolve_from_the_lock_into_the_rendered_copy(
     score_compose_module.generate_compose(
         config,
         _lock_for_images({"API_IMAGE": "ghcr.io/org/api@sha256:" + "a" * 64, **ALPINE_LOCK}),
-        {},
         secrets=_empty_secrets(),
     )
 
@@ -654,14 +666,14 @@ def test_workload_image_slot_with_no_lock_entry_refuses(tmp_path: Path, monkeypa
     config.root = tmp_path
 
     with pytest.raises(ValueError, match=r"api\.yaml.*API_IMAGE.*image lock"):
-        score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), {}, secrets=_empty_secrets())
+        score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), secrets=_empty_secrets())
 
 
 SENTINEL_RENDERING = "services:\n  api-api:\n    image: ghcr.io/org/api:__BOATYARD_TREE__API_SHA__\n"
 
 
-def _generate_compose_with_shas(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, service_shas: dict[str, str]
+def _generate_compose_with_service_builds(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> tuple[WorkloadContentsRecorder, str]:
     (tmp_path / "stack" / "score").mkdir(parents=True, exist_ok=True)
     (tmp_path / "stack" / "score" / "api.yaml").write_text(
@@ -677,8 +689,9 @@ def _generate_compose_with_shas(
         services={"core": {"workloads": ["api.yaml"]}},
     )
     config.root = tmp_path
+    config.service_builds = {"api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile")}
 
-    score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), service_shas, secrets=_empty_secrets())
+    score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), secrets=_empty_secrets())
     output = tmp_path / "stack" / "generated" / "compose" / "compose.core.yaml"
     return recorder, output.read_text(encoding="utf-8")
 
@@ -686,7 +699,7 @@ def _generate_compose_with_shas(
 def test_workload_sha_slots_render_as_marker_protected_tree_slots(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    recorder, artifact = _generate_compose_with_shas(monkeypatch, tmp_path, {"API_SHA": "tree-" + "a" * 40})
+    recorder, artifact = _generate_compose_with_service_builds(monkeypatch, tmp_path)
 
     assert (
         recorder.workload_contents["api.yaml"]
@@ -700,14 +713,14 @@ def test_workload_sha_slots_render_as_marker_protected_tree_slots(
     assert score_compose_module.TREE_SENTINEL_PATTERN.search(artifact) is None
 
 
-def test_compose_artifacts_are_invariant_to_service_source_changes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _recorder, first = _generate_compose_with_shas(monkeypatch, tmp_path, {"API_SHA": "tree-" + "a" * 40})
-    (tmp_path / "stack" / "generated" / "compose" / "compose.core.yaml").unlink()
-    _recorder, second = _generate_compose_with_shas(monkeypatch, tmp_path, {"API_SHA": "tree-" + "b" * 40})
+def test_generate_compose_never_walks_the_source_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def _refuse_the_walk(root: Path, builds: object) -> dict[str, str]:
+        raise AssertionError("compose generation reads only the config's service set")
 
-    assert first == second
+    monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _refuse_the_walk)
+    _recorder, artifact = _generate_compose_with_service_builds(monkeypatch, tmp_path)
+
+    assert "image: ghcr.io/org/api:${CORE__BOATYARD_TREE__API_SHA}" in artifact
 
 
 SHIPPED_TEMPLATES = {
@@ -814,9 +827,7 @@ def _compose_init_templates(
     recorder = ComposeBashRecorder(generated)
     monkeypatch.setattr(score_module, "bash", recorder.run)
     config.root = tmp_path
-    score_compose_module.generate_compose(
-        config, _lock_for_images({**images, **ALPINE_LOCK}), {}, secrets=_empty_secrets()
-    )
+    score_compose_module.generate_compose(config, _lock_for_images({**images, **ALPINE_LOCK}), secrets=_empty_secrets())
     inits = [command for command in recorder.commands if command.startswith("score-compose init")]
     return [[Path(token).name for token in command.split() if token.endswith(".tpl")] for command in inits]
 
@@ -856,7 +867,7 @@ def test_generate_compose_requires_the_alpine_image_lock_entry(tmp_path: Path) -
     config.root = tmp_path
 
     with pytest.raises(ValueError, match="must carry the ALPINE_IMAGE entry"):
-        score_compose_module.generate_compose(config, LockFile.model_validate({}), {}, secrets=_empty_secrets())
+        score_compose_module.generate_compose(config, LockFile.model_validate({}), secrets=_empty_secrets())
 
 
 def test_provisioners_register_by_resource_type_closure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -877,7 +888,7 @@ def test_provisioners_register_by_resource_type_closure(tmp_path: Path, monkeypa
     recorder = ComposeBashRecorder("services: {}\n")
     monkeypatch.setattr(score_module, "bash", recorder.run)
 
-    score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), {}, secrets=_empty_secrets())
+    score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), secrets=_empty_secrets())
 
     init = next(command for command in recorder.commands if command.startswith("score-compose init"))
     provisioners = [token for token in init.split() if token.endswith(".yaml")]
@@ -1141,7 +1152,6 @@ def test_consumer_interpolated_binds_ride_undoubled(tmp_path: Path, monkeypatch:
     score_compose_module.generate_compose(
         config,
         _lock_for_images(ALPINE_LOCK),
-        {},
         secrets=SecretsDeclaration.model_validate({"TUNNEL_CONTROL_ENDPOINT": "tunnel"}),
     )
 
@@ -1195,9 +1205,10 @@ def test_k8s_builtin_templates_register_on_every_init(tmp_path: Path, monkeypatc
     monkeypatch.setattr(score_k8s_module, "bash_output", HelmRecorder().run)
     config = _root_config(k8s={"workloads": ["api.yaml"]})
     config.root = tmp_path
+    (tmp_path / K8S_PINS_PATH).write_text(render_pins({}), encoding="utf-8")
 
     assert config.k8s is not None
-    generate_k8s(config, config.k8s, LockFile.model_validate({}), {}, local=False, secrets=_empty_secrets())
+    generate_k8s(config, config.k8s, LockFile.model_validate({}), local=False, secrets=_empty_secrets())
 
     init = next(command for command in recorder.commands if command.startswith("score-k8s init"))
     assert [Path(token).name for token in init.split() if token.endswith(".tpl")] == [
@@ -1215,12 +1226,93 @@ def test_k8s_instance_suffixes_are_preseeded_deterministically(tmp_path: Path, m
     monkeypatch.setattr(score_k8s_module, "bash_output", HelmRecorder().run)
     config = _root_config(k8s={"workloads": ["api.yaml"]})
     config.root = tmp_path
+    (tmp_path / K8S_PINS_PATH).write_text(render_pins({}), encoding="utf-8")
 
     assert config.k8s is not None
-    generate_k8s(config, config.k8s, LockFile.model_validate({}), {}, local=False, secrets=_empty_secrets())
+    generate_k8s(config, config.k8s, LockFile.model_validate({}), local=False, secrets=_empty_secrets())
 
     seeded = yaml.safe_load(recorder.state_at_generate[output.name])
     assert seeded["workloads"]["api"]["instance_suffix"] == "-" + sha256(b"api").hexdigest()[:10]
+
+
+PINNED_TAG = "tree-" + "e" * 40
+LOCAL_TAG = "tree-" + "f" * 40
+SHA_WORKLOAD = "metadata:\n  name: api\ncontainers:\n  api:\n    image: ghcr.io/org/api:${API_SHA}\n"
+
+
+def _pins_k8s_recorder(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, workload: str, output_name: str = "manifests.yaml"
+) -> K8sBashRecorder:
+    (tmp_path / "stack" / "score").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "stack" / "score" / "api.yaml").write_text(workload, encoding="utf-8")
+    output = Path("stack/generated/k8s") / output_name
+    recorder = K8sBashRecorder(tmp_path / output, tmp_path / "stack/generated/k8s/.score-k8s/state.yaml")
+    monkeypatch.setattr(score_module, "bash", recorder.run)
+    monkeypatch.setattr(score_k8s_module, "bash_output", HelmRecorder().run)
+    return recorder
+
+
+def _pinned_config(tmp_path: Path) -> tuple[ConfigFile, K8sConfig]:
+    config = _root_config(k8s={"workloads": ["api.yaml"]})
+    config.root = tmp_path
+    assert config.k8s is not None
+    return config, config.k8s
+
+
+def _refuse_the_tree_walk(root: Path, builds: object) -> dict[str, str]:
+    raise AssertionError("the pinned k8s rendering never walks the tree")
+
+
+def test_k8s_generation_bakes_the_pins_file_tags(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / K8S_PINS_PATH).write_text(render_pins({"API_SHA": PINNED_TAG}), encoding="utf-8")
+    recorder = _pins_k8s_recorder(monkeypatch, tmp_path, SHA_WORKLOAD)
+    config, k8s = _pinned_config(tmp_path)
+    monkeypatch.setattr(score_k8s_module.dockerfiles, "compute_service_shas", _refuse_the_tree_walk)
+
+    generate_k8s(config, k8s, LockFile.model_validate({}), local=False, secrets=_empty_secrets())
+
+    assert recorder.command_envs["generate"] is not None
+    assert recorder.command_envs["generate"]["API_SHA"] == PINNED_TAG
+    assert f"image: ghcr.io/org/api:{PINNED_TAG}" in recorder.workload_contents["api.yaml"]
+
+
+def test_k8s_generation_without_a_pins_file_refuses_naming_bump(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _pins_k8s_recorder(monkeypatch, tmp_path, SHA_WORKLOAD)
+    config, k8s = _pinned_config(tmp_path)
+
+    with pytest.raises(ValueError, match="run 'boatyard bump'"):
+        generate_k8s(config, k8s, LockFile.model_validate({}), local=False, secrets=_empty_secrets())
+
+
+def test_k8s_generation_refuses_a_workload_sha_slot_no_pin_covers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / K8S_PINS_PATH).write_text(render_pins({"API_SHA": PINNED_TAG}), encoding="utf-8")
+    workload = SHA_WORKLOAD + "  sidecar:\n    image: ghcr.io/org/sidecar:${WORKER_SHA}\n"
+    _pins_k8s_recorder(monkeypatch, tmp_path, workload)
+    config, k8s = _pinned_config(tmp_path)
+
+    with pytest.raises(ValueError, match=r"no pin for WORKER_SHA.*boatyard bump"):
+        generate_k8s(config, k8s, LockFile.model_validate({}), local=False, secrets=_empty_secrets())
+
+
+def test_local_k8s_generation_derives_working_tree_tags_without_pins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder = _pins_k8s_recorder(monkeypatch, tmp_path, SHA_WORKLOAD, output_name="manifests.local.yaml")
+    config, k8s = _pinned_config(tmp_path)
+
+    def _local_shas(root: Path, builds: object) -> dict[str, str]:
+        return {"API_SHA": LOCAL_TAG}
+
+    monkeypatch.setattr(score_k8s_module.dockerfiles, "compute_service_shas", _local_shas)
+
+    generate_k8s(config, k8s, LockFile.model_validate({}), local=True, secrets=_empty_secrets())
+
+    assert recorder.command_envs["generate"] is not None
+    assert recorder.command_envs["generate"]["API_SHA"] == LOCAL_TAG
 
 
 A0_ESCAPED_WORKLOAD = """\

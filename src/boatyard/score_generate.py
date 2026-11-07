@@ -9,7 +9,6 @@ from typing import NamedTuple
 import typer
 from bashrun.bash import bash, bash_check, bash_output
 
-from boatyard import dockerfiles
 from boatyard.config.config import ConfigFile, Target
 from boatyard.config.lock import LOCK_PATH, LockFile
 from boatyard.score import SECRETS_FILE, SECRETS_OUTPUT, SecretsDeclaration, write_file
@@ -31,7 +30,6 @@ def generate_artifacts(
     *,
     target: Target | None = None,
     local: bool = False,
-    service_shas: dict[str, str] | None = None,
 ) -> list[Path]:
     local_entries = config.local_service_entries()
 
@@ -55,12 +53,10 @@ def generate_artifacts(
     if config.k8s is None and local:
         raise typer.BadParameter("--local requires a k8s section; this config declares none")
 
-    # Require the build keys, derive the tree tags, and load the lock
+    # Require the build keys and load the lock
     if not (config.repository or config.base_images):
         raise ValueError("repository or base_images is required in boatyard.yml")
     root = config.root
-    if service_shas is None:
-        service_shas = dockerfiles.compute_service_shas(root, config.service_builds)
     lock_path = root / LOCK_PATH
     if not lock_path.is_file():
         raise ValueError(f"{lock_path.as_posix()}: the image lock is required")
@@ -112,10 +108,10 @@ def generate_artifacts(
 
     outputs: list[Path] = []
     if target in ("both", "compose"):
-        outputs.extend(generate_compose(config, lock, service_shas, secrets))
+        outputs.extend(generate_compose(config, lock, secrets))
 
     if target in ("both", "k8s") and config.k8s is not None:
-        outputs.append(generate_k8s(config, config.k8s, lock, service_shas, local, secrets))
+        outputs.append(generate_k8s(config, config.k8s, lock, local, secrets))
 
     secrets_output = root / SECRETS_OUTPUT
     secrets_output.parent.mkdir(parents=True, exist_ok=True)

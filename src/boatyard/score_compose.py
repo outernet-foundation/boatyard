@@ -26,6 +26,9 @@ from boatyard.config.config import (
     ConfigFile,
 )
 from boatyard.config.lock import LOCK_PATH, LockFile
+from boatyard.config.values import ValuesFile
+from boatyard.dockerfiles import service_sha_env
+from boatyard.paths import VALUES_FILE
 from boatyard.yaml import load_yaml_model
 from boatyard.score import (
     SECRETS_FILE,
@@ -35,8 +38,6 @@ from boatyard.score import (
     render_score,
     write_file,
 )
-from boatyard.config.values import ValuesFile
-from boatyard.paths import VALUES_FILE
 
 TOOL = "score-compose"
 
@@ -131,9 +132,7 @@ class ComposeConfig(BaseModel):
     content: str | None = None
 
 
-def generate_compose(
-    config: ConfigFile, lock: LockFile, service_shas: dict[str, str], secrets: SecretsDeclaration
-) -> list[Path]:
+def generate_compose(config: ConfigFile, lock: LockFile, secrets: SecretsDeclaration) -> list[Path]:
     score_dir = config.root / config.score_dir
     state_prefix = f".{TOOL}/"
     values_path = config.root / VALUES_FILE
@@ -143,6 +142,8 @@ def generate_compose(
     if "ALPINE_IMAGE" not in images:
         raise ValueError(f"{LOCK_PATH.as_posix()}: the image lock must carry the ALPINE_IMAGE entry")
 
+    # Only the slot name set is load-bearing; the values never enter a compose artifact.
+    tree_slots = {service_sha_env(name) for name in config.service_builds}
     outputs: list[Path] = []
     consumed: set[str] = set()
     for name, entry in config.local_service_entries():
@@ -169,7 +170,7 @@ def generate_compose(
             ],
             output=output_path,
             images=images,
-            service_shas={sha: f"{TREE_SLOT_MARKER}{sha}__" for sha in service_shas},
+            service_shas={sha: f"{TREE_SLOT_MARKER}{sha}__" for sha in tree_slots},
         )
 
         # Parse the rendering into the typed document

@@ -12,8 +12,10 @@ from pydantic import (
     Field,
 )
 
+from boatyard import dockerfiles
 from boatyard.config.config import (
     K8sConfig,
+    PLACEHOLDER,
     WorkloadDocument,
     Yaml,
     ConfigFile,
@@ -21,8 +23,10 @@ from boatyard.config.config import (
     is_list,
     is_mapping,
 )
+from boatyard.config.k8s_pins import K8sPinsFile
 from boatyard.config.lock import LockFile
 from boatyard.markers import MarkerContext, resolve_markers
+from boatyard.paths import K8S_PINS_PATH
 from boatyard.score import (
     SECRETS_FILE,
     SecretsDeclaration,
@@ -59,13 +63,24 @@ def generate_k8s(
     config: ConfigFile,
     k8s: K8sConfig,
     lock: LockFile,
-    service_shas: dict[str, str],
     local: bool,
     secrets: SecretsDeclaration,
 ) -> Path:
     score_dir = config.root / config.score_dir
     images = lock.index_references()
     workloads = load_workloads(score_dir, k8s.workloads, WorkloadDocument)
+
+    if local:
+        service_shas = dockerfiles.compute_service_shas(config.root, config.service_builds)
+    else:
+        # The scan rides the same dump text render_score substitutes over.
+        demanded = {
+            name
+            for workload in workloads
+            for name in PLACEHOLDER.findall(dump_yaml(workload.raw))
+            if name.endswith("_SHA")
+        }
+        service_shas = K8sPinsFile.load(config.root / K8S_PINS_PATH, demanded).root
 
     output_path = config.root / (config.k8s_local_output if local else config.k8s_output)
     tool_state = output_path.parent / ".score-k8s"
