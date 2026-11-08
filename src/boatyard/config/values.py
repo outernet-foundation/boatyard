@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping, Set as AbstractSet
 from pathlib import Path
 from typing import Annotated, NamedTuple, Self
 
@@ -20,6 +21,7 @@ from boatyard.config.config import (
     EDGE_SERVICE_NAME,
     ENV_NAME_PATTERN,
     OCI_REFERENCE_PREFIX,
+    PLACEHOLDER,
     RESERVED_SLOT_MARKERS,
     ConfigFile,
     SlotDemand,
@@ -62,6 +64,7 @@ SectionMap = Annotated[dict[str, str], BeforeValidator(_coerce_section)]
 class PublicUrl(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    raw: str
     forwarded_proto: str
     forwarded_port: str
 
@@ -78,7 +81,7 @@ class PublicUrl(BaseModel):
             forwarded_port = "443"
         else:
             forwarded_port = "80"
-        return {"forwarded_proto": scheme, "forwarded_port": forwarded_port}
+        return {"raw": value, "forwarded_proto": scheme, "forwarded_port": forwarded_port}
 
     @property
     def forwarded(self) -> dict[str, Yaml]:
@@ -132,6 +135,7 @@ class ValuesFile(BaseModel):
         self._fold_selection(config)
         self._build_demand_table(config, context)
         self._refuse_misplaced_keys(source)
+        self._refuse_unresolvable_references(source)
         self._refuse_unfilled_slots(source)
         self._refuse_undeclared_demands(source, config)
         return self
@@ -219,8 +223,6 @@ class ValuesFile(BaseModel):
         surface = sorted(self._demands.get(unit, {}))
         for name in sorted(section):
             self._refuse_key_shape(name, site)
-            if "${" in section[name]:
-                raise ValueError(f"{site}: {name} carries an interpolation spelling; section values are literals")
             if name not in self._demands.get(unit, {}):
                 raise ValueError(f"{site}: {name} is demanded by no surface of {unit} (the surface is {surface})")
             if demanders[name] - {unit}:
@@ -238,6 +240,45 @@ class ValuesFile(BaseModel):
             )
         if name == MINTED_SLOT:
             raise ValueError(f"{site}: {name} is minted from public_url; never set it by hand")
+
+    def _refuse_unresolvable_references(self, source: str) -> None:
+        sections: dict[str, Mapping[str, str]] = {"values.shared": self.values.shared}
+        sections.update((f"values.images.{unit}", section) for unit, section in self.values.images.items())
+        sections.update((f"values.bundles.{unit}", section) for unit, section in self.values.bundles.items())
+        references: dict[str, set[str]] = {}
+        sites: dict[str, str] = {}
+        for site, section in sorted(sections.items()):
+            for name, value in section.items():
+                if "${" in PLACEHOLDER.sub("", value):
+                    raise ValueError(
+                        f"{source}: {site}: {name}: only bare ${{NAME}} references are legal — "
+                        f"no defaults, operators, filters, or nesting"
+                    )
+                for reference in PLACEHOLDER.findall(value):
+                    if any(marker in reference for marker in RESERVED_SLOT_MARKERS):
+                        raise ValueError(
+                            f"{source}: {site}: {name}: ${{{reference}}} carries a reserved "
+                            f"__BOATYARD_LOCK__/__BOATYARD_TREE__ marker; the lock and the tree "
+                            f"tags fill those slots — never reference them"
+                        )
+                    references.setdefault(name, set()).add(reference)
+                    sites[name] = site
+        roots = set(self.flattened) | set(self.minted)
+        unresolvable = sorted({reference for referenced in references.values() for reference in referenced} - roots)
+        if unresolvable:
+            name = min(name for name, referenced in references.items() if referenced & set(unresolvable))
+            raise ValueError(
+                f"{source}: {sites[name]}: {name}: ${{{unresolvable[0]}}} resolves to no root; "
+                f"the roots are {sorted(roots)}"
+            )
+        hand_edges = {
+            name: {reference for reference in PLACEHOLDER.findall(value) if reference in self.flattened}
+            for name, value in self.flattened.items()
+        }
+        _order, blocked = peel_references(hand_edges)
+        if blocked:
+            cycle = reference_cycle({name: hand_edges[name] & set(blocked) for name in blocked})
+            raise ValueError(f"{source}: reference cycle: {' -> '.join([*cycle, cycle[0]])}")
 
     def _refuse_unfilled_slots(self, source: str) -> None:
         filled = set(self.values.shared)
@@ -340,6 +381,20 @@ class ValuesFile(BaseModel):
             values.update(section)
         return values
 
+    @property
+    def minted(self) -> dict[str, str]:
+        return {MINTED_SLOT: self.public_url.raw} if self.public_url is not None else {}
+
+    @property
+    def resolved(self) -> dict[str, str]:
+        hand = self.flattened
+        references = {name: set(PLACEHOLDER.findall(value)) & hand.keys() for name, value in hand.items()}
+        order, _blocked = peel_references(references)
+        values = dict(self.minted)
+        for name in order:
+            values[name] = resolve_value(hand[name], values)
+        return values
+
     def assembly(self) -> AssemblyPlan:
         # The heavy derivation only up pays for: the producer projection under the consumer
         # platform and the per-entry lock/tree fans over the resolved selection.
@@ -411,8 +466,46 @@ class ValuesFile(BaseModel):
         demanded = sorted({name for unit in self._participating for name in self._demands.get(unit, {})})
         return AssemblyPlan(
             includes=includes,
-            values=self.flattened,
+            values=self.resolved,
             lock_entries=lock_entries,
             tree_entries=tree_entries,
             demanded=demanded,
         )
+
+
+def peel_references(references: Mapping[str, AbstractSet[str]]) -> tuple[list[str], list[str]]:
+    # Answer the peel order (a name peels only after every name it references peels) and
+    # the names a cycle leaves blocked
+    blocked: dict[str, set[str]] = {name: set(targets) for name, targets in references.items()}
+    order: list[str] = []
+    ready = sorted(name for name, targets in blocked.items() if not targets)
+    while ready:
+        name = ready.pop(0)
+        blocked.pop(name)
+        order.append(name)
+        newly_ready: list[str] = []
+        for successor, targets in blocked.items():
+            if not targets:
+                continue
+            targets.discard(name)
+            if not targets:
+                newly_ready.append(successor)
+        ready.extend(sorted(newly_ready))
+    return order, sorted(blocked)
+
+
+def reference_cycle(blocked: Mapping[str, AbstractSet[str]]) -> list[str]:
+    # Every blocked name keeps a blocked successor, so the walk repeats a node exactly on the cycle
+    seen: dict[str, int] = {}
+    chain: list[str] = []
+    node = min(blocked)
+    while node not in seen:
+        seen[node] = len(chain)
+        chain.append(node)
+        node = min(blocked[node])
+    return chain[seen[node] :]
+
+
+def resolve_value(value: str, resolved: Mapping[str, str]) -> str:
+    parts = PLACEHOLDER.split(value)
+    return "".join(part if index % 2 == 0 else resolved[part] for index, part in enumerate(parts))

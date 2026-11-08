@@ -110,6 +110,12 @@ def _filled_values(extra: dict[str, object] | None = None) -> dict[str, object]:
     return values
 
 
+def _core_values(**overrides: str) -> dict[str, str]:
+    section = {"API_TOKEN": "one", "BIND_TOKEN": "two", "PROV_TOKEN": "three"}
+    section.update(overrides)
+    return section
+
+
 def _load(root: Path) -> ValuesFile:
     config = ConfigFile.load(root / "boatyard.yml")
     lock = LockFile.load(root / LOCK_PATH, config)
@@ -310,3 +316,150 @@ def test_a_fill_refusal_names_shell_set_values_as_ignored(tmp_path: Path, monkey
     message = _refusal(tmp_path, values)
 
     assert "API_TOKEN set in the shell and ignored" in message
+
+
+def test_a_reference_to_a_sibling_key_resolves_at_render(tmp_path: Path) -> None:
+    values = _filled_values()
+    values["values"]["images"]["core"] = _core_values(API_TOKEN="${PROV_TOKEN}-token")  # type: ignore[index]
+
+    parsed = _load(_write_repo(tmp_path, values))
+
+    assert parsed.flattened == {
+        "API_TOKEN": "${PROV_TOKEN}-token",
+        "BIND_TOKEN": "two",
+        "PROV_TOKEN": "three",
+        "MON_TOKEN": "four",
+    }
+    assert parsed.resolved == {
+        "API_TOKEN": "three-token",
+        "BIND_TOKEN": "two",
+        "PROV_TOKEN": "three",
+        "MON_TOKEN": "four",
+    }
+
+
+def test_a_reference_chains_through_another_reference(tmp_path: Path) -> None:
+    values = _filled_values()
+    values["values"]["images"]["core"] = _core_values(  # type: ignore[index]
+        API_TOKEN="u${BIND_TOKEN}", BIND_TOKEN="${PROV_TOKEN}b"
+    )
+
+    parsed = _load(_write_repo(tmp_path, values))
+
+    assert parsed.resolved == {
+        "API_TOKEN": "uthreeb",
+        "BIND_TOKEN": "threeb",
+        "PROV_TOKEN": "three",
+        "MON_TOKEN": "four",
+    }
+
+
+def test_the_minted_public_url_is_a_reference_root(tmp_path: Path) -> None:
+    values = _filled_values({"public_url": "https://example.dev"})
+    values["values"]["images"]["core"] = _core_values(API_TOKEN="${PUBLIC_URL}/token")  # type: ignore[index]
+
+    parsed = _load(_write_repo(tmp_path, values))
+
+    assert parsed.resolved == {
+        "PUBLIC_URL": "https://example.dev",
+        "API_TOKEN": "https://example.dev/token",
+        "BIND_TOKEN": "two",
+        "PROV_TOKEN": "three",
+        "MON_TOKEN": "four",
+    }
+
+
+def test_the_minted_public_url_is_no_root_when_public_url_is_absent(tmp_path: Path) -> None:
+    values = _filled_values()
+    values["values"]["images"]["core"] = _core_values(API_TOKEN="${PUBLIC_URL}/token")  # type: ignore[index]
+
+    message = _refusal(tmp_path, values)
+
+    assert "${PUBLIC_URL} resolves to no root" in message
+
+
+def test_an_unresolvable_reference_refuses_listing_the_roots(tmp_path: Path) -> None:
+    values = _filled_values()
+    values["values"]["images"]["core"] = _core_values(API_TOKEN="${GHOST}")  # type: ignore[index]
+
+    message = _refusal(tmp_path, values)
+
+    assert "${GHOST} resolves to no root" in message
+    assert "the roots are ['API_TOKEN', 'BIND_TOKEN', 'MON_TOKEN', 'PROV_TOKEN']" in message
+
+
+def test_a_default_spelling_refuses(tmp_path: Path) -> None:
+    values = _filled_values()
+    values["values"]["images"]["core"] = _core_values(API_TOKEN="${PROV_TOKEN:-three}")  # type: ignore[index]
+
+    message = _refusal(tmp_path, values)
+
+    assert "only bare ${NAME} references are legal" in message
+
+
+def test_a_lowercase_reference_refuses(tmp_path: Path) -> None:
+    values = _filled_values()
+    values["values"]["images"]["core"] = _core_values(API_TOKEN="${public_url}/token")  # type: ignore[index]
+
+    message = _refusal(tmp_path, values)
+
+    assert "only bare ${NAME} references are legal" in message
+
+
+def test_a_nested_reference_refuses(tmp_path: Path) -> None:
+    values = _filled_values()
+    values["values"]["images"]["core"] = _core_values(API_TOKEN="${${PROV_TOKEN}}")  # type: ignore[index]
+
+    message = _refusal(tmp_path, values)
+
+    assert "only bare ${NAME} references are legal" in message
+
+
+def test_a_marker_reference_refuses(tmp_path: Path) -> None:
+    values = _filled_values()
+    values["values"]["images"]["core"] = _core_values(  # type: ignore[index]
+        API_TOKEN="${CORE__BOATYARD_LOCK__PROV_TOKEN}"
+    )
+
+    message = _refusal(tmp_path, values)
+
+    assert "carries a reserved __BOATYARD_LOCK__/__BOATYARD_TREE__ marker" in message
+
+
+def test_a_reference_cycle_refuses(tmp_path: Path) -> None:
+    values = _filled_values()
+    values["values"]["images"]["core"] = _core_values(  # type: ignore[index]
+        API_TOKEN="x${BIND_TOKEN}", BIND_TOKEN="y${API_TOKEN}"
+    )
+
+    message = _refusal(tmp_path, values)
+
+    assert "reference cycle: API_TOKEN -> BIND_TOKEN -> API_TOKEN" in message
+
+
+def test_a_self_reference_refuses(tmp_path: Path) -> None:
+    values = _filled_values()
+    values["values"]["images"]["core"] = _core_values(API_TOKEN="x${API_TOKEN}")  # type: ignore[index]
+
+    message = _refusal(tmp_path, values)
+
+    assert "reference cycle: API_TOKEN -> API_TOKEN" in message
+
+
+def test_assembly_renders_resolved_values_with_the_minted_slot(tmp_path: Path) -> None:
+    values = _filled_values({"public_url": "https://example.dev"})
+    values["values"]["images"]["core"] = _core_values(API_TOKEN="${PUBLIC_URL}/token")  # type: ignore[index]
+    root = _write_repo(tmp_path, values)
+    bundle_output = root / "stack" / "generated" / "compose" / "compose.core.yaml"
+    bundle_output.parent.mkdir(parents=True)
+    bundle_output.write_text("services:\n  core-api:\n    image: demo:1\n", encoding="utf-8")
+
+    plan = _load(root).assembly()
+
+    assert plan.values == {
+        "PUBLIC_URL": "https://example.dev",
+        "API_TOKEN": "https://example.dev/token",
+        "BIND_TOKEN": "two",
+        "PROV_TOKEN": "three",
+        "MON_TOKEN": "four",
+    }
