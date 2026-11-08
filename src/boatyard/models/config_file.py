@@ -304,34 +304,26 @@ def _require_nonempty_values(values: dict[str, str]) -> dict[str, str]:
 VarsMap = Annotated[dict[str, str], AfterValidator(_require_nonempty_values)]
 
 
-class SecretsDeclaration(RootModel[dict[AllCapsName, "SecretKey"]]):
+class SecretsDeclaration(RootModel[list[AllCapsName]]):
     @model_validator(mode="before")
     @classmethod
-    def _coerce_string_specs(cls, value: Yaml) -> Yaml:
-        if value is None:
-            value = {}
-        if not is_mapping(value):
-            raise ValueError("must be a KEY: description mapping")
-        return {name: ({"description": spec} if isinstance(spec, str) else spec) for name, spec in value.items()}
+    def _coerce_null(cls, value: Yaml) -> Yaml:
+        return [] if value is None else value
+
+    @field_validator("root")
+    @classmethod
+    def _refuse_duplicates(cls, value: list[str]) -> list[str]:
+        seen: set[str] = set()
+        for name in value:
+            if name in seen:
+                raise ValueError(f"secret {name!r} is declared twice")
+            seen.add(name)
+        return value
 
     def validate_consumed(self, consumed: set[str], rendering: Substrate, source: str) -> None:
-        undeclared = sorted(consumed - self.root.keys())
+        undeclared = sorted(consumed - set(self.root))
         if undeclared:
             raise ValueError(f"{source}: the {rendering} rendering consumes undeclared keys: " + ", ".join(undeclared))
-
-
-class SecretKey(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    description: str
-    mint: bool = False
-
-    @field_validator("description")
-    @classmethod
-    def _require_description(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("description must be non-empty")
-        return value
 
 
 class ServiceGroup(BaseModel):

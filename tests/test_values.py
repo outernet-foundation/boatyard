@@ -57,7 +57,7 @@ def _write_repo(
     *,
     slots: dict[str, object] | None = None,
     workload: str = WORKLOAD,
-    secrets: object = {},
+    secrets: object = [],
     gateway: int | None = None,
     ports: list[dict[str, object]] | None = None,
 ) -> Path:
@@ -162,7 +162,7 @@ def _refusal(
     *,
     slots: dict[str, object] | None = None,
     workload: str = WORKLOAD,
-    secrets: object = {},
+    secrets: object = [],
     gateway: int | None = None,
     ports: list[dict[str, object]] | None = None,
 ) -> str:
@@ -290,7 +290,7 @@ def test_an_optional_demand_rides_unfilled_when_declared(tmp_path: Path) -> None
             tmp_path,
             _filled_values(),
             slots={"MON_TOKEN": {"required": True}, "MON_OPT": {"required": False}},
-            secrets={"MON_OPT": "declared but unfilled"},
+            secrets=["MON_OPT"],
         )
     )
 
@@ -314,7 +314,7 @@ def test_an_undeclared_consumed_key_refuses_at_load(tmp_path: Path) -> None:
 def test_a_secrets_declaration_covers_a_demand(tmp_path: Path) -> None:
     values = _filled_values()
 
-    parsed = _load(_write_repo(tmp_path, values, slots={"MON_TOKEN": {}}, secrets={"PROV_TOKEN": "declared"}))
+    parsed = _load(_write_repo(tmp_path, values, slots={"MON_TOKEN": {}}, secrets=["PROV_TOKEN"]))
 
     assert "PROV_TOKEN" in parsed.flattened
 
