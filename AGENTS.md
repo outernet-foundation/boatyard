@@ -54,8 +54,11 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
   cross-field shape in one `model_validator(mode="after")` per model.
 - Every `load()` takes a full path and goes through `load_yaml_model` (`yaml.py` strict load).
   One exception: `LockFile.load(path, config)` reads a missing lock as the empty lock.
-- Model modules order the root record first (`RootModel` subscripts quote forward refs) and run
-  one-way: `dockerfiles` ← `config/config` ← `config/lock` ← `lock`.
+- Every pydantic-modeled file kind owns exactly one module in `config/` (boatyard.yml, the
+  lock, values, pins, workloads, the pyproject lens). Each module's types run root down, root
+  record first, quoting forward refs where evaluation allows (`RootModel` subscripts;
+  `default_factory` leaves go through a module-level factory). Modules run one-way:
+  `dockerfiles`/`workload`/`pyproject` ← `config/config` ← `config/lock` ← `lock`.
 - Nothing is caught only to be re-raised as a different exception; guards and third-party
   exceptions surface raw with full traceback; `typer.BadParameter` owns the CLI-flag layer.
 - The build set is derived from the Dockerfile tree (`derive_services` in `dockerfiles.py`),
@@ -66,10 +69,13 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
 ## Modules
 
 - `config/config.py` — schema + load (`ConfigFile.load`); shared leaf for slot markers, name
-  joins, `double_dollars`, workload lens.
+  joins, `double_dollars`.
 - `config/lock.py` — lock schema; `LockFile.load(path, config)` is the only parser consumers use.
 - `config/values.py` — the values file schema: sections, typed overrides, the section key grammar.
 - `config/k8s_pins.py` — pins parsing.
+- `config/pyproject.py` — the toolchain-pin lens over the consumer repo's pyproject.toml.
+- `config/workload.py` — the workload-file lens (`WorkloadDocument`, the compose variant) plus
+  the workload loader and provisioner-file selection.
 - `dockerfiles.py` — Dockerfile-derived build set, tree-tag sha machinery.
 - `resolve.py` — the `resolve(config, lock, values)` fold answering the assembly plan `up` renders.
 - `lock.py` — relock engine + crane resolution.
@@ -82,7 +88,7 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
 - `crane.py` — pinned crane installer.
 - `paths.py` — consumer-repo document paths.
 - `temp.py` — shared digest/platform/tree-tag regex spellings.
-- `yaml.py` — strict YAML load + model load.
+- `yaml.py` — strict YAML load + model load; `Yaml` and the `is_mapping`/`is_list` guards.
 - `verbs/up.py` — assembly rendering, the per-run dotenv, unwind on failure.
 
 ## This file
