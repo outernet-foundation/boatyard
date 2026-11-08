@@ -31,7 +31,7 @@ Design intent and silent-failure traps, one fact per bullet.
   treaty.
 - `$`-doubling: a literal `$` in file text placed inside a compose document (edge Caddyfile,
   file-sourced configs, score's bind inlining) is doubled via `double_dollars` in
-  `config/config.py` — the one home. Text outside a compose document (k8s manifests) never
+  `models/config_file.py` — the one home. Text outside a compose document (k8s manifests) never
   doubles.
 - An absent `secrets:` section fails generate-score; `secrets: {}` states zero — absence and
   emptiness mean different things throughout.
@@ -55,11 +55,11 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
 - Every `load()` takes a full path. YAML kinds go through `load_yaml_model` (`yaml.py` strict load);
   `Image.load(directory, root, axes, siblings)` lenses a Dockerfile directory;
   `LockFile.load(path, config)` reads a missing lock as the empty lock.
-- Every pydantic-modeled file kind owns exactly one module in `config/` (boatyard.yml, the
-  lock, values, pins, workloads, the pyproject lens). Each module's types run root down, root
+- Every pydantic-modeled file kind owns exactly one module in `models/` (boatyard.yml, the lock,
+  values, pins, workloads, the pyproject lens). Each module's types run root down, root
   record first, quoting forward refs where evaluation allows (`RootModel` subscripts;
   `default_factory` leaves go through a module-level factory). Modules run one-way:
-  `images`/`workload`/`pyproject` ← `config/config` ← `config/lock` ← `lock`.
+  `image`/`workload`/`pyproject` ← `config_file` ← `lock_file` ← `lock`.
 - Nothing is caught only to be re-raised as a different exception; guards and third-party
   exceptions surface raw with full traceback; `typer.BadParameter` owns the CLI-flag layer.
 - The build set is derived from the Dockerfile tree inside `ConfigFile` load, never authored in
@@ -69,15 +69,15 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
 
 ## Modules
 
-- `config/config.py` — schema + load (`ConfigFile.load`); shared leaf for slot markers, name
+- `models/config_file.py` — schema + load (`ConfigFile.load`); shared leaf for slot markers, name
   joins, `double_dollars`.
-- `config/lock.py` — lock schema; `LockFile.load(path, config)` is the only parser consumers use.
-- `config/values.py` — the values file schema: sections, typed overrides, the section key grammar.
-- `config/k8s_pins.py` — pins parsing.
-- `config/pyproject.py` — the toolchain-pin lens over the consumer repo's pyproject.toml.
-- `config/workload.py` — the workload-file lens (`WorkloadDocument`, the compose variant) plus
+- `models/lock_file.py` — lock schema; `LockFile.load(path, config)` is the only parser consumers use.
+- `models/values_file.py` — the values file schema: sections, typed overrides, the section key grammar.
+- `models/k8s_pins.py` — pins parsing.
+- `models/pyproject.py` — the toolchain-pin lens over the consumer repo's pyproject.toml.
+- `models/workload.py` — the workload-file lens (`WorkloadDocument`, the compose variant) plus
   the workload loader and provisioner-file selection.
-- `images.py` — the `Image` lens (`Image.load`) and the per-image tree-tag sha machinery.
+- `models/image.py` — the `Image` lens (`Image.load`) and the per-image tree-tag sha machinery.
 - `resolve.py` — the `resolve(config, lock, values)` fold answering the assembly plan `up` renders.
 - `lock.py` — relock engine + crane resolution.
 - `compose.py` — the compose invocation spelling.
