@@ -15,6 +15,7 @@ from boatyard.build import run_build
 from boatyard.compose import compose_command
 from boatyard.config.config import (
     CADDY_IMAGE,
+    EDGE_LISTEN_PORT,
     EDGE_SERVICE_NAME,
     ConfigFile,
     Yaml,
@@ -24,8 +25,7 @@ from boatyard.config.lock import LockFile
 from boatyard.config.values import ValuesFile
 from boatyard.paths import DEFAULT_CONFIG_PATH, LOCK_PATH, VALUES_FILE
 
-# Name the edge listener port and its configs key
-EDGE_LISTEN_PORT = 8443
+# Name the edge's Caddyfile configs key
 EDGE_CONFIG_NAME = "devkit-edge-caddyfile"
 
 app = typer.Typer()

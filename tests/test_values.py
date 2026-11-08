@@ -58,6 +58,7 @@ def _write_repo(
     slots: dict[str, object] | None = None,
     workload: str = WORKLOAD,
     secrets: object = {},
+    gateway: int | None = None,
 ) -> Path:
     root = tmp_path / "consumer"
     root.mkdir()
@@ -66,30 +67,39 @@ def _write_repo(
     (score / "api.yaml").write_text(workload, encoding="utf-8")
     (score / "compose").mkdir()
     (score / "compose" / "services.yaml").write_text(PROVISIONER, encoding="utf-8")
-    (root / "boatyard.yml").write_text(
-        yaml.safe_dump({
-            "requires": ">=0",
-            "project_name": "demo",
-            "repository": "ghcr.io/org/demo",
-            "platforms": ["linux/amd64"],
-            "base_images": {"LOKI_IMAGE": "docker.io/grafana/loki:3.0"},
-            "secrets": secrets,
-            "services": {
-                "core": {"workloads": ["api.yaml"]},
-                "monitor": {"ref": "oci://ghcr.io/org/monitor:1.0.0"},
-            },
-        }),
-        encoding="utf-8",
-    )
+    base_images: dict[str, str] = {"LOKI_IMAGE": "docker.io/grafana/loki:3.0"}
+    if gateway is not None:
+        base_images["CADDY_IMAGE"] = "docker.io/library/caddy:2.8"
+    config: dict[str, object] = {
+        "requires": ">=0",
+        "project_name": "demo",
+        "repository": "ghcr.io/org/demo",
+        "platforms": ["linux/amd64"],
+        "base_images": base_images,
+        "secrets": secrets,
+        "services": {
+            "core": {"workloads": ["api.yaml"]},
+            "monitor": {"ref": "oci://ghcr.io/org/monitor:1.0.0"},
+        },
+    }
+    if gateway is not None:
+        config["gateway"] = gateway
+    (root / "boatyard.yml").write_text(yaml.safe_dump(config), encoding="utf-8")
+    lock_images: dict[str, object] = {
+        "LOKI_IMAGE": {
+            "index": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}",
+            "platforms": {"linux/amd64": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}"},
+        }
+    }
+    if gateway is not None:
+        lock_images["CADDY_IMAGE"] = {
+            "index": f"docker.io/library/caddy:2.8@{FAKE_DIGEST}",
+            "platforms": {"linux/amd64": f"docker.io/library/caddy:2.8@{FAKE_DIGEST}"},
+        }
     root.joinpath(*LOCK_PATH.parts).write_text(
         yaml.safe_dump({
             "platforms": ["linux/amd64"],
-            "images": {
-                "LOKI_IMAGE": {
-                    "index": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}",
-                    "platforms": {"linux/amd64": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}"},
-                }
-            },
+            "images": lock_images,
             "bundles": {"MONITOR_BUNDLE": {"reference": MONITOR_PINNED, "slots": _monitor_slots(slots)}},
         }),
         encoding="utf-8",
@@ -129,9 +139,10 @@ def _refusal(
     slots: dict[str, object] | None = None,
     workload: str = WORKLOAD,
     secrets: object = {},
+    gateway: int | None = None,
 ) -> str:
     with pytest.raises(ValidationError) as report:
-        _load(_write_repo(tmp_path, values, slots=slots, workload=workload, secrets=secrets))
+        _load(_write_repo(tmp_path, values, slots=slots, workload=workload, secrets=secrets, gateway=gateway))
     return str(report.value)
 
 
@@ -192,6 +203,24 @@ def test_the_minted_public_url_key_refuses(tmp_path: Path) -> None:
     message = _refusal(tmp_path, values)
 
     assert "PUBLIC_URL is minted from public_url" in message
+
+
+def test_the_minted_edge_base_url_key_refuses(tmp_path: Path) -> None:
+    values = _filled_values()
+    values["values"]["shared"] = {"EDGE_BASE_URL": "http://edge:8443"}  # type: ignore[index]
+
+    message = _refusal(tmp_path, values, gateway=9443)
+
+    assert "EDGE_BASE_URL is minted from the gateway declaration" in message
+
+
+def test_the_minted_edge_base_url_key_refuses_without_a_gateway(tmp_path: Path) -> None:
+    values = _filled_values()
+    values["values"]["shared"] = {"EDGE_BASE_URL": "http://edge:8443"}  # type: ignore[index]
+
+    message = _refusal(tmp_path, values)
+
+    assert "EDGE_BASE_URL is minted from the gateway declaration" in message
 
 
 def test_an_optional_demand_rides_unfilled_when_declared(tmp_path: Path) -> None:
@@ -378,6 +407,30 @@ def test_the_minted_public_url_is_no_root_when_public_url_is_absent(tmp_path: Pa
     assert "${PUBLIC_URL} resolves to no root" in message
 
 
+def test_the_minted_edge_base_url_is_a_reference_root(tmp_path: Path) -> None:
+    values = _filled_values()
+    values["values"]["images"]["core"] = _core_values(API_TOKEN="${EDGE_BASE_URL}/jwks")  # type: ignore[index]
+
+    parsed = _load(_write_repo(tmp_path, values, gateway=9443))
+
+    assert parsed.resolved == {
+        "EDGE_BASE_URL": "http://edge:8443",
+        "API_TOKEN": "http://edge:8443/jwks",
+        "BIND_TOKEN": "two",
+        "PROV_TOKEN": "three",
+        "MON_TOKEN": "four",
+    }
+
+
+def test_the_minted_edge_base_url_is_no_root_when_no_gateway_is_declared(tmp_path: Path) -> None:
+    values = _filled_values()
+    values["values"]["images"]["core"] = _core_values(API_TOKEN="${EDGE_BASE_URL}/jwks")  # type: ignore[index]
+
+    message = _refusal(tmp_path, values)
+
+    assert "${EDGE_BASE_URL} resolves to no root" in message
+
+
 def test_an_unresolvable_reference_refuses_listing_the_roots(tmp_path: Path) -> None:
     values = _filled_values()
     values["values"]["images"]["core"] = _core_values(API_TOKEN="${GHOST}")  # type: ignore[index]
@@ -459,6 +512,25 @@ def test_assembly_renders_resolved_values_with_the_minted_slot(tmp_path: Path) -
     assert plan.values == {
         "PUBLIC_URL": "https://example.dev",
         "API_TOKEN": "https://example.dev/token",
+        "BIND_TOKEN": "two",
+        "PROV_TOKEN": "three",
+        "MON_TOKEN": "four",
+    }
+
+
+def test_assembly_fills_the_minted_edge_base_url(tmp_path: Path) -> None:
+    values = _filled_values()
+    values["values"]["images"]["core"] = _core_values(API_TOKEN="${EDGE_BASE_URL}/jwks")  # type: ignore[index]
+    root = _write_repo(tmp_path, values, gateway=9443)
+    bundle_output = root / "stack" / "generated" / "compose" / "compose.core.yaml"
+    bundle_output.parent.mkdir(parents=True)
+    bundle_output.write_text("services:\n  core-api:\n    image: demo:1\n", encoding="utf-8")
+
+    plan = _load(root).assembly()
+
+    assert plan.values == {
+        "EDGE_BASE_URL": "http://edge:8443",
+        "API_TOKEN": "http://edge:8443/jwks",
         "BIND_TOKEN": "two",
         "PROV_TOKEN": "three",
         "MON_TOKEN": "four",

@@ -18,6 +18,7 @@ from pydantic import (
 
 from boatyard import dockerfiles
 from boatyard.config.config import (
+    EDGE_LISTEN_PORT,
     EDGE_SERVICE_NAME,
     ENV_NAME_PATTERN,
     OCI_REFERENCE_PREFIX,
@@ -39,7 +40,8 @@ from boatyard.config.lock import LockFile
 from boatyard.paths import DEFAULT_CONFIG_PATH, LOCK_PATH, VALUES_FILE
 from boatyard.yaml import load_yaml_model
 
-MINTED_SLOT = "PUBLIC_URL"
+PUBLIC_URL_SLOT = "PUBLIC_URL"
+EDGE_BASE_URL_SLOT = "EDGE_BASE_URL"
 
 OVERRIDE_LAYOUT = ("stack", "generated", "compose")
 
@@ -238,8 +240,10 @@ class ValuesFile(BaseModel):
                 f"key {name!r} carries a reserved __BOATYARD_LOCK__/__BOATYARD_TREE__ marker; "
                 f"the lock and the tree tags fill those slots — never set them by hand"
             )
-        if name == MINTED_SLOT:
+        if name == PUBLIC_URL_SLOT:
             raise ValueError(f"{site}: {name} is minted from public_url; never set it by hand")
+        if name == EDGE_BASE_URL_SLOT:
+            raise ValueError(f"{site}: {name} is minted from the gateway declaration; never set it by hand")
 
     def _refuse_unresolvable_references(self, source: str) -> None:
         sections: dict[str, Mapping[str, str]] = {"values.shared": self.values.shared}
@@ -288,7 +292,9 @@ class ValuesFile(BaseModel):
             elif name in self.values.bundles:
                 filled.update(self.values.bundles[name])
         if self.public_url is not None:
-            filled.add(MINTED_SLOT)
+            filled.add(PUBLIC_URL_SLOT)
+        if self._config is not None and self._config.gateway is not None:
+            filled.add(EDGE_BASE_URL_SLOT)
         missing: dict[str, list[str]] = {}
         for unit in sorted(self._participating):
             unfilled = sorted(
@@ -383,7 +389,12 @@ class ValuesFile(BaseModel):
 
     @property
     def minted(self) -> dict[str, str]:
-        return {MINTED_SLOT: self.public_url.raw} if self.public_url is not None else {}
+        minted: dict[str, str] = {}
+        if self.public_url is not None:
+            minted[PUBLIC_URL_SLOT] = self.public_url.raw
+        if self._config is not None and self._config.gateway is not None:
+            minted[EDGE_BASE_URL_SLOT] = f"http://{EDGE_SERVICE_NAME}:{EDGE_LISTEN_PORT}"
+        return minted
 
     @property
     def resolved(self) -> dict[str, str]:

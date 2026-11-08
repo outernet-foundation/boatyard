@@ -31,6 +31,7 @@ PLACEFRAME_CUDA_REF = "oci://ghcr.io/org/placeframe:1.2.3"
 PLACEFRAME_ROCM_REF = "oci://ghcr.io/org/placeframe:1.2.3-rocm"
 TUNNEL_BUNDLES = {"TUNNEL_BUNDLE": LIVEKIT_PINNED}
 ALPINE_BASE_IMAGES = {"ALPINE_IMAGE": "docker.io/library/alpine:3.20"}
+EDGE_BASE_URL_SECTION = "# boatyard.values.yaml\nEDGE_BASE_URL=http://edge:8443\n"
 PINNED_COMPOSE_VERSION = "5.6.1"
 
 ASSEMBLY_ARGUMENT_PATTERN = re.compile(r"-f (\S*devkit-assembly-\S+\.yaml)")
@@ -1019,7 +1020,7 @@ class TestLockEnvSynthesis:
 
         assert result.exit_code == 0, result.output
         [content] = recorder.env_contents
-        assert content == (
+        assert content == EDGE_BASE_URL_SECTION + (
             f"# boatyard.lock.yml\n"
             f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
             f"APPS_CORE__BOATYARD_LOCK__CADDY_IMAGE={self.ALPINE_MANIFEST}\n"
@@ -1048,7 +1049,7 @@ class TestLockEnvSynthesis:
 
         assert result.exit_code == 0, result.output
         [content] = recorder.env_contents
-        assert content == (
+        assert content == EDGE_BASE_URL_SECTION + (
             f"# boatyard.lock.yml\nAPPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={self.ALPINE_MANIFEST}\nAPPS_CORE__BOATYARD_LOCK__CADDY_IMAGE={self.ALPINE_MANIFEST}\n"
         )
 
@@ -1075,7 +1076,7 @@ class TestLockEnvSynthesis:
 
         assert result.exit_code == 0, result.output
         [content] = recorder.env_contents
-        assert content == (
+        assert content == EDGE_BASE_URL_SECTION + (
             f"# boatyard.lock.yml\n"
             f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
             f"APPS_CORE__BOATYARD_LOCK__CADDY_IMAGE={self.ALPINE_MANIFEST}\n"
@@ -1124,7 +1125,7 @@ class TestLockEnvSynthesis:
         result = self._invoke_up_with_lock(tmp_path, monkeypatch, recorder)
 
         assert result.exit_code == 0, result.output
-        assert recorder.env_contents[0] == (
+        assert recorder.env_contents[0] == EDGE_BASE_URL_SECTION + (
             f"# boatyard.lock.yml\n"
             f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={arm64_manifest}\n"
             f"APPS_CORE__BOATYARD_LOCK__CADDY_IMAGE={arm64_manifest}\n"
@@ -1189,7 +1190,7 @@ class TestLockEnvSynthesis:
             Path(line.split(":", 1)[1].strip()) for line in result.output.splitlines() if "kept for inspection" in line
         ]
         assert len(kept) == 1
-        assert kept[0].read_text(encoding="utf-8") == "# boatyard.values.yaml\nSECRET_TOKEN=supersecret\n"
+        assert kept[0].read_text(encoding="utf-8") == EDGE_BASE_URL_SECTION + "SECRET_TOKEN=supersecret\n"
         assert "supersecret" not in result.output
 
 
@@ -1259,12 +1260,14 @@ class TestBundleOverrides:
         assert document["include"] == [output.resolve().as_posix()]
         assert [_normalize(command, consumer) for command in recorder.commands] == [
             (
-                "env -u PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE -u PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE "
+                "env -u EDGE_BASE_URL -u PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE "
+                "-u PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE "
                 "docker compose -f ASSEMBLY --project-directory ROOT --env-file LOCKENV up --pull missing -d"
             )
         ]
         assert recorder.env_contents == [
-            (
+            EDGE_BASE_URL_SECTION
+            + (
                 "# boatyard.lock.yml\n"
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
@@ -1287,7 +1290,8 @@ class TestBundleOverrides:
 
         assert result.exit_code == 0, result.output
         assert recorder.env_contents == [
-            (
+            EDGE_BASE_URL_SECTION
+            + (
                 "# boatyard.lock.yml\n"
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
@@ -1310,7 +1314,8 @@ class TestBundleOverrides:
 
         assert result.exit_code == 0, result.output
         assert recorder.env_contents == [
-            (
+            EDGE_BASE_URL_SECTION
+            + (
                 "# boatyard.lock.yml\n"
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
@@ -1334,7 +1339,8 @@ class TestBundleOverrides:
 
         assert result.exit_code == 0, result.output
         assert recorder.env_contents == [
-            (
+            EDGE_BASE_URL_SECTION
+            + (
                 "# boatyard.lock.yml\n"
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_ARM64_DIGEST}\n"
@@ -1439,7 +1445,8 @@ class TestBundleOverrides:
         [document] = recorder.documents
         assert document["include"] == [output.resolve().as_posix()]
         assert recorder.env_contents == [
-            (
+            EDGE_BASE_URL_SECTION
+            + (
                 "# boatyard.lock.yml\n"
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
