@@ -57,7 +57,7 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
 - `extra="forbid"` everywhere in pydantic models; per-field shape in `field_validator`s,
   cross-field shape in one `model_validator(mode="after")` per model.
 - Every `load()` takes a full path. YAML kinds go through `load_yaml_model` (`yaml.py` strict load);
-  `Image.load(directory, root, axes, siblings)` lenses a Dockerfile directory;
+  `load_images(root, dimensions)` derives the image set from the Dockerfile tree;
   `LockFile.load(path, config)` reads a missing lock as the empty lock.
 - Every pydantic-modeled file kind owns exactly one module in `models/` (boatyard.yml, the lock,
   values, pins, workloads, the pyproject lens). Each module's types run root down, root
@@ -81,7 +81,7 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
 - `models/pyproject.py` — the toolchain-pin lens over the consumer repo's pyproject.toml.
 - `models/workload.py` — the workload-file lens (`WorkloadDocument`, the compose variant) plus
   the workload loader and provisioner-file selection.
-- `models/image.py` — the `Image` lens (`Image.load`) and the tree-tag sha machinery.
+- `models/image.py` — the image-set loader `load_images` and the tree-tag sha machinery.
 - `resolve.py` — the `resolve(config, lock, values)` fold answering the assembly plan `up` renders.
 - `lock.py` — relock engine + crane resolution.
 - `compose.py` — the compose invocation spelling.
