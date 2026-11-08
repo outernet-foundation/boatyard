@@ -12,8 +12,8 @@ file is deleted.
   code commit. History is never rewritten after the fact — no squashes, no reordering.
 
 Moves 1–10 landed; their specs are deleted and git log holds the detail (one commit per move).
-What remains: Move 9, the tree vocabulary rename — it lands last. Its name is still undecided;
-decide before it executes.
+What remains: Move 11, the hash-context fold; then Move 9, the tree vocabulary rename — it lands
+last. Its name is still undecided; decide before it executes.
 
 ## Closed rulings
 
@@ -85,6 +85,18 @@ is the operator's call) or dies with the line.
 - Name bar: a cold reader of `{ENTRY}__BOATYARD_{NAME}__{SERVICE}_SHA` knows what it names
   without git-internals knowledge (`SOURCE` was rejected). Decide before this move executes.
 - Ships with the churn event; bump-as-sole-writer makes the consumer re-pin one bump run.
+
+### Move 11 — the hash-context fold [NEXT]
+
+- One module function in `models/image.py`, `hash_context(repo_root)`, owns the hashed-file-set
+  policy in one contiguous body: the .dockerignore allowlist validation, the disk walk, the
+  git-visible filter, the intersection. No `models/` file-kind module for the .dockerignore —
+  the file has one reader, the policy is the concept, and `models/` is for file kinds. The name
+  records the narrowing: the hashed set is the allowlist's git-visible subset, not docker's
+  context.
+- `compute_shas(images, repo_root)` builds the context once per root and folds the per-image
+  `Image.compute_sha(repo_root, context)` (shared/own split plus write-tree); every call site
+  takes the plural. An empty image set returns without touching disk or git.
 
 ## Transition
 
