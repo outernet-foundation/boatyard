@@ -11,9 +11,9 @@ file is deleted.
   own commit, then the handoff; the next session takes the next move. Doc changes never join a
   code commit. History is never rewritten after the fact — no squashes, no reordering.
 
-Moves 1–11 landed; their specs are deleted and git log holds the detail (one commit per move).
-What remains: Move 12, the self-sufficient per-image sha; then Move 9, the tree vocabulary
-rename — it lands last. Its name is still undecided; decide before it executes.
+Moves 1–12 landed; their specs are deleted and git log holds the detail (one commit per move).
+What remains: Move 9, the tree vocabulary rename — it lands last. Its name is still undecided;
+decide before it executes.
 
 ## Closed rulings
 
@@ -85,18 +85,6 @@ is the operator's call) or dies with the line.
 - Name bar: a cold reader of `{ENTRY}__BOATYARD_{NAME}__{SERVICE}_SHA` knows what it names
   without git-internals knowledge (`SOURCE` was rejected). Decide before this move executes.
 - Ships with the churn event; bump-as-sole-writer makes the consumer re-pin one bump run.
-
-### Move 12 — the self-sufficient per-image sha [NEXT]
-
-- `Image.compute_sha(repo_root)` derives everything itself: the .dockerignore allowlist read,
-  the disk walk, the git-visible filter, the shared/own split, the write-tree. Per-image
-  duplicated reads are the accepted price; `hash_context` and `compute_shas` die, and every
-  call site is a plain comprehension over images. The fold owned no concept and prevented no
-  mistake once no shared context value exists.
-- The env spelling becomes identity, not computation: an `Image.sha_env` property beside
-  `target_variants`; the module-level `image_sha_env` dies with all callers converted.
-- .dockerignore validation stays inside `compute_sha`; moving it into `ConfigFile.load` is not
-  this move.
 
 ## Transition
 
