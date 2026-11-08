@@ -439,7 +439,6 @@ def _generate_compose(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     generated: str,
-    secrets: SecretsDeclaration,
     workload: str = "api",
     container: str | None = None,
 ) -> Path:
@@ -460,14 +459,14 @@ def _generate_compose(
     )
     config.root = tmp_path
 
-    score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), secrets=secrets)
+    score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK))
     return tmp_path / "stack" / "generated" / "compose" / "compose.core.yaml"
 
 
 def test_generate_compose_collapses_doubled_names_and_inlines_binds(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    output = _generate_compose(monkeypatch, tmp_path, GENERATED_COMPOSE, _empty_secrets())
+    output = _generate_compose(monkeypatch, tmp_path, GENERATED_COMPOSE)
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
     assert list(document["services"]) == ["core-api", "core-pf-postgres"]
@@ -487,7 +486,6 @@ def test_generate_compose_collapses_doubled_names_with_no_binds(
         monkeypatch,
         tmp_path,
         "services:\n  gateway-gateway:\n    image: ghcr.io/org/gateway:1\n",
-        _empty_secrets(),
         workload="gateway",
     )
 
@@ -503,7 +501,7 @@ def test_generate_compose_carries_a_coincidentally_prefixed_service_through(
 ) -> None:
     generated = GENERATED_COMPOSE + "  api-migrations:\n    image: ghcr.io/org/migrate:1\n"
 
-    output = _generate_compose(monkeypatch, tmp_path, generated, _empty_secrets())
+    output = _generate_compose(monkeypatch, tmp_path, generated)
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
     assert list(document["services"]) == ["core-api", "core-pf-postgres", "core-api-migrations"]
@@ -516,7 +514,6 @@ def test_generate_compose_strips_the_workload_prefix_from_differing_container_na
         monkeypatch,
         tmp_path,
         "services:\n  tunnel-rathole-rathole-client:\n    image: ghcr.io/org/rathole-client:1\n",
-        _empty_secrets(),
         workload="tunnel-rathole",
         container="rathole-client",
     )
@@ -544,7 +541,7 @@ COMPOSE_WITH_BARRIER = (
 def test_generate_compose_renames_the_barrier_and_its_references_per_entry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    output = _generate_compose(monkeypatch, tmp_path, COMPOSE_WITH_BARRIER, _empty_secrets())
+    output = _generate_compose(monkeypatch, tmp_path, COMPOSE_WITH_BARRIER)
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
     assert list(document["services"]) == ["core-api", "core-pf-postgres", "core-wait-for-resources"]
@@ -576,7 +573,7 @@ def test_generate_compose_barrier_names_differ_per_entry(tmp_path: Path, monkeyp
     )
     config.root = tmp_path
 
-    score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), secrets=_empty_secrets())
+    score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK))
 
     core = yaml.safe_load((tmp_path / "stack/generated/compose/compose.core.yaml").read_text(encoding="utf-8"))
     edge = yaml.safe_load((tmp_path / "stack/generated/compose/compose.edge.yaml").read_text(encoding="utf-8"))
@@ -624,7 +621,6 @@ def test_workload_image_slots_resolve_from_the_lock_into_the_rendered_copy(
     score_compose_module.generate_compose(
         config,
         _lock_for_images({"API_IMAGE": "ghcr.io/org/api@sha256:" + "a" * 64, **ALPINE_LOCK}),
-        secrets=_empty_secrets(),
     )
 
     assert (
@@ -650,7 +646,7 @@ def test_workload_image_slot_with_no_lock_entry_refuses(tmp_path: Path, monkeypa
     config.root = tmp_path
 
     with pytest.raises(ValueError, match=r"api\.yaml.*API_IMAGE.*image lock"):
-        score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), secrets=_empty_secrets())
+        score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK))
 
 
 SENTINEL_RENDERING = "services:\n  api-api:\n    image: ghcr.io/org/api:__BOATYARD_TREE__API_SHA__\n"
@@ -675,7 +671,7 @@ def _generate_compose_with_service_builds(
     config.root = tmp_path
     config.service_builds = {"api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile")}
 
-    score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), secrets=_empty_secrets())
+    score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK))
     output = tmp_path / "stack" / "generated" / "compose" / "compose.core.yaml"
     return recorder, output.read_text(encoding="utf-8")
 
@@ -811,7 +807,7 @@ def _compose_init_templates(
     recorder = ComposeBashRecorder(generated)
     monkeypatch.setattr(score_module, "bash", recorder.run)
     config.root = tmp_path
-    score_compose_module.generate_compose(config, _lock_for_images({**images, **ALPINE_LOCK}), secrets=_empty_secrets())
+    score_compose_module.generate_compose(config, _lock_for_images({**images, **ALPINE_LOCK}))
     inits = [command for command in recorder.commands if command.startswith("score-compose init")]
     return [[Path(token).name for token in command.split() if token.endswith(".tpl")] for command in inits]
 
@@ -852,7 +848,7 @@ def test_generate_compose_requires_the_alpine_base_image(tmp_path: Path) -> None
     config.root = tmp_path
 
     with pytest.raises(ValueError, match="local entries require base_images to declare ALPINE_IMAGE"):
-        score_compose_module.generate_compose(config, LockFile.model_validate({}), secrets=_empty_secrets())
+        score_compose_module.generate_compose(config, LockFile.model_validate({}))
 
 
 def test_provisioners_register_by_resource_type_closure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -873,7 +869,7 @@ def test_provisioners_register_by_resource_type_closure(tmp_path: Path, monkeypa
     recorder = ComposeBashRecorder("services: {}\n")
     monkeypatch.setattr(score_module, "bash", recorder.run)
 
-    score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK), secrets=_empty_secrets())
+    score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK))
 
     init = next(command for command in recorder.commands if command.startswith("score-compose init"))
     provisioners = [token for token in init.split() if token.endswith(".yaml")]
@@ -1137,7 +1133,6 @@ def test_consumer_interpolated_binds_ride_undoubled(tmp_path: Path, monkeypatch:
     score_compose_module.generate_compose(
         config,
         _lock_for_images(ALPINE_LOCK),
-        secrets=SecretsDeclaration.model_validate({"TUNNEL_CONTROL_ENDPOINT": "tunnel"}),
     )
 
     output = tmp_path / "stack" / "generated" / "compose" / "compose.rathole-client.yaml"

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Generator, Mapping
 from contextlib import ExitStack, contextmanager
 from itertools import groupby
@@ -12,22 +11,14 @@ import typer
 import yaml
 from bashrun.bash import bash_handoff
 
-from boatyard import dockerfiles
 from boatyard.build import run_build
 from boatyard.compose import compose_command
 from boatyard.config.config import (
     CADDY_IMAGE,
-    ConfigFile,
     EDGE_SERVICE_NAME,
-    OCI_REFERENCE_PREFIX,
-    RESERVED_SLOT_MARKERS,
+    ConfigFile,
     Yaml,
-    bundle_lock_key,
-    compose_bundle_output_path,
     double_dollars,
-    env_lock_slot,
-    env_tree_slot,
-    scan_bundle_texts,
 )
 from boatyard.config.lock import LockFile
 from boatyard.config.values import ValuesFile
@@ -52,109 +43,20 @@ def up(
         typer.Option("--build", help="Build all images locally before bringing the stack up"),
     ] = False,
 ) -> None:
-    # Load the config and the typed machine values from the working directory
+    # Load the config, lock, and the typed machine values from the working directory
     root = Path.cwd()
     config = ConfigFile.load(root / DEFAULT_CONFIG_PATH)
     if not (root / VALUES_FILE).exists():
         raise ValueError(f"{VALUES_FILE.as_posix()} is required")
-    config_values = ValuesFile.load(root / VALUES_FILE, config)
+    lock = LockFile.load(config.root / LOCK_PATH, config)
+    config_values = ValuesFile.load(root / VALUES_FILE, config, lock)
 
     # Resolve the chosen options into leaf services
     services = config.resolve_services(config_values.choices)
 
-    # Project the consumer lock's manifest references and seed the assembly accumulators
-    lock = LockFile.load(config.root / LOCK_PATH, config)
+    # Derive the includes, the fan entries, and the flattened validated values
+    plan = config_values.assembly()
     consumer_entries = lock.manifest_references(config_values.platform)
-    entries: dict[str, str] = {}
-    tree_entries: dict[str, str] = {}
-    shas_by_root: dict[Path, dict[str, str]] = {}
-    includes: list[Yaml] = []
-    requirements: dict[str, list[str]] = {}
-
-    # Collect each entry's include, requirements, and env entries in declaration order
-    for service in services:
-        name = service.name
-
-        # Include a remote ref as its lock-pinned digest
-        if service.entry.ref is not None and name not in config_values.path_overrides:
-            key = bundle_lock_key(name)
-            pinned = lock.require(key, f"bundle {name!r}")
-            requirements[name] = lock.bundles[key].requires
-            includes.append(f"{OCI_REFERENCE_PREFIX}{pinned}")
-            continue
-
-        # Include a local entry through its generated output
-        if service.entry.ref is None:
-            bundle_compose_path = compose_bundle_output_path(config.root, name)
-            if not bundle_compose_path.is_file():
-                raise ValueError(
-                    f"selected entry {name!r} has no bundle output {bundle_compose_path.as_posix()}; generate-score writes it"
-                )
-            lock_references = consumer_entries
-            tree_root, tree_builds = config.root, config.service_builds
-        else:
-            # Include an overridden ref through its local path
-            candidate = config_values.path_overrides[name]
-            bundle_compose_path = (candidate if candidate.is_absolute() else config.root / candidate).resolve()
-            if not bundle_compose_path.is_file():
-                raise ValueError(f"path_overrides.{name}: {bundle_compose_path.as_posix()} does not exist")
-
-            # Walk up from the override to the boatyard.yml-bearing producer root
-            producer_root = next(
-                (ancestor for ancestor in bundle_compose_path.parents if (ancestor / DEFAULT_CONFIG_PATH).is_file()),
-                None,
-            )
-            if producer_root is None:
-                raise ValueError(
-                    f"{bundle_compose_path.as_posix()}: no boatyard.yml-bearing repo root above the bundle override"
-                )
-
-            # Project the producer lock's manifest references under the consumer's platform
-            producer_config = ConfigFile.load(producer_root / DEFAULT_CONFIG_PATH)
-            lock_references = LockFile.load(producer_root / LOCK_PATH, producer_config).manifest_references(
-                config_values.platform
-            )
-            tree_root, tree_builds = producer_root, producer_config.service_builds
-
-        # Scan the bundle file for its requirements and refuse the reserved edge service
-        text = bundle_compose_path.read_text(encoding="utf-8")
-        scan = scan_bundle_texts(name, service.routes, service.ports, [text])
-        if EDGE_SERVICE_NAME in scan.service_names:
-            raise ValueError(
-                f"{bundle_compose_path.as_posix()}: "
-                f"the included bundle defines the reserved service {EDGE_SERVICE_NAME!r}"
-            )
-
-        # Record the entry's requirements, include the file by absolute path, and fan its lock keys under the marker
-        requirements[name] = scan.requires
-        includes.append(bundle_compose_path.resolve().as_posix())
-        entries.update({env_lock_slot(name, key): value for key, value in lock_references.items()})
-
-        # Fan the source tree's content tags under the entry beside the lock fans
-        if tree_root not in shas_by_root:
-            shas_by_root[tree_root] = dockerfiles.compute_service_shas(tree_root, tree_builds)
-        tree_entries.update({env_tree_slot(name, sha): value for sha, value in shas_by_root[tree_root].items()})
-
-    # Refuse bundles whose requirements no environment source fills, naming shell-set slots as ignored.
-    # Marker-bearing slots (lock and tree) are satisfied by construction — the per-run env file
-    # fills them — so they are excluded from the consumer-facing fill check.
-    filled = {variable for variable, value in config_values.variables.items() if value}
-    missing = {
-        name: sorted(unfilled)
-        for name, required in requirements.items()
-        if (
-            unfilled := {slot for slot in required if not any(marker in slot for marker in RESERVED_SLOT_MARKERS)}
-            - filled
-        )
-    }
-    if missing:
-        name, absent = min(missing.items())
-        ignored = sorted(shell_name for shell_name in absent if os.environ.get(shell_name))
-        note = f"; {', '.join(ignored)} set in the shell and ignored" if ignored else ""
-        raise ValueError(
-            f"bundle {name!r} requires {absent}, which no environment source sets "
-            f"(boatyard.values.yaml or the lock env file){note}"
-        )
 
     # Group the ports under their namespaced owners into per-service stanzas
     document_services: dict[str, Yaml] = {
@@ -217,6 +119,7 @@ def up(
         lines.append("}")
         document["configs"] = {EDGE_CONFIG_NAME: {"content": double_dollars("\n".join(lines) + "\n")}}
 
+    includes: list[Yaml] = [include for include in plan.includes]
     if includes:
         document["include"] = includes
     if document_services:
@@ -229,9 +132,9 @@ def up(
                 "".join(
                     f"# {header}\n{render_env_entries(section)}"
                     for header, section in (
-                        (VALUES_FILE.name, config_values.variables),
-                        (LOCK_PATH.name, entries),
-                        ("tree tags", tree_entries),
+                        (VALUES_FILE.name, plan.values),
+                        (LOCK_PATH.name, plan.lock_entries),
+                        ("tree tags", plan.tree_entries),
                     )
                     if section
                 )
@@ -259,12 +162,7 @@ def up(
                 "up",
                 *["--pull", "missing", *(["--quiet-pull"] if quiet_pull else []), *(["-d"] if not attached else [])],
                 env_file=materialized_env_file,
-                slot_names=[
-                    *config_values.variables,
-                    *entries,
-                    *tree_entries,
-                    *(name for required in requirements.values() for name in required),
-                ],
+                slot_names=[*plan.values, *plan.lock_entries, *plan.tree_entries, *plan.demanded],
             )
         )
 

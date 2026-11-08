@@ -6,8 +6,7 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 
-from boatyard.config.config import ConfigFile, bundle_lock_key, chart_lock_key
-from boatyard.config.values import PLATFORM_KEY
+from boatyard.config.config import PLATFORM_KEY, ConfigFile, SlotDemand, bundle_lock_key, chart_lock_key
 from boatyard.paths import LOCK_PATH, VALUES_FILE
 from boatyard.temp import PLATFORM_PATTERN, SHA256_DIGEST_REGEX
 from boatyard.yaml import load_yaml_model
@@ -137,7 +136,7 @@ class ConfigLockBundle(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     reference: str
-    requires: list[str] = Field(default_factory=list)
+    slots: dict[str, SlotDemand] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _require_digest_pin(self, info: ValidationInfo) -> Self:

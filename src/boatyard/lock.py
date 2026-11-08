@@ -13,12 +13,13 @@ from boatyard.config.config import (
     OCI_REFERENCE_PREFIX,
     ConfigFile,
     Yaml,
+    artifact_slot_demands,
     bundle_lock_key,
     chart_lock_key,
     is_list,
     is_mapping,
     mirrored_ref,
-    scan_bundle_texts,
+    refuse_unresolved_references,
 )
 from boatyard.crane import install_crane
 from boatyard.config.lock import (
@@ -96,7 +97,8 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
     committed_path = config.root / LOCK_PATH
     committed = load_yaml_model(LockFile, committed_path) if committed_path.is_file() else LockFile()
 
-    # Resolve first-party bundles direct, recomputing requires from the pinned content and validating declared references against it.
+    # Resolve first-party bundles direct, recording the slot demands from the pinned content and
+    # validating declared references against it.
     bundles: dict[str, ConfigLockBundle] = {}
     for name, reference, entry in config.remote_declared_entries():
         key = bundle_lock_key(name)
@@ -109,13 +111,10 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
             else f"{reference}@{resolve_remote_digest(reference)}"
         )
 
-        # Record the pinned reference with its required slots.
-        bundles[key] = ConfigLockBundle(
-            reference=pinned,
-            requires=scan_bundle_texts(
-                name, entry.routes, entry.ports, OciArtifactManifest.fetch_compose_texts(pinned)
-            ).requires,
-        )
+        # Record the pinned reference with the bundle's slot demands.
+        texts = OciArtifactManifest.fetch_compose_texts(pinned)
+        refuse_unresolved_references(name, entry.routes, entry.ports, texts, prefix=f"{name}-")
+        bundles[key] = ConfigLockBundle(reference=pinned, slots=artifact_slot_demands(texts))
 
     images: dict[str, ConfigLockEntry] = {}
     for name, reference in config.base_images.items():

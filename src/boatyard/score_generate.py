@@ -118,7 +118,7 @@ def generate_artifacts(
 
     outputs: list[Path] = []
     if target in ("both", "compose"):
-        outputs.extend(generate_compose(config, lock, secrets))
+        outputs.extend(generate_compose(config, lock))
 
     if target in ("both", "k8s") and config.k8s is not None:
         outputs.append(generate_k8s(config, config.k8s, lock, local, secrets))

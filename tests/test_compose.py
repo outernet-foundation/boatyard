@@ -1,5 +1,6 @@
 import platform
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -93,7 +94,7 @@ def _write_lock(
     root: Path,
     entries: dict[str, str] | None = None,
     platform_entries: dict[str, str] | None = None,
-    bundles: dict[str, str] | None = None,
+    bundles: Mapping[str, object] | None = None,
 ) -> None:
     # Write one platform-manifest reference per declared platform beside the index.
     declared = {
@@ -112,7 +113,10 @@ def _write_lock(
         },
     }
     if bundles is not None:
-        document["bundles"] = {name: {"reference": reference} for name, reference in bundles.items()}
+        document["bundles"] = {
+            name: ({"reference": reference} if isinstance(reference, str) else reference)
+            for name, reference in bundles.items()
+        }
     root.joinpath(*LOCK_PATH.parts).write_text(
         yaml.safe_dump(document),
         encoding="utf-8",
@@ -248,10 +252,13 @@ def _write_override_consumer(
     _write_values_file(root, {"bundles": ["placeframe-cuda"], **(values or {})})
 
 
-def _write_workload(root: Path, name: str, service_name: str) -> None:
+def _write_workload(root: Path, name: str, service_name: str, environment: dict[str, str] | None = None) -> None:
     path = root / "stack" / "score" / name
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump({"metadata": {"name": service_name}}), encoding="utf-8")
+    document: dict[str, object] = {"metadata": {"name": service_name}}
+    if environment is not None:
+        document["containers"] = {service_name: {"environment": environment}}
+    path.write_text(yaml.safe_dump(document), encoding="utf-8")
 
 
 def _silent_handoff(_command: str) -> None:
@@ -315,6 +322,7 @@ def _write_consumer_tree(
     *,
     bundles: str | None = "placeframe-cuda,auth-keycloak",
     extra_values: dict[str, object] | None = None,
+    api_environment: dict[str, str] | None = None,
 ) -> Path:
     # Write the canonical consumer tree; bundles=None selects nothing.
     _write_config(
@@ -324,7 +332,7 @@ def _write_consumer_tree(
             "repository": "ghcr.io/org/demo",
             "platforms": ["linux/amd64"],
             "base_images": {"CADDY_IMAGE": "docker.io/library/caddy:2.8.4-alpine"},
-            "gateway": "${GATEWAY_PORT:?err}",
+            "gateway": 58080,
             "services": {
                 "auth": {
                     "options": {
@@ -347,12 +355,7 @@ def _write_consumer_tree(
                 "livekit": {
                     "ref": LIVEKIT_REF,
                     "ports": [
-                        {
-                            "service": "livekit",
-                            "published": "${LIVEKIT_SIGNALING_PORT:?err}",
-                            "target": "${LIVEKIT_SIGNALING_PORT:?err}",
-                            "protocol": "tcp",
-                        }
+                        {"service": "livekit", "published": 6178, "target": 6178, "protocol": "tcp"},
                     ],
                 },
             },
@@ -364,12 +367,8 @@ def _write_consumer_tree(
     )
     cuda = _write_bundle_output(root, "placeframe-cuda", ["api", "grafana"])
     _write_bundle_output(root, "placeframe-rocm", ["api", "grafana"])
-    _write_workload(root, "api.yaml", "api")
-    values: dict[str, object] = {
-        "GATEWAY_PORT": 58080,
-        "LIVEKIT_SIGNALING_PORT": 6178,
-        "public_url": "http://192.168.8.10:58080",
-    }
+    _write_workload(root, "api.yaml", "api", environment=api_environment)
+    values: dict[str, object] = {"public_url": "http://192.168.8.10:58080"}
     if bundles is not None:
         values["bundles"] = [name for name in bundles.split(",") if name]
     values.update(extra_values or {})
@@ -607,7 +606,7 @@ class TestUpMaterialization:
         ])
         edge = document["services"]["edge"]
         assert edge["image"] == MIRROR_PREFIX + "/docker.io/library/caddy:2.8.4-alpine@" + FAKE_DIGEST
-        assert edge["ports"] == [{"target": 8443, "published": "${GATEWAY_PORT:?err}", "protocol": "tcp"}]
+        assert edge["ports"] == [{"target": 8443, "published": 58080, "protocol": "tcp"}]
         assert edge["networks"] == {
             "auth-keycloak-net": None,
             "placeframe-cuda-net": None,
@@ -619,8 +618,8 @@ class TestUpMaterialization:
         }
         assert document["services"]["livekit-livekit"]["ports"] == [
             {
-                "target": "${LIVEKIT_SIGNALING_PORT:?err}",
-                "published": "${LIVEKIT_SIGNALING_PORT:?err}",
+                "target": 6178,
+                "published": 6178,
                 "protocol": "tcp",
             }
         ]
@@ -750,94 +749,53 @@ class TestUpValidation:
         assert isinstance(result.exception, ValueError)
         assert "reserved service 'edge'" in str(result.exception)
 
-    def test_a_local_output_slot_no_environment_source_fills_refuses(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        _write_consumer_tree(tmp_path)
-        cuda = tmp_path / "stack" / "generated" / "compose" / "compose.placeframe-cuda.yaml"
-        cuda.write_text(
-            "services:\n"
-            "  placeframe-cuda-api:\n"
-            "    image: demo/api:1\n"
-            "    environment:\n"
-            "      TOKEN: ${API_TOKEN}\n"
-            "    networks:\n"
-            "      placeframe-cuda-net:\n"
-            "        aliases:\n"
-            "          - api\n"
-            "  placeframe-cuda-grafana:\n"
-            "    image: demo/grafana:1\n"
-            "    networks:\n"
-            "      placeframe-cuda-net:\n"
-            "        aliases:\n"
-            "          - grafana\n"
-            "networks:\n"
-            "  placeframe-cuda-net: null\n",
-            encoding="utf-8",
-        )
+    def test_a_workload_slot_no_environment_source_fills_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        _write_consumer_tree(tmp_path, api_environment={"TOKEN": "${API_TOKEN:?err}"})
 
         result = self._invoke_up(tmp_path, monkeypatch)
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "bundle 'placeframe-cuda' requires ['API_TOKEN']" in str(result.exception)
+        assert "values.images.placeframe-cuda requires ['API_TOKEN']" in str(result.exception)
 
     def test_a_lock_recorded_requirement_no_environment_source_fills_refuses(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         _write_consumer_tree(tmp_path)
-        root_lock = tmp_path.joinpath(*LOCK_PATH.parts)
-        root_lock.write_text(
-            root_lock.read_text(encoding="utf-8").replace(
-                f"  LIVEKIT_BUNDLE:\n    reference: {LIVEKIT_PINNED}",
-                f"  LIVEKIT_BUNDLE:\n    reference: {LIVEKIT_PINNED}\n    requires:\n      - LIVEKIT_TOKEN",
-            ),
-            encoding="utf-8",
+        _write_lock(
+            tmp_path,
+            bundles={
+                "AUTH_KEYCLOAK_BUNDLE": KEYCLOAK_PINNED,
+                "LIVEKIT_BUNDLE": {"reference": LIVEKIT_PINNED, "slots": {"LIVEKIT_TOKEN": {"required": True}}},
+            },
         )
 
         result = self._invoke_up(tmp_path, monkeypatch)
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "bundle 'livekit' requires ['LIVEKIT_TOKEN']" in str(result.exception)
+        assert "values.bundles.livekit requires ['LIVEKIT_TOKEN']" in str(result.exception)
 
-    def test_a_tree_slot_requirement_is_satisfied_by_construction(
+    def test_a_bare_workload_sha_slot_is_a_render_concern_not_a_demand(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        _write_consumer_tree(tmp_path)
-        cuda = tmp_path / "stack" / "generated" / "compose" / "compose.placeframe-cuda.yaml"
-        cuda.write_text(
-            "services:\n"
-            "  placeframe-cuda-api:\n"
-            "    image: demo/api:${PLACEFRAME_CUDA__BOATYARD_TREE__API_SHA}\n"
-            "    networks:\n"
-            "      placeframe-cuda-net:\n"
-            "        aliases:\n"
-            "          - api\n"
-            "  placeframe-cuda-grafana:\n"
-            "    image: demo/grafana:1\n"
-            "    networks:\n"
-            "      placeframe-cuda-net:\n"
-            "        aliases:\n"
-            "          - grafana\n"
-            "networks:\n"
-            "  placeframe-cuda-net: null\n",
-            encoding="utf-8",
-        )
+        _write_consumer_tree(tmp_path, api_environment={"VERSION": "${API_SHA}"})
 
         result = self._invoke_up(tmp_path, monkeypatch)
 
         assert result.exit_code == 0, result.output
 
     def test_a_requirement_filled_by_the_env_file_passes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        _write_consumer_tree(tmp_path, extra_values={"LIVEKIT_TOKEN": "set"})
-        root_lock = tmp_path.joinpath(*LOCK_PATH.parts)
-        root_lock.write_text(
-            root_lock.read_text(encoding="utf-8").replace(
-                f"  LIVEKIT_BUNDLE:\n    reference: {LIVEKIT_PINNED}",
-                f"  LIVEKIT_BUNDLE:\n    reference: {LIVEKIT_PINNED}\n    requires:\n      - LIVEKIT_TOKEN",
-            ),
-            encoding="utf-8",
+        _write_consumer_tree(
+            tmp_path,
+            extra_values={"values": {"bundles": {"livekit": {"LIVEKIT_TOKEN": "set"}}}},
+        )
+        _write_lock(
+            tmp_path,
+            bundles={
+                "AUTH_KEYCLOAK_BUNDLE": KEYCLOAK_PINNED,
+                "LIVEKIT_BUNDLE": {"reference": LIVEKIT_PINNED, "slots": {"LIVEKIT_TOKEN": {"required": True}}},
+            },
         )
 
         result = self._invoke_up(tmp_path, monkeypatch)
@@ -847,29 +805,8 @@ class TestUpValidation:
     def test_an_unfilled_requirement_set_in_the_shell_is_named_as_ignored(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        _write_consumer_tree(tmp_path)
+        _write_consumer_tree(tmp_path, api_environment={"TOKEN": "${API_TOKEN:?err}"})
         monkeypatch.setenv("API_TOKEN", "shell-value")
-        cuda = tmp_path / "stack" / "generated" / "compose" / "compose.placeframe-cuda.yaml"
-        cuda.write_text(
-            "services:\n"
-            "  placeframe-cuda-api:\n"
-            "    image: demo/api:1\n"
-            "    environment:\n"
-            "      TOKEN: ${API_TOKEN}\n"
-            "    networks:\n"
-            "      placeframe-cuda-net:\n"
-            "        aliases:\n"
-            "          - api\n"
-            "  placeframe-cuda-grafana:\n"
-            "    image: demo/grafana:1\n"
-            "    networks:\n"
-            "      placeframe-cuda-net:\n"
-            "        aliases:\n"
-            "          - grafana\n"
-            "networks:\n"
-            "  placeframe-cuda-net: null\n",
-            encoding="utf-8",
-        )
 
         result = self._invoke_up(tmp_path, monkeypatch)
 
@@ -1235,9 +1172,12 @@ class TestLockEnvSynthesis:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         _write_ref_tree(tmp_path, base_images=ALPINE_BASE_IMAGES)
-        _write_values_file(tmp_path, {"SECRET_TOKEN": "supersecret"})
+        _write_values_file(tmp_path, {"values": {"bundles": {"tunnel": {"SECRET_TOKEN": "supersecret"}}}})
         _write_lock(
-            tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST}, TUNNEL_BUNDLES
+            tmp_path,
+            {"ALPINE_IMAGE": self.ALPINE_INDEX},
+            {"linux/amd64": self.ALPINE_MANIFEST},
+            {"TUNNEL_BUNDLE": {"reference": LIVEKIT_PINNED, "slots": {"SECRET_TOKEN": {"required": True}}}},
         )
         monkeypatch.setattr(up, "bash_handoff", _failing_handoff)
         monkeypatch.chdir(tmp_path)
@@ -1633,14 +1573,16 @@ class TestComposePortMergeOverIncludes:
 
 class TestValuesFileLaw:
     def test_the_scrub_carries_requirement_names(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        _write_consumer_tree(tmp_path, extra_values={"LIVEKIT_TOKEN": "set"})
-        root_lock = tmp_path.joinpath(*LOCK_PATH.parts)
-        root_lock.write_text(
-            root_lock.read_text(encoding="utf-8").replace(
-                f"  LIVEKIT_BUNDLE:\n    reference: {LIVEKIT_PINNED}",
-                f"  LIVEKIT_BUNDLE:\n    reference: {LIVEKIT_PINNED}\n    requires:\n      - LIVEKIT_TOKEN",
-            ),
-            encoding="utf-8",
+        _write_consumer_tree(
+            tmp_path,
+            extra_values={"values": {"bundles": {"livekit": {"LIVEKIT_TOKEN": "set"}}}},
+        )
+        _write_lock(
+            tmp_path,
+            bundles={
+                "AUTH_KEYCLOAK_BUNDLE": KEYCLOAK_PINNED,
+                "LIVEKIT_BUNDLE": {"reference": LIVEKIT_PINNED, "slots": {"LIVEKIT_TOKEN": {"required": True}}},
+            },
         )
         recorder = HandoffRecorder()
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
@@ -1654,7 +1596,12 @@ class TestValuesFileLaw:
     def test_a_values_key_spelling_the_lock_marker_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path, base_images=ALPINE_BASE_IMAGES)
         _write_values_file(
-            tmp_path, {"TUNNEL__BOATYARD_LOCK__ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20"}
+            tmp_path,
+            {
+                "values": {
+                    "bundles": {"tunnel": {"TUNNEL__BOATYARD_LOCK__ALPINE_IMAGE": "docker.io/library/alpine:3.20"}},
+                }
+            },
         )
         _write_lock(
             tmp_path,
@@ -1667,12 +1614,15 @@ class TestValuesFileLaw:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "carry a reserved __BOATYARD_LOCK__/__BOATYARD_TREE__ marker" in str(result.exception)
+        assert "carries a reserved __BOATYARD_LOCK__/" in str(result.exception)
         assert "never set them by hand" in str(result.exception)
 
     def test_a_values_key_spelling_the_tree_marker_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path, base_images=ALPINE_BASE_IMAGES)
-        _write_values_file(tmp_path, {"TUNNEL__BOATYARD_TREE__API_SHA": "tree-abc"})
+        _write_values_file(
+            tmp_path,
+            {"values": {"bundles": {"tunnel": {"TUNNEL__BOATYARD_TREE__API_SHA": "tree-abc"}}}},
+        )
         _write_lock(
             tmp_path,
             {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST},
@@ -1684,19 +1634,23 @@ class TestValuesFileLaw:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "carry a reserved __BOATYARD_LOCK__/__BOATYARD_TREE__ marker" in str(result.exception)
+        assert "carries a reserved __BOATYARD_LOCK__/" in str(result.exception)
         assert "never set them by hand" in str(result.exception)
 
     def test_a_values_key_outside_the_env_name_grammar_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)
-        _write_values_file(tmp_path, {"lowercase_key": "value"})
+        _write_values_file(
+            tmp_path,
+            {"values": {"bundles": {"tunnel": {"lowercase_key": "value"}}}},
+        )
+        _write_lock(tmp_path, bundles=TUNNEL_BUNDLES)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "not ALL_CAPS environment names" in str(result.exception)
+        assert "is not an ALL_CAPS environment name" in str(result.exception)
 
 
 class TestShellPrecedenceEndToEnd:

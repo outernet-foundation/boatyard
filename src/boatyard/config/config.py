@@ -41,6 +41,8 @@ PYTHON_VERSION_PATH = Path(".python-version")
 
 ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
+PLATFORM_KEY = "platform"
+
 # Match ${ALL_CAPS} placeholder slots in workload files.
 PLACEHOLDER = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
 
@@ -55,7 +57,7 @@ type Yaml = str | int | float | bool | list[Yaml] | dict[str, Yaml] | None
 
 class BundleScan(NamedTuple):
     service_names: set[str]
-    requires: list[str]
+    slots: dict[str, SlotDemand]
 
 
 def _require_port_range(value: int) -> int:
@@ -83,6 +85,12 @@ def _require_all_caps_name(value: str) -> str:
 
 
 AllCapsName = Annotated[str, AfterValidator(_require_all_caps_name)]
+
+
+class SlotDemand(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    required: bool = True
 
 
 def _require_nonempty_values(values: dict[str, str]) -> dict[str, str]:
@@ -197,6 +205,7 @@ class ConfigFile(BaseModel):
     helm_version: str = "3.22.1"
 
     service_builds: dict[str, ServiceBuild] = Field(default_factory=dict, exclude=True)
+    consumer_surfaces: dict[str, dict[str, SlotDemand]] = Field(default_factory=dict, exclude=True)
     root: Path = Field(default_factory=Path.cwd, exclude=True)
 
     @classmethod
@@ -300,8 +309,16 @@ class ConfigFile(BaseModel):
             if not values.is_file():
                 raise ValueError(f"{values.as_posix()}: the chart's values file is required")
 
+        surfaces: dict[str, dict[str, SlotDemand]] = {}
         for entry_name, entry in self.local_service_entries():
-            refuse_colliding_service_names(entry_name, entry, root / self.score_dir)
+            for workload_name in entry.workloads:
+                workload_path = root / self.score_dir / workload_name
+                if not workload_path.is_file():
+                    raise ValueError(f"{workload_path.as_posix()}: the workload file is required")
+            workloads = load_workloads(root / self.score_dir, entry.workloads, WorkloadDocument)
+            refuse_colliding_service_names(entry_name, workloads, root / self.score_dir)
+            surfaces[entry_name] = authored_slot_demands(workloads, root / self.score_dir, root, set(self.base_images))
+        self.consumer_surfaces = surfaces
 
         return self
 
@@ -746,16 +763,10 @@ class LoadedWorkload(NamedTuple):
     document: WorkloadDocument
 
 
-def refuse_colliding_service_names(entry_name: str, entry: ServiceEntry, score_dir: Path) -> None:
+def refuse_colliding_service_names(entry_name: str, workloads: list[LoadedWorkload], score_dir: Path) -> None:
     # A bundle's bare service names are its compose identity: workload containers, type-joined
     # provisioner services, and the reserved barrier name each claim one, and one workload
     # claims each rendered spelling.
-    for workload_name in entry.workloads:
-        workload_path = score_dir / workload_name
-        if not workload_path.is_file():
-            raise ValueError(f"{workload_path.as_posix()}: the workload file is required")
-
-    workloads = load_workloads(score_dir, entry.workloads, WorkloadDocument)
     claims: dict[str, list[str]] = {BARRIER_SERVICE: ["the reserved barrier name"]}
     spellings: dict[str, list[str]] = {}
     for workload in workloads:
@@ -877,22 +888,84 @@ def scan_bundle_texts(
     ports: list[PortDeclaration],
     texts: list[str],
 ) -> BundleScan:
-    # Refuse declared routes and ports that name no service in the bundle and answer its requirement slots.
+    # Refuse declared routes and ports that name no service in the bundle and answer its slot demands.
     service_names = refuse_unresolved_references(entry_name, routes, ports, texts, prefix=f"{entry_name}-")
-    return BundleScan(service_names=service_names, requires=sorted(required_compose_slots(texts)))
+    return BundleScan(service_names=service_names, slots=artifact_slot_demands(texts))
 
 
-def required_compose_slots(texts: list[str]) -> set[str]:
-    # Odd $-parity slots are interpolation the consumer must fill; a :- default spells optional
-    # and $$-escaped literals are not slots at all.
-    slots: set[str] = set()
+def artifact_slot_demands(texts: list[str]) -> dict[str, SlotDemand]:
+    # Artifact text: odd-$ slots are the consumer surface; marker-bearing fan spellings are
+    # machine-filled and a :- default spells optional.
+    demands: dict[str, SlotDemand] = {}
     for text in texts:
-        slots.update(
-            match.group(2)
-            for match in COMPOSE_SLOT.finditer(text)
-            if len(match.group(1)) % 2 == 1 and not (match.group(3) or "").startswith(":-")
-        )
-    return slots
+        for match in COMPOSE_SLOT.finditer(text):
+            if len(match.group(1)) % 2 != 1 or any(marker in match.group(2) for marker in RESERVED_SLOT_MARKERS):
+                continue
+            demands[match.group(2)] = SlotDemand(required=not (match.group(3) or "").startswith(":-"))
+    return demands
+
+
+def authored_slot_demands(
+    workloads: list[LoadedWorkload],
+    score_dir: Path,
+    root: Path,
+    lock_keys: set[str],
+) -> dict[str, SlotDemand]:
+    # The compose consumer surface of a local entry, from authored text: suffixed workload
+    # slots (bare slots are render-expanded or refused), type-joined provisioner
+    # services/state/outputs text (odd $ rides verbatim into the artifact), and
+    # consumer-interpolated files text (authored $$ lands single-$ in the artifact).
+    demands: dict[str, SlotDemand] = {}
+    for workload in workloads:
+        text = (score_dir / workload.file_name).read_text(encoding="utf-8")
+        merge_slot_demands(demands, text, parity=1, suffixed_only=True)
+    for _file_name, entries in select_provisioner_files(score_dir, "compose", workloads):
+        for provisioner in entries:
+            if not is_mapping(provisioner):
+                continue
+            for field in ("services", "state", "outputs"):
+                value = provisioner.get(field)
+                if is_mapping(value):
+                    merge_slot_demands(
+                        demands, yaml.dump(value, default_flow_style=False), parity=1, suffixed_only=False
+                    )
+    for workload in workloads:
+        document = workload.document
+        for container in document.containers.values():
+            for target, spec in container.files.items():
+                if target not in document.consumer_interpolated_targets:
+                    continue
+                content = _files_text(spec, root, workload.file_name)
+                if content is not None:
+                    merge_slot_demands(demands, content, parity=0, suffixed_only=False)
+    for key in lock_keys:
+        demands.pop(key, None)
+    return demands
+
+
+def merge_slot_demands(demands: dict[str, SlotDemand], text: str, *, parity: int, suffixed_only: bool) -> None:
+    for match in COMPOSE_SLOT.finditer(text):
+        if len(match.group(1)) % 2 != parity:
+            continue
+        if suffixed_only and match.group(3) is None:
+            continue
+        required = not (match.group(3) or "").startswith(":-")
+        demands[match.group(2)] = SlotDemand(required=demands.get(match.group(2), SlotDemand()).required or required)
+
+
+def _files_text(spec: Yaml, root: Path, file_name: str) -> str | None:
+    if not is_mapping(spec):
+        return None
+    content = spec.get("content")
+    if isinstance(content, str):
+        return content
+    source = spec.get("source")
+    if isinstance(source, str):
+        path = root / source
+        if not path.is_file():
+            raise ValueError(f"{file_name}: files source {source!r} does not exist at the repo root")
+        return path.read_text(encoding="utf-8")
+    return None
 
 
 def refuse_unresolved_references(

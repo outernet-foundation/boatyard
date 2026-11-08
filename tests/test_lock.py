@@ -659,12 +659,12 @@ class TestBundleRecording:
         assert entry["reference"].startswith("ghcr.io/org/repo/")
         assert not entry["reference"].startswith(MIRROR_PREFIX)
 
-    def test_required_slots_record_sorted_under_the_bundle_key(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_slot_demands_record_under_the_bundle_key(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         bundle_text = (
             "services:\n  rathole:\n    image: busybox:1.36\n"
             "    environment:\n"
             "      Z_VAR: ${Z_REQUIRED}\n"
-            "      A_VAR: ${A_REQUIRED}\n"
+            "      A_VAR: ${A_REQUIRED:?err}\n"
             "      O_VAR: ${OPTIONAL:-x}\n"
             "      E_VAR: $$ESCAPED\n"
             "    configs:\n"
@@ -676,7 +676,11 @@ class TestBundleRecording:
 
         assert result.exit_code == 0, result.output
         [entry] = _read_lock(tmp_path)["bundles"].values()
-        assert entry["requires"] == ["A_REQUIRED", "Z_REQUIRED"]
+        assert entry["slots"] == {
+            "Z_REQUIRED": {},
+            "A_REQUIRED": {},
+            "OPTIONAL": {"required": False},
+        }
 
     def test_an_unresolved_route_upstream_refuses_naming_the_declaration(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
