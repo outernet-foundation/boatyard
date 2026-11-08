@@ -108,6 +108,7 @@ OCI_REFERENCE_PREFIX = "oci://"
 AUTH_GROUP_NAME = "auth"
 EDGE_SERVICE_NAME = "edge"
 CADDY_IMAGE = "CADDY_IMAGE"
+ALPINE_IMAGE = "ALPINE_IMAGE"
 
 COMPOSE_OUTPUT_DIR = Path("stack/generated/compose")
 
@@ -168,6 +169,10 @@ class ConfigFile(BaseModel):
         if installed != DEV_SENTINEL and not SpecifierSet(self.requires).contains(installed, prereleases=True):
             raise ValueError(f"boatyard {installed} does not satisfy requires={self.requires!r}")
         self.root = root
+
+        # Compose is unconditional; k8s is the optional substrate.
+        if not self.services:
+            raise ValueError("services is required; every boatyard repo ships a compose graph")
 
         # Resolve {uv} and {python} templates in base_images against the toolchain pins.
         pins: dict[str, str] = {}

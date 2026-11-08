@@ -15,6 +15,7 @@ from pydantic import (
 )
 
 from boatyard.config.config import (
+    ALPINE_IMAGE,
     COMPOSE_SLOT,
     TREE_SENTINEL_PATTERN,
     TREE_SLOT_MARKER,
@@ -27,7 +28,7 @@ from boatyard.config.config import (
     env_tree_slot,
     ConfigFile,
 )
-from boatyard.config.lock import LOCK_PATH, LockFile
+from boatyard.config.lock import LockFile
 from boatyard.config.values import ValuesFile
 from boatyard.paths import VALUES_FILE
 from boatyard.yaml import load_yaml_model
@@ -137,9 +138,8 @@ def generate_compose(config: ConfigFile, lock: LockFile, secrets: SecretsDeclara
     values_path = config.root / VALUES_FILE
     platform = ValuesFile.load(values_path, config).platform if values_path.is_file() else None
     images = lock.manifest_references(platform)
-
-    if "ALPINE_IMAGE" not in images:
-        raise ValueError(f"{LOCK_PATH.as_posix()}: the image lock must carry the ALPINE_IMAGE entry")
+    if ALPINE_IMAGE not in config.base_images:
+        raise ValueError("local entries require base_images to declare ALPINE_IMAGE")
 
     # The build-set slot supply mints the barrier; a workload ${X_SHA} naming no build
     # refuses at render_score's leftover check.

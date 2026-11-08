@@ -24,6 +24,7 @@ def _write_repo(root: Path, dockerfiles: dict[str, str], *, config: dict[str, An
         payload["repository"] = "ghcr.io/example"
     if config is not None:
         payload.update(config)
+    payload.setdefault("services", {"ext": {"ref": "oci://ghcr.io/org/ext:0.1.0"}})
     (root / "boatyard.yml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
 

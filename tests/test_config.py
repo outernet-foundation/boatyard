@@ -32,6 +32,7 @@ def bundle_entries(*qualified_names: str) -> dict[str, dict[str, object]]:
 
 def write_config(tmp_path: Path, payload: dict[str, object]) -> None:
     payload.setdefault("project_name", "example")
+    payload.setdefault("services", {"ext": {"ref": "oci://ghcr.io/org/ext:0.1.0"}})
     (tmp_path / "boatyard.yml").write_text(
         yaml.safe_dump(payload, default_flow_style=False, sort_keys=False), encoding="utf-8"
     )
@@ -549,7 +550,10 @@ class TestK8sSection:
         assert config.k8s.vars == {"GPU_VARIANT": "cuda"}
 
     def test_null_section_reads_as_absent(self, tmp_path: Path) -> None:
-        (tmp_path / "boatyard.yml").write_text('requires: ">=0.1"\nproject_name: example\nk8s:\n', encoding="utf-8")
+        (tmp_path / "boatyard.yml").write_text(
+            'requires: ">=0.1"\nproject_name: example\nservices:\n  ext:\n    ref: oci://ghcr.io/org/ext:0.1.0\nk8s:\n',
+            encoding="utf-8",
+        )
 
         config = ConfigFile.load(tmp_path / "boatyard.yml")
 
@@ -575,6 +579,19 @@ class TestK8sSection:
 
 
 class TestServices:
+    def test_services_is_required(self, tmp_path: Path) -> None:
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "project_name": "example",
+                "services": {},
+            },
+        )
+
+        with pytest.raises(ValueError, match="services is required; every boatyard repo ships a compose graph"):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
     def test_empty_vars_values_refuse(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,

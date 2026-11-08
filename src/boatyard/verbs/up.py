@@ -59,10 +59,6 @@ def up(
         raise ValueError(f"{VALUES_FILE.as_posix()} is required")
     config_values = ValuesFile.load(root / VALUES_FILE, config)
 
-    # Require the config to declare a compose stack
-    if not config.services:
-        raise ValueError("boatyard.yml must declare services")
-
     # Resolve the chosen options into leaf services
     services = config.resolve_services(config_values.choices)
 

@@ -56,7 +56,9 @@ class BumpHarness:
             }
         )
         (tmp_path / "boatyard.yml").write_text(
-            "requires: '>=0'\nproject_name: example\nrepository: ghcr.io/org/repo\nk8s:\n  workloads:\n    - api.yaml\n",
+            "requires: '>=0'\nproject_name: example\nrepository: ghcr.io/org/repo\n"
+            "services:\n  ext:\n    ref: oci://ghcr.io/org/ext:0.1.0\n"
+            "k8s:\n  workloads:\n    - api.yaml\n",
             encoding="utf-8",
         )
 
@@ -111,7 +113,10 @@ def test_bump_writes_certified_pins_and_regenerates_the_manifest(
 
 
 def test_bump_self_skips_where_no_k8s_section(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    (tmp_path / "boatyard.yml").write_text("requires: '>=0'\nproject_name: example\n", encoding="utf-8")
+    (tmp_path / "boatyard.yml").write_text(
+        "requires: '>=0'\nproject_name: example\nservices:\n  ext:\n    ref: oci://ghcr.io/org/ext:0.1.0\n",
+        encoding="utf-8",
+    )
     monkeypatch.chdir(tmp_path)
 
     bump_verb.bump()

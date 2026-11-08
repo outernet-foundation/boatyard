@@ -121,7 +121,7 @@ def _write_repo(
     ref_services: dict[str, Any] | None = None,
     gateway: PortOrSlot | None = None,
 ) -> None:
-    payload: dict[str, Any] = {"requires": ">=0", "project_name": "demo"}
+    payload: dict[str, Any] = {"requires": ">=0", "project_name": "demo", "repository": "ghcr.io/org/demo"}
     if gateway is not None:
         payload["gateway"] = gateway
     if base_images:
@@ -133,11 +133,14 @@ def _write_repo(
             values = root / "stack" / "score" / "k8s" / "values" / f"{chart}.yaml"
             values.parent.mkdir(parents=True, exist_ok=True)
             values.write_text("chart: {}\n", encoding="utf-8")
+    caller_refs = ref_services is not None and bool(ref_services)
+    if ref_services is None:
+        ref_services = {"core": {"workloads": ["api.yaml"]}}
     if ref_services:
         payload["project_name"] = "demo"
         payload["services"] = ref_services
     (root / "boatyard.yml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-    if (base_images or charts or ref_services) and not (root / LOCK_PATH).exists():
+    if (base_images or charts or caller_refs) and not (root / LOCK_PATH).exists():
         (root / LOCK_PATH).write_text("", encoding="utf-8")
 
 

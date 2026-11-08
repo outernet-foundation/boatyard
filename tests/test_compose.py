@@ -56,6 +56,7 @@ def _write_config(root: Path, sections: dict[str, Any] | None = None) -> None:
     payload: dict[str, Any] = {"requires": ">=0.0", "project_name": "demo"}
     if sections is not None:
         payload.update(sections)
+    payload.setdefault("services", {"ext": {"ref": LIVEKIT_REF}})
     if "services" in payload and "gateway" not in payload:
         payload["gateway"] = 8080
     if payload.get("gateway") is not None:
@@ -162,6 +163,8 @@ def _write_producer(root: Path, services: list[str], lock: dict[str, Any] | None
             yaml.safe_dump({
                 "requires": ">=0.0",
                 "project_name": "producer",
+                "repository": "ghcr.io/org/producer",
+                "services": {"core": {"workloads": ["api.yaml"]}},
                 "base_images": {
                     "LOKI_IMAGE": "docker.io/grafana/loki:3.0",
                     "ALPINE_IMAGE": "docker.io/library/alpine:3.20",
@@ -558,7 +561,7 @@ class TestSelectionLaw:
         assert isinstance(result.exception, FileNotFoundError)
 
     def test_up_in_a_services_less_repo_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        _write_config(tmp_path)
+        (tmp_path / "boatyard.yml").write_text("requires: '>=0.0'\nproject_name: demo\n", encoding="utf-8")
         _write_values_file(tmp_path, {"public_url": "https://example.dev"})
         monkeypatch.chdir(tmp_path)
 
@@ -566,7 +569,7 @@ class TestSelectionLaw:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "must declare services" in str(result.exception)
+        assert "services is required" in str(result.exception)
 
     def test_missing_local_output_refuses_naming_generate_score(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_consumer_tree(tmp_path)
@@ -1006,7 +1009,7 @@ class TestDownTeardown:
         assert result.exit_code != 0
         assert isinstance(result.exception, FileNotFoundError)
 
-    def test_down_in_a_services_less_repo_tears_down_by_name(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_down_tears_down_by_name(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_config(tmp_path)
         _write_values_file(tmp_path, {"public_url": "https://example.dev"})
         recorder = AssemblyRecorder()
@@ -1149,7 +1152,8 @@ class TestLockEnvSynthesis:
         )
         recorder = LockEnvRecorder()
 
-        self._invoke_up_with_lock(tmp_path, monkeypatch, recorder)
+        first = self._invoke_up_with_lock(tmp_path, monkeypatch, recorder)
+        assert first.exit_code == 0, first.output
         self._invoke_up_with_lock(tmp_path, monkeypatch, recorder)
 
         assert len(recorder.env_contents) == 2

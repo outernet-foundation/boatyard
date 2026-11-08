@@ -32,8 +32,13 @@ DIGEST = "sha256:" + "a" * 64
 def _root_config(**sections: object) -> ConfigFile:
     payload: dict[str, object] = {"requires": ">=0.1", "project_name": "example"}
     payload.update(sections)
-    if "services" in payload and "gateway" not in payload:
-        payload["gateway"] = 8080
+    if "services" in payload:
+        payload.setdefault("gateway", 8080)
+        declared_images = payload.get("base_images")
+        if not isinstance(declared_images, dict):
+            declared_images = {}
+        payload["base_images"] = {"ALPINE_IMAGE": "docker.io/library/alpine:3.20", **declared_images}
+        payload.setdefault("platforms", ["linux/amd64"])
     return ConfigFile.model_validate(payload)
 
 
@@ -885,11 +890,12 @@ def test_barrier_pin_stays_unregistered_without_provisioner_services(
     assert templates == [["probe-adapter-healthchecks.tpl", "restart.tpl"]]
 
 
-def test_generate_compose_requires_the_alpine_image_lock_entry(tmp_path: Path) -> None:
+def test_generate_compose_requires_the_alpine_base_image(tmp_path: Path) -> None:
     config = _bundle_config()
+    config.base_images.pop("ALPINE_IMAGE")
     config.root = tmp_path
 
-    with pytest.raises(ValueError, match="must carry the ALPINE_IMAGE entry"):
+    with pytest.raises(ValueError, match="local entries require base_images to declare ALPINE_IMAGE"):
         score_compose_module.generate_compose(config, LockFile.model_validate({}), secrets=_empty_secrets())
 
 
@@ -1526,7 +1532,9 @@ def test_generate_score_writes_the_mint_list_from_the_declaration(
 
 def _k8s_only_repo(tmp_path: Path) -> None:
     (tmp_path / "boatyard.yml").write_text(
-        "requires: '>=0'\nproject_name: example\nrepository: ghcr.io/org/repo\nk8s:\n  workloads:\n    - api.yaml\n",
+        "requires: '>=0'\nproject_name: example\nrepository: ghcr.io/org/repo\n"
+        "services:\n  ext:\n    ref: oci://ghcr.io/org/ext:0.1.0\n"
+        "k8s:\n  workloads:\n    - api.yaml\n",
         encoding="utf-8",
     )
 
