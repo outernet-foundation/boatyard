@@ -33,9 +33,10 @@ Design intent and silent-failure traps, one fact per bullet.
   file-sourced configs, score's bind inlining) is doubled via `double_dollars` in
   `models/config_file.py` — the one home. Text outside a compose document (k8s manifests) never
   doubles.
-- The mint list (`secrets.txt`) is the k8s rendering's consumed secret refs, walked from the
-  generated output — no secret vocabulary is authored anywhere, and a compose-only rendering
-  mints an empty list.
+- Consumed facts are walked from generated output, never re-derived from sources: the mint
+  list (`secrets.txt`) is the k8s rendering's consumed secret refs (no secret vocabulary is
+  authored anywhere; a compose-only rendering mints an empty list), and a local entry's values
+  demand is its rendered bundle artifact's own `${NAME}` slots.
 - A service group derives its option set from one declared variant axis (`axes:` plus
   group-level `workloads:`) or authors it (`options:`); the axis name is the one spelling
   across the Dockerfile ARG, the workload slot, and the k8s selection — never re-described by hand.
