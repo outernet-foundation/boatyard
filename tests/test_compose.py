@@ -521,7 +521,7 @@ class TestSelectionLaw:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "options are" in str(result.exception)
+        assert "are not among the selectable options" in str(result.exception)
 
     def test_two_options_of_one_group_refuse(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._invoke_up(tmp_path, monkeypatch, bundles="placeframe-cuda,placeframe-rocm")
@@ -530,7 +530,7 @@ class TestSelectionLaw:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "at most one option per group (placeframe)" in str(result.exception)
+        assert "are two options of one group (placeframe)" in str(result.exception)
 
     def test_a_shell_selection_is_ignored(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         recorder = self._invoke_up(tmp_path, monkeypatch)
@@ -580,7 +580,8 @@ class TestSelectionLaw:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "generate-score" in str(result.exception)
+        assert "lacks its bundle output" in str(result.exception)
+        assert "compose.placeframe-cuda.yaml" in str(result.exception)
 
 
 class TestUpMaterialization:
@@ -870,7 +871,7 @@ class TestUpValidation:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "API_TOKEN set in the shell and ignored" in str(result.exception)
+        assert "API_TOKEN are set in the shell and ignored" in str(result.exception)
 
 
 class TestSharedNames:
@@ -1198,7 +1199,7 @@ class TestLockEnvSynthesis:
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
         message = str(result.exception)
-        assert "platform: must be named" in message
+        assert "platform must be named in boatyard.values.yaml" in message
         assert "linux/amd64" in message and "linux/arm64" in message
 
     def test_an_undeclared_platform_selection_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -1252,7 +1253,7 @@ class TestBundleLockEnforcement:
         assert isinstance(result.exception, ValueError)
         message = str(result.exception)
         assert "TUNNEL_BUNDLE" in message
-        assert "run boatyard lock" in message
+        assert "boatyard.lock.yml lacks the TUNNEL_BUNDLE entry" in message
 
     def test_the_bundle_include_carries_the_locks_digest_not_the_yaml_tag(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1404,8 +1405,8 @@ class TestBundleOverrides:
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
         message = str(result.exception)
-        assert "platforms ['linux/amd64', 'linux/arm64'] are recorded" in message
-        assert "platform: must be named" in message
+        assert "the lock records ['linux/amd64', 'linux/arm64']" in message
+        assert "platform must be named" in message
 
     def test_the_path_form_requires_a_value(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)
@@ -1427,7 +1428,7 @@ class TestBundleOverrides:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "carries a URL scheme" in str(result.exception)
+        assert "must be a filesystem path, not a URL" in str(result.exception)
 
     def test_an_unknown_override_name_refuses_listing_the_vocabulary(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1465,7 +1466,7 @@ class TestBundleOverrides:
         assert isinstance(result.exception, ValueError)
         message = str(result.exception)
         assert "path_overrides: names [\x27extra\x27]" in message
-        assert "an override targets a ref entry" in message
+        assert "are not ref entries" in message
         assert "placeframe-cuda" in message
 
     def test_an_unselected_override_is_inert(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -1663,8 +1664,8 @@ class TestValuesFileLaw:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "carries a reserved __BOATYARD_LOCK__/" in str(result.exception)
-        assert "never set them by hand" in str(result.exception)
+        assert "must not carry a reserved __BOATYARD_LOCK__/" in str(result.exception)
+        assert "key 'TUNNEL__BOATYARD_LOCK__ALPINE_IMAGE' must not carry" in str(result.exception)
 
     def test_a_values_key_spelling_the_tree_marker_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)
@@ -1679,8 +1680,8 @@ class TestValuesFileLaw:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "carries a reserved __BOATYARD_LOCK__/" in str(result.exception)
-        assert "never set them by hand" in str(result.exception)
+        assert "must not carry a reserved __BOATYARD_LOCK__/" in str(result.exception)
+        assert "key 'TUNNEL__BOATYARD_TREE__API_SHA' must not carry" in str(result.exception)
 
     def test_a_values_key_outside_the_env_name_grammar_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)

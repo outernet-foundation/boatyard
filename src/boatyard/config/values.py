@@ -35,7 +35,7 @@ from boatyard.config.config import (
     env_tree_slot,
     is_mapping,
     qualified_option_name,
-    scan_bundle_texts,
+    refuse_unresolved_references,
 )
 from boatyard.config.lock import LockFile
 from boatyard.paths import DEFAULT_CONFIG_PATH, LOCK_PATH, VALUES_FILE
@@ -131,133 +131,94 @@ class ValuesFile(BaseModel):
         config = context.get("config")
         self._config = config if isinstance(config, ConfigFile) else None
         self._lock = lock if isinstance(lock := context.get("lock"), LockFile) else None
-        if not isinstance(config, ConfigFile) or not config.services:
+        if not isinstance(config, ConfigFile):
             if self.bundles:
                 raise ValueError("bundles: is set but this repo declares no services")
             return self
         source = str(context.get("path", VALUES_FILE.name))
 
-        self._fold_selection(config)
-        self._refuse_unknown_overrides(source, config)
-        self._build_demand_table(config, context)
-        self._refuse_misplaced_keys(source)
-        self._refuse_unresolvable_references(source)
-        self._refuse_unfilled_slots(source)
-        self._refuse_undeclared_demands(source, config)
-        return self
-
-    def _refuse_unknown_overrides(self, source: str, config: ConfigFile) -> None:
-        vocabulary = sorted(config.port_declaring_entries)
-        unknown = sorted(set(self.ports) - set(vocabulary))
-        if unknown:
-            raise ValueError(f"{source}: ports: names {unknown}; the port-declaring entries are {vocabulary}")
-        if self.gateway is not None and config.gateway is None:
-            raise ValueError(f"{source}: gateway: is set but boatyard.yml declares no gateway")
-
-    def _fold_selection(self, config: ConfigFile) -> None:
         selectable = config.selectable_options
         bare = config.bare_entries
         unknown = [name for name in self.bundles if name not in selectable]
         if unknown:
-            bare_entries_note = f"; bare entries, always included: {bare}" if bare else ""
-            raise ValueError(
-                f"bundles: names {unknown}; the selectable options are {sorted(selectable)}{bare_entries_note}"
-            )
+            message = f"bundles: names {unknown} are not among the selectable options {sorted(selectable)}"
+            if bare:
+                message += f" (bare entries, always included: {bare})"
+            raise ValueError(message)
         choices: dict[str, str] = {}
         for name in self.bundles:
             group, option_name = selectable[name]
             if group in choices:
                 raise ValueError(
-                    f"bundles: selects {qualified_option_name(group, choices[group])} and {name}; "
-                    f"at most one option per group ({group})"
+                    f"bundles: {name} and {qualified_option_name(group, choices[group])} "
+                    f"are two options of one group ({group})"
                 )
             choices[group] = option_name
         self.choices = choices
         self._participating = {service.name for service in config.resolve_services(choices)}
 
-    def _build_demand_table(self, config: ConfigFile, context: dict[str, object]) -> None:
-        context_lock = context.get("lock")
-        lock = context_lock if isinstance(context_lock, LockFile) else None
+        vocabulary = sorted(config.port_declaring_entries)
+        unknown = sorted(set(self.ports) - set(vocabulary))
+        if unknown:
+            raise ValueError(f"{source}: ports: names {unknown} are not among the port-declaring entries {vocabulary}")
+        if self.gateway is not None and config.gateway is None:
+            raise ValueError(f"{source}: gateway: is set but boatyard.yml declares no gateway")
+
         demands: dict[str, dict[str, SlotDemand]] = dict(config.consumer_surfaces)
         homes = dict.fromkeys(config.consumer_surfaces, "images")
         remote_names = {name for name, _reference, _entry in config.remote_declared_entries()}
         for name in remote_names:
             homes[name] = "bundles"
-            if lock is not None:
-                record = lock.bundles.get(bundle_lock_key(name))
+            if self._lock is not None:
+                record = self._lock.bundles.get(bundle_lock_key(name))
                 if record is not None:
                     demands[name] = dict(record.slots)
         for name in sorted(self._participating):
             if name not in self.path_overrides or name not in remote_names:
                 continue
-            candidate = self.path_overrides[name]
-            bundle_compose_path = candidate if candidate.is_absolute() else config.root / candidate
-            if not bundle_compose_path.is_file():
-                raise ValueError(f"path_overrides.{name}: {bundle_compose_path.as_posix()} does not exist")
-            demands[name] = artifact_slot_demands([bundle_compose_path.read_text(encoding="utf-8")])
+            demands[name] = artifact_slot_demands(
+                [self._override_bundle_path(name, config.root).read_text(encoding="utf-8")]
+            )
         self._demands = demands
         self._homes = homes
 
-    def _refuse_misplaced_keys(self, source: str) -> None:
         local_names = sorted(name for name, home in self._homes.items() if home == "images")
-        remote_names = sorted(name for name, home in self._homes.items() if home == "bundles")
+        sorted_remote_names = sorted(name for name, home in self._homes.items() if home == "bundles")
         demanders: dict[str, set[str]] = {}
         for unit, slots in self._demands.items():
             for name in slots:
                 demanders.setdefault(name, set()).add(unit)
 
-        for name in sorted(self.values.images):
-            if self._homes.get(name) != "images":
-                raise ValueError(
-                    f"{source}: values.images.{name}: the local entries are {local_names}; "
-                    f"ref entries ride under values.bundles"
-                )
-            self._refuse_section_faults(f"values.images.{name}", self.values.images[name], name, demanders)
-        for name in sorted(self.values.bundles):
-            if self._homes.get(name) != "bundles":
-                raise ValueError(
-                    f"{source}: values.bundles.{name}: the ref entries are {remote_names}; "
-                    f"local entries ride under values.images"
-                )
-            self._refuse_section_faults(f"values.bundles.{name}", self.values.bundles[name], name, demanders)
+        for section_name, expected_home, noun, other_names in (
+            ("images", "images", "local", local_names),
+            ("bundles", "bundles", "ref", sorted_remote_names),
+        ):
+            entries = self.values.images if section_name == "images" else self.values.bundles
+            for name in sorted(entries):
+                if self._homes.get(name) != expected_home:
+                    raise ValueError(
+                        f"{source}: values.{section_name}.{name} is not a {noun} entry "
+                        f"(the {noun} entries are {other_names})"
+                    )
+                site = f"values.{section_name}.{name}"
+                surface = sorted(self._demands.get(name, {}))
+                for key in sorted(entries[name]):
+                    self._refuse_key_shape(key, site)
+                    if key not in self._demands.get(name, {}):
+                        raise ValueError(f"{site}: {key} is demanded by no surface of {name} (the surface is {surface})")
+                    if demanders[key] - {name}:
+                        raise ValueError(
+                            f"{site}: {key} is demanded by {', '.join(sorted(demanders[key]))}, not {name} alone"
+                        )
+
         for name in sorted(self.values.shared):
             self._refuse_key_shape(name, "values.shared")
             if name not in demanders:
                 raise ValueError(f"{source}: values.shared: {name} is demanded by no surface")
             if len(demanders[name]) == 1:
                 [home] = demanders[name]
-                raise ValueError(
-                    f"{source}: values.shared: {name} is demanded by {home} only; set it in "
-                    f"values.{self._homes[home]}.{home}"
-                )
+                raise ValueError(f"{source}: values.shared: {name} is demanded by {home} only")
 
-    def _refuse_section_faults(
-        self, site: str, section: dict[str, str], unit: str, demanders: dict[str, set[str]]
-    ) -> None:
-        surface = sorted(self._demands.get(unit, {}))
-        for name in sorted(section):
-            self._refuse_key_shape(name, site)
-            if name not in self._demands.get(unit, {}):
-                raise ValueError(f"{site}: {name} is demanded by no surface of {unit} (the surface is {surface})")
-            if demanders[name] - {unit}:
-                raise ValueError(
-                    f"{site}: {name} is demanded by {', '.join(sorted(demanders[name]))}; set it in values.shared"
-                )
-
-    def _refuse_key_shape(self, name: str, site: str) -> None:
-        if ENV_NAME_PATTERN.fullmatch(name) is None:
-            raise ValueError(f"key {name!r} is not an ALL_CAPS environment name")
-        if any(marker in name for marker in RESERVED_SLOT_MARKERS):
-            raise ValueError(
-                f"key {name!r} carries a reserved __BOATYARD_LOCK__/__BOATYARD_TREE__ marker; "
-                f"the lock and the tree tags fill those slots — never set them by hand"
-            )
-        if name == PUBLIC_URL_SLOT:
-            raise ValueError(f"{site}: {name} is minted from public_url; never set it by hand")
-        if name == EDGE_BASE_URL_SLOT:
-            raise ValueError(f"{site}: {name} is minted from the gateway declaration; never set it by hand")
-
-    def _refuse_unresolvable_references(self, source: str) -> None:
         sections: dict[str, Mapping[str, str]] = {"values.shared": self.values.shared}
         sections.update((f"values.images.{unit}", section) for unit, section in self.values.images.items())
         sections.update((f"values.bundles.{unit}", section) for unit, section in self.values.bundles.items())
@@ -272,11 +233,7 @@ class ValuesFile(BaseModel):
                     )
                 for reference in PLACEHOLDER.findall(value):
                     if any(marker in reference for marker in RESERVED_SLOT_MARKERS):
-                        raise ValueError(
-                            f"{source}: {site}: {name}: ${{{reference}}} carries a reserved "
-                            f"__BOATYARD_LOCK__/__BOATYARD_TREE__ marker; the lock and the tree "
-                            f"tags fill those slots — never reference them"
-                        )
+                        raise ValueError(f"{source}: {site}: {name}: ${{{reference}}} must not carry a reserved marker")
                     references.setdefault(name, set()).add(reference)
                     sites[name] = site
         roots = set(self.flattened) | set(self.minted)
@@ -284,8 +241,8 @@ class ValuesFile(BaseModel):
         if unresolvable:
             name = min(name for name, referenced in references.items() if referenced & set(unresolvable))
             raise ValueError(
-                f"{source}: {sites[name]}: {name}: ${{{unresolvable[0]}}} resolves to no root; "
-                f"the roots are {sorted(roots)}"
+                f"{source}: {sites[name]}: {name}: ${{{unresolvable[0]}}} resolves to no root "
+                f"(the roots are {sorted(roots)})"
             )
         hand_edges = {
             name: {reference for reference in PLACEHOLDER.findall(value) if reference in self.flattened}
@@ -293,13 +250,21 @@ class ValuesFile(BaseModel):
         }
         _order, blocked = peel_references(hand_edges)
         if blocked:
-            cycle = reference_cycle({name: hand_edges[name] & set(blocked) for name in blocked})
+            cycle_nodes = {name: hand_edges[name] & set(blocked) for name in blocked}
+            # Every blocked name keeps a blocked successor, so the walk repeats a node exactly on the cycle
+            seen: dict[str, int] = {}
+            chain: list[str] = []
+            node = min(cycle_nodes)
+            while node not in seen:
+                seen[node] = len(chain)
+                chain.append(node)
+                node = min(cycle_nodes[node])
+            cycle = chain[seen[node] :]
             raise ValueError(f"{source}: reference cycle: {' -> '.join([*cycle, cycle[0]])}")
 
-    def _refuse_unfilled_slots(self, source: str) -> None:
         filled = set(self.values.shared)
-        for name, home in self._homes.items():
-            if home == "images" and name in self.values.images:
+        for name, home_section in self._homes.items():
+            if home_section == "images" and name in self.values.images:
                 filled.update(self.values.images[name])
             elif name in self.values.bundles:
                 filled.update(self.values.bundles[name])
@@ -317,23 +282,38 @@ class ValuesFile(BaseModel):
         if missing:
             unit, absent = min(missing.items())
             ignored = sorted(shell_name for shell_name in absent if os.environ.get(shell_name))
-            note = f"; {', '.join(ignored)} set in the shell and ignored" if ignored else ""
+            note = f" ({', '.join(ignored)} are set in the shell and ignored)" if ignored else ""
             raise ValueError(
-                f"{source}: values.{self._homes[unit]}.{unit} requires {absent}, "
-                f"which no declared source fills (a values section or shared){note}"
+                f"{source}: values.{self._homes[unit]}.{unit} requires {absent}, which no declared source fills{note}"
             )
 
-    def _refuse_undeclared_demands(self, source: str, config: ConfigFile) -> None:
         declared: set[str] = set(config.secrets.root) if config.secrets is not None else set()
         covered = set(self.values.shared)
-        for section in (*self.values.images.values(), *self.values.bundles.values()):
-            covered.update(section)
+        for values_section in (*self.values.images.values(), *self.values.bundles.values()):
+            covered.update(values_section)
         undeclared = sorted({name for slots in self._demands.values() for name in slots} - declared - covered)
         if undeclared:
+            raise ValueError(f"{source}: consumed keys {undeclared} are declared nowhere (boatyard.yml secrets or values keys)")
+
+        bundle_vocabulary = set(config.selectable_options) | set(config.bare_entries)
+        unknown_overrides: list[str] = []
+        local_override_names: list[str] = []
+        for name in self.path_overrides:
+            if name not in bundle_vocabulary:
+                unknown_overrides.append(name)
+            elif name not in remote_names:
+                local_override_names.append(name)
+        if unknown_overrides:
             raise ValueError(
-                f"{source}: consumed keys {undeclared} are declared nowhere; declare them in "
-                f"boatyard.yml secrets or cover them with values keys"
+                f"path_overrides: names {sorted(unknown_overrides)} "
+                f"are not in the bundle vocabulary {sorted(bundle_vocabulary)}"
             )
+        if local_override_names:
+            raise ValueError(
+                f"path_overrides: names {sorted(local_override_names)} are not ref entries "
+                f"(the ref entries are {sorted(remote_names)})"
+            )
+        return self
 
     @field_validator("path_overrides", mode="before")
     @classmethod
@@ -344,11 +324,9 @@ class ValuesFile(BaseModel):
         for name, value in raw_overrides.items():
             stripped = str(value).strip()
             if not stripped:
-                raise ValueError(f"path_overrides.{name}: empty; a value is a filesystem path")
+                raise ValueError(f"path_overrides.{name} must be a non-empty filesystem path")
             if "://" in stripped:
-                raise ValueError(
-                    f"path_overrides.{name}: {stripped!r} carries a URL scheme; a value is a filesystem path"
-                )
+                raise ValueError(f"path_overrides.{name} must be a filesystem path, not a URL ({stripped!r})")
             path_overrides[name] = Path(stripped)
         return path_overrides
 
@@ -361,32 +339,6 @@ class ValuesFile(BaseModel):
                     f"path_overrides.{name}: {path.as_posix()!r} must point into a stack/generated/compose/ bundle output layout"
                 )
         return path_overrides
-
-    @model_validator(mode="after")
-    def _require_ref_entry_overrides(self, info: ValidationInfo) -> Self:
-        context: dict[str, object] = info.context or {}
-        config = context.get("config")
-        if not isinstance(config, ConfigFile) or not config.services:
-            return self
-        vocabulary = set(config.selectable_options) | set(config.bare_entries)
-        remote_names = {name for name, _declared, _entry in config.remote_declared_entries()}
-        unknown_overrides: list[str] = []
-        local_names: list[str] = []
-        for name in self.path_overrides:
-            if name not in vocabulary:
-                unknown_overrides.append(name)
-            elif name not in remote_names:
-                local_names.append(name)
-        if unknown_overrides:
-            raise ValueError(
-                f"path_overrides: names {sorted(unknown_overrides)}; the bundle vocabulary is {sorted(vocabulary)}"
-            )
-        if local_names:
-            raise ValueError(
-                f"path_overrides: names {sorted(local_names)}; an override targets a ref entry; "
-                f"the ref entries are {sorted(remote_names)}"
-            )
-        return self
 
     @classmethod
     def load(cls, path: Path, config: ConfigFile | None, lock: LockFile | None = None) -> ValuesFile:
@@ -415,7 +367,8 @@ class ValuesFile(BaseModel):
         order, _blocked = peel_references(references)
         values = dict(self.minted)
         for name in order:
-            values[name] = resolve_value(hand[name], values)
+            parts = PLACEHOLDER.split(hand[name])
+            values[name] = "".join(part if index % 2 == 0 else values[part] for index, part in enumerate(parts))
         return values
 
     def assembly(self) -> AssemblyPlan:
@@ -442,26 +395,18 @@ class ValuesFile(BaseModel):
             if service.entry.ref is None:
                 bundle_compose_path = compose_bundle_output_path(root, name)
                 if not bundle_compose_path.is_file():
-                    raise ValueError(
-                        f"selected entry {name!r} has no bundle output {bundle_compose_path.as_posix()}; "
-                        f"generate-score writes it"
-                    )
+                    raise ValueError(f"selected entry {name!r} lacks its bundle output {bundle_compose_path.as_posix()}")
                 lock_references = lock.manifest_references(self.platform)
                 tree_root, tree_builds = root, config.service_builds
             else:
                 # Include an overridden ref through its local path
-                candidate = self.path_overrides[name]
-                bundle_compose_path = (candidate if candidate.is_absolute() else root / candidate).resolve()
-                if not bundle_compose_path.is_file():
-                    raise ValueError(f"path_overrides.{name}: {bundle_compose_path.as_posix()} does not exist")
-
+                bundle_compose_path = self._override_bundle_path(name, root).resolve()
                 # The producer root sits four levels above a stack/generated/compose/ output
-                producer_root = bundle_compose_path.parents[3] if len(bundle_compose_path.parents) > 3 else None
-                if producer_root is None or not (producer_root / DEFAULT_CONFIG_PATH).is_file():
+                producer_root = bundle_compose_path.parents[3]
+                if not (producer_root / DEFAULT_CONFIG_PATH).is_file():
                     raise ValueError(
                         f"{bundle_compose_path.as_posix()}: no boatyard.yml-bearing repo root above the bundle override"
                     )
-
                 # Project the producer lock's manifest references under the consumer's platform
                 producer_config = ConfigFile.load(producer_root / DEFAULT_CONFIG_PATH)
                 producer_lock = LockFile.load(producer_root / LOCK_PATH, producer_config)
@@ -470,8 +415,8 @@ class ValuesFile(BaseModel):
 
             # Refuse reserved services and unresolved route/port references against the bundle text
             text = bundle_compose_path.read_text(encoding="utf-8")
-            scan = scan_bundle_texts(name, service.routes, service.ports, [text])
-            if EDGE_SERVICE_NAME in scan.service_names:
+            service_names = refuse_unresolved_references(name, service.routes, service.ports, [text], prefix=f"{name}-")
+            if EDGE_SERVICE_NAME in service_names:
                 raise ValueError(
                     f"{bundle_compose_path.as_posix()}: "
                     f"the included bundle defines the reserved service {EDGE_SERVICE_NAME!r}"
@@ -495,6 +440,23 @@ class ValuesFile(BaseModel):
             demanded=demanded,
         )
 
+    def _refuse_key_shape(self, name: str, site: str) -> None:
+        if ENV_NAME_PATTERN.fullmatch(name) is None:
+            raise ValueError(f"key {name!r} is not an ALL_CAPS environment name")
+        if any(marker in name for marker in RESERVED_SLOT_MARKERS):
+            raise ValueError(f"key {name!r} must not carry a reserved __BOATYARD_LOCK__/__BOATYARD_TREE__ marker")
+        if name == PUBLIC_URL_SLOT:
+            raise ValueError(f"{site}: {name} is not hand-settable (minted from public_url)")
+        if name == EDGE_BASE_URL_SLOT:
+            raise ValueError(f"{site}: {name} is not hand-settable (minted from the gateway declaration)")
+
+    def _override_bundle_path(self, name: str, root: Path) -> Path:
+        candidate = self.path_overrides[name]
+        path = candidate if candidate.is_absolute() else root / candidate
+        if not path.is_file():
+            raise ValueError(f"path_overrides.{name}: {path.as_posix()} does not exist")
+        return path
+
 
 def peel_references(references: Mapping[str, AbstractSet[str]]) -> tuple[list[str], list[str]]:
     # Answer the peel order (a name peels only after every name it references peels) and
@@ -515,20 +477,3 @@ def peel_references(references: Mapping[str, AbstractSet[str]]) -> tuple[list[st
                 newly_ready.append(successor)
         ready.extend(sorted(newly_ready))
     return order, sorted(blocked)
-
-
-def reference_cycle(blocked: Mapping[str, AbstractSet[str]]) -> list[str]:
-    # Every blocked name keeps a blocked successor, so the walk repeats a node exactly on the cycle
-    seen: dict[str, int] = {}
-    chain: list[str] = []
-    node = min(blocked)
-    while node not in seen:
-        seen[node] = len(chain)
-        chain.append(node)
-        node = min(blocked[node])
-    return chain[seen[node] :]
-
-
-def resolve_value(value: str, resolved: Mapping[str, str]) -> str:
-    parts = PLACEHOLDER.split(value)
-    return "".join(part if index % 2 == 0 else resolved[part] for index, part in enumerate(parts))

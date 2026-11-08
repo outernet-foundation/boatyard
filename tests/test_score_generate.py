@@ -35,6 +35,7 @@ def _root_config(**sections: object) -> ConfigFile:
     if "services" in payload:
         payload.setdefault("gateway", 8080)
         payload.setdefault("platforms", ["linux/amd64"])
+    payload.setdefault("services", {"ext": {"ref": "oci://ghcr.io/org/ext:0.1.0"}})
     return ConfigFile.model_validate(payload)
 
 
@@ -1255,7 +1256,7 @@ def test_k8s_generation_without_a_pins_file_refuses_naming_bump(
     _pins_k8s_recorder(monkeypatch, tmp_path, SHA_WORKLOAD)
     config, k8s = _pinned_config(tmp_path)
 
-    with pytest.raises(ValueError, match="run 'boatyard bump'"):
+    with pytest.raises(ValueError, match=r"boatyard\.k8s-pins\.yml: the k8s pins file is required"):
         generate_k8s(config, k8s, LockFile.model_validate({}), local=False, secrets=_empty_secrets())
 
 
@@ -1267,7 +1268,7 @@ def test_k8s_generation_refuses_a_workload_sha_slot_no_pin_covers(
     _pins_k8s_recorder(monkeypatch, tmp_path, workload)
     config, k8s = _pinned_config(tmp_path)
 
-    with pytest.raises(ValueError, match=r"no pin for WORKER_SHA.*boatyard bump"):
+    with pytest.raises(ValueError, match=r"boatyard\.k8s-pins\.yml: lacks pins for WORKER_SHA"):
         generate_k8s(config, k8s, LockFile.model_validate({}), local=False, secrets=_empty_secrets())
 
 

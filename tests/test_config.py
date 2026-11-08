@@ -290,13 +290,13 @@ class TestBaseImages:
     def test_bare_path_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "base_images": {"LOKI_IMAGE": "docker.io/grafana/loki"}})
 
-        with pytest.raises(ValidationError, match="path:tag"):
+        with pytest.raises(ValidationError, match=r"LOKI_IMAGE: 'docker\.io/grafana/loki' must carry a tag or a digest"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_env_slot_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "base_images": {"LOKI_IMAGE": "${LOKI_REF}"}})
 
-        with pytest.raises(ValueError, match="interpolation lives in score sources and committed artifacts"):
+        with pytest.raises(ValueError, match=r"boatyard\.yml carries no \$\{\.\.\.\} spelling"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_lowercase_key_rejected(self, tmp_path: Path) -> None:
@@ -448,7 +448,7 @@ class TestBaseImageTemplates:
         )
         write_lock(tmp_path)
 
-        with pytest.raises(ValueError, match=r"\.python-version: the file is absent"):
+        with pytest.raises(ValueError, match=r"\.python-version: the \{python\} template requires this file"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_empty_python_version_file_refuses(self, tmp_path: Path) -> None:
@@ -466,7 +466,7 @@ class TestBaseImageTemplates:
         )
         write_lock(tmp_path)
 
-        with pytest.raises(ValueError, match=r"\.python-version: the file is empty"):
+        with pytest.raises(ValueError, match=r"\.python-version: the \{python\} template requires a non-empty file"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_unknown_template_key_refuses_listing_the_vocabulary(self, tmp_path: Path) -> None:
@@ -481,7 +481,7 @@ class TestBaseImageTemplates:
         write_lock(tmp_path)
 
         with pytest.raises(
-            ValueError, match=r"template key \{golang\} is unknown; the toolchain pins are \{uv\}, \{python\}"
+            ValueError, match=r"template key \{golang\} is not one of the toolchain pins \{uv\}, \{python\}"
         ):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
@@ -543,7 +543,7 @@ class TestCharts:
             },
         )
 
-        with pytest.raises(ValueError, match="interpolation lives in score sources and committed artifacts"):
+        with pytest.raises(ValueError, match=r"boatyard\.yml carries no \$\{\.\.\.\} spelling"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_missing_values_file_refuses_at_load(self, tmp_path: Path) -> None:
@@ -613,7 +613,7 @@ class TestServices:
             },
         )
 
-        with pytest.raises(ValueError, match="services is required; every boatyard repo ships a compose graph"):
+        with pytest.raises(ValueError, match="services is required"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_empty_vars_values_refuse(self, tmp_path: Path) -> None:
@@ -762,7 +762,7 @@ class TestServices:
             },
         )
 
-        with pytest.raises(ValidationError, match=r"pins a digest.*the lock records the digest"):
+        with pytest.raises(ValidationError, match=r"ref .* must carry a published tag, not a digest"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_a_latest_ref_refuses(self, tmp_path: Path) -> None:
@@ -775,7 +775,7 @@ class TestServices:
             },
         )
 
-        with pytest.raises(ValidationError, match="'latest' is mutable and never a pin"):
+        with pytest.raises(ValidationError, match="must not carry the mutable tag 'latest'"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     @pytest.mark.parametrize("tag", [">=0.3.1", "0.3.x", "0.3.X", "0.3.*", "~0.3", "^0.3"])
@@ -789,7 +789,7 @@ class TestServices:
             },
         )
 
-        with pytest.raises(ValidationError, match="is a range; exact tags only"):
+        with pytest.raises(ValidationError, match="must be an exact tag, not a range"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_a_tagless_ref_refuses(self, tmp_path: Path) -> None:
@@ -1005,7 +1005,7 @@ class TestAuthGroup:
             },
         )
 
-        with pytest.raises(ValidationError, match="auth is a reserved group name"):
+        with pytest.raises(ValidationError, match=r"services\.auth must be a group \(the name is reserved\)"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
 
@@ -1047,7 +1047,9 @@ class TestRoutes:
             },
         )
 
-        with pytest.raises(ValidationError, match="edge-wide unique"):
+        with pytest.raises(
+            ValidationError, match=r"route path /x/\* is already declared at services\.one\.options\.a"
+        ):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     @pytest.mark.parametrize(
@@ -1127,7 +1129,9 @@ class TestGatewayKey:
             },
         )
 
-        with pytest.raises(ValidationError, match=r"barrier_image: 'docker\.io/library/alpine' must be"):
+        with pytest.raises(
+            ValidationError, match=r"barrier_image: 'docker\.io/library/alpine' must carry a tag or a digest"
+        ):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_a_gateway_owns_the_edge_pin_and_overrides_ship_theirs(self, tmp_path: Path) -> None:
@@ -1200,7 +1204,7 @@ class TestGatewayKey:
             },
         )
 
-        with pytest.raises(ValueError, match="interpolation lives in score sources and committed artifacts"):
+        with pytest.raises(ValueError, match=r"boatyard\.yml carries no \$\{\.\.\.\} spelling"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
 
@@ -1766,5 +1770,5 @@ class TestConfigLockParse:
     def test_require_refuses_naming_the_lock_verb(self, tmp_path: Path) -> None:
         lock = LockFile.model_validate({})
 
-        with pytest.raises(ValueError, match=r"lacks the CADDY_IMAGE entry.*run boatyard lock"):
+        with pytest.raises(ValueError, match=r"routes are declared: boatyard\.lock\.yml lacks the CADDY_IMAGE entry"):
             lock.require("CADDY_IMAGE", "routes are declared")

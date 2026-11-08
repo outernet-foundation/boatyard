@@ -52,11 +52,6 @@ COMPOSE_SLOT = re.compile(r"(\$+)\{([A-Z][A-Z0-9_]*)(:[^{}]*)?\}")
 type Yaml = str | int | float | bool | list[Yaml] | dict[str, Yaml] | None
 
 
-class BundleScan(NamedTuple):
-    service_names: set[str]
-    slots: dict[str, SlotDemand]
-
-
 def _require_port_range(value: int) -> int:
     if not 1 <= value <= 65535:
         raise ValueError(f"{value} is outside the port range 1-65535")
@@ -137,7 +132,7 @@ class PyprojectToml(BaseModel):
     tool: ToolTable | None = None
 
 
-class SecretsDeclaration(RootModel[dict[str, "SecretKey"]]):
+class SecretsDeclaration(RootModel[dict[AllCapsName, "SecretKey"]]):
     @model_validator(mode="before")
     @classmethod
     def _coerce_string_specs(cls, value: Yaml) -> Yaml:
@@ -146,13 +141,6 @@ class SecretsDeclaration(RootModel[dict[str, "SecretKey"]]):
         if not is_mapping(value):
             raise ValueError("must be a KEY: description mapping")
         return {name: ({"description": spec} if isinstance(spec, str) else spec) for name, spec in value.items()}
-
-    @model_validator(mode="after")
-    def _require_all_caps_keys(self) -> Self:
-        for name in self.root:
-            if not ENV_NAME_PATTERN.match(name):
-                raise ValueError(f"{name!r} must be an ALL_CAPS key")
-        return self
 
     def validate_consumed(self, consumed: set[str], rendering: Substrate, source: str) -> None:
         undeclared = sorted(consumed - self.root.keys())
@@ -205,10 +193,7 @@ class ConfigFile(BaseModel):
     @classmethod
     def load(cls, path: Path) -> ConfigFile:
         if "${" in path.read_text(encoding="utf-8"):
-            raise ValueError(
-                f"{path.as_posix()}: boatyard.yml carries no ${{...}} spelling; "
-                f"interpolation lives in score sources and committed artifacts"
-            )
+            raise ValueError(f"{path.as_posix()}: boatyard.yml carries no ${{...}} spelling")
         config = load_yaml_model(cls, path)
         config.resolve(path.parent)
         return config
@@ -219,10 +204,6 @@ class ConfigFile(BaseModel):
         if installed != DEV_SENTINEL and not SpecifierSet(self.requires).contains(installed, prereleases=True):
             raise ValueError(f"boatyard {installed} does not satisfy requires={self.requires!r}")
         self.root = root
-
-        # Compose is unconditional; k8s is the optional substrate.
-        if not self.services:
-            raise ValueError("services is required; every boatyard repo ships a compose graph")
 
         # Resolve {uv} and {python} templates in base_images against the toolchain pins.
         pins: dict[str, str] = {}
@@ -241,10 +222,7 @@ class ConfigFile(BaseModel):
                     else None
                 )
                 if not declared:
-                    raise ValueError(
-                        f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version is not declared; "
-                        "the {uv} template requires it"
-                    )
+                    raise ValueError(f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version is not declared")
                 pin_match = re.fullmatch(r"==(?P<version>[^,*\s]+)", declared.strip())
                 if pin_match is None:
                     raise ValueError(
@@ -255,9 +233,7 @@ class ConfigFile(BaseModel):
             elif key == "python":
                 python_version = root / PYTHON_VERSION_PATH
                 if not python_version.is_file():
-                    raise ValueError(
-                        f"{PYTHON_VERSION_PATH.as_posix()}: the file is absent; the {{{key}}} template requires it"
-                    )
+                    raise ValueError(f"{PYTHON_VERSION_PATH.as_posix()}: the {{python}} template requires this file")
                 # Take the first non-empty line.
                 version = next(
                     (line.strip() for line in python_version.read_text(encoding="utf-8").splitlines() if line.strip()),
@@ -265,12 +241,12 @@ class ConfigFile(BaseModel):
                 )
                 if not version:
                     raise ValueError(
-                        f"{PYTHON_VERSION_PATH.as_posix()}: the file is empty; the {{{key}}} template requires it"
+                        f"{PYTHON_VERSION_PATH.as_posix()}: the {{python}} template requires a non-empty file"
                     )
                 pins[key] = version
             else:
                 raise ValueError(
-                    f"base_images template key {{{key}}} is unknown; the toolchain pins are {{uv}}, {{python}}"
+                    f"base_images template key {{{key}}} is not one of the toolchain pins {{uv}}, {{python}}"
                 )
         self.base_images = {
             name: TEMPLATE_KEY_PATTERN.sub(partial(_resolve_template_key, pins), reference)
@@ -289,7 +265,7 @@ class ConfigFile(BaseModel):
                 )
         if service_builds and self.repository is None:
             listed = ", ".join(sorted(service_builds))
-            raise ValueError(f"Dockerfile service directories exist ({listed}); repository is required")
+            raise ValueError(f"repository is required by the Dockerfile service directories {listed}")
         self.service_builds = service_builds
 
         # Enforce the lock pairing laws.
@@ -300,7 +276,7 @@ class ConfigFile(BaseModel):
             for entry in self.services.values()
         )
         if declares_routes and self.gateway is None:
-            raise ValueError("routes are declared; gateway is required")
+            raise ValueError("routes require a gateway declaration")
         for chart in declared_charts:
             values = root / self.score_dir / "k8s" / "values" / f"{chart}.yaml"
             if not values.is_file():
@@ -308,15 +284,78 @@ class ConfigFile(BaseModel):
 
         surfaces: dict[str, dict[str, SlotDemand]] = {}
         for entry_name, entry in self.local_service_entries():
+            score_dir = root / self.score_dir
             for workload_name in entry.workloads:
-                workload_path = root / self.score_dir / workload_name
+                workload_path = score_dir / workload_name
                 if not workload_path.is_file():
                     raise ValueError(f"{workload_path.as_posix()}: the workload file is required")
-            workloads = load_workloads(root / self.score_dir, entry.workloads, WorkloadDocument)
-            refuse_colliding_service_names(entry_name, workloads, root / self.score_dir)
-            surfaces[entry_name] = authored_slot_demands(
-                workloads, root / self.score_dir, root, set(self.base_images) | set(self.owned_images)
-            )
+            workloads = load_workloads(score_dir, entry.workloads, WorkloadDocument)
+
+            # A bundle's bare service names are its compose identity: workload containers, type-joined
+            # provisioner services, and the reserved barrier name each claim one, and one workload
+            # claims each rendered spelling.
+            claims: dict[str, list[str]] = {BARRIER_SERVICE: ["the reserved barrier name"]}
+            spellings: dict[str, list[str]] = {}
+            for workload in workloads:
+                for container_name in workload.document.containers:
+                    site = f"{workload.file_name}: containers.{container_name}"
+                    claims.setdefault(container_name, []).append(site)
+                    spelling = f"{Path(workload.file_name).stem}-{container_name}"
+                    spellings.setdefault(spelling, []).append(site)
+            for file_name, entries in select_provisioner_files(score_dir, "compose", workloads):
+                for provisioner in entries:
+                    if not is_mapping(provisioner):
+                        continue
+                    services = provisioner.get("services")
+                    if not is_mapping(services):
+                        continue
+                    for service_name in services:
+                        claims.setdefault(service_name, []).append(f"{file_name}: services.{service_name}")
+            _refuse_duplicated_claims(entry_name, "service name", claims)
+            _refuse_duplicated_claims(entry_name, "rendered spelling", spellings)
+
+            # The compose consumer surface of a local entry, from authored text: suffixed workload
+            # slots (bare slots are render-expanded or refused), type-joined provisioner
+            # services/state/outputs text (odd $ rides verbatim into the artifact), and
+            # consumer-interpolated files text (authored $$ lands single-$ in the artifact).
+            demands: dict[str, SlotDemand] = {}
+            for workload in workloads:
+                text = (score_dir / workload.file_name).read_text(encoding="utf-8")
+                merge_slot_demands(demands, text, parity=1, suffixed_only=True)
+            for _file_name, entries in select_provisioner_files(score_dir, "compose", workloads):
+                for provisioner in entries:
+                    if not is_mapping(provisioner):
+                        continue
+                    for field in ("services", "state", "outputs"):
+                        value = provisioner.get(field)
+                        if is_mapping(value):
+                            merge_slot_demands(
+                                demands, yaml.dump(value, default_flow_style=False), parity=1, suffixed_only=False
+                            )
+            for workload in workloads:
+                document = workload.document
+                for container in document.containers.values():
+                    for target, spec in container.files.items():
+                        if target not in document.consumer_interpolated_targets:
+                            continue
+                        if not is_mapping(spec):
+                            continue
+                        content = spec.get("content")
+                        if not isinstance(content, str):
+                            content = None
+                            source = spec.get("source")
+                            if isinstance(source, str):
+                                files_path = root / source
+                                if not files_path.is_file():
+                                    raise ValueError(
+                                        f"{workload.file_name}: files source {source!r} does not exist at the repo root"
+                                    )
+                                content = files_path.read_text(encoding="utf-8")
+                        if content is not None:
+                            merge_slot_demands(demands, content, parity=0, suffixed_only=False)
+            for key in set(self.base_images) | set(self.owned_images):
+                demands.pop(key, None)
+            surfaces[entry_name] = demands
         self.consumer_surfaces = surfaces
 
         return self
@@ -419,20 +458,15 @@ class ConfigFile(BaseModel):
         for name, reference in value.items():
             if name in (ALPINE_IMAGE, CADDY_IMAGE):
                 raise ValueError(
-                    f"base_images.{name}: the barrier and edge pins are boatyard-owned "
-                    f"(barrier_image:/edge_image:); base_images holds Dockerfile build inputs only"
+                    f"base_images.{name}: the barrier and edge pins are boatyard-owned (barrier_image:/edge_image:)"
                 )
-            match = DECLARED_REFERENCE_PATTERN.fullmatch(reference)
-            if match is None or not (match.group("tag") or match.group("digest")):
-                raise ValueError(f"base_images.{name}: {reference!r} must be 'path:tag' or 'path@digest'")
+            _require_declared_reference(reference, f"base_images.{name}")
         return value
 
     @field_validator("barrier_image", "edge_image")
     @classmethod
     def _validate_owned_image_pins(cls, value: str, info: ValidationInfo) -> str:
-        match = DECLARED_REFERENCE_PATTERN.fullmatch(value)
-        if match is None or not (match.group("tag") or match.group("digest")):
-            raise ValueError(f"{info.field_name}: {value!r} must be 'path:tag' or 'path@digest'")
+        _require_declared_reference(value, str(info.field_name))
         return value
 
     @field_validator("variants")
@@ -496,16 +530,13 @@ class ConfigFile(BaseModel):
         owner: dict[str, str] = {}
         for where, route in route_sites:
             if route.path in owner:
-                raise ValueError(
-                    f"{where}: route path {route.path} is already declared at {owner[route.path]}; "
-                    "paths are edge-wide unique"
-                )
+                raise ValueError(f"{where}: route path {route.path} is already declared at {owner[route.path]}")
             owner[route.path] = where
 
         if AUTH_GROUP_NAME in services:
             auth = services[AUTH_GROUP_NAME]
             if not isinstance(auth, ServiceGroup):
-                raise ValueError(f"services.{AUTH_GROUP_NAME}: auth is a reserved group name; it must be a group")
+                raise ValueError(f"services.{AUTH_GROUP_NAME} must be a group (the name is reserved)")
             for option_name, option in auth.options.items():
                 if len(option.routes) != 1:
                     raise ValueError(
@@ -515,13 +546,14 @@ class ConfigFile(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> Self:
-        if self.services:
-            any_local = any(not row.entry.remote for row in _flatten_service_members(self.services))
-            if any_local and not self.repository:
-                raise ValueError("local entries (workloads:) are declared; repository is required")
-
+        # Compose is unconditional; k8s is the optional substrate.
+        if not self.services:
+            raise ValueError("services is required")
+        any_local = any(not row.entry.remote for row in _flatten_service_members(self.services))
+        if any_local and not self.repository:
+            raise ValueError("repository is required by the local entries (workloads:)")
         if (self.base_images or self.owned_images) and not self.platforms:
-            raise ValueError("images are declared; platforms is required (an amd64-only repo declares [linux/amd64])")
+            raise ValueError("platforms is required when images are declared (an amd64-only repo declares [linux/amd64])")
         return self
 
 
@@ -549,7 +581,18 @@ class ServiceEntry(BaseModel):
     @model_validator(mode="after")
     def _validate(self) -> Self:
         if self.ref is not None:
-            require_bundle_reference(self.ref)
+            if not self.ref.startswith(OCI_REFERENCE_PREFIX):
+                raise ValueError(f"ref {self.ref!r} must be an OCI include ({OCI_REFERENCE_PREFIX}host/path:tag)")
+            remainder = self.ref.removeprefix(OCI_REFERENCE_PREFIX)
+            if "@" in remainder:
+                raise ValueError(f"ref {self.ref!r} must carry a published tag, not a digest")
+            reference, separator, tag = remainder.rpartition(":")
+            if not separator or not reference or not tag or re.search(r"\s", remainder):
+                raise ValueError(f"ref {self.ref!r} must carry a tag ({OCI_REFERENCE_PREFIX}host/path:tag)")
+            if tag == "latest":
+                raise ValueError(f"ref {self.ref!r} must not carry the mutable tag 'latest'")
+            if REF_TAG_OPERATOR_PATTERN.search(tag) or any(part in ("x", "X") for part in tag.split(".")):
+                raise ValueError(f"ref {self.ref!r}: the tag {tag!r} must be an exact tag, not a range")
         if self.ref is not None and self.workloads:
             raise ValueError("an entry declares ref: or workloads:, not both")
         if self.ref is None and not self.workloads:
@@ -661,10 +704,7 @@ class K8sConfig(BaseModel):
                     f"charts.{name}: {reference!r} must be an upstream-native OCI reference "
                     f"({OCI_REFERENCE_PREFIX}host/path:tag or {OCI_REFERENCE_PREFIX}host/path@digest)"
                 )
-            remainder = reference.removeprefix(OCI_REFERENCE_PREFIX)
-            match = DECLARED_REFERENCE_PATTERN.fullmatch(remainder)
-            if match is None or not (match.group("tag") or match.group("digest")):
-                raise ValueError(f"charts.{name}: {reference!r} must carry a tag or a digest")
+            _require_declared_reference(reference.removeprefix(OCI_REFERENCE_PREFIX), f"charts.{name}")
         if not (self.workloads or self.charts):
             raise ValueError("the k8s section must declare workloads or charts")
         return self
@@ -737,14 +777,14 @@ class WorkloadDocument(BaseModel):
         adapter = annotations.get(PROBE_ADAPTER_ANNOTATION)
         if adapter is not None and adapter not in PROBE_ADAPTERS:
             raise ValueError(
-                f"{PROBE_ADAPTER_ANNOTATION} is {adapter!r}; the supported adapters are {list(PROBE_ADAPTERS)}"
+                f"{PROBE_ADAPTER_ANNOTATION} must be one of the supported adapters {list(PROBE_ADAPTERS)}, not {adapter!r}"
             )
 
         restart = annotations.get(RESTART_ANNOTATION)
         if restart is not None and restart not in COMPOSE_RESTART_POLICIES:
             raise ValueError(
-                f"{RESTART_ANNOTATION} is {restart!r}; the compose restart policies are "
-                f"{list(COMPOSE_RESTART_POLICIES)}"
+                f"{RESTART_ANNOTATION} must be one of the compose restart policies "
+                f"{list(COMPOSE_RESTART_POLICIES)}, not {restart!r}"
             )
 
         consumer_interpolated = annotations.get(CONSUMER_INTERPOLATED_ANNOTATION)
@@ -794,33 +834,6 @@ class LoadedWorkload(NamedTuple):
     document: WorkloadDocument
 
 
-def refuse_colliding_service_names(entry_name: str, workloads: list[LoadedWorkload], score_dir: Path) -> None:
-    # A bundle's bare service names are its compose identity: workload containers, type-joined
-    # provisioner services, and the reserved barrier name each claim one, and one workload
-    # claims each rendered spelling.
-    claims: dict[str, list[str]] = {BARRIER_SERVICE: ["the reserved barrier name"]}
-    spellings: dict[str, list[str]] = {}
-    for workload in workloads:
-        for container_name in workload.document.containers:
-            site = f"{workload.file_name}: containers.{container_name}"
-            claims.setdefault(container_name, []).append(site)
-            spelling = f"{Path(workload.file_name).stem}-{container_name}"
-            spellings.setdefault(spelling, []).append(site)
-
-    for file_name, entries in select_provisioner_files(score_dir, "compose", workloads):
-        for provisioner in entries:
-            if not is_mapping(provisioner):
-                continue
-            services = provisioner.get("services")
-            if not is_mapping(services):
-                continue
-            for service_name in services:
-                claims.setdefault(service_name, []).append(f"{file_name}: services.{service_name}")
-
-    _refuse_duplicated_claims(entry_name, "service name", claims)
-    _refuse_duplicated_claims(entry_name, "rendered spelling", spellings)
-
-
 def load_workloads(score_dir: Path, names: list[str], lens: type[WorkloadDocument]) -> list[LoadedWorkload]:
     loaded: list[LoadedWorkload] = []
     for name in names:
@@ -860,19 +873,10 @@ def require_workload_reference(name: str) -> None:
         raise ValueError(f"workload reference {name!r} must be a flat .yaml file name")
 
 
-def require_bundle_reference(value: str) -> None:
-    if not value.startswith(OCI_REFERENCE_PREFIX):
-        raise ValueError(f"ref {value!r} must be an OCI include ({OCI_REFERENCE_PREFIX}host/path:tag)")
-    remainder = value.removeprefix(OCI_REFERENCE_PREFIX)
-    if "@" in remainder:
-        raise ValueError(f"ref {value!r} pins a digest; a ref carries a published tag and the lock records the digest")
-    reference, separator, tag = remainder.rpartition(":")
-    if not separator or not reference or not tag or re.search(r"\s", remainder):
-        raise ValueError(f"ref {value!r} must carry a tag ({OCI_REFERENCE_PREFIX}host/path:tag)")
-    if tag == "latest":
-        raise ValueError(f"ref {value!r}: the tag 'latest' is mutable and never a pin; pin a stable, dev, or sha tag")
-    if REF_TAG_OPERATOR_PATTERN.search(tag) or any(part in ("x", "X") for part in tag.split(".")):
-        raise ValueError(f"ref {value!r}: the tag {tag!r} is a range; exact tags only")
+def _require_declared_reference(value: str, site: str) -> None:
+    match = DECLARED_REFERENCE_PATTERN.fullmatch(value)
+    if match is None or not (match.group("tag") or match.group("digest")):
+        raise ValueError(f"{site}: {value!r} must carry a tag or a digest")
 
 
 def compose_bundle_output_path(root: Path, name: str) -> Path:
@@ -913,17 +917,6 @@ def bundle_lock_key(name: str) -> str:
     return lock_key_prefix(name) + "BUNDLE"
 
 
-def scan_bundle_texts(
-    entry_name: str,
-    routes: list[RouteConfig],
-    ports: list[PortDeclaration],
-    texts: list[str],
-) -> BundleScan:
-    # Refuse declared routes and ports that name no service in the bundle and answer its slot demands.
-    service_names = refuse_unresolved_references(entry_name, routes, ports, texts, prefix=f"{entry_name}-")
-    return BundleScan(service_names=service_names, slots=artifact_slot_demands(texts))
-
-
 def artifact_slot_demands(texts: list[str]) -> dict[str, SlotDemand]:
     # Artifact text: odd-$ slots are the consumer surface; marker-bearing fan spellings are
     # machine-filled and a :- default spells optional.
@@ -936,44 +929,6 @@ def artifact_slot_demands(texts: list[str]) -> dict[str, SlotDemand]:
     return demands
 
 
-def authored_slot_demands(
-    workloads: list[LoadedWorkload],
-    score_dir: Path,
-    root: Path,
-    lock_keys: set[str],
-) -> dict[str, SlotDemand]:
-    # The compose consumer surface of a local entry, from authored text: suffixed workload
-    # slots (bare slots are render-expanded or refused), type-joined provisioner
-    # services/state/outputs text (odd $ rides verbatim into the artifact), and
-    # consumer-interpolated files text (authored $$ lands single-$ in the artifact).
-    demands: dict[str, SlotDemand] = {}
-    for workload in workloads:
-        text = (score_dir / workload.file_name).read_text(encoding="utf-8")
-        merge_slot_demands(demands, text, parity=1, suffixed_only=True)
-    for _file_name, entries in select_provisioner_files(score_dir, "compose", workloads):
-        for provisioner in entries:
-            if not is_mapping(provisioner):
-                continue
-            for field in ("services", "state", "outputs"):
-                value = provisioner.get(field)
-                if is_mapping(value):
-                    merge_slot_demands(
-                        demands, yaml.dump(value, default_flow_style=False), parity=1, suffixed_only=False
-                    )
-    for workload in workloads:
-        document = workload.document
-        for container in document.containers.values():
-            for target, spec in container.files.items():
-                if target not in document.consumer_interpolated_targets:
-                    continue
-                content = _files_text(spec, root, workload.file_name)
-                if content is not None:
-                    merge_slot_demands(demands, content, parity=0, suffixed_only=False)
-    for key in lock_keys:
-        demands.pop(key, None)
-    return demands
-
-
 def merge_slot_demands(demands: dict[str, SlotDemand], text: str, *, parity: int, suffixed_only: bool) -> None:
     for match in COMPOSE_SLOT.finditer(text):
         if len(match.group(1)) % 2 != parity:
@@ -982,21 +937,6 @@ def merge_slot_demands(demands: dict[str, SlotDemand], text: str, *, parity: int
             continue
         required = not (match.group(3) or "").startswith(":-")
         demands[match.group(2)] = SlotDemand(required=demands.get(match.group(2), SlotDemand()).required or required)
-
-
-def _files_text(spec: Yaml, root: Path, file_name: str) -> str | None:
-    if not is_mapping(spec):
-        return None
-    content = spec.get("content")
-    if isinstance(content, str):
-        return content
-    source = spec.get("source")
-    if isinstance(source, str):
-        path = root / source
-        if not path.is_file():
-            raise ValueError(f"{file_name}: files source {source!r} does not exist at the repo root")
-        return path.read_text(encoding="utf-8")
-    return None
 
 
 def refuse_unresolved_references(
@@ -1027,7 +967,7 @@ def refuse_unresolved_references(
 
 def mirrored_ref(reference: str, prefix: str) -> str:
     if reference.startswith(f"{prefix}/"):
-        raise ValueError(f"declarations are upstream-native; {reference} already carries the mirror prefix {prefix}")
+        raise ValueError(f"{reference} must not carry the mirror prefix {prefix} (declarations are upstream-native)")
     return f"{prefix}/{reference}"
 
 

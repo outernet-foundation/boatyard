@@ -182,7 +182,7 @@ def test_a_key_demanded_by_two_units_refuses_naming_shared(tmp_path: Path) -> No
 
     message = _refusal(tmp_path, values, slots={"API_TOKEN": {"required": False}, "MON_TOKEN": {"required": True}})
 
-    assert "values.images.core: API_TOKEN is demanded by core, monitor; set it in values.shared" in message
+    assert "values.images.core: API_TOKEN is demanded by core, monitor, not core alone" in message
 
 
 def test_a_shared_key_demanded_by_one_unit_refuses_naming_its_home(tmp_path: Path) -> None:
@@ -192,7 +192,7 @@ def test_a_shared_key_demanded_by_one_unit_refuses_naming_its_home(tmp_path: Pat
 
     message = _refusal(tmp_path, values)
 
-    assert "values.shared: PROV_TOKEN is demanded by core only; set it in values.images.core" in message
+    assert "values.shared: PROV_TOKEN is demanded by core only" in message
 
 
 def test_a_shared_key_demanded_by_nothing_refuses(tmp_path: Path) -> None:
@@ -211,7 +211,7 @@ def test_the_minted_public_url_key_refuses(tmp_path: Path) -> None:
 
     message = _refusal(tmp_path, values)
 
-    assert "PUBLIC_URL is minted from public_url" in message
+    assert "PUBLIC_URL is not hand-settable (minted from public_url)" in message
 
 
 def test_the_minted_edge_base_url_key_refuses(tmp_path: Path) -> None:
@@ -220,7 +220,7 @@ def test_the_minted_edge_base_url_key_refuses(tmp_path: Path) -> None:
 
     message = _refusal(tmp_path, values, gateway=9443)
 
-    assert "EDGE_BASE_URL is minted from the gateway declaration" in message
+    assert "EDGE_BASE_URL is not hand-settable (minted from the gateway declaration)" in message
 
 
 def test_the_minted_edge_base_url_key_refuses_without_a_gateway(tmp_path: Path) -> None:
@@ -229,7 +229,7 @@ def test_the_minted_edge_base_url_key_refuses_without_a_gateway(tmp_path: Path) 
 
     message = _refusal(tmp_path, values)
 
-    assert "EDGE_BASE_URL is minted from the gateway declaration" in message
+    assert "EDGE_BASE_URL is not hand-settable (minted from the gateway declaration)" in message
 
 
 def test_an_unknown_ports_override_refuses_listing_the_vocabulary(tmp_path: Path) -> None:
@@ -237,7 +237,7 @@ def test_an_unknown_ports_override_refuses_listing_the_vocabulary(tmp_path: Path
 
     message = _refusal(tmp_path, values, ports=[{"service": "api", "published": 5678, "target": 5678}])
 
-    assert "ports: names ['ghost']; the port-declaring entries are ['core']" in message
+    assert "ports: names ['ghost'] are not among the port-declaring entries ['core']" in message
 
 
 def test_a_gateway_override_without_a_declared_gateway_refuses(tmp_path: Path) -> None:
@@ -385,7 +385,7 @@ def test_a_fill_refusal_names_shell_set_values_as_ignored(tmp_path: Path, monkey
 
     message = _refusal(tmp_path, values)
 
-    assert "API_TOKEN set in the shell and ignored" in message
+    assert "API_TOKEN are set in the shell and ignored" in message
 
 
 def test_a_reference_to_a_sibling_key_resolves_at_render(tmp_path: Path) -> None:
@@ -517,7 +517,7 @@ def test_a_marker_reference_refuses(tmp_path: Path) -> None:
 
     message = _refusal(tmp_path, values)
 
-    assert "carries a reserved __BOATYARD_LOCK__/__BOATYARD_TREE__ marker" in message
+    assert "${CORE__BOATYARD_LOCK__PROV_TOKEN} must not carry a reserved marker" in message
 
 
 def test_a_reference_cycle_refuses(tmp_path: Path) -> None:

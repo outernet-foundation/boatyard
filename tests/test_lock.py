@@ -1012,7 +1012,8 @@ class TestPlatformSelectionLaw:
 
     def test_a_multi_platform_lock_without_a_selection_refuses_listing_recorded(self) -> None:
         with pytest.raises(
-            ValueError, match=r"platforms \['linux/amd64', 'linux/arm64'\] are recorded.*platform: must be named"
+            ValueError,
+            match=r"platform must be named in boatyard\.values\.yaml \(the lock records \['linux/amd64', 'linux/arm64'\]\)",
         ):
             _selection_lock().manifest_references(None)
 
@@ -1056,7 +1057,8 @@ class TestPairedLoad:
         )
 
         with pytest.raises(
-            ValidationError, match=r"records platforms \['linux/amd64', 'linux/arm64'\].*run boatyard lock"
+            ValidationError,
+            match=r"records platforms \['linux/amd64', 'linux/arm64'\] but boatyard\.yml declares \['linux/amd64'\]",
         ):
             LockFile.load(tmp_path / LOCK_PATH, self._config(tmp_path))
 
@@ -1075,7 +1077,11 @@ class TestPairedLoad:
             },
         )
 
-        with pytest.raises(ValidationError, match=r"image entry UV_IMAGE records platforms.*run boatyard lock"):
+        with pytest.raises(
+            ValidationError,
+            match=r"image entry UV_IMAGE records platforms \['linux/amd64', 'linux/arm64'\] but the lock records "
+            r"\['linux/amd64'\]",
+        ):
             LockFile.load(tmp_path / LOCK_PATH, self._config(tmp_path))
 
     def test_a_missing_declared_entry_refuses_as_coverage(self, tmp_path: Path) -> None:
@@ -1116,7 +1122,7 @@ class TestPairedLoad:
             },
         )
 
-        with pytest.raises(ValidationError, match=r"no longer declares \(\['GHOST_IMAGE'\]\); run boatyard lock"):
+        with pytest.raises(ValidationError, match=r"no longer declares \(\['GHOST_IMAGE'\]\)"):
             LockFile.load(tmp_path / LOCK_PATH, self._config(tmp_path))
 
     def test_a_missing_lock_in_a_platforms_repo_refuses_as_stale(

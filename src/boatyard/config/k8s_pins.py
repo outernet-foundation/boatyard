@@ -35,12 +35,9 @@ def parse_pins(data: object) -> dict[str, str]:
 
 def load_pins(path: Path, demanded: set[str]) -> dict[str, str]:
     if not path.is_file():
-        raise ValueError(
-            f"{path.as_posix()}: the k8s pins are required; run 'boatyard bump' at a CI-built head "
-            "(generation never bootstraps them)"
-        )
+        raise ValueError(f"{path.as_posix()}: the k8s pins file is required")
     pins = parse_pins(load_yaml(path))
     unpinned = sorted(demanded - pins.keys())
     if unpinned:
-        raise ValueError(f"{path.as_posix()}: no pin for {', '.join(unpinned)}; run 'boatyard bump' at a CI-built head")
+        raise ValueError(f"{path.as_posix()}: lacks pins for {', '.join(unpinned)}")
     return pins

@@ -236,7 +236,7 @@ class TestEdgeStanza:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "routes are declared; gateway is required" in str(result.exception)
+        assert "routes require a gateway declaration" in str(result.exception)
 
 
 class TestValuesLoad:
