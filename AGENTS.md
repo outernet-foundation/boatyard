@@ -36,6 +36,9 @@ Design intent and silent-failure traps, one fact per bullet.
 - The mint list (`secrets.txt`) is the k8s rendering's consumed secret refs, walked from the
   generated output — no secret vocabulary is authored anywhere, and a compose-only rendering
   mints an empty list.
+- A service group derives its option set from one declared variant dimension (`variants:` plus
+  group-level `workloads:`) or authors it (`options:`); the dimension name is the one spelling
+  across the Dockerfile ARG, the workload slot, and the k8s selection — never re-described by hand.
 - Plain score-compose silently drops `httpGet` probes; boatyard's lens makes the omission loud
   instead via the workload's `outernet.internal/probe-adapter` annotation.
 - Substrate needs live in workload files as `outernet.internal/*` annotations — `boatyard.yml`
