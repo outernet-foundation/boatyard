@@ -170,7 +170,7 @@ def up(
                 "up",
                 *["--pull", "missing", *(["--quiet-pull"] if quiet_pull else []), *(["-d"] if not attached else [])],
                 env_file=materialized_env_file,
-                slot_names=[*plan.values, *plan.lock_entries, *plan.tree_entries, *plan.demanded],
+                slot_names=[*plan.values, *plan.lock_entries, *plan.tree_entries, *plan.consumed],
             )
         )
 

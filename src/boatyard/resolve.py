@@ -15,8 +15,8 @@ from boatyard.models.config_file import (
     ConfigFile,
     ResolvedService,
     ServiceGroup,
-    SlotDemand,
-    artifact_slot_demands,
+    Slot,
+    artifact_slots,
     bundle_lock_key,
     compose_bundle_output_path,
     env_lock_slot,
@@ -40,7 +40,7 @@ class AssemblyPlan(NamedTuple):
     values: dict[str, str]
     lock_entries: dict[str, str]
     tree_entries: dict[str, str]
-    demanded: list[str]
+    consumed: list[str]
     consumer_entries: dict[str, str]
 
 
@@ -105,28 +105,28 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
         raise ValueError(f"{source}: gateway: is set but boatyard.yml declares no gateway")
 
     # Demand tables: authored consumer surfaces, lock-recorded bundle slots, override texts.
-    demands: dict[str, dict[str, SlotDemand]] = dict(config.consumer_surfaces)
+    slots_by_unit: dict[str, dict[str, Slot]] = dict(config.consumer_surfaces)
     homes = dict.fromkeys(config.consumer_surfaces, "images")
     remote_names = {name for name, _reference, _entry in config.remote_declared_entries()}
     for name in remote_names:
         homes[name] = "bundles"
         record = lock.bundles.get(bundle_lock_key(name))
         if record is not None:
-            demands[name] = dict(record.slots)
+            slots_by_unit[name] = dict(record.slots)
     for name in sorted(participating):
         if name not in values.path_overrides or name not in remote_names:
             continue
-        demands[name] = artifact_slot_demands([
+        slots_by_unit[name] = artifact_slots([
             _override_bundle_path(values, name, config.root).read_text(encoding="utf-8")
         ])
 
-    # Values sections: every key sits in its demanding unit's section; shared keys are shared.
+    # Values sections: every key sits in its consuming unit's section; shared keys are shared.
     local_names = sorted(name for name, home in homes.items() if home == "images")
     sorted_remote_names = sorted(name for name, home in homes.items() if home == "bundles")
-    demanders: dict[str, set[str]] = {}
-    for unit, slots in demands.items():
+    consumers: dict[str, set[str]] = {}
+    for unit, slots in slots_by_unit.items():
         for name in slots:
-            demanders.setdefault(name, set()).add(unit)
+            consumers.setdefault(name, set()).add(unit)
 
     for section_name, expected_home, noun, other_names in (
         ("images", "images", "local", local_names),
@@ -140,21 +140,21 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
                     f"(the {noun} entries are {other_names})"
                 )
             site = f"values.{section_name}.{name}"
-            surface = sorted(demands.get(name, {}))
+            surface = sorted(slots_by_unit.get(name, {}))
             for key in sorted(entries[name]):
-                if key not in demands.get(name, {}):
-                    raise ValueError(f"{site}: {key} is demanded by no surface of {name} (the surface is {surface})")
-                if demanders[key] - {name}:
+                if key not in slots_by_unit.get(name, {}):
+                    raise ValueError(f"{site}: {key} is consumed by no surface of {name} (the surface is {surface})")
+                if consumers[key] - {name}:
                     raise ValueError(
-                        f"{site}: {key} is demanded by {', '.join(sorted(demanders[key]))}, not {name} alone"
+                        f"{site}: {key} is consumed by {', '.join(sorted(consumers[key]))}, not {name} alone"
                     )
 
     for name in sorted(values.values.shared):
-        if name not in demanders:
-            raise ValueError(f"{source}: values.shared: {name} is demanded by no surface")
-        if len(demanders[name]) == 1:
-            [home] = demanders[name]
-            raise ValueError(f"{source}: values.shared: {name} is demanded by {home} only")
+        if name not in consumers:
+            raise ValueError(f"{source}: values.shared: {name} is consumed by no surface")
+        if len(consumers[name]) == 1:
+            [home] = consumers[name]
+            raise ValueError(f"{source}: values.shared: {name} is consumed by {home} only")
 
     # The interpolation grammar: bare references only, roots resolvable, no cycles.
     sections: dict[str, Mapping[str, str]] = {"values.shared": values.values.shared}
@@ -200,7 +200,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
         cycle = chain[seen[node] :]
         raise ValueError(f"{source}: reference cycle: {' -> '.join([*cycle, cycle[0]])}")
 
-    # Every required demand is filled by some declared source.
+    # Every required slot is filled by some declared source.
     filled = set(values.values.shared)
     for name, home_section in homes.items():
         if home_section == "images" and name in values.values.images:
@@ -214,7 +214,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
     missing: dict[str, list[str]] = {}
     for unit in sorted(participating):
         unfilled = sorted(
-            name for name, demand in demands.get(unit, {}).items() if demand.required and name not in filled
+            name for name, slot in slots_by_unit.get(unit, {}).items() if slot.required and name not in filled
         )
         if unfilled:
             missing[unit] = unfilled
@@ -224,17 +224,6 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
         note = f" ({', '.join(ignored)} are set in the shell and ignored)" if ignored else ""
         raise ValueError(
             f"{source}: values.{homes[unit]}.{unit} requires {absent}, which no declared source fills{note}"
-        )
-
-    # Consumed keys are declared (boatyard.yml secrets or values keys).
-    declared: set[str] = set(config.secrets.root) if config.secrets is not None else set()
-    covered = set(values.values.shared)
-    for values_section in (*values.values.images.values(), *values.values.bundles.values()):
-        covered.update(values_section)
-    undeclared = sorted({name for slots in demands.values() for name in slots} - declared - covered)
-    if undeclared:
-        raise ValueError(
-            f"{source}: consumed keys {undeclared} are declared nowhere (boatyard.yml secrets or values keys)"
         )
 
     # path_overrides name vocabulary members; only ref entries are overridable.
@@ -312,7 +301,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
             shas_by_root[tree_root] = {image.sha_env: image.compute_sha(tree_root) for image in tree_images.values()}
         tree_entries.update({env_tree_slot(name, sha): value for sha, value in shas_by_root[tree_root].items()})
 
-    demanded = sorted({name for unit in participating for name in demands.get(unit, {})})
+    consumed = sorted({name for unit in participating for name in slots_by_unit.get(unit, {})})
 
     # Interpolation: minted slots first, then peeled hand values over bare references.
     hand = values.flattened
@@ -331,7 +320,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
         values=resolved_values,
         lock_entries=lock_entries,
         tree_entries=tree_entries,
-        demanded=demanded,
+        consumed=consumed,
         consumer_entries=lock.manifest_references(values.platform),
     )
 

@@ -57,7 +57,6 @@ def _write_repo(
     *,
     slots: dict[str, object] | None = None,
     workload: str = WORKLOAD,
-    secrets: object = [],
     gateway: int | None = None,
     ports: list[dict[str, object]] | None = None,
 ) -> Path:
@@ -78,7 +77,6 @@ def _write_repo(
         "repository": "ghcr.io/org/demo",
         "platforms": ["linux/amd64"],
         "base_images": base_images,
-        "secrets": secrets,
         "services": {
             "core": core_entry,
             "monitor": {"ref": "oci://ghcr.io/org/monitor:1.0.0"},
@@ -162,13 +160,12 @@ def _refusal(
     *,
     slots: dict[str, object] | None = None,
     workload: str = WORKLOAD,
-    secrets: object = [],
     gateway: int | None = None,
     ports: list[dict[str, object]] | None = None,
 ) -> str:
     try:
         _resolve(
-            _write_repo(tmp_path, values, slots=slots, workload=workload, secrets=secrets, gateway=gateway, ports=ports)
+            _write_repo(tmp_path, values, slots=slots, workload=workload, gateway=gateway, ports=ports)
         )
     except ValueError as error:
         return str(error)
@@ -193,36 +190,36 @@ def test_an_orphan_key_refuses_naming_the_section(tmp_path: Path) -> None:
 
     message = _refusal(tmp_path, values)
 
-    assert "values.images.core: GHOST is demanded by no surface of core" in message
+    assert "values.images.core: GHOST is consumed by no surface of core" in message
 
 
-def test_a_key_demanded_by_two_units_refuses_naming_shared(tmp_path: Path) -> None:
+def test_a_key_consumed_by_two_units_refuses_naming_shared(tmp_path: Path) -> None:
     values = _filled_values()
     del values["values"]["bundles"]["monitor"]["MON_TOKEN"]  # type: ignore[index]
 
     message = _refusal(tmp_path, values, slots={"API_TOKEN": {"required": False}, "MON_TOKEN": {"required": True}})
 
-    assert "values.images.core: API_TOKEN is demanded by core, monitor, not core alone" in message
+    assert "values.images.core: API_TOKEN is consumed by core, monitor, not core alone" in message
 
 
-def test_a_shared_key_demanded_by_one_unit_refuses_naming_its_home(tmp_path: Path) -> None:
+def test_a_shared_key_consumed_by_one_unit_refuses_naming_its_home(tmp_path: Path) -> None:
     values = _filled_values()
     del values["values"]["images"]["core"]["PROV_TOKEN"]  # type: ignore[index]
     values["values"]["shared"] = {"PROV_TOKEN": "three"}  # type: ignore[index]
 
     message = _refusal(tmp_path, values)
 
-    assert "values.shared: PROV_TOKEN is demanded by core only" in message
+    assert "values.shared: PROV_TOKEN is consumed by core only" in message
 
 
-def test_a_shared_key_demanded_by_nothing_refuses(tmp_path: Path) -> None:
+def test_a_shared_key_consumed_by_nothing_refuses(tmp_path: Path) -> None:
     values = _filled_values({"values": {"shared": {"ORPHAN": "x"}}})
     values["values"]["images"] = {}  # type: ignore[index]
     values["values"]["bundles"] = {}  # type: ignore[index]
 
     message = _refusal(tmp_path, values)
 
-    assert "values.shared: ORPHAN is demanded by no surface" in message
+    assert "values.shared: ORPHAN is consumed by no surface" in message
 
 
 def test_the_minted_public_url_key_refuses(tmp_path: Path) -> None:
@@ -284,13 +281,12 @@ def test_typed_port_and_gateway_overrides_load(tmp_path: Path) -> None:
     assert parsed.ports == {"core": 1234}
 
 
-def test_an_optional_demand_rides_unfilled_when_declared(tmp_path: Path) -> None:
+def test_an_optional_slot_rides_unfilled(tmp_path: Path) -> None:
     parsed = _load(
         _write_repo(
             tmp_path,
             _filled_values(),
             slots={"MON_TOKEN": {"required": True}, "MON_OPT": {"required": False}},
-            secrets=["MON_OPT"],
         )
     )
 
@@ -301,22 +297,6 @@ def test_an_optional_demand_rides_unfilled_when_declared(tmp_path: Path) -> None
         "MON_TOKEN": "four",
     }
     assert "MON_OPT" not in parsed.flattened
-
-
-def test_an_undeclared_consumed_key_refuses_at_load(tmp_path: Path) -> None:
-    values = _filled_values()
-
-    message = _refusal(tmp_path, values, slots={"MON_TOKEN": {}, "MON_OPT": {"required": False}})
-
-    assert "consumed keys ['MON_OPT'] are declared nowhere" in message
-
-
-def test_a_secrets_declaration_covers_a_demand(tmp_path: Path) -> None:
-    values = _filled_values()
-
-    parsed = _load(_write_repo(tmp_path, values, slots={"MON_TOKEN": {}}, secrets=["PROV_TOKEN"]))
-
-    assert "PROV_TOKEN" in parsed.flattened
 
 
 def test_consumer_interpolated_content_demands(tmp_path: Path) -> None:
@@ -366,7 +346,7 @@ def test_an_unselected_options_section_still_orphan_refuses(tmp_path: Path) -> N
     values["values"]["images"]["placeframe-cuda"] = {"GHOST": "x"}
     (root / VALUES_FILE).write_text(yaml.safe_dump(values), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="demanded by no surface"):
+    with pytest.raises(ValueError, match="consumed by no surface"):
         _resolve(root)
 
 

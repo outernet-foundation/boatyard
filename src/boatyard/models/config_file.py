@@ -15,7 +15,6 @@ from pydantic import (
     ConfigDict,
     Discriminator,
     Field,
-    RootModel,
     Tag,
     ValidationInfo,
     field_validator,
@@ -99,7 +98,6 @@ class ConfigFile(BaseModel):
     project_name: str
     services: dict[str, ServiceMember] = Field(default_factory=dict)
     k8s: K8sConfig | None = None
-    secrets: SecretsDeclaration | None = None
     mirror_prefix: str = DEFAULT_MIRROR_PREFIX
 
     score_dir: Path = Path("stack/score")
@@ -110,7 +108,7 @@ class ConfigFile(BaseModel):
     helm_version: str = "3.22.1"
 
     images: dict[str, Image] = Field(default_factory=dict, exclude=True)
-    consumer_surfaces: dict[str, dict[str, SlotDemand]] = Field(default_factory=dict, exclude=True)
+    consumer_surfaces: dict[str, dict[str, Slot]] = Field(default_factory=dict, exclude=True)
     root: Path = Field(default_factory=Path.cwd, exclude=True)
 
     @classmethod
@@ -304,28 +302,6 @@ def _require_nonempty_values(values: dict[str, str]) -> dict[str, str]:
 VarsMap = Annotated[dict[str, str], AfterValidator(_require_nonempty_values)]
 
 
-class SecretsDeclaration(RootModel[list[AllCapsName]]):
-    @model_validator(mode="before")
-    @classmethod
-    def _coerce_null(cls, value: Yaml) -> Yaml:
-        return [] if value is None else value
-
-    @field_validator("root")
-    @classmethod
-    def _refuse_duplicates(cls, value: list[str]) -> list[str]:
-        seen: set[str] = set()
-        for name in value:
-            if name in seen:
-                raise ValueError(f"secret {name!r} is declared twice")
-            seen.add(name)
-        return value
-
-    def validate_consumed(self, consumed: set[str], rendering: Substrate, source: str) -> None:
-        undeclared = sorted(consumed - set(self.root))
-        if undeclared:
-            raise ValueError(f"{source}: the {rendering} rendering consumes undeclared keys: " + ", ".join(undeclared))
-
-
 class ServiceGroup(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -439,7 +415,7 @@ class K8sConfig(BaseModel):
         return self
 
 
-class SlotDemand(BaseModel):
+class Slot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     required: bool = True
@@ -543,7 +519,7 @@ def _derive(config: ConfigFile, root: Path) -> None:
         if not values.is_file():
             raise ValueError(f"{values.as_posix()}: the chart's values file is required")
 
-    surfaces: dict[str, dict[str, SlotDemand]] = {}
+    surfaces: dict[str, dict[str, Slot]] = {}
     for entry_name, entry in config.local_service_entries():
         score_dir = root / config.score_dir
         workloads = load_workloads(score_dir, entry.workloads, WorkloadDocument)
@@ -557,17 +533,17 @@ def _derive(config: ConfigFile, root: Path) -> None:
         # consumer-interpolated files text (authored $$ lands single-$ in the artifact).
         claims: dict[str, list[str]] = {BARRIER_SERVICE: ["the reserved barrier name"]}
         spellings: dict[str, list[str]] = {}
-        demands: dict[str, SlotDemand] = {}
+        slots: dict[str, Slot] = {}
         for workload in workloads:
             document = workload.document
-            merge_slot_demands(demands, workload.text, parity=1, suffixed_only=True)
+            merge_slots(slots, workload.text, parity=1, suffixed_only=True)
             for container_name in document.containers:
                 site = f"{workload.file_name}: containers.{container_name}"
                 claims.setdefault(container_name, []).append(site)
                 spelling = f"{Path(workload.file_name).stem}-{container_name}"
                 spellings.setdefault(spelling, []).append(site)
             for content in document.interpolated_file_texts(root):
-                merge_slot_demands(demands, content, parity=0, suffixed_only=False)
+                merge_slots(slots, content, parity=0, suffixed_only=False)
         for file_name, entries in provisioner_files:
             for provisioner in entries:
                 if not is_mapping(provisioner):
@@ -579,14 +555,14 @@ def _derive(config: ConfigFile, root: Path) -> None:
                 for field in ("services", "state", "outputs"):
                     value = provisioner.get(field)
                     if is_mapping(value):
-                        merge_slot_demands(
-                            demands, yaml.dump(value, default_flow_style=False), parity=1, suffixed_only=False
+                        merge_slots(
+                            slots, yaml.dump(value, default_flow_style=False), parity=1, suffixed_only=False
                         )
         _refuse_duplicated_claims(entry_name, "service name", claims)
         _refuse_duplicated_claims(entry_name, "rendered spelling", spellings)
         for key in set(config.base_images) | set(config.owned_images):
-            demands.pop(key, None)
-        surfaces[entry_name] = demands
+            slots.pop(key, None)
+        surfaces[entry_name] = slots
     config.consumer_surfaces = surfaces
 
 
@@ -679,26 +655,26 @@ def bundle_lock_key(name: str) -> str:
     return lock_key_prefix(name) + "BUNDLE"
 
 
-def artifact_slot_demands(texts: list[str]) -> dict[str, SlotDemand]:
+def artifact_slots(texts: list[str]) -> dict[str, Slot]:
     # Artifact text: odd-$ slots are the consumer surface; marker-bearing fan spellings are
     # machine-filled and a :- default spells optional.
-    demands: dict[str, SlotDemand] = {}
+    slots: dict[str, Slot] = {}
     for text in texts:
         for match in COMPOSE_SLOT.finditer(text):
             if len(match.group(1)) % 2 != 1 or any(marker in match.group(2) for marker in RESERVED_SLOT_MARKERS):
                 continue
-            demands[match.group(2)] = SlotDemand(required=not (match.group(3) or "").startswith(":-"))
-    return demands
+            slots[match.group(2)] = Slot(required=not (match.group(3) or "").startswith(":-"))
+    return slots
 
 
-def merge_slot_demands(demands: dict[str, SlotDemand], text: str, *, parity: int, suffixed_only: bool) -> None:
+def merge_slots(slots: dict[str, Slot], text: str, *, parity: int, suffixed_only: bool) -> None:
     for match in COMPOSE_SLOT.finditer(text):
         if len(match.group(1)) % 2 != parity:
             continue
         if suffixed_only and match.group(3) is None:
             continue
         required = not (match.group(3) or "").startswith(":-")
-        demands[match.group(2)] = SlotDemand(required=demands.get(match.group(2), SlotDemand()).required or required)
+        slots[match.group(2)] = Slot(required=slots.get(match.group(2), Slot()).required or required)
 
 
 def refuse_unresolved_references(

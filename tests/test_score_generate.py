@@ -18,7 +18,7 @@ from boatyard import score_k8s as score_k8s_module
 from boatyard import score_generate as score_generate_module
 from boatyard.verbs import score as score_verb_module
 from boatyard.models import workload as workload_module
-from boatyard.models.config_file import ConfigFile, K8sConfig, SecretsDeclaration
+from boatyard.models.config_file import ConfigFile, K8sConfig
 from boatyard.models.lock_file import LockFile
 from boatyard.models.workload import WorkloadDocument
 from boatyard.models.image import Image
@@ -38,10 +38,6 @@ def _root_config(**sections: object) -> ConfigFile:
         payload.setdefault("platforms", ["linux/amd64"])
     payload.setdefault("services", {"ext": {"ref": "oci://ghcr.io/org/ext:0.1.0"}})
     return ConfigFile.model_validate(payload)
-
-
-def _empty_secrets() -> SecretsDeclaration:
-    return SecretsDeclaration.model_validate([])
 
 
 def test_tool_pin_defaults_live_on_the_root_model() -> None:
@@ -174,7 +170,7 @@ def _generate_with_chart(
         "images": {name: {"index": ref} for name, ref in images.items() if not name.endswith("_CHART")},
         "charts": {name: ref for name, ref in images.items() if name.endswith("_CHART")},
     })
-    generate_k8s(config, config.k8s, lock, local=False, secrets=_empty_secrets())
+    generate_k8s(config, config.k8s, lock, local=False)
     return helm
 
 
@@ -337,7 +333,6 @@ class TestMarkerSubstrateResolution:
             "project_name: example\n"
             f"platforms:\n{platform_lines}"
             f"{base_image_lines}"
-            "secrets: []\n"
             "services:\n"
             "  core:\n"
             "    workloads:\n"
@@ -397,7 +392,7 @@ class TestMarkerSubstrateResolution:
         lock = self._multi_arch_lock()
         assert config.k8s is not None
 
-        generate_k8s(config, config.k8s, lock, local=False, secrets=_empty_secrets())
+        generate_k8s(config, config.k8s, lock, local=False)
 
         resolved = yaml.safe_load(helm.values_contents[0])
         assert resolved["image"] == LOKI_INDEX
@@ -1183,7 +1178,7 @@ def test_k8s_builtin_templates_register_on_every_init(tmp_path: Path, monkeypatc
     _write_pins(tmp_path, {})
 
     assert config.k8s is not None
-    generate_k8s(config, config.k8s, LockFile.model_validate({}), local=False, secrets=_empty_secrets())
+    generate_k8s(config, config.k8s, LockFile.model_validate({}), local=False)
 
     init = next(command for command in recorder.commands if command.startswith("score-k8s init"))
     assert [Path(token).name for token in init.split() if token.endswith(".tpl")] == [
@@ -1204,7 +1199,7 @@ def test_k8s_instance_suffixes_are_preseeded_deterministically(tmp_path: Path, m
     _write_pins(tmp_path, {})
 
     assert config.k8s is not None
-    generate_k8s(config, config.k8s, LockFile.model_validate({}), local=False, secrets=_empty_secrets())
+    generate_k8s(config, config.k8s, LockFile.model_validate({}), local=False)
 
     seeded = yaml.safe_load(recorder.state_at_generate[output.name])
     assert seeded["workloads"]["api"]["instance_suffix"] == "-" + sha256(b"api").hexdigest()[:10]
@@ -1245,7 +1240,7 @@ def test_k8s_generation_bakes_the_pins_file_tags(tmp_path: Path, monkeypatch: py
     config, k8s = _pinned_config(tmp_path)
     monkeypatch.setattr(Image, "compute_sha", _refuse_the_tree_walk)
 
-    generate_k8s(config, k8s, LockFile.model_validate({}), local=False, secrets=_empty_secrets())
+    generate_k8s(config, k8s, LockFile.model_validate({}), local=False)
 
     assert recorder.command_envs["generate"] is not None
     assert recorder.command_envs["generate"]["API_SHA"] == PINNED_TAG
@@ -1259,7 +1254,7 @@ def test_k8s_generation_without_a_pins_file_refuses_naming_bump(
     config, k8s = _pinned_config(tmp_path)
 
     with pytest.raises(ValueError, match=r"boatyard\.k8s-pins\.yml: the k8s pins file is required"):
-        generate_k8s(config, k8s, LockFile.model_validate({}), local=False, secrets=_empty_secrets())
+        generate_k8s(config, k8s, LockFile.model_validate({}), local=False)
 
 
 def test_k8s_generation_refuses_a_workload_sha_slot_no_pin_covers(
@@ -1271,7 +1266,7 @@ def test_k8s_generation_refuses_a_workload_sha_slot_no_pin_covers(
     config, k8s = _pinned_config(tmp_path)
 
     with pytest.raises(ValueError, match=r"boatyard\.k8s-pins\.yml: lacks pins for WORKER_SHA"):
-        generate_k8s(config, k8s, LockFile.model_validate({}), local=False, secrets=_empty_secrets())
+        generate_k8s(config, k8s, LockFile.model_validate({}), local=False)
 
 
 def test_local_k8s_generation_derives_working_tree_tags_without_pins(
@@ -1285,7 +1280,7 @@ def test_local_k8s_generation_derives_working_tree_tags_without_pins(
 
     monkeypatch.setattr(Image, "compute_sha", _local_tree_sha)
 
-    generate_k8s(config, k8s, LockFile.model_validate({}), local=True, secrets=_empty_secrets())
+    generate_k8s(config, k8s, LockFile.model_validate({}), local=True)
 
     assert recorder.command_envs["generate"] is not None
     assert recorder.command_envs["generate"]["API_SHA"] == LOCAL_TAG
@@ -1411,7 +1406,7 @@ def test_variable_placeholders_refuse_or_stay_escaped(tmp_path: Path) -> None:
         bash("score-compose generate refused-variables.yaml --output refused.yaml", cwd=tmp_path)
 
 
-def _verb_repo(tmp_path: Path, secrets: object = []) -> None:
+def _verb_repo(tmp_path: Path) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "api.yaml").write_text(
         "metadata:\n  name: api\ncontainers:\n  api:\n    image: ${LOKI_IMAGE}\n", encoding="utf-8"
@@ -1441,38 +1436,33 @@ def _verb_repo(tmp_path: Path, secrets: object = []) -> None:
             "base_images": {
                 "LOKI_IMAGE": "docker.io/grafana/loki:3.5.0",
             },
-            "secrets": secrets,
             "services": {"core": {"workloads": ["api.yaml"]}},
         }),
         encoding="utf-8",
     )
 
 
-def test_generate_score_refuses_an_absent_secrets_section(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _verb_repo(tmp_path)
-    config = yaml.safe_load((tmp_path / "boatyard.yml").read_text(encoding="utf-8"))
-    del config["secrets"]
-    (tmp_path / "boatyard.yml").write_text(yaml.safe_dump(config), encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
-
-    with pytest.raises(ValueError, match="the secrets section is required"):
-        score_verb_module.generate_score(target="compose")
-
-
-def test_generate_score_writes_the_mint_list_from_the_declaration(
+def test_generate_score_writes_the_mint_list_from_the_k8s_rendering(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _verb_repo(tmp_path, secrets=["PUBLIC_URL", "S3_ACCESS_KEY"])
-    recorder = WorkloadContentsRecorder()
+    (tmp_path / "stack" / "score" / "k8s" / "values").mkdir(parents=True)
+    (tmp_path / "stack" / "score" / "k8s" / "values" / "loki.yaml").write_text("chart: {}\n", encoding="utf-8")
+    (tmp_path / "boatyard.lock.yml").write_text(
+        yaml.safe_dump({"charts": {"LOKI_CHART": MIRRORED_CHART}}), encoding="utf-8"
+    )
+    config = _root_config(repository="ghcr.io/org/repo", k8s={"workloads": ["api.yaml"], "charts": {"loki": CHART_REF}})
+    config.root = tmp_path
 
-    monkeypatch.setattr(score_module, "bash", recorder.run)
+    def _stub_generate_k8s(*args: object, **kwargs: object) -> tuple[Path, set[str]]:
+        return tmp_path / "manifests.yaml", {"PUBLIC_URL", "S3_ACCESS_KEY"}
+
     _offline_tool_ensure(monkeypatch, on_path=None)
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(score_generate_module, "generate_k8s", _stub_generate_k8s)
 
-    score_verb_module.generate_score(target="compose")
+    score_generate_module.generate_artifacts(config)
 
     mint = (tmp_path / "stack" / "generated" / "secrets.txt").read_text(encoding="utf-8")
-    assert mint == "# Generated by generate-score from the secrets declaration\nPUBLIC_URL\nS3_ACCESS_KEY\n"
+    assert mint == "# Generated by generate-score from the k8s rendering's consumed keys\nPUBLIC_URL\nS3_ACCESS_KEY\n"
 
 
 def _k8s_only_repo(tmp_path: Path) -> None:
@@ -1487,7 +1477,7 @@ def _k8s_only_repo(tmp_path: Path) -> None:
 def test_generate_score_on_a_compose_only_repo_derives_compose_and_requests_only_the_compose_tool(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    _verb_repo(tmp_path, secrets=["PUBLIC_URL"])
+    _verb_repo(tmp_path)
     recorder = WorkloadContentsRecorder()
 
     monkeypatch.setattr(score_module, "bash", recorder.run)
@@ -1499,6 +1489,8 @@ def test_generate_score_on_a_compose_only_repo_derives_compose_and_requests_only
     installed = [line.split()[1] for line in capsys.readouterr().out.splitlines() if line.startswith("Install ")]
     assert installed == ["score-compose"]
     assert (tmp_path / "stack" / "generated" / "compose" / "compose.core.yaml").is_file()
+    mint = (tmp_path / "stack" / "generated" / "secrets.txt").read_text(encoding="utf-8")
+    assert mint == "# Generated by generate-score from the k8s rendering's consumed keys\n"
 
 
 def test_generate_artifacts_on_a_k8s_only_repo_requests_no_compose_tool(
@@ -1512,12 +1504,11 @@ def test_generate_artifacts_on_a_k8s_only_repo_requests_no_compose_tool(
     config = _root_config(
         repository="ghcr.io/org/repo",
         k8s={"workloads": ["api.yaml"], "charts": {"loki": CHART_REF}},
-        secrets=[],
     )
     config.root = tmp_path
 
-    def _stub_generate_k8s(*args: object, **kwargs: object) -> Path:
-        return tmp_path / "manifests.yaml"
+    def _stub_generate_k8s(*args: object, **kwargs: object) -> tuple[Path, set[str]]:
+        return tmp_path / "manifests.yaml", set()
 
     _offline_tool_ensure(monkeypatch, on_path=None)
     monkeypatch.setattr(score_generate_module, "generate_k8s", _stub_generate_k8s)

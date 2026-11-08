@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from boatyard.models.config_file import (
     OCI_REFERENCE_PREFIX,
     ConfigFile,
-    artifact_slot_demands,
+    artifact_slots,
     bundle_lock_key,
     chart_lock_key,
     mirrored_ref,
@@ -111,7 +111,7 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
         # Record the pinned reference with the bundle's slot demands.
         texts = OciArtifactManifest.fetch_compose_texts(pinned)
         refuse_unresolved_references(name, entry.routes, entry.ports, texts, prefix=f"{name}-")
-        bundles[key] = ConfigLockBundle(reference=pinned, slots=artifact_slot_demands(texts))
+        bundles[key] = ConfigLockBundle(reference=pinned, slots=artifact_slots(texts))
 
     images: dict[str, ConfigLockEntry] = {}
     for name, reference in {**config.base_images, **config.owned_images}.items():

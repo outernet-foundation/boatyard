@@ -15,7 +15,6 @@ from pydantic import (
 from boatyard.models.config_file import (
     K8sConfig,
     PLACEHOLDER,
-    SecretsDeclaration,
     ConfigFile,
     chart_lock_key,
 )
@@ -59,8 +58,7 @@ def generate_k8s(
     k8s: K8sConfig,
     lock: LockFile,
     local: bool,
-    secrets: SecretsDeclaration,
-) -> Path:
+) -> tuple[Path, set[str]]:
     score_dir = config.root / config.score_dir
     index_images = lock.index_references()
     workloads = load_workloads(score_dir, k8s.workloads, WorkloadDocument)
@@ -139,16 +137,15 @@ def generate_k8s(
 
     shutil.rmtree(output_path.parent / ".score-k8s", ignore_errors=True)
 
-    # Validate the consumed secrets against the declaration.
+    # The mint set is the rendering's consumed secret refs, walked from the output.
     secret_name = f"{config.project_name}-secrets"
     consumed = {
         key
         for block in split_documents(output_path.read_text(encoding="utf-8"))
         for key in collect_secret_keys(yaml.safe_load(block), secret_name)
     }
-    secrets.validate_consumed(consumed, "k8s", "boatyard.yml: secrets")
 
-    return output_path
+    return output_path, consumed
 
 
 def collect_secret_keys(node: Yaml, secret_name: str) -> set[str]:
