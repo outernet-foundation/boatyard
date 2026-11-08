@@ -77,7 +77,7 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
 - `models/pyproject.py` — the toolchain-pin lens over the consumer repo's pyproject.toml.
 - `models/workload.py` — the workload-file lens (`WorkloadDocument`, the compose variant) plus
   the workload loader and provisioner-file selection.
-- `models/image.py` — the `Image` lens (`Image.load`) and the per-image tree-tag sha machinery.
+- `models/image.py` — the `Image` lens (`Image.load`) and the tree-tag sha machinery.
 - `resolve.py` — the `resolve(config, lock, values)` fold answering the assembly plan `up` renders.
 - `lock.py` — relock engine + crane resolution.
 - `compose.py` — the compose invocation spelling.
