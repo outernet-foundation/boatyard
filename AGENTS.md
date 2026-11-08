@@ -52,13 +52,14 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
   composes them with nameless `app.add_typer(...)` (a named `add_typer` nests a group).
 - `extra="forbid"` everywhere in pydantic models; per-field shape in `field_validator`s,
   cross-field shape in one `model_validator(mode="after")` per model.
-- Every `load()` takes a full path and goes through `load_yaml_model` (`yaml.py` strict load).
-  One exception: `LockFile.load(path, config)` reads a missing lock as the empty lock.
+- Every `load()` takes a full path. YAML kinds go through `load_yaml_model` (`yaml.py` strict load);
+  `Image.load(directory, root, axes, siblings)` lenses a Dockerfile directory;
+  `LockFile.load(path, config)` reads a missing lock as the empty lock.
 - Every pydantic-modeled file kind owns exactly one module in `config/` (boatyard.yml, the
   lock, values, pins, workloads, the pyproject lens). Each module's types run root down, root
   record first, quoting forward refs where evaluation allows (`RootModel` subscripts;
   `default_factory` leaves go through a module-level factory). Modules run one-way:
-  `dockerfiles`/`workload`/`pyproject` ← `config/config` ← `config/lock` ← `lock`.
+  `images`/`workload`/`pyproject` ← `config/config` ← `config/lock` ← `lock`.
 - Nothing is caught only to be re-raised as a different exception; guards and third-party
   exceptions surface raw with full traceback; `typer.BadParameter` owns the CLI-flag layer.
 - The build set is derived from the Dockerfile tree inside `ConfigFile` load, never authored in
@@ -76,7 +77,7 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
 - `config/pyproject.py` — the toolchain-pin lens over the consumer repo's pyproject.toml.
 - `config/workload.py` — the workload-file lens (`WorkloadDocument`, the compose variant) plus
   the workload loader and provisioner-file selection.
-- `dockerfiles.py` — the `ServiceBuild` record and the tree-tag sha machinery.
+- `images.py` — the `Image` lens (`Image.load`) and the per-image tree-tag sha machinery.
 - `resolve.py` — the `resolve(config, lock, values)` fold answering the assembly plan `up` renders.
 - `lock.py` — relock engine + crane resolution.
 - `compose.py` — the compose invocation spelling.
