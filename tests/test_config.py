@@ -297,7 +297,7 @@ class TestBaseImages:
     def test_env_slot_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "base_images": {"ALPINE_IMAGE": "${ALPINE_REF}"}})
 
-        with pytest.raises(ValidationError, match="path:tag"):
+        with pytest.raises(ValueError, match="interpolation lives in score sources and committed artifacts"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_lowercase_key_rejected(self, tmp_path: Path) -> None:
@@ -544,7 +544,7 @@ class TestCharts:
             },
         )
 
-        with pytest.raises(ValidationError, match="tag or a digest"):
+        with pytest.raises(ValueError, match="interpolation lives in score sources and committed artifacts"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_missing_values_file_refuses_at_load(self, tmp_path: Path) -> None:
@@ -638,7 +638,7 @@ class TestServices:
                 "requires": ">=0.1",
                 "repository": "ghcr.io/org/repo",
                 "project_name": "example",
-                "gateway": "${GATEWAY_PORT:?err}",
+                "gateway": 58080,
                 "base_images": EDGE_BASE_IMAGES,
                 "platforms": EDGE_PLATFORMS,
                 "services": {
@@ -663,8 +663,8 @@ class TestServices:
                         "ports": [
                             {
                                 "service": "livekit",
-                                "published": "${LIVEKIT_SIGNALING_PORT:?err}",
-                                "target": "${LIVEKIT_SIGNALING_PORT:?err}",
+                                "published": 6178,
+                                "target": 6178,
                                 "protocol": "tcp",
                             }
                         ],
@@ -1078,7 +1078,7 @@ class TestRoutes:
         assert config is not None
 
     def test_an_upstream_without_a_literal_port_refuses(self, tmp_path: Path) -> None:
-        write_config(tmp_path, self._routed([{"path": "/*", "upstream": "api:${PORT}"}]))
+        write_config(tmp_path, self._routed([{"path": "/*", "upstream": "api:eight"}]))
 
         with pytest.raises(ValidationError, match="a service name and a literal port"):
             ConfigFile.load(tmp_path / "boatyard.yml")
@@ -1172,7 +1172,7 @@ class TestGatewayKey:
             },
         )
 
-        with pytest.raises(ValidationError, match="env slot; a literal port is an int"):
+        with pytest.raises(ValueError, match="interpolation lives in score sources and committed artifacts"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
 
@@ -1196,7 +1196,7 @@ class TestPorts:
                     "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
                     "routes": [{"path": "/*", "upstream": "livekit:8000"}],
                     "ports": [
-                        {"service": "livekit", "published": "${PORT:?err}", "target": 6178},
+                        {"service": "livekit", "published": 6178, "target": 6178},
                         {"service": "livekit", "published": 6179, "target": 6179, "protocol": "udp"},
                     ],
                 }
@@ -1209,7 +1209,7 @@ class TestPorts:
         livekit = config.services["livekit"]
         assert isinstance(livekit, ServiceEntry)
         assert [(port.service, port.published, port.target, port.protocol) for port in livekit.ports] == [
-            ("livekit", "${PORT:?err}", 6178, "tcp"),
+            ("livekit", 6178, 6178, "tcp"),
             ("livekit", 6179, 6179, "udp"),
         ]
 
@@ -1290,7 +1290,7 @@ class TestPorts:
                         {
                             "service": "api",
                             "host_ip": "127.0.0.1",
-                            "published": "${API_DEBUG_PORT:-5679}",
+                            "published": 5679,
                             "target": 5678,
                         }
                     ],
@@ -1306,7 +1306,7 @@ class TestPorts:
 
         assert config is not None
 
-    def test_a_non_port_non_slot_field_refuses(self, tmp_path: Path) -> None:
+    def test_a_non_integer_port_refuses(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,
             self._ports_config({
@@ -1318,7 +1318,7 @@ class TestPorts:
             }),
         )
 
-        with pytest.raises(ValidationError, match="env slot; a literal port is an int"):
+        with pytest.raises(ValidationError, match="Input should be a valid integer"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_a_digit_string_port_refuses(self, tmp_path: Path) -> None:
@@ -1333,7 +1333,7 @@ class TestPorts:
             }),
         )
 
-        with pytest.raises(ValidationError, match="env slot; a literal port is an int"):
+        with pytest.raises(ValidationError, match="Input should be a valid integer"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
 

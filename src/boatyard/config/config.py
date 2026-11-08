@@ -49,9 +49,6 @@ PLACEHOLDER = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
 # Match a compose brace slot with its preceding dollar run.
 COMPOSE_SLOT = re.compile(r"(\$+)\{([A-Z][A-Z0-9_]*)(:[^{}]*)?\}")
 
-# Match compose env slots: ${NAME}, ${NAME:?err}, ${NAME:-default}.
-ENV_SLOT_PATTERN = re.compile(r"^\$\{[A-Z][A-Z0-9_]*(?::[^{}]*)?\}$")
-
 type Yaml = str | int | float | bool | list[Yaml] | dict[str, Yaml] | None
 
 
@@ -66,16 +63,7 @@ def _require_port_range(value: int) -> int:
     return value
 
 
-def _require_env_slot(value: str) -> str:
-    if ENV_SLOT_PATTERN.fullmatch(value) is None:
-        raise ValueError(f"{value!r} must be a ${{…}} env slot; a literal port is an int")
-    return value
-
-
-PortOrSlot = (
-    Annotated[int, Field(strict=True), AfterValidator(_require_port_range)]
-    | Annotated[str, Field(strict=True), AfterValidator(_require_env_slot)]
-)
+PortNumber = Annotated[int, Field(strict=True), AfterValidator(_require_port_range)]
 
 
 def _require_all_caps_name(value: str) -> str:
@@ -187,7 +175,7 @@ class ConfigFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     requires: str
-    gateway: PortOrSlot | None = None
+    gateway: PortNumber | None = None
     repository: str | None = None
     base_images: dict[AllCapsName, str] = Field(default_factory=dict)
     variants: dict[AllCapsName, list[str]] = Field(default_factory=dict)
@@ -211,6 +199,11 @@ class ConfigFile(BaseModel):
 
     @classmethod
     def load(cls, path: Path) -> ConfigFile:
+        if "${" in path.read_text(encoding="utf-8"):
+            raise ValueError(
+                f"{path.as_posix()}: boatyard.yml carries no ${{...}} spelling; "
+                f"interpolation lives in score sources and committed artifacts"
+            )
         config = load_yaml_model(cls, path)
         config.resolve(path.parent)
         return config
@@ -338,6 +331,17 @@ class ConfigFile(BaseModel):
     @property
     def bare_entries(self) -> list[str]:
         return [row.root for row in _flatten_service_members(self.services) if row.option is None]
+
+    @property
+    def port_declaring_entries(self) -> list[str]:
+        # Options inherit their group's port declarations, mirroring resolve_services
+        names: list[str] = []
+        for row in _flatten_service_members(self.services):
+            member = self.services[row.root]
+            group_ports = member.ports if isinstance(member, ServiceGroup) else []
+            if row.entry.ports or group_ports:
+                names.append(row.name)
+        return names
 
     def local_service_entries(self) -> list[tuple[str, ServiceEntry]]:
         return [(row.name, row.entry) for row in _flatten_service_members(self.services) if not row.entry.remote]
@@ -598,8 +602,8 @@ class PortDeclaration(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     service: str
-    published: PortOrSlot
-    target: PortOrSlot
+    published: PortNumber
+    target: PortNumber
     protocol: Literal["tcp", "udp"] = "tcp"
     host_ip: str | None = None
 

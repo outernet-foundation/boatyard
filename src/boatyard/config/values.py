@@ -23,6 +23,7 @@ from boatyard.config.config import (
     ENV_NAME_PATTERN,
     OCI_REFERENCE_PREFIX,
     PLACEHOLDER,
+    PortNumber,
     RESERVED_SLOT_MARKERS,
     ConfigFile,
     SlotDemand,
@@ -113,6 +114,8 @@ class ValuesFile(BaseModel):
     path_overrides: dict[str, Path] = Field(default_factory=dict)
     public_url: PublicUrl | None = None
     platform: str | None = None
+    gateway: PortNumber | None = None
+    ports: dict[str, PortNumber] = Field(default_factory=dict)
     values: ValuesSections = Field(default_factory=ValuesSections)
     choices: dict[str, str] = Field(default_factory=dict, exclude=True)
 
@@ -135,12 +138,21 @@ class ValuesFile(BaseModel):
         source = str(context.get("path", VALUES_FILE.name))
 
         self._fold_selection(config)
+        self._refuse_unknown_overrides(source, config)
         self._build_demand_table(config, context)
         self._refuse_misplaced_keys(source)
         self._refuse_unresolvable_references(source)
         self._refuse_unfilled_slots(source)
         self._refuse_undeclared_demands(source, config)
         return self
+
+    def _refuse_unknown_overrides(self, source: str, config: ConfigFile) -> None:
+        vocabulary = sorted(config.port_declaring_entries)
+        unknown = sorted(set(self.ports) - set(vocabulary))
+        if unknown:
+            raise ValueError(f"{source}: ports: names {unknown}; the port-declaring entries are {vocabulary}")
+        if self.gateway is not None and config.gateway is None:
+            raise ValueError(f"{source}: gateway: is set but boatyard.yml declares no gateway")
 
     def _fold_selection(self, config: ConfigFile) -> None:
         selectable = config.selectable_options

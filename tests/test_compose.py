@@ -647,6 +647,64 @@ class TestUpMaterialization:
         content = document["configs"]["devkit-edge-caddyfile"]["content"]
         assert "/auth/*" not in content
 
+    def test_typed_port_overrides_win_over_the_config_defaults(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        _write_consumer_tree(tmp_path, extra_values={"gateway": 18443, "ports": {"livekit": 16178}})
+        recorder = AssemblyRecorder()
+        monkeypatch.setattr(up, "bash_handoff", recorder.run)
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code == 0, result.output
+        [document] = recorder.documents
+        assert document["services"]["edge"]["ports"] == [{"target": 8443, "published": 18443, "protocol": "tcp"}]
+        assert document["services"]["livekit-livekit"]["ports"] == [
+            {"target": 6178, "published": 16178, "protocol": "tcp"}
+        ]
+
+    def test_an_unselected_port_overriding_entry_sits_inert(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        _write_config(
+            tmp_path,
+            {
+                "project_name": "demo",
+                "repository": "ghcr.io/org/demo",
+                "services": {
+                    "placeframe": {
+                        "options": {
+                            "cuda": {
+                                "workloads": ["api.yaml"],
+                                "ports": [{"service": "api", "published": 16000, "target": 8000}],
+                            },
+                            "rocm": {
+                                "workloads": ["api.yaml"],
+                                "ports": [{"service": "api", "published": 17000, "target": 8000}],
+                            },
+                        }
+                    }
+                },
+            },
+        )
+        _write_lock(tmp_path)
+        _write_bundle_output(tmp_path, "placeframe-cuda", ["api"])
+        _write_bundle_output(tmp_path, "placeframe-rocm", ["api"])
+        _write_workload(tmp_path, "api.yaml", "api")
+        _write_values_file(
+            tmp_path,
+            {"bundles": ["placeframe-rocm"], "ports": {"placeframe-cuda": 19000, "placeframe-rocm": 19777}},
+        )
+        recorder = AssemblyRecorder()
+        monkeypatch.setattr(up, "bash_handoff", recorder.run)
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code == 0, result.output
+        [document] = recorder.documents
+        assert "placeframe-cuda-api" not in document["services"]
+        assert document["services"]["placeframe-rocm-api"]["ports"] == [
+            {"target": 8000, "published": 19777, "protocol": "tcp"}
+        ]
+
     def test_the_edge_refuses_without_the_caddy_lock_entry(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_consumer_tree(tmp_path)
         tmp_path.joinpath(*LOCK_PATH.parts).write_text(

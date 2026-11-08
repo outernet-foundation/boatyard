@@ -58,10 +58,17 @@ def up(
     plan = config_values.assembly()
     consumer_entries = lock.manifest_references(config_values.platform)
 
-    # Group the ports under their namespaced owners into per-service stanzas
+    # Group the ports under their namespaced owners into per-service stanzas, the typed
+    # values overrides winning over the config's integer defaults
     document_services: dict[str, Yaml] = {
         f"{service.name}-{owner}": {
-            "ports": [port.model_dump(exclude={"service"}, exclude_none=True) for port in owner_ports]
+            "ports": [
+                {
+                    **port.model_dump(exclude={"service"}, exclude_none=True),
+                    "published": config_values.ports.get(service.name, port.published),
+                }
+                for port in owner_ports
+            ]
         }
         for service in services
         for owner, owner_ports in groupby(
@@ -74,10 +81,11 @@ def up(
 
     # Render the edge and its Caddyfile when a gateway is declared
     if config.gateway is not None:
+        gateway = config.gateway if config_values.gateway is None else config_values.gateway
         edge: dict[str, Yaml] = {
             "image": consumer_entries[CADDY_IMAGE],
             "configs": [{"source": EDGE_CONFIG_NAME, "target": "/etc/caddy/Caddyfile"}],
-            "ports": [{"target": EDGE_LISTEN_PORT, "published": config.gateway, "protocol": "tcp"}],
+            "ports": [{"target": EDGE_LISTEN_PORT, "published": gateway, "protocol": "tcp"}],
             # Attach the edge to every selected bundle's network
             "networks": dict.fromkeys(f"{service.name}-net" for service in services),
         }

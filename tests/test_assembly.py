@@ -8,7 +8,7 @@ from typer.testing import CliRunner
 
 from boatyard.cli import app
 from boatyard.config import values
-from boatyard.config.config import ConfigFile, PortOrSlot
+from boatyard.config.config import ConfigFile
 from boatyard.config.lock import LOCK_PATH, LockFile
 from boatyard.verbs import up
 
@@ -39,7 +39,7 @@ def _write_edge_tree(
     routes: list[dict[str, object]],
     *,
     auth: bool = False,
-    gateway: PortOrSlot | None = 58080,
+    gateway: int | None = 58080,
     public_url: str = "http://192.168.8.10:58080",
 ) -> None:
     services: dict[str, object] = {
@@ -102,7 +102,7 @@ def _assembly_document(
     routes: list[dict[str, object]],
     *,
     auth: bool = False,
-    gateway: PortOrSlot | None = 58080,
+    gateway: int | None = 58080,
     public_url: str = "http://192.168.8.10:58080",
 ) -> dict[str, Any]:
     _write_edge_tree(tmp_path, monkeypatch, routes, auth=auth, gateway=gateway, public_url=public_url)

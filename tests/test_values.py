@@ -59,6 +59,7 @@ def _write_repo(
     workload: str = WORKLOAD,
     secrets: object = {},
     gateway: int | None = None,
+    ports: list[dict[str, object]] | None = None,
 ) -> Path:
     root = tmp_path / "consumer"
     root.mkdir()
@@ -70,6 +71,9 @@ def _write_repo(
     base_images: dict[str, str] = {"LOKI_IMAGE": "docker.io/grafana/loki:3.0"}
     if gateway is not None:
         base_images["CADDY_IMAGE"] = "docker.io/library/caddy:2.8"
+    core_entry: dict[str, object] = {"workloads": ["api.yaml"]}
+    if ports is not None:
+        core_entry["ports"] = ports
     config: dict[str, object] = {
         "requires": ">=0",
         "project_name": "demo",
@@ -78,7 +82,7 @@ def _write_repo(
         "base_images": base_images,
         "secrets": secrets,
         "services": {
-            "core": {"workloads": ["api.yaml"]},
+            "core": core_entry,
             "monitor": {"ref": "oci://ghcr.io/org/monitor:1.0.0"},
         },
     }
@@ -140,9 +144,12 @@ def _refusal(
     workload: str = WORKLOAD,
     secrets: object = {},
     gateway: int | None = None,
+    ports: list[dict[str, object]] | None = None,
 ) -> str:
     with pytest.raises(ValidationError) as report:
-        _load(_write_repo(tmp_path, values, slots=slots, workload=workload, secrets=secrets, gateway=gateway))
+        _load(
+            _write_repo(tmp_path, values, slots=slots, workload=workload, secrets=secrets, gateway=gateway, ports=ports)
+        )
     return str(report.value)
 
 
@@ -221,6 +228,38 @@ def test_the_minted_edge_base_url_key_refuses_without_a_gateway(tmp_path: Path) 
     message = _refusal(tmp_path, values)
 
     assert "EDGE_BASE_URL is minted from the gateway declaration" in message
+
+
+def test_an_unknown_ports_override_refuses_listing_the_vocabulary(tmp_path: Path) -> None:
+    values = _filled_values({"ports": {"ghost": 1234}})
+
+    message = _refusal(tmp_path, values, ports=[{"service": "api", "published": 5678, "target": 5678}])
+
+    assert "ports: names ['ghost']; the port-declaring entries are ['core']" in message
+
+
+def test_a_gateway_override_without_a_declared_gateway_refuses(tmp_path: Path) -> None:
+    values = _filled_values({"gateway": 9000})
+
+    message = _refusal(tmp_path, values)
+
+    assert "gateway: is set but boatyard.yml declares no gateway" in message
+
+
+def test_typed_port_and_gateway_overrides_load(tmp_path: Path) -> None:
+    values = _filled_values({"gateway": 9000, "ports": {"core": 1234}})
+
+    parsed = _load(
+        _write_repo(
+            tmp_path,
+            values,
+            gateway=58080,
+            ports=[{"service": "api", "published": 5678, "target": 5678}],
+        )
+    )
+
+    assert parsed.gateway == 9000
+    assert parsed.ports == {"core": 1234}
 
 
 def test_an_optional_demand_rides_unfilled_when_declared(tmp_path: Path) -> None:

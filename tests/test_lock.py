@@ -10,7 +10,6 @@ from typer.testing import CliRunner
 
 from boatyard.cli import app
 from boatyard.config import config as config_module
-from boatyard.config.config import PortOrSlot
 from boatyard import lock as lock_module
 from boatyard import dockerfiles as dockerfiles_module
 from boatyard.verbs.up import render_env_entries
@@ -119,7 +118,7 @@ def _write_repo(
     charts: dict[str, str] | None = None,
     platforms: list[str] | None = None,
     ref_services: dict[str, Any] | None = None,
-    gateway: PortOrSlot | None = None,
+    gateway: int | None = None,
 ) -> None:
     payload: dict[str, Any] = {"requires": ">=0", "project_name": "demo", "repository": "ghcr.io/org/demo"}
     if gateway is not None:
