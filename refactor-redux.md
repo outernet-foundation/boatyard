@@ -1,12 +1,26 @@
 # refactor-redux.md — the image-declaration line
 
-Plan file for the image-source declaration refactor. It holds this line's design rulings,
+Plan file for the image-declaration refactor. It holds this line's design rulings,
 the move list, and the consumer transition. Present truth lives in the code and AGENTS.md;
 at line close this file is deleted and the closeout takes the record.
 
 A first execution attempt grew the code (+383 lines) by implementing generality beyond
 evidence; it was reverted whole. The rulings below pin the observed universe — every
 refusal that exists because a case is not real is a refusal, not a general mechanism.
+
+Execution now runs one commit per session-step, never the whole plan. Landed baseline
+(boatyard `28e43ed`/`69a92a3`, placeframe `c9039a15`): the base-registry increment —
+dual-shape `base_images`, the one `FROM ${KEY}` grammar resolving against pulled ∪ owned ∪
+built keys, the fan declared on the built entry and inherited one hop, pulled-only lock
+pairing with built keys refused, bake's base wiring re-keyed on declared names (arg value =
+context key = directory stem; the `additional_contexts` redirect unchanged), and the
+placeframe transition for all of that. The increment cost +107 net in src/ — the price of
+`BuiltBaseEntry`'s validators and the refusal blocks; the moves below carry their state.
+compaction.md's "Current state" section predates this baseline and is superseded by this
+paragraph. Sandbox gaps this baseline hit: placeframe's venv holds a stale non-editable
+boatyard copy (verify through boatyard's own project env until placeframe runs `uv sync`),
+and `scripts/preflight.py` shells to a `preflight-python` entry point absent here (pytest +
+ruff are the runnable gate).
 
 ## The problem
 
@@ -78,27 +92,30 @@ groups. The repository prefix was hand-spelled inside every ref (17 sites in pla
 
 ## Moves
 
+Each move carries its landed state; unmarked moves are not started.
+
 1. `markers.py`: the reference composer and the `dockerfile:` marker arm (provisioner
    manifests only).
 2. `models/workload.py` + `score.py`: source annotations, `image:` rejected, injection at
    the per-run copy pass.
-3. `models/image.py`: the facts parse stays; closure derivation from declared edges;
-   FROM resolution against base_images; the one-hop declared fan; the ARG-sniffing
-   derivation (`own_axes`, `_effective_axis`) dies.
-4. `models/config_file.py`: dual-shape `base_images`; the lexical member grammar and the
-   derived fan over one load of the workload files; `_derive` walks declared edges for the
-   closure and surfaces; `_refuse_unknown_axis_refs` deleted.
-5. `build.py` and the verbs (`tree-tags`, `matrix`, `publish`, `bump`): consume the
-   closure; re-key the per-variant base wiring on declared names.
-6. `models/lock_file.py` + `lock.py`: pairing skips built entries; built entries in the
-   lock refuse.
-7. Tests: closure-derived sets, dual-shape base_images, FROM grammar, one-hop fan, the
-   composer per substrate, lens rules, placeframe-shaped fixtures.
+3. `models/image.py`: PARTIALLY LANDED — FROM resolution against `base_images`, the
+   declared one-hop fan, and the ARG-sniffing deaths (`own_axes`, `_effective_axis`) are
+   in; the build set still derives from the directory walk, whose replacement needs the
+   declared edges of moves 1–2.
+4. `models/config_file.py`: PARTIALLY LANDED — dual-shape `base_images` and
+   `pulled_base_images` are in; the lexical member grammar and the closure-walking
+   `_derive` wait (group `axes:` blocks still expand options).
+5. `build.py` and the verbs (`tree-tags`, `matrix`, `publish`, `bump`): PARTIALLY LANDED —
+   the per-variant base wiring is re-keyed on declared names; the verbs still consume the
+   walk-derived set until move 4's closure replaces it.
+6. `models/lock_file.py` + `lock.py`: LANDED — pairing skips built entries; built entries
+   in the lock refuse (both at `LockFile.load` and at relock).
+7. Tests: ONGOING — the landed increment carries its own (the image-grammar and
+   built-entry refusal suites, the reworked fan/matrix/build fixtures).
 
 ## Placeframe transition
 
-- boatyard.yml: a built entry joins base_images; the core `axes:` block is deleted;
-  routes and ports are re-spelled in flow style:
+- LANDED — boatyard.yml: the built entry and the flow-style routes/ports are in:
 
       base_images:
         NEURAL_NETWORKS_BASE:
@@ -106,10 +123,12 @@ groups. The repository prefix was hand-spelled inside every ref (17 sites in pla
           axis:
             TORCH_DEVICE: [cuda, rocm]
 
-- Dockerfiles: reconstructor and localizer add `ARG NEURAL_NETWORKS_BASE` and re-spell
-  `FROM neural-networks-base` as `FROM ${NEURAL_NETWORKS_BASE}`. neural-networks-base is
-  unchanged — its `ARG TORCH_DEVICE` stays as the branching mechanism the declared fan is
-  checked against.
+  The core `axes:` block stays until move 4/D6; it and the built entry both spell
+  TORCH_DEVICE with no cross-check in this baseline — agreement becomes structural only
+  when the fan derives the group.
+- LANDED — Dockerfiles: reconstructor and localizer carry `ARG NEURAL_NETWORKS_BASE` and
+  `FROM ${NEURAL_NETWORKS_BASE}`. neural-networks-base is unchanged — its `ARG
+  TORCH_DEVICE` stays as the mechanism the declared fan is checked against.
 - Workloads: api, lease-server, reconstructor, localizer gain
   `outernet.internal/dockerfile` annotations; keycloak and ngrok gain
   `outernet.internal/lock` annotations. The image lines are deleted.
@@ -121,9 +140,9 @@ groups. The repository prefix was hand-spelled inside every ref (17 sites in pla
 
 ## What dies
 
-The directory walk and the one-top-dir rule, the ARG-sniffing fan derivation, the
-bare-name FROM grammar and its stem resolution, the stem surgery in
-`_refuse_unknown_axis_refs`, group `axes:` blocks, hand-composed image refs,
+Dead so far: the ARG-sniffing fan derivation, and the bare-name FROM grammar with its
+stem resolution. Still to die: the directory walk and the one-top-dir rule, the stem
+surgery in `_refuse_unknown_axis_refs`, group `axes:` blocks, hand-composed image refs,
 `{{ env "X_SHA" }}` image lines, the slot-in-image grammar, the repository prefix inside
 score files, and the per-entry workload reload.
 
