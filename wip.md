@@ -6,16 +6,15 @@ declaration schema (`boatyard.yml` + `boatyard.lock.yml`), and the committed art
 
 ## Design treaties
 
-Authored intent and silent-failure traps. Everything that fails loudly (a refusal with a named
-remedy) is documented by the code and deliberately not restated here.
+Design intent and silent-failure traps, one fact per bullet.
 
 - Three classes of fact: authored in the config, registry-resolved in the lock, tree-derived
   (`tree-<hash>`) computed on demand. Nothing derived is committed except
   `boatyard.k8s-pins.yml`, written only by the `bump` verb (rollback = `git revert`, never
   hand-edit). The lock is written only by the `lock` verb and `build`'s incremental freeze —
   never hand-authored.
-- Fresh-repo assumption: no code handles an obsolete format. A past artifact gets the plain
-  parse refusal, never a migration path.
+- Fresh-repo assumption: no code handles an obsolete format. An obsolete artifact gets a plain
+  parse failure, never a migration path.
 - github-actions-toolkit owns the consumer workflow contract and is never a project dependency.
   From 1.0 on, breaking changes ship with a manually bumped `major_minor`.
 - Third-party images and charts are consumed through the org mirror namespace (upstream
@@ -25,22 +24,22 @@ remedy) is documented by the code and deliberately not restated here.
   one machine runs); k8s renderings bake the index form (kubelet resolves per node).
   `helm template` is a renderer, never a deployer.
 - `boatyard.values.yaml` (consumer root, gitignored) is the only machine-values source; the
-  ambient shell fills nothing. `up` refuses without it; `down` and score generation run without
-  it. `down` reads no values, no lock, no selection — a name-only root plus
-  `--remove-orphans`.
+  ambient shell fills nothing. `up` requires it; `down` and score generation run without it.
+- `down` reads no values file, no lock, no selection — a name-only root plus
+  `--remove-orphans` removes every container the project ever created.
 - The edge does no token validation; re-protection is a bundle-shipped oauth2-proxy sidecar
   treaty.
 - `$`-doubling: a literal `$` in file text placed inside a compose document (edge Caddyfile,
   file-sourced configs, score's bind inlining) is doubled via `double_dollars` in
   `config/config.py` — the one home. Text outside a compose document (k8s manifests) never
   doubles.
-- `secrets:` absent refuses at generate-score; `secrets: {}` states zero — absence and emptiness
-  carry different meaning throughout.
-- Silent trap: plain score-compose silently drops `httpGet` probes; boatyard's lens
-  (`outernet.internal/probe-adapter` on the workload) refuses loudly instead. Substrate needs
-  live in workload files as `outernet.internal/*` annotations — `boatyard.yml` never carries a
-  per-workload runtime fact; the shipped `score_patch_templates` are the reader, and the lens is
-  `WorkloadDocument.parse(raw, file_name)`.
+- An absent `secrets:` section fails generate-score; `secrets: {}` states zero — absence and
+  emptiness mean different things throughout.
+- Plain score-compose silently drops `httpGet` probes; boatyard's lens makes the omission loud
+  instead via the workload's `outernet.internal/probe-adapter` annotation.
+- Substrate needs live in workload files as `outernet.internal/*` annotations — `boatyard.yml`
+  holds no per-workload runtime fact. The shipped `score_patch_templates` are the reader; the
+  lens is `WorkloadDocument.parse(raw, file_name)`.
 
 ## Commands
 
@@ -88,6 +87,18 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
 
 ## This file
 
-The code is the source of truth for mechanism. Admit a line only if removing it would cause a
-specific mistake — a loud refusal documents itself, so it is never restated here. Search before
-adding; one fact, one home; identifiers and refusal phrasings stay exact.
+The code is the source of truth for mechanism; this file exists to prevent specific mistakes,
+and every bullet names the mistake it prevents — a line whose mistake cannot be named does not
+belong here.
+
+- Nothing else lives here: mechanism belongs in the code it describes, a one-off procedure in
+  `design/`, another repo's fact in that repo's own doc, and refusal behavior nowhere — a loud
+  refusal's error text is its documentation. The string `refus` appears nowhere outside this
+  section.
+- The shape is fixed, in order: identity paragraph, `Design treaties`, `Commands`,
+  `Placement conventions`, `Modules`, this section. One fact per bullet, plain sentences —
+  compression and shorthand are how wrong lines survive review. Lines wrap at or before column
+  100. `Modules` mirrors `src/boatyard/` exactly: one line per module, no function inventories,
+  no parenthetical laws.
+- Treaties and conventions trade one for one: a new bullet replaces a weaker one, it never
+  merely appends. Growing this file is a human decision, not a session's.
