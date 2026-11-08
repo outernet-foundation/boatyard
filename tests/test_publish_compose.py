@@ -65,11 +65,7 @@ class DigestResolver:
         return FAKE_DIGEST
 
 
-def _empty_hash_context(_root: Path) -> list[str]:
-    return []
-
-
-def _livekit_tree_sha(_self: Image, _root: Path, _context: list[str]) -> str:
+def _livekit_tree_sha(_self: Image, _root: Path) -> str:
     return "tree-abc"
 
 
@@ -84,7 +80,6 @@ def _invoke_publishing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Publi
     monkeypatch.setattr(publish_verb, "bash", recorder.run)
     monkeypatch.setattr(crane, "bash", recorder.run)
     monkeypatch.setattr(publish_verb, "bash_output", _command_output)
-    monkeypatch.setattr("boatyard.models.image.hash_context", _empty_hash_context)
     monkeypatch.setattr(Image, "compute_sha", _livekit_tree_sha)
     monkeypatch.setattr(publish_compose, "resolve_remote_digest", DigestResolver().resolve)
     return recorder

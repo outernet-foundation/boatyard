@@ -19,7 +19,6 @@ from boatyard.models.config_file import (
     ConfigFile,
     chart_lock_key,
 )
-from boatyard.models.image import compute_shas
 from boatyard.models.k8s_pins import load_pins
 from boatyard.models.lock_file import LockFile
 from boatyard.models.workload import WorkloadDocument, load_workloads
@@ -76,7 +75,7 @@ def generate_k8s(
             STORAGE_CLASS_VAR: LOCAL_STORAGE_CLASS if local else CLOUD_STORAGE_CLASS,
             **k8s.vars,
             **(
-                compute_shas(config.images, config.root)
+                {image.sha_env: image.compute_sha(config.root) for image in config.images.values()}
                 if local
                 else load_pins(
                     config.root / K8S_PINS_PATH,

@@ -6,7 +6,6 @@ from typing import Annotated
 import typer
 
 from boatyard.models.config_file import ConfigFile
-from boatyard.models.image import compute_shas, image_sha_env
 from boatyard.paths import DEFAULT_CONFIG_PATH
 
 app = typer.Typer()
@@ -27,6 +26,6 @@ def tree_tags(
     unknown = [name for name in names if name not in config.images]
     if unknown:
         raise typer.BadParameter(f"unknown image(s) {unknown}; this repo derives {vocabulary}")
-    shas = compute_shas(config.images, config.root)
+    shas = {name: image.compute_sha(config.root) for name, image in config.images.items()}
     for name in names:
-        print(shas[image_sha_env(name)])
+        print(shas[name])

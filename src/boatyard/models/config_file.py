@@ -29,7 +29,6 @@ from boatyard.models.image import (
     DOCKERFILE_NAME,
     Image,
     require_single_top,
-    image_sha_env,
 )
 from boatyard.temp import PLATFORM_PATTERN, SHA256_DIGEST_REGEX
 from boatyard.yaml import Yaml, is_mapping, load_yaml_model
@@ -149,7 +148,7 @@ class ConfigFile(BaseModel):
     @property
     def tree_sentinels(self) -> dict[str, str]:
         # The compose barrier pre-images over the build-set slot supply; TREE_SENTINEL_PATTERN finds them
-        return {slot: f"{TREE_SLOT_MARKER}{slot}__" for slot in (image_sha_env(name) for name in self.images)}
+        return {slot: f"{TREE_SLOT_MARKER}{slot}__" for slot in (image.sha_env for image in self.images.values())}
 
     @field_validator("requires")
     @classmethod
@@ -529,7 +528,7 @@ def _derive(config: ConfigFile, root: Path) -> None:
             build.axis = axis
             build.variants = list(axes[axis])
 
-    computable = {image_sha_env(name) for name in images}
+    computable = {image.sha_env for image in images.values()}
     for image in images.values():
         unknown = [argument for argument in image.sha_args if argument not in computable]
         if unknown:

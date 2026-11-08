@@ -265,11 +265,7 @@ def _silent_handoff(_command: str) -> None:
     return None
 
 
-def _empty_hash_context(_root: Path) -> list[str]:
-    return []
-
-
-def _producer_tree_sha(self: Image, root: Path, _context: list[str]) -> str:
+def _producer_tree_sha(self: Image, root: Path) -> str:
     return "tree-producer" if "producer" in root.parts else "tree-consumer"
 
 
@@ -1128,7 +1124,6 @@ class TestLockEnvSynthesis:
         (api_image / "Dockerfile").write_text("ARG PY_IMAGE\nFROM ${PY_IMAGE}\n", encoding="utf-8")
         _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST})
         _write_values_file(tmp_path, {"bundles": ["apps-core"]})
-        monkeypatch.setattr("boatyard.models.image.hash_context", _empty_hash_context)
         monkeypatch.setattr(Image, "compute_sha", _producer_tree_sha)
         recorder = LockEnvRecorder()
 
@@ -1363,7 +1358,6 @@ class TestBundleOverrides:
             {"path_overrides": {"placeframe-cuda": OVERRIDE_PATH}},
             platforms=["linux/amd64"],
         )
-        monkeypatch.setattr("boatyard.models.image.hash_context", _empty_hash_context)
         monkeypatch.setattr(Image, "compute_sha", _producer_tree_sha)
         recorder = self._invoke_up(monkeypatch, consumer)
 

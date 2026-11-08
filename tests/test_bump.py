@@ -6,13 +6,9 @@ import yaml
 from pydantic import ValidationError
 
 from boatyard.models.k8s_pins import parse_pins
-from boatyard.models.image import Image, image_sha_env
+from boatyard.models.image import Image
 from boatyard.paths import K8S_PINS_PATH
 from boatyard.verbs import bump as bump_verb
-
-
-def _empty_hash_context(_root: Path) -> list[str]:
-    return []
 
 
 HEAD = "a" * 40
@@ -89,8 +85,8 @@ class BumpHarness:
         def _shelf_tags(registry: str, project: str, platform: str, **kwargs: object) -> list[str]:
             return sorted(resolved_shards)
 
-        def _image_sha(inner_self: Image, _root: Path, _context: list[str]) -> str:
-            return self.image_shas[image_sha_env(inner_self.name)]
+        def _image_sha(inner_self: Image, _root: Path) -> str:
+            return self.image_shas[inner_self.sha_env]
 
         if registry:
             monkeypatch.setenv("REGISTRY", "ghcr.io/org/builds")
@@ -100,7 +96,6 @@ class BumpHarness:
         monkeypatch.setattr(bump_verb, "install_oras", lambda: None)
         monkeypatch.setattr(bump_verb, "list_build_tags", _shelf_tags)
         monkeypatch.setattr(bump_verb, "pull_artifact", _fake_pull)
-        monkeypatch.setattr("boatyard.models.image.hash_context", _empty_hash_context)
         monkeypatch.setattr(Image, "compute_sha", _image_sha)
         monkeypatch.setattr(bump_verb, "generate_artifacts", _fake_generate)
         monkeypatch.chdir(tmp_path)

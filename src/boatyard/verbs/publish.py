@@ -12,7 +12,6 @@ from bashrun.bash import bash, bash_output
 
 from boatyard.models.config_file import ConfigFile, compose_bundle_output_path, env_lock_slot, env_tree_slot
 from boatyard.crane import install_crane
-from boatyard.models.image import compute_shas
 from boatyard.models.lock_file import LOCK_PATH, LockFile
 from boatyard.paths import DEFAULT_CONFIG_PATH
 from boatyard.publish import (
@@ -84,7 +83,7 @@ def publish_compose(
     sha = bash_output("git rev-parse HEAD").strip()
     branch_tag = (branch or bash_output("git rev-parse --abbrev-ref HEAD").strip()).replace("/", "-")
 
-    image_shas = compute_shas(config.images, config.root)
+    image_shas = {image.sha_env: image.compute_sha(config.root) for image in config.images.values()}
     lock_entries = LockFile.load(root / LOCK_PATH, config).index_references()
 
     published: list[PublishedEntry] = []
