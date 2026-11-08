@@ -23,7 +23,7 @@ from boatyard.models.config_file import (
     double_dollars,
     env_lock_slot,
     env_tree_slot,
-    variant_dimensions,
+    variant_axes,
     ConfigFile,
 )
 from boatyard.models.lock_file import LockFile
@@ -138,7 +138,7 @@ def generate_compose(config: ConfigFile, lock: LockFile) -> list[Path]:
     # The build-set slot supply mints the barrier; a workload ${X_SHA} naming no build
     # refuses at render_score's leftover check.
     sentinels = config.tree_sentinels
-    dimensions = variant_dimensions(config.services)
+    axes = variant_axes(config.services)
     outputs: list[Path] = []
     for name, entry in config.local_service_entries():
         workloads = load_workloads(score_dir, entry.workloads, ComposeWorkloadDocument)
@@ -159,7 +159,7 @@ def generate_compose(config: ConfigFile, lock: LockFile) -> list[Path]:
                 *(
                     GPU_COMPOSE_TEMPLATES[value]
                     for variable, value in entry.vars.items()
-                    if variable in dimensions and value in GPU_COMPOSE_TEMPLATES
+                    if variable in axes and value in GPU_COMPOSE_TEMPLATES
                 ),
             ],
             output=output_path,

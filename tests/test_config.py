@@ -238,8 +238,8 @@ class TestVariants:
         payload.update(extra or {})
         write_config(tmp_path, payload)
 
-    def _gpu_group(self, variants: dict[str, list[str]]) -> dict[str, Any]:
-        return {"variants": variants, "workloads": ["gpu.yaml"]}
+    def _gpu_group(self, axes: dict[str, list[str]]) -> dict[str, Any]:
+        return {"axes": axes, "workloads": ["gpu.yaml"]}
 
     def test_declared_variants_expand_into_options(self, tmp_path: Path) -> None:
         self._write_services_config(tmp_path, {"gpu": self._gpu_group({"TORCH_DEVICE": ["cuda", "rocm"]})})
@@ -255,44 +255,44 @@ class TestVariants:
         }
         assert all(option.workloads == ["gpu.yaml"] for option in group.options.values())
 
-    def test_lowercase_dimension_name_rejected(self, tmp_path: Path) -> None:
+    def test_lowercase_axis_name_rejected(self, tmp_path: Path) -> None:
         self._write_services_config(tmp_path, {"gpu": self._gpu_group({"torch_device": ["cuda"]})})
 
         with pytest.raises(ValidationError, match="ALL_CAPS env name"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
-    def test_two_dimensions_on_one_group_rejected(self, tmp_path: Path) -> None:
+    def test_two_axes_on_one_group_rejected(self, tmp_path: Path) -> None:
         self._write_services_config(
             tmp_path, {"gpu": self._gpu_group({"TORCH_DEVICE": ["cuda"], "ACCEL_FPGA": ["fpga"]})}
         )
 
-        with pytest.raises(ValidationError, match="exactly one dimension"):
+        with pytest.raises(ValidationError, match="exactly one axis"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
-    def test_options_and_variants_on_one_group_rejected(self, tmp_path: Path) -> None:
+    def test_options_and_axes_on_one_group_rejected(self, tmp_path: Path) -> None:
         self._write_services_config(
             tmp_path,
-            {"gpu": {"variants": {"TORCH_DEVICE": ["cuda"]}, "options": {"cuda": {"workloads": ["gpu.yaml"]}}, "workloads": ["gpu.yaml"]}},
+            {"gpu": {"axes": {"TORCH_DEVICE": ["cuda"]}, "options": {"cuda": {"workloads": ["gpu.yaml"]}}, "workloads": ["gpu.yaml"]}},
         )
 
-        with pytest.raises(ValidationError, match="exactly one of options: or variants:"):
+        with pytest.raises(ValidationError, match="exactly one of options: or axes:"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
-    def test_variants_without_group_workloads_rejected(self, tmp_path: Path) -> None:
-        self._write_services_config(tmp_path, {"gpu": {"variants": {"TORCH_DEVICE": ["cuda"]}}})
+    def test_axes_without_group_workloads_rejected(self, tmp_path: Path) -> None:
+        self._write_services_config(tmp_path, {"gpu": {"axes": {"TORCH_DEVICE": ["cuda"]}}})
 
         with pytest.raises(ValidationError, match="carries its workloads at the group level"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
-    def test_group_workloads_without_variants_rejected(self, tmp_path: Path) -> None:
+    def test_group_workloads_without_axes_rejected(self, tmp_path: Path) -> None:
         self._write_services_config(
             tmp_path, {"gpu": {"options": {"cuda": {"workloads": ["gpu.yaml"]}}, "workloads": ["gpu.yaml"]}}
         )
 
-        with pytest.raises(ValidationError, match="ride only with variants:"):
+        with pytest.raises(ValidationError, match="ride only with axes:"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
-    def test_a_dimension_declared_by_two_groups_rejected(self, tmp_path: Path) -> None:
+    def test_an_axis_declared_by_two_groups_rejected(self, tmp_path: Path) -> None:
         self._write_services_config(
             tmp_path,
             {
@@ -340,14 +340,14 @@ class TestVariants:
         with pytest.raises(ValidationError, match=r"k8s\.vars: TORCH_DEVICE='metal' names no declared variant"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
-    def test_declared_dimensions_reach_the_derived_images(self, tmp_path: Path) -> None:
+    def test_declared_axes_reach_the_derived_images(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "localizer", "ARG PY_IMAGE\nARG TORCH_DEVICE\nFROM ${PY_IMAGE}\n")
         self._write_services_config(tmp_path, {"gpu": self._gpu_group({"TORCH_DEVICE": ["cuda", "rocm"]})})
 
         config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None
-        assert config.images["localizer"].dimension == "TORCH_DEVICE"
+        assert config.images["localizer"].axis == "TORCH_DEVICE"
         assert config.images["localizer"].variants == ["cuda", "rocm"]
         assert [target for target, _variant in config.images["localizer"].target_variants] == [
             "localizer-cuda",

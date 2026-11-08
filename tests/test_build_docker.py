@@ -35,7 +35,7 @@ def _write_repo(
     charts: dict[str, str] | None = None,
     platforms: list[str] | None = None,
     repository: str = REPOSITORY,
-    variants: dict[str, list[str]] | None = None,
+    axes: dict[str, list[str]] | None = None,
 ) -> None:
     for service, text in (dockerfiles or {}).items():
         directory = root / "workloads" / service
@@ -46,7 +46,7 @@ def _write_repo(
         "repository": repository,
         "project_name": "demo",
         "platforms": platforms or ["linux/amd64"],
-        "services": {"core": ({"variants": variants, "workloads": ["api.yaml"]} if variants else {"workloads": ["api.yaml"]})},
+        "services": {"core": ({"axes": axes, "workloads": ["api.yaml"]} if axes else {"workloads": ["api.yaml"]})},
     }
     if base_images:
         payload["base_images"] = base_images
@@ -209,7 +209,7 @@ def _prepare(
     dockerfiles: dict[str, str] | None = None,
     base_images: dict[str, str] | None = None,
     platforms: list[str] | None = None,
-    variants: dict[str, list[str]] | None = None,
+    axes: dict[str, list[str]] | None = None,
 ) -> BakeRunner:
     recorder = BakeRunner()
     monkeypatch.setattr(build_module, "bash", recorder.run)
@@ -229,7 +229,7 @@ def _prepare(
         dockerfiles=dockerfiles or DEFAULT_DOCKERFILES,
         base_images=base_images,
         platforms=platforms,
-        variants=variants,
+        axes=axes,
     )
 
     result = runner.invoke(app, ["build", *arguments])
@@ -240,7 +240,7 @@ def _prepare(
 
 class TestDefaultTargets:
     def test_defaults_are_every_service_default_variant(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        recorder = _prepare(monkeypatch, tmp_path, [], variants=TORCH_AXIS)
+        recorder = _prepare(monkeypatch, tmp_path, [], axes=TORCH_AXIS)
 
         assert _bake_targets(recorder.commands) == [
             "api",
@@ -326,7 +326,7 @@ class TestVariantSelection:
             tmp_path,
             arguments,
             dockerfiles={"neural-networks-base": FANNED, "localizer": DEPENDENT, "postgres": EXTERNAL},
-            variants=TORCH_AXIS,
+            axes=TORCH_AXIS,
         )
         return _bake_targets(recorder.commands)
 
@@ -382,7 +382,7 @@ class TestVariantSelection:
         _write_repo(
             tmp_path,
             dockerfiles={"neural-networks-base": FANNED, "localizer": DEPENDENT, "postgres": EXTERNAL},
-            variants=TORCH_AXIS,
+            axes=TORCH_AXIS,
         )
 
         result = runner.invoke(app, ["build", *arguments])
@@ -643,14 +643,14 @@ class TestRenderBakeDeterminism:
             tmp_path,
             [],
             base_images={"UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"},
-            variants=TORCH_AXIS,
+            axes=TORCH_AXIS,
         )
         second = _prepare(
             monkeypatch,
             tmp_path,
             [],
             base_images={"UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"},
-            variants=TORCH_AXIS,
+            axes=TORCH_AXIS,
         )
 
         assert first.rendered == second.rendered
@@ -673,7 +673,7 @@ class TestRenderBakeTagDerivation:
     def test_variant_axes_derive_per_variant_targets_sharing_one_sha_env(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        recorder = _prepare(monkeypatch, tmp_path, [], dockerfiles={"localizer": FANNED}, variants=TORCH_AXIS)
+        recorder = _prepare(monkeypatch, tmp_path, [], dockerfiles={"localizer": FANNED}, axes=TORCH_AXIS)
 
         services = _rendered_services(recorder.rendered)
 
@@ -723,7 +723,7 @@ class TestRenderBakeArgs:
         assert services["localizer"]["build"]["args"] == {"LOCALIZER_SHA": "${LOCALIZER_SHA:?err}"}
 
     def test_declared_values_reach_the_rendered_axis_arg(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        recorder = _prepare(monkeypatch, tmp_path, [], dockerfiles={"localizer": FANNED}, variants=TORCH_AXIS)
+        recorder = _prepare(monkeypatch, tmp_path, [], dockerfiles={"localizer": FANNED}, axes=TORCH_AXIS)
 
         services = _rendered_services(recorder.rendered)
 
@@ -738,7 +738,7 @@ class TestRenderBakeContexts:
             tmp_path,
             [],
             dockerfiles={"neural-networks-base": FANNED, "localizer": DEPENDENT},
-            variants=TORCH_AXIS,
+            axes=TORCH_AXIS,
         )
 
         services = _rendered_services(recorder.rendered)
@@ -770,7 +770,7 @@ class TestRenderBakeCache:
             tmp_path,
             ["--push"],
             dockerfiles={"localizer": FANNED},
-            variants={"TORCH_DEVICE": ["cuda"]},
+            axes={"TORCH_DEVICE": ["cuda"]},
         )
 
         services = _rendered_services(recorder.rendered)
@@ -791,7 +791,7 @@ class TestRenderBakeCache:
             tmp_path,
             ["--push-to", LOCAL_REGISTRY],
             dockerfiles={"localizer": FANNED},
-            variants={"TORCH_DEVICE": ["cuda"]},
+            axes={"TORCH_DEVICE": ["cuda"]},
         )
 
         services = _rendered_services(recorder.rendered)

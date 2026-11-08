@@ -342,7 +342,7 @@ def _write_consumer_tree(
                     },
                 },
                 "placeframe": {
-                    "variants": {"TORCH_DEVICE": ["cuda", "rocm"]},
+                    "axes": {"TORCH_DEVICE": ["cuda", "rocm"]},
                     "workloads": ["api.yaml"],
                     "routes": [
                         {"path": "/grafana/*", "upstream": "grafana:3000"},

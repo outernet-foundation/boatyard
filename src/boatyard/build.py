@@ -163,9 +163,9 @@ def run_build(
     for image in config.images.values():
         for target, variant in image.target_variants:
             args: dict[str, str] = {key: f"${{{key}:-}}" for key in config.base_images}
-            dimension = image.dimension
-            if variant is not None and dimension is not None:
-                args[dimension] = variant
+            axis = image.axis
+            if variant is not None and axis is not None:
+                args[axis] = variant
             args.update({sha: f"${{{sha}:?err}}" for sha in image.sha_args})
             build: dict[str, BakeValue] = {"dockerfile": image.dockerfile}
             if config.platforms:

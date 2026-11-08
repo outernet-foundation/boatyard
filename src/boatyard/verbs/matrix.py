@@ -38,12 +38,12 @@ def docker_build_matrix() -> None:
             for variant in images[name].variants or [None]:
                 partition = variant if variant is not None else "common"
                 address = f"{name}/{variant}" if variant is not None else name
-                entries_by_variant.setdefault((images[name].dimension, partition), []).append(address)
+                entries_by_variant.setdefault((images[name].axis, partition), []).append(address)
 
     print(
         json.dumps([
             {"targets": " ".join(sorted(addresses)), "variant": partition}
-            for (_dimension, partition), addresses in sorted(entries_by_variant.items(), key=lambda item: item[0][1])
+            for (_axis, partition), addresses in sorted(entries_by_variant.items(), key=lambda item: item[0][1])
         ])
     )
 

@@ -24,7 +24,7 @@ class Image(BaseModel):
     name: str
     dockerfile: str
     contexts: list[str] = Field(default_factory=list)
-    dimension: str | None = None
+    axis: str | None = None
     variants: list[str] = Field(default_factory=list)
     sha_args: list[str] = Field(default_factory=list)
 
@@ -89,8 +89,8 @@ class Image(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> Self:
-        if (self.dimension is None) != (not self.variants):
-            raise ValueError("dimension and variants must be declared together")
+        if (self.axis is None) != (not self.variants):
+            raise ValueError("axis and variants must be declared together")
         return self
 
     @property
@@ -110,7 +110,7 @@ class DockerfileFacts(NamedTuple):
     args: list[str]
 
 
-def load_images(root: Path, dimensions: Mapping[str, list[str]]) -> dict[str, Image]:
+def load_images(root: Path, axes: Mapping[str, list[str]]) -> dict[str, Image]:
     directories: dict[str, Path] = {}
     tops: set[str] = set()
     for top in sorted(root.iterdir()):
@@ -132,20 +132,20 @@ def load_images(root: Path, dimensions: Mapping[str, list[str]]) -> dict[str, Im
                 raise ValueError(f"{fact.dockerfile}: FROM {candidate} names no image directory or stage")
         contexts[name] = sorted(set(fact.context_candidates))
 
-    own_dimensions: dict[str, str | None] = {}
+    own_axes: dict[str, str | None] = {}
     for name, fact in facts.items():
-        dimension_args = [argument for argument in fact.args if argument in dimensions]
-        own_dimensions[name] = dimension_args[0] if dimension_args else None
+        axis_args = [argument for argument in fact.args if argument in axes]
+        own_axes[name] = axis_args[0] if axis_args else None
 
     images: dict[str, Image] = {}
     for name, fact in facts.items():
-        dimension = _effective_dimension(name, contexts, own_dimensions)
+        axis = _effective_axis(name, contexts, own_axes)
         images[name] = Image(
             name=fact.name,
             dockerfile=fact.dockerfile,
             contexts=contexts[name],
-            dimension=dimension,
-            variants=list(dimensions[dimension]) if dimension is not None else [],
+            axis=axis,
+            variants=list(axes[axis]) if axis is not None else [],
             sha_args=sorted({argument for argument in fact.args if argument.endswith("_SHA")}),
         )
 
@@ -198,9 +198,9 @@ def _parse_dockerfile(directory: Path, root: Path) -> DockerfileFacts:
     )
 
 
-def _effective_dimension(
-    name: str, contexts: Mapping[str, list[str]], own_dimensions: Mapping[str, str | None]
+def _effective_axis(
+    name: str, contexts: Mapping[str, list[str]], own_axes: Mapping[str, str | None]
 ) -> str | None:
     if contexts[name]:
-        return _effective_dimension(contexts[name][0], contexts, own_dimensions)
-    return own_dimensions[name]
+        return _effective_axis(contexts[name][0], contexts, own_axes)
+    return own_axes[name]

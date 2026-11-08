@@ -16,13 +16,13 @@ def write_dockerfile(tmp_path: Path, image_name: str, text: str, top: str = "wor
     (directory / "Dockerfile").write_text(text, encoding="utf-8")
 
 
-def _derive(tmp_path: Path, dimensions: dict[str, list[str]] | None = None) -> dict[str, Image]:
+def _derive(tmp_path: Path, axes: dict[str, list[str]] | None = None) -> dict[str, Image]:
     score = tmp_path / "stack" / "score"
     score.mkdir(parents=True, exist_ok=True)
     (score / "gpu.yaml").write_text("metadata:\n  name: gpu\ncontainers: {}\n", encoding="utf-8")
     services: dict[str, Any] = {"ext": {"ref": "oci://ghcr.io/org/ext:0.1.0"}}
-    for dimension, values in (dimensions or {}).items():
-        services[dimension.lower()] = {"variants": {dimension: values}, "workloads": ["gpu.yaml"]}
+    for axis, values in (axes or {}).items():
+        services[axis.lower()] = {"axes": {axis: values}, "workloads": ["gpu.yaml"]}
     payload: dict[str, Any] = {
         "requires": ">=0",
         "project_name": "demo",
@@ -142,24 +142,24 @@ class TestDeriveImages:
 
         assert images["api"].contexts == []
 
-    def test_a_declared_dimension_arg_fans_over_the_declared_values(self, tmp_path: Path) -> None:
+    def test_a_declared_axis_arg_fans_over_the_declared_values(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
 
         images = _derive(tmp_path, {"TORCH_DEVICE": ["cuda", "rocm"]})
 
-        assert images["neural-networks-base"].dimension == "TORCH_DEVICE"
+        assert images["neural-networks-base"].axis == "TORCH_DEVICE"
         assert images["neural-networks-base"].variants == ["cuda", "rocm"]
         assert [target for target, _variant in images["neural-networks-base"].target_variants] == [
             "neural-networks-base-cuda",
             "neural-networks-base-rocm",
         ]
 
-    def test_an_arg_naming_no_declared_dimension_stays_plain(self, tmp_path: Path) -> None:
+    def test_an_arg_naming_no_declared_axis_stays_plain(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
 
         images = _derive(tmp_path)
 
-        assert images["neural-networks-base"].dimension is None
+        assert images["neural-networks-base"].axis is None
         assert images["neural-networks-base"].variants == []
         assert [target for target, _variant in images["neural-networks-base"].target_variants] == [
             "neural-networks-base"
@@ -173,13 +173,13 @@ class TestDeriveImages:
         assert images["api"].variants == ["rocm", "cuda"]
         assert [target for target, _variant in images["api"].target_variants] == ["api-rocm", "api-cuda"]
 
-    def test_the_dimension_propagates_along_context_edges(self, tmp_path: Path) -> None:
+    def test_the_axis_propagates_along_context_edges(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
         write_dockerfile(tmp_path, "localizer", "FROM neural-networks-base AS dev\n")
 
         images = _derive(tmp_path, {"TORCH_DEVICE": ["cuda", "rocm"]})
 
-        assert images["localizer"].dimension == "TORCH_DEVICE"
+        assert images["localizer"].axis == "TORCH_DEVICE"
         assert images["localizer"].variants == ["cuda", "rocm"]
         assert [target for target, _variant in images["localizer"].target_variants] == [
             "localizer-cuda",
