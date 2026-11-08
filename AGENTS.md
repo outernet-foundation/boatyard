@@ -58,7 +58,7 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
 - `extra="forbid"` everywhere in pydantic models; per-field shape in `field_validator`s,
   cross-field shape in one `model_validator(mode="after")` per model.
 - Every `load()` takes a full path. YAML kinds go through `load_yaml_model` (`yaml.py` strict load);
-  `load_images(root, axes)` derives the image set from the Dockerfile tree;
+  `load_images(root, base_images, owned_images)` derives the image set from the Dockerfile tree;
   `LockFile.load(path, config)` reads a missing lock as the empty lock.
 - Every pydantic-modeled file kind owns exactly one module in `models/` (boatyard.yml, the lock,
   values, pins, workloads, the pyproject lens). Each module's types run root down, root
