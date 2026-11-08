@@ -11,10 +11,10 @@ from build_artifact_registry.builds import list_build_tags, pull_artifact
 from build_artifact_registry.setup_oras import install_oras
 from pydantic import BaseModel, ConfigDict, RootModel
 
-from boatyard import images
 from boatyard.build import DIGEST_FILE_NAME, DIGEST_PLATFORM, DIGEST_PROJECT
 from boatyard.config.config import ConfigFile
 from boatyard.config.k8s_pins import PINS_HEADER, parse_pins
+from boatyard.images import image_sha_env
 from boatyard.paths import DEFAULT_CONFIG_PATH, K8S_PINS_PATH
 from boatyard.score_generate import generate_artifacts
 
@@ -48,7 +48,7 @@ def bump() -> None:
     if dirty:
         raise ValueError("the working tree is dirty; the bump certifies HEAD — commit or stash first")
 
-    image_shas = images.compute_image_shas(root, config.images)
+    image_shas = {image_sha_env(name): image.compute_sha(root) for name, image in config.images.items()}
     certify_head(image_shas)
 
     pins = parse_pins(image_shas)

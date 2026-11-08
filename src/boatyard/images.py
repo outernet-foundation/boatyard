@@ -80,6 +80,65 @@ class Image(BaseModel):
             sha_args=sorted({arg for arg in args if arg.endswith("_SHA")}),
         )
 
+    def compute_sha(self, repo_root: Path) -> str:
+        repo_root = repo_root.resolve()
+        image_directory = PurePosixPath(self.dockerfile).parent
+        image_root_prefix = f"{image_directory.parts[0]}/"
+
+        # Require that .dockerignore be an allowlist
+        rules = [line.strip() for line in (repo_root / ".dockerignore").read_text(encoding="utf-8").splitlines()]
+        if sum(1 for rule in rules if rule == "*") != 1:
+            raise ValueError(".dockerignore: must contain exactly one '*' line")
+        includes: list[str] = []
+        for number, rule in enumerate(rules, start=1):
+            if not rule or rule.startswith("#") or rule == "*":
+                continue
+            if not rule.startswith("!"):
+                raise ValueError(
+                    f".dockerignore:{number}: only allowlists are supported ('*' + '!path' lines); got {rule!r}"
+                )
+            path = rule[1:].strip("/")
+            if not path or any(character in path for character in "*?[]\\"):
+                raise ValueError(
+                    f".dockerignore:{number}: re-include lines must be literal paths without wildcards; got {rule!r}"
+                )
+            includes.append(path)
+
+        # Collect allowlisted files present on disk
+        disk_files = [
+            path
+            for path in (entry.relative_to(repo_root).as_posix() for entry in repo_root.rglob("*") if entry.is_file())
+            if any(path == include or path.startswith(include + "/") for include in includes)
+        ]
+
+        # Keep only git-visible files (tracked and untracked-not-ignored); ignored files never hash.
+        visible = set(
+            bash_output(
+                "git -c core.excludesFile=/dev/null ls-files --cached --others --exclude-standard -z",
+                cwd=repo_root,
+                env={"GIT_CONFIG_NOSYSTEM": "1"},
+            ).split("\0")
+        )
+
+        allowed = [path for path in disk_files if path in visible]
+
+        # The hashed set is everything allowlisted outside the image root plus this image's own directory.
+        shared_paths = [path for path in allowed if not path.startswith(image_root_prefix)]
+        own_paths = [path for path in allowed if path.startswith(f"{image_directory}/")]
+
+        with TemporaryDirectory() as tmpdir:
+            index_env = {"GIT_INDEX_FILE": str(Path(tmpdir) / "index")}
+            # Conversion pinned off so blobs hash the raw on-disk bytes; git derives modes and symlinks from disk.
+            bash(
+                "git -c core.autocrlf=false update-index --add --stdin",
+                cwd=repo_root,
+                env=index_env,
+                stdin_text="".join(f"{path}\n" for path in shared_paths + own_paths),
+            )
+            tree_hash = bash_output("git write-tree", cwd=repo_root, env=index_env).strip()
+
+        return f"tree-{tree_hash}"
+
     @model_validator(mode="after")
     def _validate(self) -> Self:
         if (self.axis is None) != (not self.variants):
@@ -99,76 +158,3 @@ def require_single_top(tops: set[str], subject: str) -> None:
 
 def image_sha_env(name: str) -> str:
     return name.upper().replace("-", "_") + "_SHA"
-
-
-def compute_image_shas(repo_root: Path, images: dict[str, Image]) -> dict[str, str]:
-    repo_root = repo_root.resolve()
-
-    image_dirs = {str(PurePosixPath(image.dockerfile).parent) for image in images.values()}
-
-    if not image_dirs:
-        # Skip the disk walk when no images exist.
-        return {}
-
-    # Derive the image root as the single top-level directory holding every image.
-    tops = {PurePosixPath(image_dir).parts[0] for image_dir in image_dirs}
-    require_single_top(tops, "image directories")
-    image_root_prefix = f"{next(iter(tops))}/"
-
-    # Require that .dockerignore be an allowlist
-    rules = [line.strip() for line in (repo_root / ".dockerignore").read_text(encoding="utf-8").splitlines()]
-    if sum(1 for rule in rules if rule == "*") != 1:
-        raise ValueError(".dockerignore: must contain exactly one '*' line")
-    includes: list[str] = []
-    for number, rule in enumerate(rules, start=1):
-        if not rule or rule.startswith("#") or rule == "*":
-            continue
-        if not rule.startswith("!"):
-            raise ValueError(
-                f".dockerignore:{number}: only allowlists are supported ('*' + '!path' lines); got {rule!r}"
-            )
-        path = rule[1:].strip("/")
-        if not path or any(character in path for character in "*?[]\\"):
-            raise ValueError(
-                f".dockerignore:{number}: re-include lines must be literal paths without wildcards; got {rule!r}"
-            )
-        includes.append(path)
-
-    # Collect allowlisted files present on disk
-    disk_files = [
-        path
-        for path in (entry.relative_to(repo_root).as_posix() for entry in repo_root.rglob("*") if entry.is_file())
-        if any(path == include or path.startswith(include + "/") for include in includes)
-    ]
-
-    # Keep only git-visible files (tracked and untracked-not-ignored); ignored files never hash.
-    visible = set(
-        bash_output(
-            "git -c core.excludesFile=/dev/null ls-files --cached --others --exclude-standard -z",
-            cwd=repo_root,
-            env={"GIT_CONFIG_NOSYSTEM": "1"},
-        ).split("\0")
-    )
-
-    allowed = [path for path in disk_files if path in visible]
-
-    # Partition into shared and per-image paths, dropping image-root files owned by no image.
-    shared_paths = [path for path in allowed if not path.startswith(image_root_prefix)]
-    per_image = {directory: [p for p in allowed if p.startswith(directory + "/")] for directory in image_dirs}
-
-    result: dict[str, str] = {}
-    for image_dir in sorted(image_dirs):
-        with TemporaryDirectory() as tmpdir:
-            index_env = {"GIT_INDEX_FILE": str(Path(tmpdir) / "index")}
-            # Conversion pinned off so blobs hash the raw on-disk bytes; git derives modes and symlinks from disk.
-            bash(
-                "git -c core.autocrlf=false update-index --add --stdin",
-                cwd=repo_root,
-                env=index_env,
-                stdin_text="".join(f"{path}\n" for path in shared_paths + per_image[image_dir]),
-            )
-            tree_hash = bash_output("git write-tree", cwd=repo_root, env=index_env).strip()
-
-        result[image_sha_env(PurePosixPath(image_dir).name)] = f"tree-{tree_hash}"
-
-    return result

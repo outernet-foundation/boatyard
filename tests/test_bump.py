@@ -6,6 +6,7 @@ import yaml
 from pydantic import ValidationError
 
 from boatyard.config.k8s_pins import parse_pins
+from boatyard.images import Image, image_sha_env
 from boatyard.paths import K8S_PINS_PATH
 from boatyard.verbs import bump as bump_verb
 
@@ -61,6 +62,11 @@ class BumpHarness:
             "k8s:\n  workloads:\n    - api.yaml\n",
             encoding="utf-8",
         )
+        if self.image_shas:
+            for directory in ("api", "worker"):
+                image_directory = tmp_path / "workloads" / directory
+                image_directory.mkdir(parents=True, exist_ok=True)
+                (image_directory / "Dockerfile").write_text("ARG PY_IMAGE\nFROM ${PY_IMAGE}\n", encoding="utf-8")
 
         def _fake_pull(
             registry_address: str, project: str, platform: str, tag: str, target: Path, **_kwargs: object
@@ -78,8 +84,8 @@ class BumpHarness:
         def _shelf_tags(registry: str, project: str, platform: str, **kwargs: object) -> list[str]:
             return sorted(resolved_shards)
 
-        def _image_shas(root: Path, builds: object) -> dict[str, str]:
-            return dict(self.image_shas)
+        def _image_sha(inner_self: Image, _root: Path) -> str:
+            return self.image_shas[image_sha_env(inner_self.name)]
 
         if registry:
             monkeypatch.setenv("REGISTRY", "ghcr.io/org/builds")
@@ -89,7 +95,7 @@ class BumpHarness:
         monkeypatch.setattr(bump_verb, "install_oras", lambda: None)
         monkeypatch.setattr(bump_verb, "list_build_tags", _shelf_tags)
         monkeypatch.setattr(bump_verb, "pull_artifact", _fake_pull)
-        monkeypatch.setattr(bump_verb.images, "compute_image_shas", _image_shas)
+        monkeypatch.setattr(Image, "compute_sha", _image_sha)
         monkeypatch.setattr(bump_verb, "generate_artifacts", _fake_generate)
         monkeypatch.chdir(tmp_path)
 

@@ -12,7 +12,6 @@ from bashrun.bash import CalledProcessError, bash, bash_output
 from pydantic import ValidationError
 
 from boatyard.config import config as config_module
-from boatyard import images as images_module
 from boatyard import score as score_module
 from boatyard import score_compose as score_compose_module
 from boatyard import score_k8s as score_k8s_module
@@ -691,10 +690,10 @@ def test_workload_sha_slots_render_as_marker_protected_tree_slots(
 
 
 def test_generate_compose_never_walks_the_source_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    def _refuse_the_walk(root: Path, builds: object) -> dict[str, str]:
-        raise AssertionError("compose generation reads only the config's service set")
+    def _refuse_the_walk(_self: Image, _root: Path) -> str:
+        raise AssertionError("compose generation reads only the config's image set")
 
-    monkeypatch.setattr(images_module, "compute_image_shas", _refuse_the_walk)
+    monkeypatch.setattr(Image, "compute_sha", _refuse_the_walk)
     _recorder, artifact = _generate_compose_with_derived_images(monkeypatch, tmp_path)
 
     assert "image: ghcr.io/org/api:${CORE__BOATYARD_TREE__API_SHA}" in artifact
@@ -1231,11 +1230,12 @@ def _pins_k8s_recorder(
 def _pinned_config(tmp_path: Path) -> tuple[ConfigFile, K8sConfig]:
     config = _root_config(k8s={"workloads": ["api.yaml"]})
     config.root = tmp_path
+    config.images = {"api": Image(name="api", dockerfile="workloads/api/Dockerfile")}
     assert config.k8s is not None
     return config, config.k8s
 
 
-def _refuse_the_tree_walk(root: Path, builds: object) -> dict[str, str]:
+def _refuse_the_tree_walk(_self: Image, _root: Path) -> str:
     raise AssertionError("the pinned k8s rendering never walks the tree")
 
 
@@ -1243,7 +1243,7 @@ def test_k8s_generation_bakes_the_pins_file_tags(tmp_path: Path, monkeypatch: py
     _write_pins(tmp_path, {"API_SHA": PINNED_TAG})
     recorder = _pins_k8s_recorder(monkeypatch, tmp_path, SHA_WORKLOAD)
     config, k8s = _pinned_config(tmp_path)
-    monkeypatch.setattr(score_k8s_module.images, "compute_image_shas", _refuse_the_tree_walk)
+    monkeypatch.setattr(Image, "compute_sha", _refuse_the_tree_walk)
 
     generate_k8s(config, k8s, LockFile.model_validate({}), local=False, secrets=_empty_secrets())
 
@@ -1280,10 +1280,10 @@ def test_local_k8s_generation_derives_working_tree_tags_without_pins(
     recorder = _pins_k8s_recorder(monkeypatch, tmp_path, SHA_WORKLOAD, output_name="manifests.local.yaml")
     config, k8s = _pinned_config(tmp_path)
 
-    def _local_shas(root: Path, builds: object) -> dict[str, str]:
-        return {"API_SHA": LOCAL_TAG}
+    def _local_tree_sha(_self: Image, _root: Path) -> str:
+        return LOCAL_TAG
 
-    monkeypatch.setattr(score_k8s_module.images, "compute_image_shas", _local_shas)
+    monkeypatch.setattr(Image, "compute_sha", _local_tree_sha)
 
     generate_k8s(config, k8s, LockFile.model_validate({}), local=True, secrets=_empty_secrets())
 

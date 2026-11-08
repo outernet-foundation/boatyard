@@ -13,9 +13,9 @@ from typer.testing import CliRunner
 from boatyard.cli import app
 from boatyard.verbs import build
 from boatyard import build as build_module
-from boatyard import images as images_module
 from boatyard import lock as lock_module
 from boatyard.config.lock import LOCK_PATH
+from boatyard.images import Image
 
 DIGEST_A = "sha256:" + "a" * 64
 HEAD_SHA = "1111111111111111111111111111111111111111"
@@ -95,8 +95,8 @@ def _tagged_entry() -> dict[str, str]:
     return {"image.name": "registry/api:tree-abc", "containerimage.digest": DIGEST_A}
 
 
-def _no_image_shas(root: Path, config: object) -> dict[str, str]:
-    return {}
+def _fixed_tree_sha(_self: Image, _root: Path) -> str:
+    return "tree-none"
 
 
 def _no_gc_limits() -> None:
@@ -215,7 +215,7 @@ def _prepare(
 ) -> BakeRunner:
     recorder = BakeRunner()
     monkeypatch.setattr(build_module, "bash", recorder.run)
-    monkeypatch.setattr(images_module, "compute_image_shas", _no_image_shas)
+    monkeypatch.setattr(Image, "compute_sha", _fixed_tree_sha)
     monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
     monkeypatch.setattr(build_module, "host_platform", _amd64_host)
     monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
@@ -267,7 +267,7 @@ class TestDefaultTargets:
 
     def test_foreign_arch_repo_refuses_bare_build(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(build_module, "bash", BakeRunner().run)
-        monkeypatch.setattr(images_module, "compute_image_shas", _no_image_shas)
+        monkeypatch.setattr(Image, "compute_sha", _fixed_tree_sha)
         monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
@@ -374,7 +374,7 @@ class TestVariantSelection:
 
     def _refuse(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, arguments: list[str]) -> Any:
         monkeypatch.setattr(build_module, "bash", BakeRunner().run)
-        monkeypatch.setattr(images_module, "compute_image_shas", _no_image_shas)
+        monkeypatch.setattr(Image, "compute_sha", _fixed_tree_sha)
         monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
@@ -395,7 +395,7 @@ class TestVariantSelection:
 
 class TestBuildKeysGuard:
     def test_build_without_derived_images_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(images_module, "compute_image_shas", _no_image_shas)
+        monkeypatch.setattr(Image, "compute_sha", _fixed_tree_sha)
         monkeypatch.chdir(tmp_path)
         _write_repo(
             tmp_path,
@@ -417,7 +417,7 @@ class TestBakeFailure:
             raise CalledProcessError(returncode=1, cmd=command)
 
         monkeypatch.setattr(build_module, "bash", _fail)
-        monkeypatch.setattr(images_module, "compute_image_shas", _no_image_shas)
+        monkeypatch.setattr(Image, "compute_sha", _fixed_tree_sha)
         monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
@@ -481,7 +481,7 @@ class TestPushDestination:
 
     def test_a_target_with_no_tagged_references_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(build_module, "bash", BakeRunner(_baked("zed-capture", refs="", digest=DIGEST_A)).run)
-        monkeypatch.setattr(images_module, "compute_image_shas", _no_image_shas)
+        monkeypatch.setattr(Image, "compute_sha", _fixed_tree_sha)
         monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
@@ -497,7 +497,7 @@ class TestPushDestination:
 
     def test_bake_output_not_covering_the_targets_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(build_module, "bash", MissingTargetRunner().run)
-        monkeypatch.setattr(images_module, "compute_image_shas", _no_image_shas)
+        monkeypatch.setattr(Image, "compute_sha", _fixed_tree_sha)
         monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
@@ -523,7 +523,7 @@ class TestPushDestination:
 
     def _refuse_address(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, arguments: list[str]) -> None:
         monkeypatch.setattr(build_module, "bash", BakeRunner().run)
-        monkeypatch.setattr(images_module, "compute_image_shas", _no_image_shas)
+        monkeypatch.setattr(Image, "compute_sha", _fixed_tree_sha)
         monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
@@ -569,7 +569,7 @@ class TestDigestShelving:
 
     def test_a_repository_push_without_registry_env_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(build_module, "bash", BakeRunner().run)
-        monkeypatch.setattr(images_module, "compute_image_shas", _no_image_shas)
+        monkeypatch.setattr(Image, "compute_sha", _fixed_tree_sha)
         monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
@@ -623,7 +623,7 @@ class TestBakeSeesLockValues:
         monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         _fixed_registry(monkeypatch)
-        monkeypatch.setattr(images_module, "compute_image_shas", _no_image_shas)
+        monkeypatch.setattr(Image, "compute_sha", _fixed_tree_sha)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles=LOCK_DOCKERFILES, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
 

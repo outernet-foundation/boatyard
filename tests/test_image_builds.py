@@ -6,9 +6,8 @@ from typing import Any
 import pytest
 import yaml
 
-from boatyard import images as images_module
 from boatyard.config.config import ConfigFile
-from boatyard.images import Image, compute_image_shas
+from boatyard.images import Image, image_sha_env
 
 
 def write_dockerfile(tmp_path: Path, image_name: str, text: str, top: str = "workloads") -> None:
@@ -37,6 +36,10 @@ def _image_builds(*dockerfiles: str) -> dict[str, Image]:
         PurePosixPath(dockerfile).parent.name: Image(name=PurePosixPath(dockerfile).parent.name, dockerfile=dockerfile)
         for dockerfile in dockerfiles
     }
+
+
+def _compute_shas(repo: Path, images: dict[str, Image]) -> dict[str, str]:
+    return {image_sha_env(name): image.compute_sha(repo) for name, image in images.items()}
 
 
 def _init_repo(path: Path) -> None:
@@ -214,122 +217,119 @@ class TestDeriveImages:
 
 
 class TestComputeImageShasZeroImages:
-    def _fail_bash(self, command: str) -> str:
-        raise AssertionError(f"zero images must not shell out, saw: {command}")
+    def test_an_imageless_repo_walks_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        def _refuse_the_walk(_self: Image, _root: Path) -> str:
+            raise AssertionError("zero images must not walk the tree")
 
-    def test_an_imageless_repo_returns_empty_without_git_or_dockerignore_reads(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        monkeypatch.setattr(images_module, "bash_output", self._fail_bash)
-        monkeypatch.setattr(images_module, "bash", self._fail_bash)
+        monkeypatch.setattr(Image, "compute_sha", _refuse_the_walk)
 
-        assert compute_image_shas(tmp_path, _image_builds()) == {}
+        assert _compute_shas(tmp_path, _image_builds()) == {}
 
 
 class TestComputeImageShas:
     def test_should_return_deterministic_hashes(self, repo: Path):
         images = _image_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
-        shas1 = compute_image_shas(repo, images)
-        shas2 = compute_image_shas(repo, images)
+        shas1 = _compute_shas(repo, images)
+        shas2 = _compute_shas(repo, images)
 
         assert shas1 == shas2
 
     def test_should_have_tree_prefix(self, repo: Path):
-        shas = compute_image_shas(repo, _image_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile"))
+        shas = _compute_shas(repo, _image_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile"))
 
         for sha in shas.values():
             assert sha.startswith("tree-")
 
     def test_should_return_only_tagged_images(self, repo: Path):
-        shas = compute_image_shas(repo, _image_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile"))
+        shas = _compute_shas(repo, _image_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile"))
 
         assert set(shas.keys()) == {"APP_SHA", "WORKER_SHA"}
 
     def test_should_change_only_affected_image_when_image_file_changes(self, repo: Path):
         images = _image_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
-        shas_before = compute_image_shas(repo, images)
+        shas_before = _compute_shas(repo, images)
 
         (repo / "workloads" / "app" / "main.py").write_text("print('changed')")
         _commit_all(repo)
 
-        shas_after = compute_image_shas(repo, images)
+        shas_after = _compute_shas(repo, images)
         assert shas_before["APP_SHA"] != shas_after["APP_SHA"]
         assert shas_before["WORKER_SHA"] == shas_after["WORKER_SHA"]
 
     def test_should_change_all_images_when_shared_file_changes(self, repo: Path):
         images = _image_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
-        shas_before = compute_image_shas(repo, images)
+        shas_before = _compute_shas(repo, images)
 
         (repo / "packages" / "lib.py").write_text("x = 2")
         _commit_all(repo)
 
-        shas_after = compute_image_shas(repo, images)
+        shas_after = _compute_shas(repo, images)
         assert shas_before["APP_SHA"] != shas_after["APP_SHA"]
         assert shas_before["WORKER_SHA"] != shas_after["WORKER_SHA"]
 
     def test_should_not_change_when_ignored_file_changes(self, repo: Path):
         images = _image_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
-        shas_before = compute_image_shas(repo, images)
+        shas_before = _compute_shas(repo, images)
 
         (repo / "README.md").write_text("changed readme")
         _commit_all(repo)
 
-        shas_after = compute_image_shas(repo, images)
+        shas_after = _compute_shas(repo, images)
         assert shas_before == shas_after
 
     def test_should_not_change_when_untagged_workload_file_changes(self, repo: Path):
         images = _image_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
-        shas_before = compute_image_shas(repo, images)
+        shas_before = _compute_shas(repo, images)
 
         (repo / "workloads" / "loki").mkdir()
         (repo / "workloads" / "loki" / "config.yaml").write_text("unused by tagged images")
         _commit_all(repo)
 
-        shas_after = compute_image_shas(repo, images)
+        shas_after = _compute_shas(repo, images)
         assert shas_before == shas_after
 
     def test_should_rekey_only_the_affected_image_on_a_dirty_edit(self, repo: Path):
         images = _image_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
-        shas_before = compute_image_shas(repo, images)
+        shas_before = _compute_shas(repo, images)
 
         (repo / "workloads" / "app" / "main.py").write_text("print('uncommitted')")
 
-        shas_after = compute_image_shas(repo, images)
+        shas_after = _compute_shas(repo, images)
         assert shas_before["APP_SHA"] != shas_after["APP_SHA"]
         assert shas_before["WORKER_SHA"] == shas_after["WORKER_SHA"]
 
     def test_should_rekey_on_an_untracked_context_visible_file(self, repo: Path):
         images = _image_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
-        shas_before = compute_image_shas(repo, images)
+        shas_before = _compute_shas(repo, images)
 
         (repo / "workloads" / "app" / "new_module.py").write_text("print('untracked')")
 
-        shas_after = compute_image_shas(repo, images)
+        shas_after = _compute_shas(repo, images)
         assert shas_before["APP_SHA"] != shas_after["APP_SHA"]
         assert shas_before["WORKER_SHA"] == shas_after["WORKER_SHA"]
 
     def test_ignored_files_under_the_allowlist_never_hash(self, repo: Path):
         images = _image_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
         (repo / ".gitignore").write_text("__pycache__/\n")
-        shas_before = compute_image_shas(repo, images)
+        shas_before = _compute_shas(repo, images)
 
         (repo / "workloads" / "app" / "__pycache__").mkdir()
         (repo / "workloads" / "app" / "__pycache__" / "main.cpython-313.pyc").write_text("machine-local bytes")
 
-        assert compute_image_shas(repo, images) == shas_before
+        assert _compute_shas(repo, images) == shas_before
 
     def test_staged_and_unstaged_edits_hash_identically(self, repo: Path):
         images = _image_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
         (repo / "workloads" / "app" / "main.py").write_text("print('edited')")
-        shas_unstaged = compute_image_shas(repo, images)
+        shas_unstaged = _compute_shas(repo, images)
 
         subprocess.run(["git", "add", "-A"], cwd=str(repo), capture_output=True, check=True)
 
-        assert compute_image_shas(repo, images) == shas_unstaged
+        assert _compute_shas(repo, images) == shas_unstaged
 
     def test_global_excludes_do_not_affect_visibility(self, repo: Path, tmp_path_factory: pytest.TempPathFactory):
         images = _image_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
-        shas_before = compute_image_shas(repo, images)
+        shas_before = _compute_shas(repo, images)
 
         global_ignore = tmp_path_factory.mktemp("global-excludes") / "gitignore"
         global_ignore.write_text("main.py\n")
@@ -340,13 +340,7 @@ class TestComputeImageShas:
             check=True,
         )
 
-        assert compute_image_shas(repo, images) == shas_before
-
-    def test_should_raise_when_images_span_multiple_top_level_dirs(self, repo: Path):
-        images = _image_builds("workloads/app/Dockerfile", "other/worker/Dockerfile")
-
-        with pytest.raises(ValueError, match="multiple top-level"):
-            compute_image_shas(repo, images)
+        assert _compute_shas(repo, images) == shas_before
 
 
 class TestComputeImageShasGrammar:
@@ -354,25 +348,25 @@ class TestComputeImageShasGrammar:
         (tmp_path / ".dockerignore").write_text("*\n!workloads/\n__pycache__\n")
 
         with pytest.raises(ValueError, match="only allowlists are supported"):
-            compute_image_shas(tmp_path, _image_builds("workloads/app/Dockerfile"))
+            _compute_shas(tmp_path, _image_builds("workloads/app/Dockerfile"))
 
     def test_should_refuse_a_wildcard_re_include(self, tmp_path: Path):
         (tmp_path / ".dockerignore").write_text("*\n!workloads/*\n")
 
         with pytest.raises(ValueError, match="literal paths without wildcards"):
-            compute_image_shas(tmp_path, _image_builds("workloads/app/Dockerfile"))
+            _compute_shas(tmp_path, _image_builds("workloads/app/Dockerfile"))
 
     def test_should_refuse_a_missing_star(self, tmp_path: Path):
         (tmp_path / ".dockerignore").write_text("!workloads/\n")
 
         with pytest.raises(ValueError, match=r"exactly one '\*' line"):
-            compute_image_shas(tmp_path, _image_builds("workloads/app/Dockerfile"))
+            _compute_shas(tmp_path, _image_builds("workloads/app/Dockerfile"))
 
     def test_should_refuse_a_second_star(self, tmp_path: Path):
         (tmp_path / ".dockerignore").write_text("*\n*\n!workloads/\n")
 
         with pytest.raises(ValueError, match=r"exactly one '\*' line"):
-            compute_image_shas(tmp_path, _image_builds("workloads/app/Dockerfile"))
+            _compute_shas(tmp_path, _image_builds("workloads/app/Dockerfile"))
 
 
 def _docker_available() -> bool:
@@ -402,7 +396,7 @@ class TestComputeImageShasContextGolden:
         (app / "__pycache__" / "main.cpython-313.pyc").write_text("machine-local bytes")
 
         images = _image_builds("workloads/app/Dockerfile")
-        shas = compute_image_shas(tmp_path, images)
+        shas = _compute_shas(tmp_path, images)
         tree_hash = shas["APP_SHA"].removeprefix("tree-")
         listed = subprocess.run(
             ["git", "ls-tree", "-r", tree_hash],

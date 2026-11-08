@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from boatyard.cli import app
-from boatyard import images as images_module
+from boatyard.images import Image
 from boatyard import crane
 from boatyard import publish as publish_compose
 from boatyard.verbs import publish as publish_verb
@@ -65,19 +65,22 @@ class DigestResolver:
         return FAKE_DIGEST
 
 
-def _image_shas(root: Path, bake: object) -> dict[str, str]:
-    return {"LIVEKIT_TOKEN_SHA": "tree-abc"}
+def _livekit_tree_sha(_self: Image, _root: Path) -> str:
+    return "tree-abc"
 
 
 def _invoke_publishing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> PublishingRecorder:
     recorder = PublishingRecorder()
     monkeypatch.chdir(tmp_path)
+    livekit = tmp_path / "workloads" / "livekit-token"
+    livekit.mkdir(parents=True, exist_ok=True)
+    (livekit / "Dockerfile").write_text("ARG PY_IMAGE\nFROM ${PY_IMAGE}\n", encoding="utf-8")
     monkeypatch.setenv("REGISTRY_USERNAME", "publisher")
     monkeypatch.setenv("REGISTRY_TOKEN", "secret")
     monkeypatch.setattr(publish_verb, "bash", recorder.run)
     monkeypatch.setattr(crane, "bash", recorder.run)
     monkeypatch.setattr(publish_verb, "bash_output", _command_output)
-    monkeypatch.setattr(images_module, "compute_image_shas", _image_shas)
+    monkeypatch.setattr(Image, "compute_sha", _livekit_tree_sha)
     monkeypatch.setattr(publish_compose, "resolve_remote_digest", DigestResolver().resolve)
     return recorder
 

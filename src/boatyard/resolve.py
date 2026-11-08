@@ -5,7 +5,7 @@ from collections.abc import Mapping, Set as AbstractSet
 from pathlib import Path
 from typing import NamedTuple
 
-from boatyard import images
+from boatyard.images import image_sha_env
 from boatyard.config.config import (
     AUTH_GROUP_NAME,
     EDGE_LISTEN_PORT,
@@ -310,7 +310,9 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
 
         # Fan the source tree's content tags under the entry beside the lock fans
         if tree_root not in shas_by_root:
-            shas_by_root[tree_root] = images.compute_image_shas(tree_root, tree_images)
+            shas_by_root[tree_root] = {
+                image_sha_env(name): image.compute_sha(tree_root) for name, image in tree_images.items()
+            }
         tree_entries.update({env_tree_slot(name, sha): value for sha, value in shas_by_root[tree_root].items()})
 
     demanded = sorted({name for unit in participating for name in demands.get(unit, {})})

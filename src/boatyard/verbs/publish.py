@@ -10,9 +10,9 @@ from typing import Annotated
 import typer
 from bashrun.bash import bash, bash_output
 
-from boatyard import images
 from boatyard.config.config import ConfigFile, compose_bundle_output_path, env_lock_slot, env_tree_slot
 from boatyard.crane import install_crane
+from boatyard.images import image_sha_env
 from boatyard.config.lock import LOCK_PATH, LockFile
 from boatyard.paths import DEFAULT_CONFIG_PATH
 from boatyard.publish import (
@@ -84,7 +84,7 @@ def publish_compose(
     sha = bash_output("git rev-parse HEAD").strip()
     branch_tag = (branch or bash_output("git rev-parse --abbrev-ref HEAD").strip()).replace("/", "-")
 
-    image_shas = images.compute_image_shas(config.root, config.images)
+    image_shas = {image_sha_env(name): image.compute_sha(config.root) for name, image in config.images.items()}
     lock_entries = LockFile.load(root / LOCK_PATH, config).index_references()
 
     published: list[PublishedEntry] = []

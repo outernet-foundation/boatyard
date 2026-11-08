@@ -12,7 +12,6 @@ from pydantic import (
     Field,
 )
 
-from boatyard import images
 from boatyard.config.config import (
     K8sConfig,
     PLACEHOLDER,
@@ -20,6 +19,7 @@ from boatyard.config.config import (
     ConfigFile,
     chart_lock_key,
 )
+from boatyard.images import image_sha_env
 from boatyard.config.k8s_pins import load_pins
 from boatyard.config.lock import LockFile
 from boatyard.config.workload import WorkloadDocument, load_workloads
@@ -76,7 +76,7 @@ def generate_k8s(
             STORAGE_CLASS_VAR: LOCAL_STORAGE_CLASS if local else CLOUD_STORAGE_CLASS,
             **k8s.vars,
             **(
-                images.compute_image_shas(config.root, config.images)
+                {image_sha_env(name): image.compute_sha(config.root) for name, image in config.images.items()}
                 if local
                 else load_pins(
                     config.root / K8S_PINS_PATH,

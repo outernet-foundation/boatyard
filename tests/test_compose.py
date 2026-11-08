@@ -10,7 +10,7 @@ from bashrun.bash import bash, bash_output
 from typer.testing import CliRunner
 
 from boatyard.cli import app
-from boatyard import images as images_module
+from boatyard.images import Image
 from boatyard.verbs import down, up
 from boatyard.config.lock import LOCK_PATH
 
@@ -265,8 +265,8 @@ def _silent_handoff(_command: str) -> None:
     return None
 
 
-def _producer_tree_shas(root: Path, builds: object) -> dict[str, str]:
-    return {"API_SHA": "tree-producer"} if "producer" in root.parts else {"API_SHA": "tree-consumer"}
+def _producer_tree_sha(self: Image, root: Path) -> str:
+    return "tree-producer" if "producer" in root.parts else "tree-consumer"
 
 
 def _failing_handoff(_command: str) -> None:
@@ -1119,9 +1119,12 @@ class TestLockEnvSynthesis:
         )
         _write_bundle_output(tmp_path, "apps-core", ["api"])
         _write_workload(tmp_path, "api.yaml", "api")
+        api_image = tmp_path / "workloads" / "api"
+        api_image.mkdir(parents=True)
+        (api_image / "Dockerfile").write_text("ARG PY_IMAGE\nFROM ${PY_IMAGE}\n", encoding="utf-8")
         _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST})
         _write_values_file(tmp_path, {"bundles": ["apps-core"]})
-        monkeypatch.setattr(images_module, "compute_image_shas", _producer_tree_shas)
+        monkeypatch.setattr(Image, "compute_sha", _producer_tree_sha)
         recorder = LockEnvRecorder()
 
         result = self._invoke_up_with_lock(tmp_path, monkeypatch, recorder)
@@ -1346,12 +1349,16 @@ class TestBundleOverrides:
         consumer = tmp_path / "consumer"
         consumer.mkdir()
         _write_producer(tmp_path, ["api", "grafana"], _producer_lock(["linux/amd64"]))
+        for name in ("api", "grafana"):
+            image_directory = tmp_path / "producer" / "workloads" / name
+            image_directory.mkdir(parents=True)
+            (image_directory / "Dockerfile").write_text("ARG PY_IMAGE\nFROM ${PY_IMAGE}\n", encoding="utf-8")
         _write_override_consumer(
             consumer,
             {"path_overrides": {"placeframe-cuda": OVERRIDE_PATH}},
             platforms=["linux/amd64"],
         )
-        monkeypatch.setattr(images_module, "compute_image_shas", _producer_tree_shas)
+        monkeypatch.setattr(Image, "compute_sha", _producer_tree_sha)
         recorder = self._invoke_up(monkeypatch, consumer)
 
         result = runner.invoke(app, ["up"])
@@ -1365,6 +1372,7 @@ class TestBundleOverrides:
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
                 "# tree tags\n"
                 "PLACEFRAME_CUDA__BOATYARD_TREE__API_SHA=tree-producer\n"
+                "PLACEFRAME_CUDA__BOATYARD_TREE__GRAFANA_SHA=tree-producer\n"
             )
         ]
 

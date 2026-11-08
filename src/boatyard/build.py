@@ -17,7 +17,6 @@ from build_artifact_registry.builds import push_build
 from build_artifact_registry.setup_oras import install_oras
 from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, model_validator
 
-from boatyard import images
 from boatyard.config.config import ConfigFile
 from boatyard.yaml import Yaml
 from boatyard.images import Image, image_sha_env
@@ -106,7 +105,7 @@ def run_build(
     pushing = push or push_to is not None
     destination = push_to
 
-    image_shas = images.compute_image_shas(config.root, config.images)
+    image_shas = {image_sha_env(name): image.compute_sha(config.root) for name, image in config.images.items()}
     os.environ.update(image_shas)
 
     if not config.images:
