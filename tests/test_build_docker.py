@@ -31,7 +31,7 @@ def _write_repo(
     root: Path,
     *,
     dockerfiles: dict[str, str] | None = None,
-    base_images: dict[str, str] | None = None,
+    base_images: dict[str, Any] | None = None,
     charts: dict[str, str] | None = None,
     platforms: list[str] | None = None,
     repository: str = REPOSITORY,
@@ -46,10 +46,15 @@ def _write_repo(
         "repository": repository,
         "project_name": "demo",
         "platforms": platforms or ["linux/amd64"],
-        "services": {"core": ({"axes": axes, "workloads": ["api.yaml"]} if axes else {"workloads": ["api.yaml"]})},
+        "services": {"core": {"workloads": ["api.yaml"]}},
     }
     if base_images:
         payload["base_images"] = base_images
+    if axes is not None:
+        payload["base_images"] = {
+            **payload.get("base_images", {}),
+            "NEURAL_NETWORKS_BASE": {"dockerfile": "workloads/neural-networks-base/Dockerfile", "axis": axes},
+        }
     if charts:
         payload["k8s"] = {"charts": charts}
         for chart in charts:
@@ -64,9 +69,9 @@ def _write_repo(
         (root / LOCK_PATH).write_text("", encoding="utf-8")
 
 
-EXTERNAL = "ARG PY_IMAGE\nFROM ${PY_IMAGE}\n"
-FANNED = "ARG PY_IMAGE\nARG TORCH_DEVICE\nFROM ${PY_IMAGE}\n"
-DEPENDENT = "FROM neural-networks-base\n"
+EXTERNAL = "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n"
+FANNED = "ARG ALPINE_IMAGE\nARG TORCH_DEVICE\nFROM ${ALPINE_IMAGE}\n"
+DEPENDENT = "ARG NEURAL_NETWORKS_BASE\nFROM ${NEURAL_NETWORKS_BASE}\n"
 
 DEFAULT_DOCKERFILES: dict[str, str] = {
     "api": EXTERNAL,
@@ -252,7 +257,7 @@ class TestDefaultTargets:
         ]
 
     def test_an_undeclared_axis_arg_leaves_plain_targets(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        recorder = _prepare(monkeypatch, tmp_path, [])
+        recorder = _prepare(monkeypatch, tmp_path, [], axes={})
 
         assert _bake_targets(recorder.commands) == [
             "api",
@@ -673,11 +678,22 @@ class TestRenderBakeTagDerivation:
     def test_variant_axes_derive_per_variant_targets_sharing_one_sha_env(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        recorder = _prepare(monkeypatch, tmp_path, [], dockerfiles={"localizer": FANNED}, axes=TORCH_AXIS)
+        recorder = _prepare(
+            monkeypatch,
+            tmp_path,
+            [],
+            dockerfiles={"neural-networks-base": FANNED, "localizer": DEPENDENT},
+            axes=TORCH_AXIS,
+        )
 
         services = _rendered_services(recorder.rendered)
 
-        assert list(services) == ["localizer-cuda", "localizer-rocm"]
+        assert list(services) == [
+            "localizer-cuda",
+            "localizer-rocm",
+            "neural-networks-base-cuda",
+            "neural-networks-base-rocm",
+        ]
         assert services["localizer-cuda"]["build"]["tags"] == [
             f"{REPOSITORY}/localizer-cuda:latest",
             f"{REPOSITORY}/localizer-cuda:${{LOCALIZER_SHA}}",
@@ -713,7 +729,7 @@ class TestRenderBakeArgs:
             [],
             dockerfiles={
                 "api": EXTERNAL,
-                "localizer": "ARG PY_IMAGE\nARG LOCALIZER_SHA\nFROM ${PY_IMAGE}\n",
+                "localizer": "ARG ALPINE_IMAGE\nARG LOCALIZER_SHA\nFROM ${ALPINE_IMAGE}\n",
             },
         )
 
@@ -723,7 +739,13 @@ class TestRenderBakeArgs:
         assert services["localizer"]["build"]["args"] == {"LOCALIZER_SHA": "${LOCALIZER_SHA:?err}"}
 
     def test_declared_values_reach_the_rendered_axis_arg(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        recorder = _prepare(monkeypatch, tmp_path, [], dockerfiles={"localizer": FANNED}, axes=TORCH_AXIS)
+        recorder = _prepare(
+            monkeypatch,
+            tmp_path,
+            [],
+            dockerfiles={"neural-networks-base": FANNED, "localizer": DEPENDENT},
+            axes=TORCH_AXIS,
+        )
 
         services = _rendered_services(recorder.rendered)
 
@@ -755,12 +777,14 @@ class TestRenderBakeContexts:
             monkeypatch,
             tmp_path,
             [],
-            dockerfiles={"app": "FROM base\n", "base": EXTERNAL},
+            dockerfiles={"app": "ARG BASE_IMAGE\nFROM ${BASE_IMAGE}\n", "base": EXTERNAL},
+            base_images={"BASE_IMAGE": {"dockerfile": "workloads/base/Dockerfile"}},
         )
 
         services = _rendered_services(recorder.rendered)
 
         assert services["app"]["build"]["additional_contexts"] == {"base": "target:base"}
+        assert services["app"]["build"]["args"] == {"BASE_IMAGE": "base"}
 
 
 class TestRenderBakeCache:
@@ -769,7 +793,7 @@ class TestRenderBakeCache:
             monkeypatch,
             tmp_path,
             ["--push"],
-            dockerfiles={"localizer": FANNED},
+            dockerfiles={"neural-networks-base": FANNED, "localizer": DEPENDENT},
             axes={"TORCH_DEVICE": ["cuda"]},
         )
 
@@ -790,7 +814,7 @@ class TestRenderBakeCache:
             monkeypatch,
             tmp_path,
             ["--push-to", LOCAL_REGISTRY],
-            dockerfiles={"localizer": FANNED},
+            dockerfiles={"neural-networks-base": FANNED, "localizer": DEPENDENT},
             axes={"TORCH_DEVICE": ["cuda"]},
         )
 
@@ -862,8 +886,11 @@ def test_render_bake_carries_only_bake_read_keys(tmp_path: Path, monkeypatch: py
         monkeypatch,
         tmp_path,
         [],
-        dockerfiles={"api": "FROM base\nARG API_SHA\n", "base": EXTERNAL},
-        base_images={"UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"},
+        dockerfiles={"api": "ARG BASE_IMAGE\nFROM ${BASE_IMAGE}\nARG API_SHA\n", "base": EXTERNAL},
+        base_images={
+            "UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:0.12.15",
+            "BASE_IMAGE": {"dockerfile": "workloads/base/Dockerfile"},
+        },
     )
 
     document = yaml.safe_load(recorder.rendered)

@@ -25,7 +25,7 @@ def mirror() -> None:
 
     lock = LockFile.load(root / LOCK_PATH, config)
     mirror_targets: list[tuple[str, list[str]]] = []
-    for name, reference in sorted(config.base_images.items(), key=lambda item: item[1]):
+    for name, reference in sorted(config.pulled_base_images.items(), key=lambda item: item[1]):
         mirror_targets.append((reference, lock.images[name].recorded_digests))
     for chart_name, chart_ref in sorted(config.declared_charts.items()):
         mirror_targets.append((chart_ref.removeprefix("oci://"), [lock.charts[chart_lock_key(chart_name)]]))

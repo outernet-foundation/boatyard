@@ -43,6 +43,8 @@ def repo(tmp_path: Path) -> Path:
             "requires": ">=0",
             "repository": "ghcr.io/org/demo",
             "project_name": "demo",
+            "platforms": ["linux/amd64"],
+            "base_images": {"PY_IMAGE": "docker.io/library/python:3.13-slim"},
             "services": {"ext": {"ref": "oci://ghcr.io/org/ext:0.1.0"}},
         }),
         encoding="utf-8",

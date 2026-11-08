@@ -16,24 +16,41 @@ def write_dockerfile(tmp_path: Path, image_name: str, text: str, top: str = "wor
     (directory / "Dockerfile").write_text(text, encoding="utf-8")
 
 
-def _derive(tmp_path: Path, axes: dict[str, list[str]] | None = None) -> dict[str, Image]:
+def _derive(
+    tmp_path: Path,
+    base_images: dict[str, Any] | None = None,
+    local: bool = False,
+) -> dict[str, Image]:
     score = tmp_path / "stack" / "score"
     score.mkdir(parents=True, exist_ok=True)
     (score / "gpu.yaml").write_text("metadata:\n  name: gpu\ncontainers: {}\n", encoding="utf-8")
-    services: dict[str, Any] = {"ext": {"ref": "oci://ghcr.io/org/ext:0.1.0"}}
-    for axis, values in (axes or {}).items():
-        services[axis.lower()] = {"axes": {axis: values}, "workloads": ["gpu.yaml"]}
     payload: dict[str, Any] = {
         "requires": ">=0",
         "project_name": "demo",
         "repository": "ghcr.io/example",
         "platforms": ["linux/amd64"],
-        "services": services,
+        "base_images": {
+            "UV_IMAGE": "ghcr.io/org/uv:1",
+            "PY_IMAGE": "docker.io/library/python:3.13-slim",
+            **(base_images or {}),
+        },
+        "services": (
+            {"gpu": {"workloads": ["gpu.yaml"]}}
+            if local
+            else {"ext": {"ref": "oci://ghcr.io/org/ext:0.1.0"}}
+        ),
     }
     (tmp_path / "boatyard.yml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     loaded = ConfigFile.load(tmp_path / "boatyard.yml")
     assert loaded is not None
     return loaded.images
+
+
+NEURAL_BASE: dict[str, Any] = {"dockerfile": "workloads/neural-networks-base/Dockerfile"}
+
+
+def _neural_entry(axis: dict[str, list[str]] | None = None) -> dict[str, Any]:
+    return {**NEURAL_BASE, **({"axis": axis} if axis is not None else {})}
 
 
 def _image_builds(*dockerfiles: str) -> dict[str, Image]:
@@ -87,14 +104,24 @@ class TestDeriveImages:
         assert images["api"].dockerfile == "workloads/api/Dockerfile"
         assert images["api"].contexts == []
 
-    def test_bare_identifier_from_declares_a_context_edge(self, tmp_path: Path) -> None:
+    def test_a_built_base_from_declares_a_base_edge(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\n")
-        write_dockerfile(tmp_path, "localizer", "FROM neural-networks-base AS dev\nARG LOCALIZER_SHA\n")
+        write_dockerfile(
+            tmp_path, "localizer", "ARG NEURAL_NETWORKS_BASE\nFROM ${NEURAL_NETWORKS_BASE} AS dev\nARG LOCALIZER_SHA\n"
+        )
 
-        images = _derive(tmp_path)
+        images = _derive(tmp_path, {"NEURAL_NETWORKS_BASE": NEURAL_BASE})
 
+        assert images["localizer"].bases == {"NEURAL_NETWORKS_BASE": "neural-networks-base"}
         assert images["localizer"].contexts == ["neural-networks-base"]
         assert images["localizer"].sha_args == ["LOCALIZER_SHA"]
+
+    def test_an_owned_image_key_resolves_a_from(self, tmp_path: Path) -> None:
+        write_dockerfile(tmp_path, "api", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n")
+
+        images = _derive(tmp_path, local=True)
+
+        assert sorted(images) == ["api"]
 
     def test_stage_names_are_not_context_edges(self, tmp_path: Path) -> None:
         write_dockerfile(
@@ -107,22 +134,28 @@ class TestDeriveImages:
 
         assert images["api"].contexts == []
 
-    def test_bare_identifier_naming_no_sibling_refuses(self, tmp_path: Path) -> None:
+    def test_a_bare_name_from_refuses(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "FROM python\n")
 
-        with pytest.raises(ValueError, match="FROM python names no image directory"):
+        with pytest.raises(ValueError, match=r"FROM python must be a \$\{KEY\} reference"):
+            _derive(tmp_path)
+
+    def test_a_from_key_naming_no_base_images_entry_refuses(self, tmp_path: Path) -> None:
+        write_dockerfile(tmp_path, "api", "ARG GHOST_IMAGE\nFROM ${GHOST_IMAGE}\n")
+
+        with pytest.raises(ValueError, match=r"FROM \$\{GHOST_IMAGE\} names no base_images key"):
             _derive(tmp_path)
 
     def test_literal_from_refuses_naming_base_images(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "migrator", "FROM golang:1.22-alpine AS build\nFROM ghcr.io/org/base:1\n")
 
-        with pytest.raises(ValueError, match=r"FROM golang:1\.22-alpine must reference a base_images build arg"):
+        with pytest.raises(ValueError, match=r"FROM golang:1\.22-alpine must be a \$\{KEY\} reference"):
             _derive(tmp_path)
 
     def test_registry_path_with_an_arg_suffix_still_refuses(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "FROM ghcr.io/org/uv${UV_BASE_DIGEST}\n")
 
-        with pytest.raises(ValueError, match=r"FROM ghcr\.io/org/uv\$\{UV_BASE_DIGEST\} must reference"):
+        with pytest.raises(ValueError, match=r"FROM ghcr\.io/org/uv\$\{UV_BASE_DIGEST\} must be a"):
             _derive(tmp_path)
 
     def test_literal_copy_from_refuses_naming_base_images(self, tmp_path: Path) -> None:
@@ -142,10 +175,11 @@ class TestDeriveImages:
 
         assert images["api"].contexts == []
 
-    def test_a_declared_axis_arg_fans_over_the_declared_values(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
+    def test_a_declared_axis_fans_the_built_base(self, tmp_path: Path) -> None:
+        write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nARG TORCH_DEVICE\nFROM ${UV_IMAGE}\n")
+        write_dockerfile(tmp_path, "localizer", "ARG NEURAL_NETWORKS_BASE\nFROM ${NEURAL_NETWORKS_BASE}\n")
 
-        images = _derive(tmp_path, {"TORCH_DEVICE": ["cuda", "rocm"]})
+        images = _derive(tmp_path, {"NEURAL_NETWORKS_BASE": _neural_entry({"TORCH_DEVICE": ["cuda", "rocm"]})})
 
         assert images["neural-networks-base"].axis == "TORCH_DEVICE"
         assert images["neural-networks-base"].variants == ["cuda", "rocm"]
@@ -154,10 +188,11 @@ class TestDeriveImages:
             "neural-networks-base-rocm",
         ]
 
-    def test_an_arg_naming_no_declared_axis_stays_plain(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
+    def test_an_undeclared_axis_arg_stays_plain(self, tmp_path: Path) -> None:
+        write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nARG TORCH_DEVICE\nFROM ${UV_IMAGE}\n")
+        write_dockerfile(tmp_path, "localizer", "ARG NEURAL_NETWORKS_BASE\nFROM ${NEURAL_NETWORKS_BASE}\n")
 
-        images = _derive(tmp_path)
+        images = _derive(tmp_path, {"NEURAL_NETWORKS_BASE": NEURAL_BASE})
 
         assert images["neural-networks-base"].axis is None
         assert images["neural-networks-base"].variants == []
@@ -166,18 +201,22 @@ class TestDeriveImages:
         ]
 
     def test_declared_values_keep_their_declared_order(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "api", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
+        write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nARG TORCH_DEVICE\nFROM ${UV_IMAGE}\n")
+        write_dockerfile(tmp_path, "localizer", "ARG NEURAL_NETWORKS_BASE\nFROM ${NEURAL_NETWORKS_BASE}\n")
 
-        images = _derive(tmp_path, {"TORCH_DEVICE": ["rocm", "cuda"]})
+        images = _derive(tmp_path, {"NEURAL_NETWORKS_BASE": _neural_entry({"TORCH_DEVICE": ["rocm", "cuda"]})})
 
-        assert images["api"].variants == ["rocm", "cuda"]
-        assert [target for target, _variant in images["api"].target_variants] == ["api-rocm", "api-cuda"]
+        assert images["localizer"].variants == ["rocm", "cuda"]
+        assert [target for target, _variant in images["localizer"].target_variants] == [
+            "localizer-rocm",
+            "localizer-cuda",
+        ]
 
-    def test_the_axis_propagates_along_context_edges(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
-        write_dockerfile(tmp_path, "localizer", "FROM neural-networks-base AS dev\n")
+    def test_the_axis_is_inherited_one_hop(self, tmp_path: Path) -> None:
+        write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nARG TORCH_DEVICE\nFROM ${UV_IMAGE}\n")
+        write_dockerfile(tmp_path, "localizer", "ARG NEURAL_NETWORKS_BASE\nFROM ${NEURAL_NETWORKS_BASE}\n")
 
-        images = _derive(tmp_path, {"TORCH_DEVICE": ["cuda", "rocm"]})
+        images = _derive(tmp_path, {"NEURAL_NETWORKS_BASE": _neural_entry({"TORCH_DEVICE": ["cuda", "rocm"]})})
 
         assert images["localizer"].axis == "TORCH_DEVICE"
         assert images["localizer"].variants == ["cuda", "rocm"]
@@ -187,17 +226,79 @@ class TestDeriveImages:
         ]
 
     def test_sha_arg_naming_no_image_refuses(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "api", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\nARG GHOST_SHA\n")
+        write_dockerfile(tmp_path, "api", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG GHOST_SHA\n")
 
         with pytest.raises(ValueError, match="ARG GHOST_SHA names no image directory"):
             _derive(tmp_path)
 
     def test_dockerfiles_spanning_multiple_top_level_dirs_refuse(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "api", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n")
-        write_dockerfile(tmp_path, "bridge", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n", top="docker")
+        write_dockerfile(tmp_path, "api", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\n")
+        write_dockerfile(tmp_path, "bridge", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\n", top="docker")
 
         with pytest.raises(ValueError, match="span multiple top-level directories"):
             _derive(tmp_path)
+
+
+class TestBuiltBaseRefusals:
+    def test_a_built_entry_with_a_missing_dockerfile_refuses(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match=r"base_images\.NEURAL_NETWORKS_BASE: .*does not exist"):
+            _derive(tmp_path, {"NEURAL_NETWORKS_BASE": NEURAL_BASE})
+
+    def test_a_dead_built_entry_refuses(self, tmp_path: Path) -> None:
+        write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\n")
+
+        with pytest.raises(ValueError, match=r"base_images\.NEURAL_NETWORKS_BASE: no Dockerfile FROMs"):
+            _derive(tmp_path, {"NEURAL_NETWORKS_BASE": NEURAL_BASE})
+
+    def test_a_declared_axis_without_a_matching_arg_refuses(self, tmp_path: Path) -> None:
+        write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\n")
+        write_dockerfile(tmp_path, "localizer", "ARG NEURAL_NETWORKS_BASE\nFROM ${NEURAL_NETWORKS_BASE}\n")
+
+        with pytest.raises(ValueError, match=r"axis TORCH_DEVICE names no ARG"):
+            _derive(tmp_path, {"NEURAL_NETWORKS_BASE": _neural_entry({"TORCH_DEVICE": ["cuda"]})})
+
+    def test_two_entries_declaring_one_axis_with_different_values_refuse(self, tmp_path: Path) -> None:
+        write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nARG TORCH_DEVICE\nFROM ${UV_IMAGE}\n")
+        write_dockerfile(tmp_path, "localizer", "ARG NEURAL_NETWORKS_BASE\nFROM ${NEURAL_NETWORKS_BASE}\n")
+        write_dockerfile(tmp_path, "tools-base", "ARG UV_IMAGE\nARG TORCH_DEVICE\nFROM ${UV_IMAGE}\n")
+        write_dockerfile(tmp_path, "tools", "ARG TOOLS_BASE\nFROM ${TOOLS_BASE}\n")
+
+        with pytest.raises(ValueError, match="already declares"):
+            _derive(
+                tmp_path,
+                {
+                    "NEURAL_NETWORKS_BASE": _neural_entry({"TORCH_DEVICE": ["cuda", "rocm"]}),
+                    "TOOLS_BASE": {"dockerfile": "workloads/tools-base/Dockerfile", "axis": {"TORCH_DEVICE": ["cuda"]}},
+                },
+            )
+
+    def test_a_built_base_on_a_built_base_refuses(self, tmp_path: Path) -> None:
+        write_dockerfile(tmp_path, "tools-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\n")
+        write_dockerfile(tmp_path, "app-base", "ARG TOOLS_BASE\nFROM ${TOOLS_BASE}\n")
+        write_dockerfile(tmp_path, "app", "ARG APP_BASE\nFROM ${APP_BASE}\n")
+
+        with pytest.raises(ValueError, match="a built base must not FROM the built base"):
+            _derive(
+                tmp_path,
+                {
+                    "TOOLS_BASE": {"dockerfile": "workloads/tools-base/Dockerfile"},
+                    "APP_BASE": {"dockerfile": "workloads/app-base/Dockerfile"},
+                },
+            )
+
+    def test_a_dockerfile_froming_two_built_bases_refuses(self, tmp_path: Path) -> None:
+        write_dockerfile(tmp_path, "tools-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\n")
+        write_dockerfile(tmp_path, "app-base", "ARG PY_IMAGE\nFROM ${PY_IMAGE}\n")
+        write_dockerfile(tmp_path, "app", "ARG TOOLS_BASE\nARG APP_BASE\nFROM ${TOOLS_BASE}\nFROM ${APP_BASE}\n")
+
+        with pytest.raises(ValueError, match="FROMs more than one built base"):
+            _derive(
+                tmp_path,
+                {
+                    "TOOLS_BASE": {"dockerfile": "workloads/tools-base/Dockerfile"},
+                    "APP_BASE": {"dockerfile": "workloads/app-base/Dockerfile"},
+                },
+            )
 
 
 class TestComputeImageShasZeroImages:

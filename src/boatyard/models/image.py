@@ -7,15 +7,16 @@ from tempfile import TemporaryDirectory
 from typing import NamedTuple, Self
 
 from bashrun.bash import bash, bash_output
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 DOCKERFILE_NAME = "Dockerfile"
 
 FROM_LINE_PATTERN = re.compile(r"^FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?", re.IGNORECASE)
 ARG_LINE_PATTERN = re.compile(r"^ARG\s+([A-Za-z_][A-Za-z0-9_]*)")
 COPY_FROM_LINE_PATTERN = re.compile(r"^COPY\s+--from=(\S+)", re.IGNORECASE)
-BARE_IDENTIFIER_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
-BUILD_ARG_REFERENCE_PATTERN = re.compile(r"^\$\{[A-Za-z0-9_]+\}$")
+BUILD_ARG_REFERENCE_PATTERN = re.compile(r"^\$\{([A-Za-z0-9_]+)\}$")
+AXIS_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
+AXIS_VALUE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
 class Image(BaseModel):
@@ -23,10 +24,14 @@ class Image(BaseModel):
 
     name: str
     dockerfile: str
-    contexts: list[str] = Field(default_factory=list)
+    bases: dict[str, str] = Field(default_factory=dict)
     axis: str | None = None
     variants: list[str] = Field(default_factory=list)
     sha_args: list[str] = Field(default_factory=list)
+
+    @property
+    def contexts(self) -> list[str]:
+        return sorted(set(self.bases.values()))
 
     def compute_sha(self, repo_root: Path) -> str:
         repo_root = repo_root.resolve()
@@ -103,14 +108,61 @@ class Image(BaseModel):
         return self.name.upper().replace("-", "_") + "_SHA"
 
 
+class BuiltBaseEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    dockerfile: str
+    axis: dict[str, list[str]] = Field(default_factory=dict)
+
+    @field_validator("dockerfile")
+    @classmethod
+    def _require_repo_relative(cls, value: str) -> str:
+        if not value or value.startswith("/") or ".." in PurePosixPath(value).parts:
+            raise ValueError(f"dockerfile {value!r} must be a repo-relative path")
+        return value
+
+    @field_validator("axis")
+    @classmethod
+    def _validate_axis(cls, value: dict[str, list[str]]) -> dict[str, list[str]]:
+        if len(value) > 1:
+            raise ValueError("axis: declares at most one axis")
+        for axis, values in value.items():
+            if AXIS_NAME_PATTERN.fullmatch(axis) is None:
+                raise ValueError(f"axis.{axis}: the name must be an ALL_CAPS env name")
+            if not values:
+                raise ValueError(f"axis.{axis}: must declare at least one value")
+            seen: set[str] = set()
+            for variant in values:
+                if AXIS_VALUE_PATTERN.fullmatch(variant) is None:
+                    raise ValueError(f"axis.{axis}: value {variant!r} must be a bare lowercase spelling like cuda")
+                if variant in seen:
+                    raise ValueError(f"axis.{axis}: value {variant!r} is declared twice")
+                seen.add(variant)
+        return value
+
+
 class DockerfileFacts(NamedTuple):
     name: str
     dockerfile: str
-    context_candidates: list[str]
+    base_keys: list[str]
     args: list[str]
 
 
-def load_images(root: Path, axes: Mapping[str, list[str]]) -> dict[str, Image]:
+def load_images(
+    root: Path,
+    base_images: Mapping[str, str | BuiltBaseEntry],
+    owned_images: Mapping[str, str],
+) -> dict[str, Image]:
+    # A built entry declares its dockerfile and optional fan; its directory stem is the target name.
+    built: dict[str, str] = {}
+    for name, entry in base_images.items():
+        if not isinstance(entry, BuiltBaseEntry):
+            continue
+        path = root / entry.dockerfile
+        if not path.is_file():
+            raise ValueError(f"base_images.{name}: {entry.dockerfile} does not exist")
+        built[name] = PurePosixPath(entry.dockerfile).parent.name
+
     directories: dict[str, Path] = {}
     tops: set[str] = set()
     for top in sorted(root.iterdir()):
@@ -125,27 +177,68 @@ def load_images(root: Path, axes: Mapping[str, list[str]]) -> dict[str, Image]:
 
     facts = {name: _parse_dockerfile(directory, root) for name, directory in sorted(directories.items())}
 
-    contexts: dict[str, list[str]] = {}
+    # Every FROM key resolves against the declared vocabulary; built keys become base edges.
+    resolvable = set(base_images) | set(owned_images) | set(built)
+    bases: dict[str, dict[str, str]] = {}
     for name, fact in facts.items():
-        for candidate in fact.context_candidates:
-            if candidate not in facts:
-                raise ValueError(f"{fact.dockerfile}: FROM {candidate} names no image directory or stage")
-        contexts[name] = sorted(set(fact.context_candidates))
+        bases[name] = {}
+        for key in fact.base_keys:
+            if key not in resolvable:
+                raise ValueError(f"{fact.dockerfile}: FROM ${{{key}}} names no base_images key")
+            if key in built:
+                bases[name][key] = built[key]
 
-    own_axes: dict[str, str | None] = {}
+    # One-hop grammar: a built base FROMs pulled entries only; a Dockerfile FROMs at most one built base.
     for name, fact in facts.items():
-        axis_args = [argument for argument in fact.args if argument in axes]
-        own_axes[name] = axis_args[0] if axis_args else None
+        own_bases = set(bases[name].values())
+        if name in built.values() and own_bases:
+            raise ValueError(f"{fact.dockerfile}: a built base must not FROM the built base {min(own_bases)!r}")
+        if len(own_bases) > 1:
+            raise ValueError(f"{fact.dockerfile}: FROMs more than one built base {sorted(own_bases)}")
+
+    # A declared entry no Dockerfile consumes is dead.
+    consumed = {stem for own_bases in bases.values() for stem in own_bases.values()}
+    for name, stem in sorted(built.items()):
+        if stem not in consumed:
+            raise ValueError(f"base_images.{name}: no Dockerfile FROMs ${{{name}}} (dead declaration)")
+
+    # The declared fan: the axis names an ARG in the built base's own Dockerfile; equal axis
+    # names carry equal value sets across entries.
+    axis_values: dict[str, list[str]] = {}
+    axis_sites: dict[str, str] = {}
+    entry_axes: dict[str, tuple[str, list[str]]] = {}
+    for name, entry in base_images.items():
+        if not isinstance(entry, BuiltBaseEntry):
+            continue
+        stem = built[name]
+        for axis, values in entry.axis.items():
+            if axis not in facts[stem].args:
+                raise ValueError(f"base_images.{name}: axis {axis} names no ARG in {entry.dockerfile}")
+            if axis in axis_values and axis_values[axis] != values:
+                raise ValueError(
+                    f"base_images.{name}: axis {axis} declares {values}; "
+                    f"{axis_sites[axis]} already declares {axis_values[axis]}"
+                )
+            axis_values[axis] = values
+            axis_sites[axis] = name
+            entry_axes[stem] = (axis, list(values))
 
     images: dict[str, Image] = {}
     for name, fact in facts.items():
-        axis = _effective_axis(name, contexts, own_axes)
+        axis: str | None = None
+        variants: list[str] = []
+        if name in entry_axes:
+            axis, variants = entry_axes[name][0], list(entry_axes[name][1])
+        else:
+            [stem, *_] = [*bases[name].values(), None]
+            if stem is not None and stem in entry_axes:
+                axis, variants = entry_axes[stem][0], list(entry_axes[stem][1])
         images[name] = Image(
             name=fact.name,
             dockerfile=fact.dockerfile,
-            contexts=contexts[name],
+            bases=bases[name],
             axis=axis,
-            variants=list(axes[axis]) if axis is not None else [],
+            variants=variants,
             sha_args=sorted({argument for argument in fact.args if argument.endswith("_SHA")}),
         )
 
@@ -178,27 +271,20 @@ def _parse_dockerfile(directory: Path, root: Path) -> DockerfileFacts:
         arg_match = ARG_LINE_PATTERN.match(line.strip())
         if arg_match is not None:
             args.append(arg_match.group(1))
-    context_candidates: list[str] = []
+    base_keys: list[str] = []
     for image in from_images:
         if image in stages:
             continue
-        if BARE_IDENTIFIER_PATTERN.fullmatch(image) is None:
-            if BUILD_ARG_REFERENCE_PATTERN.fullmatch(image) is None:
-                raise ValueError(f"{relative}: FROM {image} must reference a base_images build arg")
-            continue
-        context_candidates.append(image)
+        arg_match = BUILD_ARG_REFERENCE_PATTERN.fullmatch(image)
+        if arg_match is None:
+            raise ValueError(f"{relative}: FROM {image} must be a ${{KEY}} reference to a base_images key")
+        base_keys.append(arg_match.group(1))
     for value in copy_from_values:
         if "/" in value:
             raise ValueError(f"{relative}: COPY --from={value} must reference a base_images build arg")
     return DockerfileFacts(
         name=directory.name,
         dockerfile=relative,
-        context_candidates=context_candidates,
+        base_keys=base_keys,
         args=args,
     )
-
-
-def _effective_axis(name: str, contexts: Mapping[str, list[str]], own_axes: Mapping[str, str | None]) -> str | None:
-    if contexts[name]:
-        return _effective_axis(contexts[name][0], contexts, own_axes)
-    return own_axes[name]

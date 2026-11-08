@@ -162,7 +162,8 @@ def run_build(
     services: dict[str, dict[str, dict[str, BakeValue]]] = {}
     for image in config.images.values():
         for target, variant in image.target_variants:
-            args: dict[str, str] = {key: f"${{{key}:-}}" for key in config.base_images}
+            args: dict[str, str] = {key: f"${{{key}:-}}" for key in config.pulled_base_images}
+            args.update(image.bases)
             axis = image.axis
             if variant is not None and axis is not None:
                 args[axis] = variant

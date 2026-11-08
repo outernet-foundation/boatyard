@@ -74,7 +74,7 @@ def _invoke_publishing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Publi
     monkeypatch.chdir(tmp_path)
     livekit = tmp_path / "workloads" / "livekit-token"
     livekit.mkdir(parents=True, exist_ok=True)
-    (livekit / "Dockerfile").write_text("ARG PY_IMAGE\nFROM ${PY_IMAGE}\n", encoding="utf-8")
+    (livekit / "Dockerfile").write_text("ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n", encoding="utf-8")
     monkeypatch.setenv("REGISTRY_USERNAME", "publisher")
     monkeypatch.setenv("REGISTRY_TOKEN", "secret")
     monkeypatch.setattr(publish_verb, "bash", recorder.run)

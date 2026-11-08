@@ -114,7 +114,14 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
         bundles[key] = ConfigLockBundle(reference=pinned, slots=artifact_slots(texts))
 
     images: dict[str, ConfigLockEntry] = {}
-    for name, reference in {**config.base_images, **config.owned_images}.items():
+    built = {name for name, entry in config.base_images.items() if not isinstance(entry, str)}
+    stale_built = sorted(built & committed.images.keys())
+    if stale_built:
+        raise ValueError(
+            f"{committed_path.as_posix()}: records the built entries {stale_built}; "
+            "the lock pairs pulled base_images entries only"
+        )
+    for name, reference in {**config.pulled_base_images, **config.owned_images}.items():
         base = mirrored_ref(reference, prefix)
         committed_entry = committed.images.get(name)
 

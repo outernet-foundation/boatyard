@@ -53,7 +53,13 @@ class LockFile(BaseModel):
                     f"{source}: image entry {name} records platforms {sorted(entry.platforms)} "
                     f"but the lock records {recorded}"
                 )
-        effective_images = set(config.base_images) | set(config.owned_images)
+        built = sorted(set(config.base_images) - set(config.pulled_base_images))
+        stale_built = sorted(set(built) & lock.images.keys())
+        if stale_built:
+            raise ValueError(
+                f"{source}: records the built entries {stale_built}; the lock pairs pulled base_images entries only"
+            )
+        effective_images = set(config.pulled_base_images) | set(config.owned_images)
         missing_images = sorted(effective_images - lock.images.keys())
         if missing_images:
             raise ValueError(f"{source}: lacks the {missing_images} image entries")

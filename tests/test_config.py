@@ -333,12 +333,28 @@ class TestVariants:
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_declared_axes_reach_the_derived_images(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "localizer", "ARG PY_IMAGE\nARG TORCH_DEVICE\nFROM ${PY_IMAGE}\n")
-        self._write_services_config(tmp_path, {"gpu": self._gpu_group({"TORCH_DEVICE": ["cuda", "rocm"]})})
+        write_dockerfile(tmp_path, "neural-networks-base", "ARG TOOLS_IMAGE\nARG TORCH_DEVICE\nFROM ${TOOLS_IMAGE}\n")
+        write_dockerfile(tmp_path, "localizer", "ARG NEURAL_NETWORKS_BASE\nFROM ${NEURAL_NETWORKS_BASE}\n")
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "repository": "ghcr.io/org/repo",
+                "platforms": ["linux/amd64"],
+                "base_images": {
+                    "TOOLS_IMAGE": "docker.io/library/tools:1",
+                    "NEURAL_NETWORKS_BASE": {
+                        "dockerfile": "workloads/neural-networks-base/Dockerfile",
+                        "axis": {"TORCH_DEVICE": ["cuda", "rocm"]},
+                    },
+                },
+            },
+        )
 
         config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None
+        assert config.images["neural-networks-base"].axis == "TORCH_DEVICE"
         assert config.images["localizer"].axis == "TORCH_DEVICE"
         assert config.images["localizer"].variants == ["cuda", "rocm"]
         assert [target for target, _variant in config.images["localizer"].target_variants] == [
@@ -1587,15 +1603,26 @@ class TestLockPairing:
 
 class TestImageDerivation:
     def test_repository_required_when_images_exist(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "api", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n")
-        write_config(tmp_path, {"requires": ">=0.1"})
+        write_dockerfile(tmp_path, "api", "ARG TOOLS_IMAGE\nFROM ${TOOLS_IMAGE}\n")
+        write_config(
+            tmp_path,
+            {"requires": ">=0.1", "platforms": ["linux/amd64"], "base_images": {"TOOLS_IMAGE": "docker.io/library/tools:1"}},
+        )
 
         with pytest.raises(ValueError, match="repository is required"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_derived_images_attach_to_the_loaded_config(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "api", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n")
-        write_config(tmp_path, {"requires": ">=0.1", "repository": "ghcr.io/org/repo"})
+        write_dockerfile(tmp_path, "api", "ARG TOOLS_IMAGE\nFROM ${TOOLS_IMAGE}\n")
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "repository": "ghcr.io/org/repo",
+                "platforms": ["linux/amd64"],
+                "base_images": {"TOOLS_IMAGE": "docker.io/library/tools:1"},
+            },
+        )
 
         config = ConfigFile.load(tmp_path / "boatyard.yml")
 

@@ -59,6 +59,8 @@ class BumpHarness:
         )
         (tmp_path / "boatyard.yml").write_text(
             "requires: '>=0'\nproject_name: example\nrepository: ghcr.io/org/repo\n"
+            "platforms: [linux/amd64]\n"
+            "base_images:\n  PY_IMAGE: docker.io/library/python:3.13-slim\n"
             "services:\n  ext:\n    ref: oci://ghcr.io/org/ext:0.1.0\n"
             "k8s:\n  workloads:\n    - api.yaml\n",
             encoding="utf-8",

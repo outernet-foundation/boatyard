@@ -121,7 +121,7 @@ def _barrier_entry(platforms: list[str]) -> dict[str, object]:
 def _write_repo(
     root: Path,
     *,
-    base_images: dict[str, str] | None = None,
+    base_images: dict[str, Any] | None = None,
     charts: dict[str, str] | None = None,
     platforms: list[str] | None = None,
     ref_services: dict[str, Any] | None = None,
@@ -165,7 +165,7 @@ def _invoke(
     tmp_path: Path,
     arguments: list[str],
     *,
-    base_images: dict[str, str] | None = None,
+    base_images: dict[str, Any] | None = None,
     charts: dict[str, str] | None = None,
     platforms: list[str] | None = None,
 ) -> Any:
@@ -210,7 +210,52 @@ class TestSelfSkip:
         assert rechecked.exit_code == 0, rechecked.output
 
 
+def _write_built_images(root: Path) -> None:
+    for name, text in {
+        "neural-networks-base": "ARG UV_IMAGE\nFROM ${UV_IMAGE}\n",
+        "localizer": "ARG NEURAL_NETWORKS_BASE\nFROM ${NEURAL_NETWORKS_BASE}\n",
+    }.items():
+        directory = root / "workloads" / name
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "Dockerfile").write_text(text, encoding="utf-8")
+
+
+BUILT_BASE_IMAGES: dict[str, Any] = {
+    "UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15",
+    "NEURAL_NETWORKS_BASE": {"dockerfile": "workloads/neural-networks-base/Dockerfile"},
+}
+
+
 class TestImageRecording:
+    def test_built_entries_are_never_recorded(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _write_built_images(tmp_path)
+
+        result = _invoke(monkeypatch, tmp_path, [], base_images=BUILT_BASE_IMAGES)
+
+        assert result.exit_code == 0, result.output
+        assert set(_read_lock(tmp_path)["images"]) == {"ALPINE_IMAGE", "UV_IMAGE"}
+
+    def test_a_committed_built_entry_refuses_relock(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _write_built_images(tmp_path)
+        (tmp_path / LOCK_PATH).write_text(
+            yaml.safe_dump({
+                "platforms": ["linux/amd64"],
+                "images": {
+                    "NEURAL_NETWORKS_BASE": _structured_entry(
+                        f"{MIRROR_PREFIX}/ghcr.io/org/demo/neural-networks-base:1",
+                        index_digest=DIGEST_A,
+                        platforms={"linux/amd64": DIGEST_A},
+                    )
+                },
+            }),
+            encoding="utf-8",
+        )
+
+        result = _invoke(monkeypatch, tmp_path, [], base_images=BUILT_BASE_IMAGES)
+
+        assert result.exit_code != 0
+        assert "records the built entries ['NEURAL_NETWORKS_BASE']" in str(result.exception)
+
     def test_records_the_index_and_one_manifest_per_declared_platform(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
@@ -1124,6 +1169,45 @@ class TestPairedLoad:
 
         with pytest.raises(ValueError, match=r"no longer declares \(\['GHOST_IMAGE'\]\)"):
             LockFile.load(tmp_path / LOCK_PATH, self._config(tmp_path))
+
+    def test_a_built_entry_in_the_committed_lock_refuses(self, tmp_path: Path) -> None:
+        _write_repo(tmp_path, base_images=BUILT_BASE_IMAGES)
+        _write_built_images(tmp_path)
+        self._write_committed(
+            tmp_path,
+            {
+                "platforms": ["linux/amd64"],
+                "images": {
+                    "NEURAL_NETWORKS_BASE": _structured_entry(
+                        f"{MIRROR_PREFIX}/ghcr.io/org/demo/neural-networks-base:1",
+                        index_digest=DIGEST_A,
+                        platforms={"linux/amd64": DIGEST_A},
+                    )
+                },
+            },
+        )
+
+        with pytest.raises(ValueError, match=r"records the built entries \['NEURAL_NETWORKS_BASE'\]"):
+            LockFile.load(tmp_path / LOCK_PATH, self._config(tmp_path))
+
+    def test_pairing_demands_only_the_pulled_entries(self, tmp_path: Path) -> None:
+        _write_repo(tmp_path, base_images=BUILT_BASE_IMAGES)
+        _write_built_images(tmp_path)
+        base = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15"
+        self._write_committed(
+            tmp_path,
+            {
+                "platforms": ["linux/amd64"],
+                "images": {
+                    "UV_IMAGE": _structured_entry(base, index_digest=DIGEST_A, platforms={"linux/amd64": DIGEST_A}),
+                    "ALPINE_IMAGE": _barrier_entry(["linux/amd64"]),
+                },
+            },
+        )
+
+        lock = LockFile.load(tmp_path / LOCK_PATH, self._config(tmp_path))
+
+        assert set(lock.images) == {"ALPINE_IMAGE", "UV_IMAGE"}
 
     def test_a_missing_lock_in_a_platforms_repo_refuses_as_stale(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

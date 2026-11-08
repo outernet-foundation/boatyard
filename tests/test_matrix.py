@@ -10,8 +10,17 @@ from boatyard.cli import app
 runner = CliRunner()
 
 FANNED = "ARG PY_IMAGE\nARG TORCH_DEVICE\nFROM ${PY_IMAGE}\n"
-DEPENDENT = "FROM neural-networks-base\n"
+DEPENDENT = "ARG NEURAL_NETWORKS_BASE\nFROM ${NEURAL_NETWORKS_BASE}\n"
 EXTERNAL = "ARG PY_IMAGE\nFROM ${PY_IMAGE}\n"
+
+PY_BASE = {"PY_IMAGE": "docker.io/library/python:3.13-slim"}
+
+
+def neural_base(axis: dict[str, list[str]] | None = None) -> dict[str, Any]:
+    entry: dict[str, Any] = {"dockerfile": "workloads/neural-networks-base/Dockerfile"}
+    if axis is not None:
+        entry["axis"] = axis
+    return {"NEURAL_NETWORKS_BASE": entry}
 
 
 def _write_repo(
@@ -19,7 +28,7 @@ def _write_repo(
     dockerfiles: dict[str, str],
     *,
     config: dict[str, Any] | None = None,
-    axes: dict[str, list[str]] | None = None,
+    fan: dict[str, list[str]] | None = None,
 ) -> None:
     for service, text in dockerfiles.items():
         directory = root / "workloads" / service
@@ -28,18 +37,13 @@ def _write_repo(
     payload: dict[str, Any] = {"requires": ">=0", "project_name": "demo"}
     if dockerfiles:
         payload["repository"] = "ghcr.io/example"
+        payload["platforms"] = ["linux/amd64"]
+        payload.setdefault("base_images", PY_BASE)
+        if fan is not None:
+            payload["base_images"] = {**PY_BASE, **neural_base(fan)}
     if config is not None:
         payload.update(config)
     payload.setdefault("services", {"ext": {"ref": "oci://ghcr.io/org/ext:0.1.0"}})
-    if axes is not None:
-        score = root / "stack" / "score"
-        score.mkdir(parents=True, exist_ok=True)
-        (score / "gpu.yaml").write_text("metadata:\n  name: gpu\ncontainers: {}\n", encoding="utf-8")
-        payload["platforms"] = ["linux/amd64"]
-        payload["services"] = {
-            "gpu": {"axes": axes, "workloads": ["gpu.yaml"]},
-            **payload["services"],
-        }
     (root / "boatyard.yml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
 
@@ -48,9 +52,9 @@ def _invoke_matrix(
     tmp_path: Path,
     dockerfiles: dict[str, str],
     config: dict[str, Any] | None = None,
-    axes: dict[str, list[str]] | None = None,
+    fan: dict[str, list[str]] | None = None,
 ) -> Any:
-    _write_repo(tmp_path, dockerfiles, config=config, axes=axes)
+    _write_repo(tmp_path, dockerfiles, config=config, fan=fan)
     monkeypatch.chdir(tmp_path)
     return runner.invoke(app, ["docker-build-matrix"])
 
@@ -66,7 +70,7 @@ def test_bases_group_with_their_dependents_per_variant(monkeypatch: Any, tmp_pat
             "reconstructor": DEPENDENT,
             "localizer": DEPENDENT,
         },
-        axes={"TORCH_DEVICE": ["cuda", "rocm"]},
+        fan={"TORCH_DEVICE": ["cuda", "rocm"]},
     )
 
     assert result.exit_code == 0, result.output
@@ -88,14 +92,14 @@ def test_declared_values_reach_the_legs_verbatim(monkeypatch: Any, tmp_path: Pat
     result = _invoke_matrix(
         monkeypatch,
         tmp_path,
-        {"api": FANNED},
-        axes={"TORCH_DEVICE": ["rocm", "cuda"]},
+        {"neural-networks-base": FANNED, "reconstructor": DEPENDENT},
+        fan={"TORCH_DEVICE": ["rocm", "cuda"]},
     )
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout) == [
-        {"targets": "api/cuda", "variant": "cuda"},
-        {"targets": "api/rocm", "variant": "rocm"},
+        {"targets": "neural-networks-base/cuda reconstructor/cuda", "variant": "cuda"},
+        {"targets": "neural-networks-base/rocm reconstructor/rocm", "variant": "rocm"},
     ]
 
 
@@ -105,8 +109,9 @@ def test_unfanned_dependents_group_with_their_base(monkeypatch: Any, tmp_path: P
         tmp_path,
         {
             "base": EXTERNAL,
-            "app": "FROM base\n",
+            "app": "ARG BASE_IMAGE\nFROM ${BASE_IMAGE}\n",
         },
+        config={"base_images": {**PY_BASE, "BASE_IMAGE": {"dockerfile": "workloads/base/Dockerfile"}}},
     )
 
     assert result.exit_code == 0, result.output

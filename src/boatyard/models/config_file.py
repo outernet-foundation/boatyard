@@ -23,7 +23,7 @@ from pydantic import (
 import yaml
 
 from boatyard.models.pyproject import PYPROJECT_PATH, PyprojectToml
-from boatyard.models.image import Image, load_images
+from boatyard.models.image import BuiltBaseEntry, Image, load_images
 from boatyard.temp import PLATFORM_PATTERN, SHA256_DIGEST_REGEX
 from boatyard.yaml import Yaml, is_mapping, load_yaml_model
 
@@ -85,7 +85,7 @@ class ConfigFile(BaseModel):
     requires: str
     gateway: PortNumber | None = None
     repository: str | None = None
-    base_images: dict[AllCapsName, str] = Field(default_factory=dict)
+    base_images: dict[AllCapsName, str | BuiltBaseEntry] = Field(default_factory=dict)
     barrier_image: str = DEFAULT_BARRIER_IMAGE
     edge_image: str = DEFAULT_EDGE_IMAGE
     project_name: str
@@ -127,6 +127,10 @@ class ConfigFile(BaseModel):
         ]
 
     @property
+    def pulled_base_images(self) -> dict[str, str]:
+        return {name: reference for name, reference in self.base_images.items() if isinstance(reference, str)}
+
+    @property
     def owned_images(self) -> dict[str, str]:
         # Boatyard-emitted service pins: the barrier rides local entries, the edge a gateway
         owned: dict[str, str] = {}
@@ -162,13 +166,14 @@ class ConfigFile(BaseModel):
 
     @field_validator("base_images")
     @classmethod
-    def _validate_base_images(cls, value: dict[AllCapsName, str]) -> dict[AllCapsName, str]:
+    def _validate_base_images(cls, value: dict[AllCapsName, str | BuiltBaseEntry]) -> dict[AllCapsName, str | BuiltBaseEntry]:
         for name, reference in value.items():
             if name in (ALPINE_IMAGE, CADDY_IMAGE):
                 raise ValueError(
                     f"base_images.{name}: the barrier and edge pins are boatyard-owned (barrier_image:/edge_image:)"
                 )
-            _require_declared_reference(reference, f"base_images.{name}")
+            if isinstance(reference, str):
+                _require_declared_reference(reference, f"base_images.{name}")
         return value
 
     @field_validator("barrier_image", "edge_image")
@@ -470,9 +475,10 @@ def _derive(config: ConfigFile, root: Path) -> None:
         raise ValueError(f"boatyard {installed} does not satisfy requires={config.requires!r}")
     config.root = root
 
-    # Resolve {uv} and {python} templates in base_images against the toolchain pins.
+    # Resolve {uv} and {python} templates in the pulled base_images against the toolchain pins.
     pins: dict[str, str] = {}
-    used = sorted({key for reference in config.base_images.values() for key in TEMPLATE_KEY_PATTERN.findall(reference)})
+    pulled = config.pulled_base_images
+    used = sorted({key for reference in pulled.values() for key in TEMPLATE_KEY_PATTERN.findall(reference)})
     for key in used:
         if key == "uv":
             pyproject = root / PYPROJECT_PATH
@@ -496,12 +502,13 @@ def _derive(config: ConfigFile, root: Path) -> None:
             raise ValueError(f"base_images template key {{{key}}} is not one of the toolchain pins {{uv}}, {{python}}")
     config.base_images = {
         name: TEMPLATE_KEY_PATTERN.sub(partial(_resolve_template_key, pins), reference)
+        if isinstance(reference, str)
+        else reference
         for name, reference in config.base_images.items()
     }
 
     # Derive the image build set from the Dockerfile tree.
-    axes = variant_axes(config.services)
-    images = load_images(root, axes)
+    images = load_images(root, config.base_images, config.owned_images)
     if images and config.repository is None:
         listed = ", ".join(sorted(images))
         raise ValueError(f"repository is required by the Dockerfile image directories {listed}")

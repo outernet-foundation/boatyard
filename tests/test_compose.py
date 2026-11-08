@@ -1126,7 +1126,7 @@ class TestLockEnvSynthesis:
         _write_workload(tmp_path, "api.yaml", "api")
         api_image = tmp_path / "workloads" / "api"
         api_image.mkdir(parents=True)
-        (api_image / "Dockerfile").write_text("ARG PY_IMAGE\nFROM ${PY_IMAGE}\n", encoding="utf-8")
+        (api_image / "Dockerfile").write_text("ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n", encoding="utf-8")
         _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST})
         _write_values_file(tmp_path, {"bundles": ["apps-core"]})
         monkeypatch.setattr(Image, "compute_sha", _producer_tree_sha)
@@ -1357,7 +1357,7 @@ class TestBundleOverrides:
         for name in ("api", "grafana"):
             image_directory = tmp_path / "producer" / "workloads" / name
             image_directory.mkdir(parents=True)
-            (image_directory / "Dockerfile").write_text("ARG PY_IMAGE\nFROM ${PY_IMAGE}\n", encoding="utf-8")
+            (image_directory / "Dockerfile").write_text("ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n", encoding="utf-8")
         _write_override_consumer(
             consumer,
             {"path_overrides": {"placeframe-cuda": OVERRIDE_PATH}},
