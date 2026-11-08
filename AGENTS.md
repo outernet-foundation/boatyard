@@ -61,8 +61,8 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
   `dockerfiles`/`workload`/`pyproject` ← `config/config` ← `config/lock` ← `lock`.
 - Nothing is caught only to be re-raised as a different exception; guards and third-party
   exceptions surface raw with full traceback; `typer.BadParameter` owns the CLI-flag layer.
-- The build set is derived from the Dockerfile tree (`derive_services` in `dockerfiles.py`),
-  never authored in config.
+- The build set is derived from the Dockerfile tree inside `ConfigFile` load, never authored in
+  config.
 - Authored provisioner files carry real YAML mappings and lists; the string form is generated. A
   field already in string form is a validation error.
 
@@ -76,7 +76,7 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
 - `config/pyproject.py` — the toolchain-pin lens over the consumer repo's pyproject.toml.
 - `config/workload.py` — the workload-file lens (`WorkloadDocument`, the compose variant) plus
   the workload loader and provisioner-file selection.
-- `dockerfiles.py` — Dockerfile-derived build set, tree-tag sha machinery.
+- `dockerfiles.py` — the `ServiceBuild` record and the tree-tag sha machinery.
 - `resolve.py` — the `resolve(config, lock, values)` fold answering the assembly plan `up` renders.
 - `lock.py` — relock engine + crane resolution.
 - `compose.py` — the compose invocation spelling.
