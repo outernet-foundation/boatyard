@@ -11,17 +11,17 @@ import yaml
 from bashrun.bash import CalledProcessError, bash, bash_output
 from pydantic import ValidationError
 
-from boatyard.config import config as config_module
+from boatyard.models import config_file as config_file_module
 from boatyard import score as score_module
 from boatyard import score_compose as score_compose_module
 from boatyard import score_k8s as score_k8s_module
 from boatyard import score_generate as score_generate_module
 from boatyard.verbs import score as score_verb_module
-from boatyard.config import workload as workload_module
-from boatyard.config.config import ConfigFile, K8sConfig, SecretsDeclaration
-from boatyard.config.lock import LockFile
-from boatyard.config.workload import WorkloadDocument
-from boatyard.images import Image
+from boatyard.models import workload as workload_module
+from boatyard.models.config_file import ConfigFile, K8sConfig, SecretsDeclaration
+from boatyard.models.lock_file import LockFile
+from boatyard.models.workload import WorkloadDocument
+from boatyard.models.image import Image
 from boatyard.paths import K8S_PINS_PATH
 from boatyard.score import write_file
 from boatyard.score_compose import BindVolume, ComposeService
@@ -686,7 +686,7 @@ def test_workload_sha_slots_render_as_marker_protected_tree_slots(
     assert generate_env["API_SHA"] == "__BOATYARD_TREE__API_SHA__"
     assert "image: ghcr.io/org/api:${CORE__BOATYARD_TREE__API_SHA}" in artifact
     assert "tree-" not in artifact
-    assert config_module.TREE_SENTINEL_PATTERN.search(artifact) is None
+    assert config_file_module.TREE_SENTINEL_PATTERN.search(artifact) is None
 
 
 def test_generate_compose_never_walks_the_source_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

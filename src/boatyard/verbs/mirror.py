@@ -5,13 +5,13 @@ from pathlib import Path
 import typer
 from bashrun.bash import bash, bash_check
 
-from boatyard.config.config import (
+from boatyard.models.config_file import (
     ConfigFile,
     chart_lock_key,
     mirrored_ref,
 )
 from boatyard.crane import install_crane
-from boatyard.config.lock import LOCK_PATH, LockFile
+from boatyard.models.lock_file import LOCK_PATH, LockFile
 from boatyard.paths import DEFAULT_CONFIG_PATH
 
 app = typer.Typer()

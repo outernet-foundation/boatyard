@@ -13,15 +13,15 @@ from bashrun.bash import bash_handoff
 
 from boatyard.build import run_build
 from boatyard.compose import compose_command
-from boatyard.config.config import (
+from boatyard.models.config_file import (
     CADDY_IMAGE,
     EDGE_LISTEN_PORT,
     EDGE_SERVICE_NAME,
     ConfigFile,
     double_dollars,
 )
-from boatyard.config.lock import LockFile
-from boatyard.config.values import ValuesFile
+from boatyard.models.lock_file import LockFile
+from boatyard.models.values_file import ValuesFile
 from boatyard.paths import DEFAULT_CONFIG_PATH, LOCK_PATH, VALUES_FILE
 from boatyard.resolve import resolve
 from boatyard.yaml import Yaml

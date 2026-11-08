@@ -7,9 +7,9 @@ import yaml
 from typer.testing import CliRunner
 
 from boatyard.cli import app
-from boatyard.config import values
-from boatyard.config.config import ConfigFile
-from boatyard.config.lock import LOCK_PATH, LockFile
+from boatyard.models import values_file
+from boatyard.models.config_file import ConfigFile
+from boatyard.models.lock_file import LOCK_PATH, LockFile
 from boatyard.verbs import up
 from boatyard.resolve import resolve
 
@@ -286,7 +286,7 @@ class TestValuesLoad:
         )
         config = ConfigFile.load(tmp_path / "boatyard.yml")
         lock = LockFile.load(tmp_path / "boatyard.lock.yml", config)
-        parsed = values.ValuesFile.load(tmp_path / "boatyard.values.yaml")
+        parsed = values_file.ValuesFile.load(tmp_path / "boatyard.values.yaml")
 
         assert [service.name for service in resolve(config, lock, parsed).services] == ["core-cuda", "ui-open"]
         assert parsed.flattened == {"RELOAD": "true", "GPU_MEM": "512"}

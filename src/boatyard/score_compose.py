@@ -14,7 +14,7 @@ from pydantic import (
     model_validator,
 )
 
-from boatyard.config.config import (
+from boatyard.models.config_file import (
     ALPINE_IMAGE,
     BARRIER_SERVICE,
     COMPOSE_SLOT,
@@ -25,9 +25,9 @@ from boatyard.config.config import (
     env_tree_slot,
     ConfigFile,
 )
-from boatyard.config.lock import LockFile
-from boatyard.config.values import ValuesFile
-from boatyard.config.workload import ComposeWorkloadDocument, WorkloadDocument, load_workloads
+from boatyard.models.lock_file import LockFile
+from boatyard.models.values_file import ValuesFile
+from boatyard.models.workload import ComposeWorkloadDocument, WorkloadDocument, load_workloads
 from boatyard.paths import VALUES_FILE
 from boatyard.yaml import Yaml, load_yaml_model
 from boatyard.score import (

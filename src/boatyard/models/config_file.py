@@ -23,9 +23,9 @@ from pydantic import (
 )
 import yaml
 
-from boatyard.config.pyproject import PYPROJECT_PATH, PyprojectToml
-from boatyard.config.workload import WorkloadDocument, load_workloads, select_provisioner_files
-from boatyard.images import (
+from boatyard.models.pyproject import PYPROJECT_PATH, PyprojectToml
+from boatyard.models.workload import WorkloadDocument, load_workloads, select_provisioner_files
+from boatyard.models.image import (
     DOCKERFILE_NAME,
     Image,
     require_single_top,

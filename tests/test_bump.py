@@ -5,8 +5,8 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from boatyard.config.k8s_pins import parse_pins
-from boatyard.images import Image, image_sha_env
+from boatyard.models.k8s_pins import parse_pins
+from boatyard.models.image import Image, image_sha_env
 from boatyard.paths import K8S_PINS_PATH
 from boatyard.verbs import bump as bump_verb
 

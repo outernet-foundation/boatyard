@@ -9,7 +9,7 @@ import yaml
 from bashrun.bash import bash_output
 from pydantic import BaseModel, ConfigDict, Field
 
-from boatyard.config.config import (
+from boatyard.models.config_file import (
     OCI_REFERENCE_PREFIX,
     ConfigFile,
     artifact_slot_demands,
@@ -19,7 +19,7 @@ from boatyard.config.config import (
     refuse_unresolved_references,
 )
 from boatyard.crane import install_crane
-from boatyard.config.lock import (
+from boatyard.models.lock_file import (
     LOCK_PATH,
     LockFile,
     ConfigLockBundle,

@@ -6,7 +6,7 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 
-from boatyard.config.config import PLATFORM_KEY, ConfigFile, SlotDemand, bundle_lock_key, chart_lock_key
+from boatyard.models.config_file import PLATFORM_KEY, ConfigFile, SlotDemand, bundle_lock_key, chart_lock_key
 from boatyard.paths import LOCK_PATH, VALUES_FILE
 from boatyard.temp import PLATFORM_PATTERN, SHA256_DIGEST_REGEX
 from boatyard.yaml import load_yaml_model

@@ -19,12 +19,12 @@ from pydantic import (
     field_validator,
 )
 
-from boatyard.config.config import (
+from boatyard.models.config_file import (
     PLACEHOLDER,
     Substrate,
     ConfigFile,
 )
-from boatyard.config.workload import LoadedWorkload, select_provisioner_files
+from boatyard.models.workload import LoadedWorkload, select_provisioner_files
 from boatyard.yaml import Yaml, is_mapping, load_yaml_model
 from boatyard.markers import MarkerContext, resolve_markers
 

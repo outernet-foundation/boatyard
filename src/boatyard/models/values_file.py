@@ -12,7 +12,7 @@ from pydantic import (
     model_validator,
 )
 
-from boatyard.config.config import (
+from boatyard.models.config_file import (
     ENV_NAME_PATTERN,
     PortNumber,
     RESERVED_SLOT_MARKERS,

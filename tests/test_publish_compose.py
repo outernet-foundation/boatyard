@@ -9,12 +9,12 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from boatyard.cli import app
-from boatyard.images import Image
+from boatyard.models.image import Image
 from boatyard import crane
 from boatyard import publish as publish_compose
 from boatyard.verbs import publish as publish_verb
-from boatyard.config.config import ConfigFile
-from boatyard.config.lock import LOCK_PATH
+from boatyard.models.config_file import ConfigFile
+from boatyard.models.lock_file import LOCK_PATH
 
 REPOSITORY = "ghcr.io/outernet-foundation/lbe-toolkit"
 FAKE_SHA = "a" * 40

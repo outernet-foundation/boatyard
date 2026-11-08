@@ -5,8 +5,8 @@ from collections.abc import Mapping, Set as AbstractSet
 from pathlib import Path
 from typing import NamedTuple
 
-from boatyard.images import image_sha_env
-from boatyard.config.config import (
+from boatyard.models.image import image_sha_env
+from boatyard.models.config_file import (
     AUTH_GROUP_NAME,
     EDGE_LISTEN_PORT,
     EDGE_SERVICE_NAME,
@@ -26,8 +26,8 @@ from boatyard.config.config import (
     qualified_option_name,
     refuse_unresolved_references,
 )
-from boatyard.config.lock import LockFile
-from boatyard.config.values import (
+from boatyard.models.lock_file import LockFile
+from boatyard.models.values_file import (
     EDGE_BASE_URL_SLOT,
     PUBLIC_URL_SLOT,
     ValuesFile,

@@ -14,8 +14,8 @@ from boatyard.cli import app
 from boatyard.verbs import build
 from boatyard import build as build_module
 from boatyard import lock as lock_module
-from boatyard.config.lock import LOCK_PATH
-from boatyard.images import Image
+from boatyard.models.lock_file import LOCK_PATH
+from boatyard.models.image import Image
 
 DIGEST_A = "sha256:" + "a" * 64
 HEAD_SHA = "1111111111111111111111111111111111111111"

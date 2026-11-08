@@ -5,9 +5,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-from boatyard.config.config import ConfigFile
-from boatyard.config.lock import LOCK_PATH, LockFile
-from boatyard.config.values import ValuesFile
+from boatyard.models.config_file import ConfigFile
+from boatyard.models.lock_file import LOCK_PATH, LockFile
+from boatyard.models.values_file import ValuesFile
 from boatyard.paths import VALUES_FILE
 from boatyard.resolve import AssemblyPlan, resolve
 

@@ -17,9 +17,9 @@ from build_artifact_registry.builds import push_build
 from build_artifact_registry.setup_oras import install_oras
 from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, model_validator
 
-from boatyard.config.config import ConfigFile
+from boatyard.models.config_file import ConfigFile
 from boatyard.yaml import Yaml
-from boatyard.images import Image, image_sha_env
+from boatyard.models.image import Image, image_sha_env
 from boatyard.lock import relock
 
 

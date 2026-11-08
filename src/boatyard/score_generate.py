@@ -9,8 +9,8 @@ from typing import NamedTuple
 import typer
 from bashrun.bash import bash, bash_check, bash_output
 
-from boatyard.config.config import ConfigFile, Target
-from boatyard.config.lock import LOCK_PATH, LockFile
+from boatyard.models.config_file import ConfigFile, Target
+from boatyard.models.lock_file import LOCK_PATH, LockFile
 from boatyard.score import SECRETS_OUTPUT, write_file
 from boatyard.score_compose import generate_compose
 from boatyard.score_k8s import generate_k8s

@@ -12,17 +12,17 @@ from pydantic import (
     Field,
 )
 
-from boatyard.config.config import (
+from boatyard.models.config_file import (
     K8sConfig,
     PLACEHOLDER,
     SecretsDeclaration,
     ConfigFile,
     chart_lock_key,
 )
-from boatyard.images import image_sha_env
-from boatyard.config.k8s_pins import load_pins
-from boatyard.config.lock import LockFile
-from boatyard.config.workload import WorkloadDocument, load_workloads
+from boatyard.models.image import image_sha_env
+from boatyard.models.k8s_pins import load_pins
+from boatyard.models.lock_file import LockFile
+from boatyard.models.workload import WorkloadDocument, load_workloads
 from boatyard.markers import MarkerContext, resolve_markers
 from boatyard.paths import K8S_PINS_PATH
 from boatyard.yaml import Yaml, is_list, is_mapping

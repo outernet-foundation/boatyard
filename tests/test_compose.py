@@ -10,9 +10,9 @@ from bashrun.bash import bash, bash_output
 from typer.testing import CliRunner
 
 from boatyard.cli import app
-from boatyard.images import Image
+from boatyard.models.image import Image
 from boatyard.verbs import down, up
-from boatyard.config.lock import LOCK_PATH
+from boatyard.models.lock_file import LOCK_PATH
 
 MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
 FAKE_DIGEST = "sha256:" + "a" * 64

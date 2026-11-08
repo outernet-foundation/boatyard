@@ -9,11 +9,11 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from boatyard.cli import app
-from boatyard.config import config as config_module
+from boatyard.models import config_file as config_file_module
 from boatyard import lock as lock_module
 from boatyard.verbs.up import render_env_entries
-from boatyard.config.lock import LOCK_PATH, LockFile
-from boatyard.images import Image
+from boatyard.models.lock_file import LOCK_PATH, LockFile
+from boatyard.models.image import Image
 
 DIGEST_A = "sha256:" + "a" * 64
 DIGEST_B = "sha256:" + "b" * 64
@@ -1035,8 +1035,8 @@ class TestPlatformSelectionLaw:
 
 
 class TestPairedLoad:
-    def _config(self, tmp_path: Path) -> config_module.ConfigFile:
-        return config_module.ConfigFile.load(tmp_path / "boatyard.yml")
+    def _config(self, tmp_path: Path) -> config_file_module.ConfigFile:
+        return config_file_module.ConfigFile.load(tmp_path / "boatyard.yml")
 
     def _write_committed(self, tmp_path: Path, document: dict[str, Any]) -> None:
         (tmp_path / LOCK_PATH).write_text(yaml.safe_dump(document), encoding="utf-8")

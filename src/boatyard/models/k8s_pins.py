@@ -6,7 +6,7 @@ from typing import Annotated
 
 from pydantic import AfterValidator, TypeAdapter
 
-from boatyard.config.config import ENV_NAME_PATTERN
+from boatyard.models.config_file import ENV_NAME_PATTERN
 from boatyard.temp import TREE_TAG_REGEX
 from boatyard.yaml import load_yaml
 

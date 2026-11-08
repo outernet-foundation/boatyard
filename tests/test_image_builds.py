@@ -6,8 +6,8 @@ from typing import Any
 import pytest
 import yaml
 
-from boatyard.config.config import ConfigFile
-from boatyard.images import Image, image_sha_env
+from boatyard.models.config_file import ConfigFile
+from boatyard.models.image import Image, image_sha_env
 
 
 def write_dockerfile(tmp_path: Path, image_name: str, text: str, top: str = "workloads") -> None:

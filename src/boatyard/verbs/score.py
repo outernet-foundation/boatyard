@@ -6,7 +6,7 @@ from typing import Annotated
 import typer
 from bashrun.bash import bash, bash_output
 
-from boatyard.config.config import ConfigFile, Target
+from boatyard.models.config_file import ConfigFile, Target
 from boatyard.paths import DEFAULT_CONFIG_PATH
 from boatyard.score_generate import generate_artifacts
 

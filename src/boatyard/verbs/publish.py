@@ -10,10 +10,10 @@ from typing import Annotated
 import typer
 from bashrun.bash import bash, bash_output
 
-from boatyard.config.config import ConfigFile, compose_bundle_output_path, env_lock_slot, env_tree_slot
+from boatyard.models.config_file import ConfigFile, compose_bundle_output_path, env_lock_slot, env_tree_slot
 from boatyard.crane import install_crane
-from boatyard.images import image_sha_env
-from boatyard.config.lock import LOCK_PATH, LockFile
+from boatyard.models.image import image_sha_env
+from boatyard.models.lock_file import LOCK_PATH, LockFile
 from boatyard.paths import DEFAULT_CONFIG_PATH
 from boatyard.publish import (
     STUB_VALUE,

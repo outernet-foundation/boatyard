@@ -7,14 +7,14 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from boatyard.config.config import (
+from boatyard.models.config_file import (
     DEV_SENTINEL,
     ConfigFile,
     ServiceEntry,
     ServiceGroup,
     bundle_lock_key,
 )
-from boatyard.config.lock import LOCK_PATH, LockFile
+from boatyard.models.lock_file import LOCK_PATH, LockFile
 from boatyard.yaml import load_yaml_model
 
 EDGE_PLATFORMS = ["linux/amd64"]
