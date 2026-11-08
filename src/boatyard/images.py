@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 DOCKERFILE_NAME = "Dockerfile"
 
 
-class ServiceBuild(BaseModel):
+class Image(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
@@ -37,23 +37,23 @@ def require_single_top(tops: set[str], subject: str) -> None:
         raise ValueError(f"{subject} span multiple top-level directories: {sorted(tops)}")
 
 
-def service_sha_env(name: str) -> str:
+def image_sha_env(name: str) -> str:
     return name.upper().replace("-", "_") + "_SHA"
 
 
-def compute_service_shas(repo_root: Path, service_builds: dict[str, ServiceBuild]) -> dict[str, str]:
+def compute_image_shas(repo_root: Path, images: dict[str, Image]) -> dict[str, str]:
     repo_root = repo_root.resolve()
 
-    service_dirs = {str(PurePosixPath(service.dockerfile).parent) for service in service_builds.values()}
+    image_dirs = {str(PurePosixPath(image.dockerfile).parent) for image in images.values()}
 
-    if not service_dirs:
-        # Skip the disk walk when no services exist.
+    if not image_dirs:
+        # Skip the disk walk when no images exist.
         return {}
 
-    # Derive the workload root as the single top-level directory holding every service.
-    tops = {PurePosixPath(service_dir).parts[0] for service_dir in service_dirs}
-    require_single_top(tops, "services")
-    workload_prefix = f"{next(iter(tops))}/"
+    # Derive the image root as the single top-level directory holding every image.
+    tops = {PurePosixPath(image_dir).parts[0] for image_dir in image_dirs}
+    require_single_top(tops, "image directories")
+    image_root_prefix = f"{next(iter(tops))}/"
 
     # Require that .dockerignore be an allowlist
     rules = [line.strip() for line in (repo_root / ".dockerignore").read_text(encoding="utf-8").splitlines()]
@@ -92,12 +92,12 @@ def compute_service_shas(repo_root: Path, service_builds: dict[str, ServiceBuild
 
     allowed = [path for path in disk_files if path in visible]
 
-    # Partition into shared and per-service paths, dropping workload-root files owned by no service.
-    shared_paths = [path for path in allowed if not path.startswith(workload_prefix)]
-    per_service = {d: [p for p in allowed if p.startswith(d + "/")] for d in service_dirs}
+    # Partition into shared and per-image paths, dropping image-root files owned by no image.
+    shared_paths = [path for path in allowed if not path.startswith(image_root_prefix)]
+    per_image = {directory: [p for p in allowed if p.startswith(directory + "/")] for directory in image_dirs}
 
     result: dict[str, str] = {}
-    for service_dir in sorted(service_dirs):
+    for image_dir in sorted(image_dirs):
         with TemporaryDirectory() as tmpdir:
             index_env = {"GIT_INDEX_FILE": str(Path(tmpdir) / "index")}
             # Conversion pinned off so blobs hash the raw on-disk bytes; git derives modes and symlinks from disk.
@@ -105,10 +105,10 @@ def compute_service_shas(repo_root: Path, service_builds: dict[str, ServiceBuild
                 "git -c core.autocrlf=false update-index --add --stdin",
                 cwd=repo_root,
                 env=index_env,
-                stdin_text="".join(f"{path}\n" for path in shared_paths + per_service[service_dir]),
+                stdin_text="".join(f"{path}\n" for path in shared_paths + per_image[image_dir]),
             )
             tree_hash = bash_output("git write-tree", cwd=repo_root, env=index_env).strip()
 
-        result[service_sha_env(PurePosixPath(service_dir).name)] = f"tree-{tree_hash}"
+        result[image_sha_env(PurePosixPath(image_dir).name)] = f"tree-{tree_hash}"
 
     return result

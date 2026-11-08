@@ -11,7 +11,7 @@ from build_artifact_registry.builds import list_build_tags, pull_artifact
 from build_artifact_registry.setup_oras import install_oras
 from pydantic import BaseModel, ConfigDict, RootModel
 
-from boatyard import dockerfiles
+from boatyard import images
 from boatyard.build import DIGEST_FILE_NAME, DIGEST_PLATFORM, DIGEST_PROJECT
 from boatyard.config.config import ConfigFile
 from boatyard.config.k8s_pins import PINS_HEADER, parse_pins
@@ -48,19 +48,19 @@ def bump() -> None:
     if dirty:
         raise ValueError("the working tree is dirty; the bump certifies HEAD — commit or stash first")
 
-    service_shas = dockerfiles.compute_service_shas(root, config.service_builds)
-    certify_head(service_shas)
+    image_shas = images.compute_image_shas(root, config.images)
+    certify_head(image_shas)
 
-    pins = parse_pins(service_shas)
+    pins = parse_pins(image_shas)
     body = "".join(f"{name}: {tag}\n" for name, tag in sorted(pins.items())) or "{}\n"
     (root / K8S_PINS_PATH).write_text(PINS_HEADER + body, encoding="utf-8")
     generate_artifacts(config, target="k8s")
-    for name, tag in sorted(service_shas.items()):
+    for name, tag in sorted(image_shas.items()):
         print(f"{name}={tag}")
     print(f"wrote {K8S_PINS_PATH.as_posix()}")
 
 
-def certify_head(service_shas: dict[str, str]) -> None:
+def certify_head(image_shas: dict[str, str]) -> None:
     # A pin is writable only for content CI built and pushed at exactly this head.
     registry = os.environ.get("REGISTRY", "")
     if not registry:
@@ -92,7 +92,7 @@ def certify_head(service_shas: dict[str, str]) -> None:
                     raise ValueError(f"shard {shard_tag!r} repeats build target {build_target!r} from another shard")
                 seen_targets.add(build_target)
                 recorded.update(image.tags)
-    missing = sorted(set(service_shas.values()) - recorded)
+    missing = sorted(set(image_shas.values()) - recorded)
     if missing:
         raise ValueError(
             f"no CI image at {head[:8]} carries the tags {missing}: nothing to pin — rebuild the head through CI"

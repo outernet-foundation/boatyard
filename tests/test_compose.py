@@ -10,7 +10,7 @@ from bashrun.bash import bash, bash_output
 from typer.testing import CliRunner
 
 from boatyard.cli import app
-from boatyard import dockerfiles as dockerfiles_module
+from boatyard import images as images_module
 from boatyard.verbs import down, up
 from boatyard.config.lock import LOCK_PATH
 
@@ -1121,7 +1121,7 @@ class TestLockEnvSynthesis:
         _write_workload(tmp_path, "api.yaml", "api")
         _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST})
         _write_values_file(tmp_path, {"bundles": ["apps-core"]})
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _producer_tree_shas)
+        monkeypatch.setattr(images_module, "compute_image_shas", _producer_tree_shas)
         recorder = LockEnvRecorder()
 
         result = self._invoke_up_with_lock(tmp_path, monkeypatch, recorder)
@@ -1351,7 +1351,7 @@ class TestBundleOverrides:
             {"path_overrides": {"placeframe-cuda": OVERRIDE_PATH}},
             platforms=["linux/amd64"],
         )
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _producer_tree_shas)
+        monkeypatch.setattr(images_module, "compute_image_shas", _producer_tree_shas)
         recorder = self._invoke_up(monkeypatch, consumer)
 
         result = runner.invoke(app, ["up"])

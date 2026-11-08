@@ -6,18 +6,18 @@ from typing import Any
 import pytest
 import yaml
 
-from boatyard import dockerfiles
+from boatyard import images as images_module
 from boatyard.config.config import ConfigFile
-from boatyard.dockerfiles import ServiceBuild, compute_service_shas
+from boatyard.images import Image, compute_image_shas
 
 
-def write_dockerfile(tmp_path: Path, service: str, text: str, top: str = "workloads") -> None:
-    directory = tmp_path / top / service
+def write_dockerfile(tmp_path: Path, image_name: str, text: str, top: str = "workloads") -> None:
+    directory = tmp_path / top / image_name
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "Dockerfile").write_text(text, encoding="utf-8")
 
 
-def _derive(tmp_path: Path, axes: dict[str, list[str]] | None = None) -> dict[str, ServiceBuild]:
+def _derive(tmp_path: Path, axes: dict[str, list[str]] | None = None) -> dict[str, Image]:
     payload: dict[str, Any] = {
         "requires": ">=0",
         "project_name": "demo",
@@ -29,14 +29,12 @@ def _derive(tmp_path: Path, axes: dict[str, list[str]] | None = None) -> dict[st
     (tmp_path / "boatyard.yml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     loaded = ConfigFile.load(tmp_path / "boatyard.yml")
     assert loaded is not None
-    return loaded.service_builds
+    return loaded.images
 
 
-def _service_builds(*dockerfiles: str) -> dict[str, ServiceBuild]:
+def _image_builds(*dockerfiles: str) -> dict[str, Image]:
     return {
-        PurePosixPath(dockerfile).parent.name: ServiceBuild(
-            name=PurePosixPath(dockerfile).parent.name, dockerfile=dockerfile
-        )
+        PurePosixPath(dockerfile).parent.name: Image(name=PurePosixPath(dockerfile).parent.name, dockerfile=dockerfile)
         for dockerfile in dockerfiles
     }
 
@@ -67,28 +65,28 @@ def repo(tmp_path: Path) -> Path:
     return tmp_path
 
 
-class TestDeriveServices:
-    def test_dockerfile_dirs_derive_bare_services(self, tmp_path: Path) -> None:
+class TestDeriveImages:
+    def test_dockerfile_dirs_derive_bare_images(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\n")
         write_dockerfile(tmp_path, "database-manager", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\n")
 
-        services = _derive(tmp_path)
+        images = _derive(tmp_path)
 
-        # The service name IS the directory name — the old manifest's create-database key
+        # The image name IS the directory name — the old manifest's create-database key
         # renames to database-manager under directory-derived naming.
-        assert sorted(services) == ["api", "database-manager"]
-        assert [target for target, _variant in services["api"].target_variants] == ["api"]
-        assert services["api"].dockerfile == "workloads/api/Dockerfile"
-        assert services["api"].contexts == []
+        assert sorted(images) == ["api", "database-manager"]
+        assert [target for target, _variant in images["api"].target_variants] == ["api"]
+        assert images["api"].dockerfile == "workloads/api/Dockerfile"
+        assert images["api"].contexts == []
 
     def test_bare_identifier_from_declares_a_context_edge(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\n")
         write_dockerfile(tmp_path, "localizer", "FROM neural-networks-base AS dev\nARG LOCALIZER_SHA\n")
 
-        services = _derive(tmp_path)
+        images = _derive(tmp_path)
 
-        assert services["localizer"].contexts == ["neural-networks-base"]
-        assert services["localizer"].sha_args == ["LOCALIZER_SHA"]
+        assert images["localizer"].contexts == ["neural-networks-base"]
+        assert images["localizer"].sha_args == ["LOCALIZER_SHA"]
 
     def test_stage_names_are_not_context_edges(self, tmp_path: Path) -> None:
         write_dockerfile(
@@ -97,14 +95,14 @@ class TestDeriveServices:
             "ARG UV_IMAGE\nFROM ${UV_IMAGE} AS base\nFROM base AS dev\nFROM base AS prod\n",
         )
 
-        services = _derive(tmp_path)
+        images = _derive(tmp_path)
 
-        assert services["api"].contexts == []
+        assert images["api"].contexts == []
 
     def test_bare_identifier_naming_no_sibling_refuses(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "FROM python\n")
 
-        with pytest.raises(ValueError, match="FROM python names no service directory"):
+        with pytest.raises(ValueError, match="FROM python names no image directory"):
             _derive(tmp_path)
 
     def test_literal_from_refuses_naming_base_images(self, tmp_path: Path) -> None:
@@ -132,18 +130,18 @@ class TestDeriveServices:
             "ARG PY_IMAGE\nFROM ${PY_IMAGE} AS base\nCOPY --from=base /x /y\nCOPY --from=${UV_IMAGE} /uv /bin/\n",
         )
 
-        services = _derive(tmp_path)
+        images = _derive(tmp_path)
 
-        assert services["api"].contexts == []
+        assert images["api"].contexts == []
 
     def test_a_declared_axis_arg_fans_over_the_declared_values(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
 
-        services = _derive(tmp_path, {"TORCH_DEVICE": ["cuda", "rocm"]})
+        images = _derive(tmp_path, {"TORCH_DEVICE": ["cuda", "rocm"]})
 
-        assert services["neural-networks-base"].axis == "TORCH_DEVICE"
-        assert services["neural-networks-base"].variants == ["cuda", "rocm"]
-        assert [target for target, _variant in services["neural-networks-base"].target_variants] == [
+        assert images["neural-networks-base"].axis == "TORCH_DEVICE"
+        assert images["neural-networks-base"].variants == ["cuda", "rocm"]
+        assert [target for target, _variant in images["neural-networks-base"].target_variants] == [
             "neural-networks-base-cuda",
             "neural-networks-base-rocm",
         ]
@@ -151,37 +149,37 @@ class TestDeriveServices:
     def test_an_arg_naming_no_declared_axis_stays_plain(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
 
-        services = _derive(tmp_path)
+        images = _derive(tmp_path)
 
-        assert services["neural-networks-base"].axis is None
-        assert services["neural-networks-base"].variants == []
-        assert [target for target, _variant in services["neural-networks-base"].target_variants] == [
+        assert images["neural-networks-base"].axis is None
+        assert images["neural-networks-base"].variants == []
+        assert [target for target, _variant in images["neural-networks-base"].target_variants] == [
             "neural-networks-base"
         ]
 
     def test_declared_values_keep_their_declared_order(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
 
-        services = _derive(tmp_path, {"TORCH_DEVICE": ["rocm", "cuda"]})
+        images = _derive(tmp_path, {"TORCH_DEVICE": ["rocm", "cuda"]})
 
-        assert services["api"].variants == ["rocm", "cuda"]
-        assert [target for target, _variant in services["api"].target_variants] == ["api-rocm", "api-cuda"]
+        assert images["api"].variants == ["rocm", "cuda"]
+        assert [target for target, _variant in images["api"].target_variants] == ["api-rocm", "api-cuda"]
 
-    def test_two_axis_args_on_one_service_refuse(self, tmp_path: Path) -> None:
+    def test_two_axis_args_on_one_image_refuse(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG ACCEL_FPGA\nARG ACCEL_TPU\n")
 
-        with pytest.raises(ValueError, match="a service carries one axis"):
+        with pytest.raises(ValueError, match="an image carries one axis"):
             _derive(tmp_path, {"ACCEL_FPGA": ["fpga"], "ACCEL_TPU": ["tpu"]})
 
     def test_the_axis_propagates_along_context_edges(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
         write_dockerfile(tmp_path, "localizer", "FROM neural-networks-base AS dev\n")
 
-        services = _derive(tmp_path, {"TORCH_DEVICE": ["cuda", "rocm"]})
+        images = _derive(tmp_path, {"TORCH_DEVICE": ["cuda", "rocm"]})
 
-        assert services["localizer"].axis == "TORCH_DEVICE"
-        assert services["localizer"].variants == ["cuda", "rocm"]
-        assert [target for target, _variant in services["localizer"].target_variants] == [
+        assert images["localizer"].axis == "TORCH_DEVICE"
+        assert images["localizer"].variants == ["cuda", "rocm"]
+        assert [target for target, _variant in images["localizer"].target_variants] == [
             "localizer-cuda",
             "localizer-rocm",
         ]
@@ -201,10 +199,10 @@ class TestDeriveServices:
         with pytest.raises(ValueError, match="disagree on variants"):
             _derive(tmp_path, {"TORCH_DEVICE": ["cuda", "rocm"]})
 
-    def test_sha_arg_naming_no_service_refuses(self, tmp_path: Path) -> None:
+    def test_sha_arg_naming_no_image_refuses(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\nARG GHOST_SHA\n")
 
-        with pytest.raises(ValueError, match="ARG GHOST_SHA names no service directory"):
+        with pytest.raises(ValueError, match="ARG GHOST_SHA names no image directory"):
             _derive(tmp_path)
 
     def test_dockerfiles_spanning_multiple_top_level_dirs_refuse(self, tmp_path: Path) -> None:
@@ -215,123 +213,123 @@ class TestDeriveServices:
             _derive(tmp_path)
 
 
-class TestComputeServiceShasZeroServices:
+class TestComputeImageShasZeroImages:
     def _fail_bash(self, command: str) -> str:
-        raise AssertionError(f"zero services must not shell out, saw: {command}")
+        raise AssertionError(f"zero images must not shell out, saw: {command}")
 
-    def test_a_serviceless_repo_returns_empty_without_git_or_dockerignore_reads(
+    def test_an_imageless_repo_returns_empty_without_git_or_dockerignore_reads(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        monkeypatch.setattr(dockerfiles, "bash_output", self._fail_bash)
-        monkeypatch.setattr(dockerfiles, "bash", self._fail_bash)
+        monkeypatch.setattr(images_module, "bash_output", self._fail_bash)
+        monkeypatch.setattr(images_module, "bash", self._fail_bash)
 
-        assert compute_service_shas(tmp_path, _service_builds()) == {}
+        assert compute_image_shas(tmp_path, _image_builds()) == {}
 
 
-class TestComputeServiceShas:
+class TestComputeImageShas:
     def test_should_return_deterministic_hashes(self, repo: Path):
-        builds = _service_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
-        shas1 = compute_service_shas(repo, builds)
-        shas2 = compute_service_shas(repo, builds)
+        images = _image_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
+        shas1 = compute_image_shas(repo, images)
+        shas2 = compute_image_shas(repo, images)
 
         assert shas1 == shas2
 
     def test_should_have_tree_prefix(self, repo: Path):
-        shas = compute_service_shas(repo, _service_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile"))
+        shas = compute_image_shas(repo, _image_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile"))
 
         for sha in shas.values():
             assert sha.startswith("tree-")
 
-    def test_should_return_only_tagged_services(self, repo: Path):
-        shas = compute_service_shas(repo, _service_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile"))
+    def test_should_return_only_tagged_images(self, repo: Path):
+        shas = compute_image_shas(repo, _image_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile"))
 
         assert set(shas.keys()) == {"APP_SHA", "WORKER_SHA"}
 
-    def test_should_change_only_affected_service_when_service_file_changes(self, repo: Path):
-        builds = _service_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
-        shas_before = compute_service_shas(repo, builds)
+    def test_should_change_only_affected_image_when_image_file_changes(self, repo: Path):
+        images = _image_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
+        shas_before = compute_image_shas(repo, images)
 
         (repo / "workloads" / "app" / "main.py").write_text("print('changed')")
         _commit_all(repo)
 
-        shas_after = compute_service_shas(repo, builds)
+        shas_after = compute_image_shas(repo, images)
         assert shas_before["APP_SHA"] != shas_after["APP_SHA"]
         assert shas_before["WORKER_SHA"] == shas_after["WORKER_SHA"]
 
-    def test_should_change_all_services_when_shared_file_changes(self, repo: Path):
-        builds = _service_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
-        shas_before = compute_service_shas(repo, builds)
+    def test_should_change_all_images_when_shared_file_changes(self, repo: Path):
+        images = _image_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
+        shas_before = compute_image_shas(repo, images)
 
         (repo / "packages" / "lib.py").write_text("x = 2")
         _commit_all(repo)
 
-        shas_after = compute_service_shas(repo, builds)
+        shas_after = compute_image_shas(repo, images)
         assert shas_before["APP_SHA"] != shas_after["APP_SHA"]
         assert shas_before["WORKER_SHA"] != shas_after["WORKER_SHA"]
 
     def test_should_not_change_when_ignored_file_changes(self, repo: Path):
-        builds = _service_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
-        shas_before = compute_service_shas(repo, builds)
+        images = _image_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
+        shas_before = compute_image_shas(repo, images)
 
         (repo / "README.md").write_text("changed readme")
         _commit_all(repo)
 
-        shas_after = compute_service_shas(repo, builds)
+        shas_after = compute_image_shas(repo, images)
         assert shas_before == shas_after
 
     def test_should_not_change_when_untagged_workload_file_changes(self, repo: Path):
-        builds = _service_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
-        shas_before = compute_service_shas(repo, builds)
+        images = _image_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
+        shas_before = compute_image_shas(repo, images)
 
         (repo / "workloads" / "loki").mkdir()
-        (repo / "workloads" / "loki" / "config.yaml").write_text("unused by tagged services")
+        (repo / "workloads" / "loki" / "config.yaml").write_text("unused by tagged images")
         _commit_all(repo)
 
-        shas_after = compute_service_shas(repo, builds)
+        shas_after = compute_image_shas(repo, images)
         assert shas_before == shas_after
 
-    def test_should_rekey_only_the_affected_service_on_a_dirty_edit(self, repo: Path):
-        builds = _service_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
-        shas_before = compute_service_shas(repo, builds)
+    def test_should_rekey_only_the_affected_image_on_a_dirty_edit(self, repo: Path):
+        images = _image_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
+        shas_before = compute_image_shas(repo, images)
 
         (repo / "workloads" / "app" / "main.py").write_text("print('uncommitted')")
 
-        shas_after = compute_service_shas(repo, builds)
+        shas_after = compute_image_shas(repo, images)
         assert shas_before["APP_SHA"] != shas_after["APP_SHA"]
         assert shas_before["WORKER_SHA"] == shas_after["WORKER_SHA"]
 
     def test_should_rekey_on_an_untracked_context_visible_file(self, repo: Path):
-        builds = _service_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
-        shas_before = compute_service_shas(repo, builds)
+        images = _image_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
+        shas_before = compute_image_shas(repo, images)
 
         (repo / "workloads" / "app" / "new_module.py").write_text("print('untracked')")
 
-        shas_after = compute_service_shas(repo, builds)
+        shas_after = compute_image_shas(repo, images)
         assert shas_before["APP_SHA"] != shas_after["APP_SHA"]
         assert shas_before["WORKER_SHA"] == shas_after["WORKER_SHA"]
 
     def test_ignored_files_under_the_allowlist_never_hash(self, repo: Path):
-        builds = _service_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
+        images = _image_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
         (repo / ".gitignore").write_text("__pycache__/\n")
-        shas_before = compute_service_shas(repo, builds)
+        shas_before = compute_image_shas(repo, images)
 
         (repo / "workloads" / "app" / "__pycache__").mkdir()
         (repo / "workloads" / "app" / "__pycache__" / "main.cpython-313.pyc").write_text("machine-local bytes")
 
-        assert compute_service_shas(repo, builds) == shas_before
+        assert compute_image_shas(repo, images) == shas_before
 
     def test_staged_and_unstaged_edits_hash_identically(self, repo: Path):
-        builds = _service_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
+        images = _image_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
         (repo / "workloads" / "app" / "main.py").write_text("print('edited')")
-        shas_unstaged = compute_service_shas(repo, builds)
+        shas_unstaged = compute_image_shas(repo, images)
 
         subprocess.run(["git", "add", "-A"], cwd=str(repo), capture_output=True, check=True)
 
-        assert compute_service_shas(repo, builds) == shas_unstaged
+        assert compute_image_shas(repo, images) == shas_unstaged
 
     def test_global_excludes_do_not_affect_visibility(self, repo: Path, tmp_path_factory: pytest.TempPathFactory):
-        builds = _service_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
-        shas_before = compute_service_shas(repo, builds)
+        images = _image_builds("workloads/app/Dockerfile", "workloads/worker/Dockerfile")
+        shas_before = compute_image_shas(repo, images)
 
         global_ignore = tmp_path_factory.mktemp("global-excludes") / "gitignore"
         global_ignore.write_text("main.py\n")
@@ -342,39 +340,39 @@ class TestComputeServiceShas:
             check=True,
         )
 
-        assert compute_service_shas(repo, builds) == shas_before
+        assert compute_image_shas(repo, images) == shas_before
 
-    def test_should_raise_when_services_span_multiple_top_level_dirs(self, repo: Path):
-        builds = _service_builds("workloads/app/Dockerfile", "other/worker/Dockerfile")
+    def test_should_raise_when_images_span_multiple_top_level_dirs(self, repo: Path):
+        images = _image_builds("workloads/app/Dockerfile", "other/worker/Dockerfile")
 
         with pytest.raises(ValueError, match="multiple top-level"):
-            compute_service_shas(repo, builds)
+            compute_image_shas(repo, images)
 
 
-class TestComputeServiceShasGrammar:
+class TestComputeImageShasGrammar:
     def test_should_refuse_a_bare_pattern(self, tmp_path: Path):
         (tmp_path / ".dockerignore").write_text("*\n!workloads/\n__pycache__\n")
 
         with pytest.raises(ValueError, match="only allowlists are supported"):
-            compute_service_shas(tmp_path, _service_builds("workloads/app/Dockerfile"))
+            compute_image_shas(tmp_path, _image_builds("workloads/app/Dockerfile"))
 
     def test_should_refuse_a_wildcard_re_include(self, tmp_path: Path):
         (tmp_path / ".dockerignore").write_text("*\n!workloads/*\n")
 
         with pytest.raises(ValueError, match="literal paths without wildcards"):
-            compute_service_shas(tmp_path, _service_builds("workloads/app/Dockerfile"))
+            compute_image_shas(tmp_path, _image_builds("workloads/app/Dockerfile"))
 
     def test_should_refuse_a_missing_star(self, tmp_path: Path):
         (tmp_path / ".dockerignore").write_text("!workloads/\n")
 
         with pytest.raises(ValueError, match=r"exactly one '\*' line"):
-            compute_service_shas(tmp_path, _service_builds("workloads/app/Dockerfile"))
+            compute_image_shas(tmp_path, _image_builds("workloads/app/Dockerfile"))
 
     def test_should_refuse_a_second_star(self, tmp_path: Path):
         (tmp_path / ".dockerignore").write_text("*\n*\n!workloads/\n")
 
         with pytest.raises(ValueError, match=r"exactly one '\*' line"):
-            compute_service_shas(tmp_path, _service_builds("workloads/app/Dockerfile"))
+            compute_image_shas(tmp_path, _image_builds("workloads/app/Dockerfile"))
 
 
 def _docker_available() -> bool:
@@ -385,7 +383,7 @@ def _docker_available() -> bool:
     return True
 
 
-class TestComputeServiceShasContextGolden:
+class TestComputeImageShasContextGolden:
     pytestmark = pytest.mark.skipif(not _docker_available(), reason="docker daemon required")
 
     def test_the_hashed_file_set_is_the_git_visible_build_context(self, tmp_path: Path):
@@ -403,8 +401,8 @@ class TestComputeServiceShasContextGolden:
         (app / "__pycache__").mkdir()
         (app / "__pycache__" / "main.cpython-313.pyc").write_text("machine-local bytes")
 
-        builds = _service_builds("workloads/app/Dockerfile")
-        shas = compute_service_shas(tmp_path, builds)
+        images = _image_builds("workloads/app/Dockerfile")
+        shas = compute_image_shas(tmp_path, images)
         tree_hash = shas["APP_SHA"].removeprefix("tree-")
         listed = subprocess.run(
             ["git", "ls-tree", "-r", tree_hash],

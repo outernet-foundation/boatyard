@@ -12,7 +12,7 @@ from bashrun.bash import CalledProcessError, bash, bash_output
 from pydantic import ValidationError
 
 from boatyard.config import config as config_module
-from boatyard import dockerfiles as dockerfiles_module
+from boatyard import images as images_module
 from boatyard import score as score_module
 from boatyard import score_compose as score_compose_module
 from boatyard import score_k8s as score_k8s_module
@@ -22,7 +22,7 @@ from boatyard.config import workload as workload_module
 from boatyard.config.config import ConfigFile, K8sConfig, SecretsDeclaration
 from boatyard.config.lock import LockFile
 from boatyard.config.workload import WorkloadDocument
-from boatyard.dockerfiles import ServiceBuild
+from boatyard.images import Image
 from boatyard.paths import K8S_PINS_PATH
 from boatyard.score import write_file
 from boatyard.score_compose import BindVolume, ComposeService
@@ -649,7 +649,7 @@ def test_workload_image_slot_with_no_lock_entry_refuses(tmp_path: Path, monkeypa
 SENTINEL_RENDERING = "services:\n  api-api:\n    image: ghcr.io/org/api:__BOATYARD_TREE__API_SHA__\n"
 
 
-def _generate_compose_with_service_builds(
+def _generate_compose_with_derived_images(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> tuple[WorkloadContentsRecorder, str]:
     (tmp_path / "stack" / "score").mkdir(parents=True, exist_ok=True)
@@ -666,7 +666,7 @@ def _generate_compose_with_service_builds(
         services={"core": {"workloads": ["api.yaml"]}},
     )
     config.root = tmp_path
-    config.service_builds = {"api": ServiceBuild(name="api", dockerfile="workloads/api/Dockerfile")}
+    config.images = {"api": Image(name="api", dockerfile="workloads/api/Dockerfile")}
 
     score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK))
     output = tmp_path / "stack" / "generated" / "compose" / "compose.core.yaml"
@@ -676,7 +676,7 @@ def _generate_compose_with_service_builds(
 def test_workload_sha_slots_render_as_marker_protected_tree_slots(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    recorder, artifact = _generate_compose_with_service_builds(monkeypatch, tmp_path)
+    recorder, artifact = _generate_compose_with_derived_images(monkeypatch, tmp_path)
 
     assert (
         recorder.workload_contents["api.yaml"]
@@ -694,8 +694,8 @@ def test_generate_compose_never_walks_the_source_tree(tmp_path: Path, monkeypatc
     def _refuse_the_walk(root: Path, builds: object) -> dict[str, str]:
         raise AssertionError("compose generation reads only the config's service set")
 
-    monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _refuse_the_walk)
-    _recorder, artifact = _generate_compose_with_service_builds(monkeypatch, tmp_path)
+    monkeypatch.setattr(images_module, "compute_image_shas", _refuse_the_walk)
+    _recorder, artifact = _generate_compose_with_derived_images(monkeypatch, tmp_path)
 
     assert "image: ghcr.io/org/api:${CORE__BOATYARD_TREE__API_SHA}" in artifact
 
@@ -1243,7 +1243,7 @@ def test_k8s_generation_bakes_the_pins_file_tags(tmp_path: Path, monkeypatch: py
     _write_pins(tmp_path, {"API_SHA": PINNED_TAG})
     recorder = _pins_k8s_recorder(monkeypatch, tmp_path, SHA_WORKLOAD)
     config, k8s = _pinned_config(tmp_path)
-    monkeypatch.setattr(score_k8s_module.dockerfiles, "compute_service_shas", _refuse_the_tree_walk)
+    monkeypatch.setattr(score_k8s_module.images, "compute_image_shas", _refuse_the_tree_walk)
 
     generate_k8s(config, k8s, LockFile.model_validate({}), local=False, secrets=_empty_secrets())
 
@@ -1283,7 +1283,7 @@ def test_local_k8s_generation_derives_working_tree_tags_without_pins(
     def _local_shas(root: Path, builds: object) -> dict[str, str]:
         return {"API_SHA": LOCAL_TAG}
 
-    monkeypatch.setattr(score_k8s_module.dockerfiles, "compute_service_shas", _local_shas)
+    monkeypatch.setattr(score_k8s_module.images, "compute_image_shas", _local_shas)
 
     generate_k8s(config, k8s, LockFile.model_validate({}), local=True, secrets=_empty_secrets())
 

@@ -11,7 +11,7 @@ from typer.testing import CliRunner
 from boatyard.cli import app
 from boatyard.config import config as config_module
 from boatyard import lock as lock_module
-from boatyard import dockerfiles as dockerfiles_module
+from boatyard import images as images_module
 from boatyard.verbs.up import render_env_entries
 from boatyard.config.lock import LOCK_PATH, LockFile
 
@@ -31,7 +31,7 @@ LOCK_BASE_IMAGES = {
 runner = CliRunner()
 
 
-def _no_service_shas(_root: Path, _service_builds: object) -> dict[str, str]:
+def _no_image_shas(_root: Path, _images: object) -> dict[str, str]:
     return {}
 
 
@@ -172,7 +172,7 @@ def _invoke(
     monkeypatch.setattr(lock_module, "bash_output", IndexRegistry().bash_output)
     monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
     monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
-    monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+    monkeypatch.setattr(images_module, "compute_image_shas", _no_image_shas)
     monkeypatch.chdir(tmp_path)
     _write_repo(tmp_path, base_images=base_images, charts=charts, platforms=platforms)
     return runner.invoke(app, ["lock", *arguments])
@@ -189,7 +189,7 @@ class TestSelfSkip:
         assert not (tmp_path / LOCK_PATH).exists()
 
     def test_skips_without_declarations(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(images_module, "compute_image_shas", _no_image_shas)
         monkeypatch.setattr(lock_module, "bash_output", IndexRegistry().bash_output)
         monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
         monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
@@ -242,7 +242,7 @@ class TestImageRecording:
         monkeypatch.setattr(lock_module, "bash_output", registry.bash_output)
         monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
         monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(images_module, "compute_image_shas", _no_image_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, base_images=LOCK_BASE_IMAGES)
 
@@ -314,7 +314,7 @@ class TestImageRecording:
         monkeypatch.setattr(lock_module, "bash_output", registry.bash_output)
         monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
         monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(images_module, "compute_image_shas", _no_image_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
 
@@ -344,7 +344,7 @@ class TestImageRecording:
         monkeypatch.setattr(lock_module, "bash_output", registry.bash_output)
         monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
         monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(images_module, "compute_image_shas", _no_image_shas)
         monkeypatch.chdir(tmp_path)
         _write_repo(
             tmp_path,
@@ -465,7 +465,7 @@ def _lock_against_index(
     monkeypatch.setattr(lock_module, "bash_output", ManifestOutput(json.dumps({"manifests": manifests})))
     monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
     monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
-    monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+    monkeypatch.setattr(images_module, "compute_image_shas", _no_image_shas)
     monkeypatch.chdir(tmp_path)
     _write_repo(tmp_path, platforms=platforms)
     return runner.invoke(app, ["lock"])
@@ -646,7 +646,7 @@ class TestBundleRecording:
         monkeypatch.setattr(lock_module, "resolve_remote_digest", recorder.resolve)
         monkeypatch.setattr(lock_module, "bash_output", registry.bash_output)
         monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(images_module, "compute_image_shas", _no_image_shas)
         monkeypatch.chdir(tmp_path)
         services = ref_services or {"tunnel": {"options": {"rathole": {"ref": self.TUNNEL_RATHOLE}}}}
         if declares_routes:
@@ -895,7 +895,7 @@ class TestResolveRemoteDigest:
 
 class TestLockCheck:
     def _prepare(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(images_module, "compute_image_shas", _no_image_shas)
         monkeypatch.setattr(lock_module, "bash_output", IndexRegistry().bash_output)
         monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
         monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
@@ -1186,7 +1186,7 @@ class TestPairedLoad:
         monkeypatch.setattr(lock_module, "bash_output", IndexRegistry().bash_output)
         monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
         monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(images_module, "compute_image_shas", _no_image_shas)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["lock"])

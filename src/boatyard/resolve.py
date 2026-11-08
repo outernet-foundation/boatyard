@@ -5,7 +5,7 @@ from collections.abc import Mapping, Set as AbstractSet
 from pathlib import Path
 from typing import NamedTuple
 
-from boatyard import dockerfiles
+from boatyard import images
 from boatyard.config.config import (
     AUTH_GROUP_NAME,
     EDGE_LISTEN_PORT,
@@ -279,7 +279,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
             if not bundle_compose_path.is_file():
                 raise ValueError(f"selected entry {name!r} lacks its bundle output {bundle_compose_path.as_posix()}")
             lock_references = lock.manifest_references(values.platform)
-            tree_root, tree_builds = root, config.service_builds
+            tree_root, tree_images = root, config.images
         else:
             # Include an overridden ref through its local path
             bundle_compose_path = _override_bundle_path(values, name, root).resolve()
@@ -293,7 +293,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
             producer_config = ConfigFile.load(producer_root / DEFAULT_CONFIG_PATH)
             producer_lock = LockFile.load(producer_root / LOCK_PATH, producer_config)
             lock_references = producer_lock.manifest_references(values.platform)
-            tree_root, tree_builds = producer_root, producer_config.service_builds
+            tree_root, tree_images = producer_root, producer_config.images
 
         # Refuse reserved services and unresolved route/port references against the bundle text
         text = bundle_compose_path.read_text(encoding="utf-8")
@@ -310,7 +310,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
 
         # Fan the source tree's content tags under the entry beside the lock fans
         if tree_root not in shas_by_root:
-            shas_by_root[tree_root] = dockerfiles.compute_service_shas(tree_root, tree_builds)
+            shas_by_root[tree_root] = images.compute_image_shas(tree_root, tree_images)
         tree_entries.update({env_tree_slot(name, sha): value for sha, value in shas_by_root[tree_root].items()})
 
     demanded = sorted({name for unit in participating for name in demands.get(unit, {})})

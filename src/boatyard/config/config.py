@@ -25,11 +25,11 @@ import yaml
 
 from boatyard.config.pyproject import PYPROJECT_PATH, PyprojectToml
 from boatyard.config.workload import WorkloadDocument, load_workloads, select_provisioner_files
-from boatyard.dockerfiles import (
+from boatyard.images import (
     DOCKERFILE_NAME,
-    ServiceBuild,
+    Image,
     require_single_top,
-    service_sha_env,
+    image_sha_env,
 )
 from boatyard.temp import PLATFORM_PATTERN, SHA256_DIGEST_REGEX
 from boatyard.yaml import Yaml, is_mapping, load_yaml_model
@@ -116,7 +116,7 @@ class ConfigFile(BaseModel):
     score_k8s_version: str = "0.15.0"
     helm_version: str = "3.22.1"
 
-    service_builds: dict[str, ServiceBuild] = Field(default_factory=dict, exclude=True)
+    images: dict[str, Image] = Field(default_factory=dict, exclude=True)
     consumer_surfaces: dict[str, dict[str, SlotDemand]] = Field(default_factory=dict, exclude=True)
     root: Path = Field(default_factory=Path.cwd, exclude=True)
 
@@ -155,7 +155,7 @@ class ConfigFile(BaseModel):
     @property
     def tree_sentinels(self) -> dict[str, str]:
         # The compose barrier pre-images over the build-set slot supply; TREE_SENTINEL_PATTERN finds them
-        return {slot: f"{TREE_SLOT_MARKER}{slot}__" for slot in (service_sha_env(name) for name in self.service_builds)}
+        return {slot: f"{TREE_SLOT_MARKER}{slot}__" for slot in (image_sha_env(name) for name in self.images)}
 
     @field_validator("requires")
     @classmethod
@@ -513,21 +513,21 @@ def _derive(config: ConfigFile, root: Path) -> None:
         for name, reference in config.base_images.items()
     }
 
-    # Derive the service build set from the Dockerfile tree.
+    # Derive the image build set from the Dockerfile tree.
     axes = config.variants
-    service_dirs: dict[str, Path] = {}
+    image_dirs: dict[str, Path] = {}
     tops: set[str] = set()
     for top in sorted(root.iterdir()):
         if not top.is_dir() or top.name.startswith("."):
             continue
         for child in sorted(top.iterdir()):
             if child.is_dir() and (child / DOCKERFILE_NAME).is_file():
-                service_dirs[child.name] = child
+                image_dirs[child.name] = child
                 tops.add(top.name)
-    require_single_top(tops, "Dockerfile service directories")
+    require_single_top(tops, "Dockerfile image directories")
 
-    service_builds: dict[str, ServiceBuild] = {}
-    for name, directory in service_dirs.items():
+    images: dict[str, Image] = {}
+    for name, directory in image_dirs.items():
         dockerfile = directory / DOCKERFILE_NAME
         relative = dockerfile.relative_to(root).as_posix()
         from_images: list[str] = []
@@ -556,8 +556,8 @@ def _derive(config: ConfigFile, root: Path) -> None:
                 if BUILD_ARG_REFERENCE_PATTERN.fullmatch(image) is None:
                     raise ValueError(f"{relative}: FROM {image} must reference a base_images build arg")
                 continue
-            if image not in service_dirs:
-                raise ValueError(f"{relative}: FROM {image} names no service directory or stage")
+            if image not in image_dirs:
+                raise ValueError(f"{relative}: FROM {image} names no image directory or stage")
             contexts.append(image)
         for value in copy_from_values:
             if "/" in value:
@@ -566,10 +566,10 @@ def _derive(config: ConfigFile, root: Path) -> None:
         if len(declared_axis_args) > 1:
             raise ValueError(
                 f"{relative}: declares two variant-axis ARGs ({', '.join(declared_axis_args)}); "
-                "a service carries one axis"
+                "an image carries one axis"
             )
         axis_arg = declared_axis_args[0] if declared_axis_args else None
-        service_builds[name] = ServiceBuild(
+        images[name] = Image(
             name=name,
             dockerfile=relative,
             contexts=sorted(set(contexts)),
@@ -578,24 +578,22 @@ def _derive(config: ConfigFile, root: Path) -> None:
             sha_args=sorted({arg for arg in args if arg.endswith("_SHA")}),
         )
 
-    effective_axes = {name: _effective_axis(name, service_builds, ()) for name in service_builds}
-    for name, build in service_builds.items():
+    effective_axes = {name: _effective_axis(name, images, ()) for name in images}
+    for name, build in images.items():
         axis = effective_axes[name]
         if axis is not None:
             build.axis = axis
             build.variants = list(axes[axis])
 
-    computable = {service_sha_env(name) for name in service_builds}
-    for service in service_builds.values():
-        unknown = [argument for argument in service.sha_args if argument not in computable]
+    computable = {image_sha_env(name) for name in images}
+    for image in images.values():
+        unknown = [argument for argument in image.sha_args if argument not in computable]
         if unknown:
-            raise ValueError(
-                f"workloads/{service.name}/{DOCKERFILE_NAME}: ARG {', '.join(unknown)} names no service directory"
-            )
-    if service_builds and config.repository is None:
-        listed = ", ".join(sorted(service_builds))
-        raise ValueError(f"repository is required by the Dockerfile service directories {listed}")
-    config.service_builds = service_builds
+            raise ValueError(f"{image.dockerfile}: ARG {', '.join(unknown)} names no image directory")
+    if images and config.repository is None:
+        listed = ", ".join(sorted(images))
+        raise ValueError(f"repository is required by the Dockerfile image directories {listed}")
+    config.images = images
 
     # Enforce the lock pairing laws.
     declared_charts = config.declared_charts
@@ -657,19 +655,17 @@ def _derive(config: ConfigFile, root: Path) -> None:
     config.consumer_surfaces = surfaces
 
 
-def _effective_axis(name: str, builds: dict[str, ServiceBuild], path: tuple[str, ...]) -> str | None:
+def _effective_axis(name: str, builds: dict[str, Image], path: tuple[str, ...]) -> str | None:
     if name in path:
         raise ValueError(f"FROM context cycle: {' -> '.join((*path, name))}")
     build = builds[name]
     parent_axes = [_effective_axis(parent, builds, (*path, name)) for parent in build.contexts]
     if len(set(parent_axes)) > 1:
-        raise ValueError(
-            f"workloads/{name}/{DOCKERFILE_NAME}: parents ({', '.join(build.contexts)}) disagree on variants"
-        )
+        raise ValueError(f"{build.dockerfile}: parents ({', '.join(build.contexts)}) disagree on variants")
     if parent_axes:
         if build.axis is not None:
             raise ValueError(
-                f"workloads/{name}/{DOCKERFILE_NAME}: declares ARG {build.axis} over a "
+                f"{build.dockerfile}: declares ARG {build.axis} over a "
                 f"variant-bearing base (parents: {', '.join(build.contexts)})"
             )
         return parent_axes[0]

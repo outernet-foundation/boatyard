@@ -17,10 +17,10 @@ from build_artifact_registry.builds import push_build
 from build_artifact_registry.setup_oras import install_oras
 from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, model_validator
 
-from boatyard import dockerfiles
+from boatyard import images
 from boatyard.config.config import ConfigFile
 from boatyard.yaml import Yaml
-from boatyard.dockerfiles import ServiceBuild, service_sha_env
+from boatyard.images import Image, image_sha_env
 from boatyard.lock import relock
 
 
@@ -106,11 +106,11 @@ def run_build(
     pushing = push or push_to is not None
     destination = push_to
 
-    service_shas = dockerfiles.compute_service_shas(config.root, config.service_builds)
-    os.environ.update(service_shas)
+    image_shas = images.compute_image_shas(config.root, config.images)
+    os.environ.update(image_shas)
 
-    if not config.service_builds:
-        raise ValueError("no Dockerfile service derives under this repo; the lock verb owns relocking declarations")
+    if not config.images:
+        raise ValueError("no Dockerfile image derives under this repo; the lock verb owns relocking declarations")
 
     # Check Docker GC limits.
     if not pushing and not targets:
@@ -123,38 +123,36 @@ def run_build(
         for target in targets:
             # Resolve each address to a target.
             if "/" in target:
-                service_name, _, variant = target.partition("/")
-                service = config.service_builds.get(service_name)
-                if service is None:
+                image_name, _, variant = target.partition("/")
+                image = config.images.get(image_name)
+                if image is None:
                     raise typer.BadParameter(
-                        f"Unknown target {target!r}. Available: {_address_vocabulary(config.service_builds)}"
+                        f"Unknown target {target!r}. Available: {_address_vocabulary(config.images)}"
                     )
-                if not service.variants:
-                    raise typer.BadParameter(f"{service_name} declares no variants")
-                if variant not in service.variants:
+                if not image.variants:
+                    raise typer.BadParameter(f"{image_name} declares no variants")
+                if variant not in image.variants:
                     raise typer.BadParameter(
-                        f"Unknown variant {variant!r} for {service_name}; it declares the variants {service.variants}"
+                        f"Unknown variant {variant!r} for {image_name}; it declares the variants {image.variants}"
                     )
-                resolved_targets.append(f"{service_name}-{variant}")
-            elif target in config.service_builds:
-                service = config.service_builds[target]
-                if service.variants:
+                resolved_targets.append(f"{image_name}-{variant}")
+            elif target in config.images:
+                image = config.images[target]
+                if image.variants:
                     raise typer.BadParameter(
-                        f"{target} declares the variants {service.variants}; spell {target}/<variant>"
+                        f"{target} declares the variants {image.variants}; spell {target}/<variant>"
                     )
                 resolved_targets.append(target)
             else:
-                raise typer.BadParameter(
-                    f"Unknown target {target!r}. Available: {_address_vocabulary(config.service_builds)}"
-                )
+                raise typer.BadParameter(f"Unknown target {target!r}. Available: {_address_vocabulary(config.images)}")
     else:
         # Select the default targets for this machine's arch.
-        defaults = {service.target_variants[0][0] for service in config.service_builds.values()}
+        defaults = {image.target_variants[0][0] for image in config.images.values()}
         resolved_targets = sorted(defaults) if not config.platforms or host in config.platforms else []
         if not resolved_targets:
             raise ValueError(
-                f"No service targets this machine's arch ({host}); "
-                f"other arches require --targets. Services: {_address_vocabulary(config.service_builds)}"
+                f"No image targets this machine's arch ({host}); "
+                f"other arches require --targets. Images: {_address_vocabulary(config.images)}"
             )
 
     # The incremental lock write rides every building run; bake reads the fresh entries as environment.
@@ -163,26 +161,26 @@ def run_build(
     # Render the bake services for every target.
     namespace = destination if destination is not None else config.repository
     services: dict[str, dict[str, dict[str, BakeValue]]] = {}
-    for service in config.service_builds.values():
-        for target, variant in service.target_variants:
+    for image in config.images.values():
+        for target, variant in image.target_variants:
             args: dict[str, str] = {key: f"${{{key}:-}}" for key in config.base_images}
-            axis = service.axis
+            axis = image.axis
             if variant is not None and axis is not None:
                 args[axis] = variant
-            args.update({sha: f"${{{sha}:?err}}" for sha in service.sha_args})
-            build: dict[str, BakeValue] = {"dockerfile": service.dockerfile}
+            args.update({sha: f"${{{sha}:?err}}" for sha in image.sha_args})
+            build: dict[str, BakeValue] = {"dockerfile": image.dockerfile}
             if config.platforms:
                 # Collapse multi-arch declarations to the host arch in load mode.
                 build["platforms"] = [host] if not pushing and len(config.platforms) > 1 else list(config.platforms)
             build["args"] = args
             build["tags"] = [
                 f"{namespace}/{target}:latest",
-                f"{namespace}/{target}:${{{service_sha_env(service.name)}}}",
+                f"{namespace}/{target}:${{{image_sha_env(image.name)}}}",
             ]
-            if service.contexts:
+            if image.contexts:
                 build["additional_contexts"] = {
                     context: f"target:{context}-{variant}" if variant is not None else f"target:{context}"
-                    for context in service.contexts
+                    for context in image.contexts
                 }
             if push:
                 cache = f"{namespace}/build-cache"
@@ -293,9 +291,9 @@ def host_platform() -> str:
     raise ValueError(f"Unsupported host architecture: {machine}")
 
 
-def _address_vocabulary(services: dict[str, ServiceBuild]) -> list[str]:
+def _address_vocabulary(images: dict[str, Image]) -> list[str]:
     addresses: list[str] = []
-    for name in sorted(services):
+    for name in sorted(images):
         addresses.append(name)
-        addresses.extend(f"{name}/{variant}" for variant in services[name].variants)
+        addresses.extend(f"{name}/{variant}" for variant in images[name].variants)
     return addresses

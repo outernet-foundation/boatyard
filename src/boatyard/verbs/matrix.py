@@ -18,27 +18,27 @@ def docker_build_matrix() -> None:
     if config is None:
         print(json.dumps([]))
         return
-    # Partition the services into dependency closures x variants.
-    services = config.service_builds
-    parent = {service: service for service in services}
+    # Partition the images into dependency closures x variants.
+    images = config.images
+    parent = {image: image for image in images}
 
-    for name, service in services.items():
-        for dependency in service.contexts:
+    for name, image in images.items():
+        for dependency in image.contexts:
             left, right = _find(parent, name), _find(parent, dependency)
             if left != right:
                 parent[right] = left
 
     members: dict[str, list[str]] = {}
-    for service in services:
-        members.setdefault(_find(parent, service), []).append(service)
+    for image in images:
+        members.setdefault(_find(parent, image), []).append(image)
 
     entries_by_variant: dict[tuple[str | None, str], list[str]] = {}
     for group in sorted(sorted(member_list) for member_list in members.values()):
         for name in group:
-            for variant in services[name].variants or [None]:
+            for variant in images[name].variants or [None]:
                 partition = variant if variant is not None else "common"
                 address = f"{name}/{variant}" if variant is not None else name
-                entries_by_variant.setdefault((services[name].axis, partition), []).append(address)
+                entries_by_variant.setdefault((images[name].axis, partition), []).append(address)
 
     print(
         json.dumps([
@@ -48,10 +48,10 @@ def docker_build_matrix() -> None:
     )
 
 
-def _find(parent: dict[str, str], service: str) -> str:
-    root = service
+def _find(parent: dict[str, str], image: str) -> str:
+    root = image
     while parent[root] != root:
         root = parent[root]
-    while parent[service] != service:
-        parent[service], service = root, parent[service]
+    while parent[image] != image:
+        parent[image], image = root, parent[image]
     return root

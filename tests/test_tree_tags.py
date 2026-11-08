@@ -23,14 +23,14 @@ def _commit_all(path: Path) -> None:
     subprocess.run(["git", "commit", "-m", "init", "--allow-empty"], cwd=str(path), capture_output=True, check=True)
 
 
-def _write_service(root: Path, name: str, text: str = "ARG PY_IMAGE\nFROM ${PY_IMAGE}\n") -> None:
+def _write_image(root: Path, name: str, text: str = "ARG PY_IMAGE\nFROM ${PY_IMAGE}\n") -> None:
     directory = root / "workloads" / name
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "Dockerfile").write_text(text, encoding="utf-8")
 
 
-def _tags(repo: Path, capfd: pytest.CaptureFixture[str], *services: str) -> list[str]:
-    tree_tags(services=list(services) or None)
+def _tags(repo: Path, capfd: pytest.CaptureFixture[str], *images: str) -> list[str]:
+    tree_tags(names=list(images) or None)
     return capfd.readouterr().out.splitlines()
 
 
@@ -47,8 +47,8 @@ def repo(tmp_path: Path) -> Path:
         }),
         encoding="utf-8",
     )
-    _write_service(tmp_path, "api")
-    _write_service(tmp_path, "worker")
+    _write_image(tmp_path, "api")
+    _write_image(tmp_path, "worker")
     _commit_all(tmp_path)
     return tmp_path
 
@@ -93,16 +93,16 @@ class TestTreeTags:
     def test_unknown_names_refuse_listing_the_vocabulary(self, repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(repo)
 
-        with pytest.raises(typer.BadParameter, match=r"unknown service\(s\) \['ghost'\].*\['api', 'worker'\]"):
-            tree_tags(services=["api", "ghost"])
+        with pytest.raises(typer.BadParameter, match=r"unknown image\(s\) \['ghost'\].*\['api', 'worker'\]"):
+            tree_tags(names=["api", "ghost"])
 
     def test_a_bare_invocation_refuses_listing_the_vocabulary(
         self, repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.chdir(repo)
 
-        with pytest.raises(typer.BadParameter, match=r"at least one service name is required.*\['api', 'worker'\]"):
-            tree_tags(services=None)
+        with pytest.raises(typer.BadParameter, match=r"at least one image name is required.*\['api', 'worker'\]"):
+            tree_tags(names=None)
 
     def test_a_repo_without_config_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)

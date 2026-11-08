@@ -10,7 +10,7 @@ from typing import Annotated
 import typer
 from bashrun.bash import bash, bash_output
 
-from boatyard import dockerfiles
+from boatyard import images
 from boatyard.config.config import ConfigFile, compose_bundle_output_path, env_lock_slot, env_tree_slot
 from boatyard.crane import install_crane
 from boatyard.config.lock import LOCK_PATH, LockFile
@@ -84,7 +84,7 @@ def publish_compose(
     sha = bash_output("git rev-parse HEAD").strip()
     branch_tag = (branch or bash_output("git rev-parse --abbrev-ref HEAD").strip()).replace("/", "-")
 
-    service_shas = dockerfiles.compute_service_shas(config.root, config.service_builds)
+    image_shas = images.compute_image_shas(config.root, config.images)
     lock_entries = LockFile.load(root / LOCK_PATH, config).index_references()
 
     published: list[PublishedEntry] = []
@@ -97,7 +97,7 @@ def publish_compose(
             substitutions = {
                 **lock_entries,
                 **{env_lock_slot(bundle_name, key): value for key, value in lock_entries.items()},
-                **{env_tree_slot(bundle_name, sha): value for sha, value in service_shas.items()},
+                **{env_tree_slot(bundle_name, sha): value for sha, value in image_shas.items()},
             }
             baked_path = bake_sources(baked_directory, output.as_posix(), substitutions)
 

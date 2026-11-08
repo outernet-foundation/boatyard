@@ -259,9 +259,9 @@ class TestVariants:
         config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None
-        assert config.service_builds["localizer"].axis == "TORCH_DEVICE"
-        assert config.service_builds["localizer"].variants == ["cuda", "rocm"]
-        assert [target for target, _variant in config.service_builds["localizer"].target_variants] == [
+        assert config.images["localizer"].axis == "TORCH_DEVICE"
+        assert config.images["localizer"].variants == ["cuda", "rocm"]
+        assert [target for target, _variant in config.images["localizer"].target_variants] == [
             "localizer-cuda",
             "localizer-rocm",
         ]
@@ -1381,9 +1381,9 @@ class TestRepository:
         with pytest.raises(ValidationError, match="trailing slash"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
-    def test_repository_without_service_builds_loads(self, tmp_path: Path) -> None:
+    def test_repository_without_derived_images_loads(self, tmp_path: Path) -> None:
         # The publish shape for a repo whose whole runtime is its own workload set: no
-        # Dockerfile service builds, repository naming the artifact registry.
+        # Dockerfile image builds, repository naming the artifact registry.
         write_workload(tmp_path, "rathole-client.yaml", ["rathole-client"])
         write_config(
             tmp_path,
@@ -1400,7 +1400,7 @@ class TestRepository:
         config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None and config.repository == "ghcr.io/org/repo"
-        assert config.service_builds == {}
+        assert config.images == {}
 
 
 class TestPlatforms:
@@ -1505,22 +1505,22 @@ class TestLockPairing:
         assert ConfigFile.load(tmp_path / "boatyard.yml") is not None
 
 
-class TestServiceDerivation:
-    def test_repository_required_when_services_exist(self, tmp_path: Path) -> None:
+class TestImageDerivation:
+    def test_repository_required_when_images_exist(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n")
         write_config(tmp_path, {"requires": ">=0.1"})
 
         with pytest.raises(ValueError, match="repository is required"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
-    def test_derived_services_attach_to_the_loaded_config(self, tmp_path: Path) -> None:
+    def test_derived_images_attach_to_the_loaded_config(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n")
         write_config(tmp_path, {"requires": ">=0.1", "repository": "ghcr.io/org/repo"})
 
         config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None
-        assert sorted(config.service_builds) == ["api"]
+        assert sorted(config.images) == ["api"]
 
 
 class TestBareServiceNameClaims:

@@ -39,13 +39,13 @@ class BumpHarness:
         tmp_path: Path,
         shards: dict[str, dict[str, object]] | None = None,
         registry: bool = True,
-        service_shas: dict[str, str] | None = None,
+        image_shas: dict[str, str] | None = None,
     ) -> None:
         self.tmp_path = tmp_path
         self.generated: dict[str, object] = {}
         self.pulled: list[str] = []
         self.git = GitStub()
-        self.service_shas = service_shas if service_shas is not None else {"WORKER_SHA": WORKER_TAG, "API_SHA": API_TAG}
+        self.image_shas = image_shas if image_shas is not None else {"WORKER_SHA": WORKER_TAG, "API_SHA": API_TAG}
         resolved_shards = (
             shards
             if shards is not None
@@ -72,14 +72,14 @@ class BumpHarness:
 
         def _fake_generate(config: object, **kwargs: object) -> list[Path]:
             self.generated.update(kwargs)
-            assert parse_pins(yaml.safe_load(self.pins_text())) == self.service_shas
+            assert parse_pins(yaml.safe_load(self.pins_text())) == self.image_shas
             return []
 
         def _shelf_tags(registry: str, project: str, platform: str, **kwargs: object) -> list[str]:
             return sorted(resolved_shards)
 
-        def _service_shas(root: Path, builds: object) -> dict[str, str]:
-            return dict(self.service_shas)
+        def _image_shas(root: Path, builds: object) -> dict[str, str]:
+            return dict(self.image_shas)
 
         if registry:
             monkeypatch.setenv("REGISTRY", "ghcr.io/org/builds")
@@ -89,7 +89,7 @@ class BumpHarness:
         monkeypatch.setattr(bump_verb, "install_oras", lambda: None)
         monkeypatch.setattr(bump_verb, "list_build_tags", _shelf_tags)
         monkeypatch.setattr(bump_verb, "pull_artifact", _fake_pull)
-        monkeypatch.setattr(bump_verb.dockerfiles, "compute_service_shas", _service_shas)
+        monkeypatch.setattr(bump_verb.images, "compute_image_shas", _image_shas)
         monkeypatch.setattr(bump_verb, "generate_artifacts", _fake_generate)
         monkeypatch.chdir(tmp_path)
 
@@ -205,7 +205,7 @@ def test_bump_is_idempotent_per_head(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 
 def test_bump_writes_the_empty_record_for_a_shaless_head(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    harness = BumpHarness(monkeypatch, tmp_path, service_shas={})
+    harness = BumpHarness(monkeypatch, tmp_path, image_shas={})
 
     harness.run()
 

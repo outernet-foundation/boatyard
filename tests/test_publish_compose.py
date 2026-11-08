@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from boatyard.cli import app
-from boatyard import dockerfiles as dockerfiles_module
+from boatyard import images as images_module
 from boatyard import crane
 from boatyard import publish as publish_compose
 from boatyard.verbs import publish as publish_verb
@@ -65,7 +65,7 @@ class DigestResolver:
         return FAKE_DIGEST
 
 
-def _service_shas(root: Path, bake: object) -> dict[str, str]:
+def _image_shas(root: Path, bake: object) -> dict[str, str]:
     return {"LIVEKIT_TOKEN_SHA": "tree-abc"}
 
 
@@ -77,7 +77,7 @@ def _invoke_publishing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Publi
     monkeypatch.setattr(publish_verb, "bash", recorder.run)
     monkeypatch.setattr(crane, "bash", recorder.run)
     monkeypatch.setattr(publish_verb, "bash_output", _command_output)
-    monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _service_shas)
+    monkeypatch.setattr(images_module, "compute_image_shas", _image_shas)
     monkeypatch.setattr(publish_compose, "resolve_remote_digest", DigestResolver().resolve)
     return recorder
 

@@ -12,7 +12,7 @@ from pydantic import (
     Field,
 )
 
-from boatyard import dockerfiles
+from boatyard import images
 from boatyard.config.config import (
     K8sConfig,
     PLACEHOLDER,
@@ -63,7 +63,7 @@ def generate_k8s(
     secrets: SecretsDeclaration,
 ) -> Path:
     score_dir = config.root / config.score_dir
-    images = lock.index_references()
+    index_images = lock.index_references()
     workloads = load_workloads(score_dir, k8s.workloads, WorkloadDocument)
 
     output_path = config.root / (config.k8s_local_output if local else config.k8s_output)
@@ -76,7 +76,7 @@ def generate_k8s(
             STORAGE_CLASS_VAR: LOCAL_STORAGE_CLASS if local else CLOUD_STORAGE_CLASS,
             **k8s.vars,
             **(
-                dockerfiles.compute_service_shas(config.root, config.service_builds)
+                images.compute_image_shas(config.root, config.images)
                 if local
                 else load_pins(
                     config.root / K8S_PINS_PATH,
@@ -91,7 +91,7 @@ def generate_k8s(
         },
         templates=[GPU_POD_TEMPLATE, SCALE_TO_ZERO_TEMPLATE],
         output=output_path,
-        images=images,
+        images=index_images,
     )
 
     # Render the charts through helm template.
@@ -108,7 +108,7 @@ def generate_k8s(
                 dump_yaml(
                     resolve_markers(
                         yaml.safe_load(path.read_text(encoding="utf-8")),
-                        MarkerContext(config.root, images, path.as_posix()),
+                        MarkerContext(config.root, index_images, path.as_posix()),
                     )
                 ),
             )
