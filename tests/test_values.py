@@ -43,6 +43,25 @@ PROVISIONER = """\
         PROV_TOKEN: ${PROV_TOKEN:?err}
 """
 
+# The bundle artifact generate-score renders from the workload and provisioner above: bare
+# slots are expanded at render, suffixed slots ride as compose interpolation, lock keys ride
+# under the entry marker, and consumer-interpolated content lands un-doubled.
+BUNDLE = (
+    "services:\n"
+    "  core-api:\n"
+    f"    image: ghcr.io/org/loki:3.0@{FAKE_DIGEST}\n"
+    "    environment:\n"
+    "      TOKEN: ${API_TOKEN:?err}\n"
+    "  extra-api:\n"
+    "    image: demo/extra:1\n"
+    "    environment:\n"
+    "      PROV_TOKEN: ${PROV_TOKEN:?err}\n"
+    "configs:\n"
+    "  core-client.toml:\n"
+    "    content: |\n"
+    '      remote_addr = "${BIND_TOKEN:?err}"\n'
+)
+
 
 def _monitor_slots(overrides: dict[str, object] | None) -> dict[str, object]:
     slots: dict[str, object] = {"MON_TOKEN": {"required": True}}
@@ -56,7 +75,7 @@ def _write_repo(
     values: dict[str, object],
     *,
     slots: dict[str, object] | None = None,
-    workload: str = WORKLOAD,
+    bundle: str = BUNDLE,
     gateway: int | None = None,
     ports: list[dict[str, object]] | None = None,
 ) -> Path:
@@ -64,9 +83,12 @@ def _write_repo(
     root.mkdir()
     score = root / "stack" / "score"
     score.mkdir(parents=True)
-    (score / "api.yaml").write_text(workload, encoding="utf-8")
+    (score / "api.yaml").write_text(WORKLOAD, encoding="utf-8")
     (score / "compose").mkdir()
     (score / "compose" / "services.yaml").write_text(PROVISIONER, encoding="utf-8")
+    bundle_output = root / "stack" / "generated" / "compose" / "compose.core.yaml"
+    bundle_output.parent.mkdir(parents=True)
+    bundle_output.write_text(bundle, encoding="utf-8")
     base_images: dict[str, str] = {"LOKI_IMAGE": "docker.io/grafana/loki:3.0"}
     core_entry: dict[str, object] = {"workloads": ["api.yaml"]}
     if ports is not None:
@@ -112,20 +134,6 @@ def _write_repo(
     return root
 
 
-def _write_bundle_backed_repo(
-    tmp_path: Path,
-    values: dict[str, object],
-    *,
-    slots: dict[str, object] | None = None,
-    gateway: int | None = None,
-) -> Path:
-    root = _write_repo(tmp_path, values, slots=slots, gateway=gateway)
-    bundle_output = root / "stack" / "generated" / "compose" / "compose.core.yaml"
-    bundle_output.parent.mkdir(parents=True)
-    bundle_output.write_text("services:\n  core-api:\n    image: demo:1\n", encoding="utf-8")
-    return root
-
-
 def _filled_values(extra: dict[str, object] | None = None) -> dict[str, object]:
     values: dict[str, object] = {
         "values": {
@@ -159,21 +167,19 @@ def _refusal(
     values: dict[str, object],
     *,
     slots: dict[str, object] | None = None,
-    workload: str = WORKLOAD,
+    bundle: str = BUNDLE,
     gateway: int | None = None,
     ports: list[dict[str, object]] | None = None,
 ) -> str:
     try:
-        _resolve(
-            _write_repo(tmp_path, values, slots=slots, workload=workload, gateway=gateway, ports=ports)
-        )
+        _resolve(_write_repo(tmp_path, values, slots=slots, bundle=bundle, gateway=gateway, ports=ports))
     except ValueError as error:
         return str(error)
     raise AssertionError("expected a refusal")
 
 
 def test_a_filled_surface_loads_and_flattens(tmp_path: Path) -> None:
-    root = _write_bundle_backed_repo(tmp_path, _filled_values(), slots={"MON_TOKEN": {"required": True}})
+    root = _write_repo(tmp_path, _filled_values(), slots={"MON_TOKEN": {"required": True}})
 
     assert _load(root).flattened == {
         "API_TOKEN": "one",
@@ -317,23 +323,15 @@ def test_provisioner_services_text_demands(tmp_path: Path) -> None:
     assert "values.images.core requires ['PROV_TOKEN']" in message
 
 
-def test_a_suffixed_lock_key_spelling_leaves_the_surface(tmp_path: Path) -> None:
-    workload = WORKLOAD.replace("image: ${LOKI_IMAGE}", "image: ${LOKI_IMAGE:?err}")
+def test_a_marker_lock_key_spelling_leaves_the_surface(tmp_path: Path) -> None:
+    bundle = BUNDLE.replace(
+        f"image: ghcr.io/org/loki:3.0@{FAKE_DIGEST}", "image: ${CORE__BOATYARD_LOCK__LOKI_IMAGE:?err}"
+    )
     values = _filled_values()
+    root = _write_repo(tmp_path, values, bundle=bundle)
 
-    parsed = _load(_write_repo(tmp_path, values, workload=workload))
-
-    assert "LOKI_IMAGE" not in parsed.flattened
-
-
-def test_a_bare_workload_slot_is_not_a_demand(tmp_path: Path) -> None:
-    workload = WORKLOAD.replace("TOKEN: ${API_TOKEN:?err}", "VERSION: ${API_SHA}")
-    values = _filled_values()
-    del values["values"]["images"]["core"]["API_TOKEN"]  # type: ignore[index]
-
-    parsed = _load(_write_repo(tmp_path, values, workload=workload))
-
-    assert "API_SHA" not in parsed.flattened
+    assert "LOKI_IMAGE" not in _load(root).flattened
+    assert [service.name for service in _resolve(root).services] == ["core", "monitor"]
 
 
 def test_an_unselected_options_section_still_orphan_refuses(tmp_path: Path) -> None:
@@ -342,6 +340,8 @@ def test_an_unselected_options_section_still_orphan_refuses(tmp_path: Path) -> N
     config = yaml.safe_load((root / "boatyard.yml").read_text(encoding="utf-8"))
     config["services"]["placeframe"] = {"options": {"cuda": {"workloads": ["pf.yaml"]}}}
     (root / "boatyard.yml").write_text(yaml.safe_dump(config), encoding="utf-8")
+    option_output = root / "stack" / "generated" / "compose" / "compose.placeframe-cuda.yaml"
+    option_output.write_text("services:\n  placeframe-cuda-pf:\n    image: demo:1\n", encoding="utf-8")
     values = yaml.safe_load((root / VALUES_FILE).read_text(encoding="utf-8"))
     values["values"]["images"]["placeframe-cuda"] = {"GHOST": "x"}
     (root / VALUES_FILE).write_text(yaml.safe_dump(values), encoding="utf-8")
@@ -391,7 +391,7 @@ def test_a_fill_refusal_names_shell_set_values_as_ignored(tmp_path: Path, monkey
 def test_a_reference_to_a_sibling_key_resolves_at_render(tmp_path: Path) -> None:
     values = _filled_values()
     values["values"]["images"]["core"] = _core_values(API_TOKEN="${PROV_TOKEN}-token")  # type: ignore[index]
-    root = _write_bundle_backed_repo(tmp_path, values)
+    root = _write_repo(tmp_path, values)
 
     assert _load(root).flattened == {
         "API_TOKEN": "${PROV_TOKEN}-token",
@@ -412,7 +412,7 @@ def test_a_reference_chains_through_another_reference(tmp_path: Path) -> None:
     values["values"]["images"]["core"] = _core_values(  # type: ignore[index]
         API_TOKEN="u${BIND_TOKEN}", BIND_TOKEN="${PROV_TOKEN}b"
     )
-    root = _write_bundle_backed_repo(tmp_path, values)
+    root = _write_repo(tmp_path, values)
 
     assert _resolve(root).values == {
         "API_TOKEN": "uthreeb",
@@ -425,7 +425,7 @@ def test_a_reference_chains_through_another_reference(tmp_path: Path) -> None:
 def test_the_minted_public_url_is_a_reference_root(tmp_path: Path) -> None:
     values = _filled_values({"public_url": "https://example.dev"})
     values["values"]["images"]["core"] = _core_values(API_TOKEN="${PUBLIC_URL}/token")  # type: ignore[index]
-    root = _write_bundle_backed_repo(tmp_path, values)
+    root = _write_repo(tmp_path, values)
 
     assert _resolve(root).values == {
         "PUBLIC_URL": "https://example.dev",
@@ -448,7 +448,7 @@ def test_the_minted_public_url_is_no_root_when_public_url_is_absent(tmp_path: Pa
 def test_the_minted_edge_base_url_is_a_reference_root(tmp_path: Path) -> None:
     values = _filled_values()
     values["values"]["images"]["core"] = _core_values(API_TOKEN="${EDGE_BASE_URL}/jwks")  # type: ignore[index]
-    root = _write_bundle_backed_repo(tmp_path, values, gateway=9443)
+    root = _write_repo(tmp_path, values, gateway=9443)
 
     assert _resolve(root).values == {
         "EDGE_BASE_URL": "http://edge:8443",
@@ -540,9 +540,6 @@ def test_assembly_renders_resolved_values_with_the_minted_slot(tmp_path: Path) -
     values = _filled_values({"public_url": "https://example.dev"})
     values["values"]["images"]["core"] = _core_values(API_TOKEN="${PUBLIC_URL}/token")  # type: ignore[index]
     root = _write_repo(tmp_path, values)
-    bundle_output = root / "stack" / "generated" / "compose" / "compose.core.yaml"
-    bundle_output.parent.mkdir(parents=True)
-    bundle_output.write_text("services:\n  core-api:\n    image: demo:1\n", encoding="utf-8")
 
     plan = _resolve(root)
 
@@ -559,9 +556,6 @@ def test_assembly_fills_the_minted_edge_base_url(tmp_path: Path) -> None:
     values = _filled_values()
     values["values"]["images"]["core"] = _core_values(API_TOKEN="${EDGE_BASE_URL}/jwks")  # type: ignore[index]
     root = _write_repo(tmp_path, values, gateway=9443)
-    bundle_output = root / "stack" / "generated" / "compose" / "compose.core.yaml"
-    bundle_output.parent.mkdir(parents=True)
-    bundle_output.write_text("services:\n  core-api:\n    image: demo:1\n", encoding="utf-8")
 
     plan = _resolve(root)
 

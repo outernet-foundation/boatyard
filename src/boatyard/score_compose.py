@@ -18,6 +18,7 @@ from boatyard.models.config_file import (
     ALPINE_IMAGE,
     BARRIER_SERVICE,
     COMPOSE_SLOT,
+    PLACEHOLDER,
     TREE_SENTINEL_PATTERN,
     compose_bundle_output_path,
     double_dollars,
@@ -28,7 +29,8 @@ from boatyard.models.config_file import (
 )
 from boatyard.models.lock_file import LockFile
 from boatyard.models.values_file import ValuesFile
-from boatyard.models.workload import ComposeWorkloadDocument, WorkloadDocument, load_workloads
+from boatyard.models.workload import ComposeWorkloadDocument, LoadedWorkload, load_workloads
+from boatyard.models.image import Image
 from boatyard.paths import VALUES_FILE
 from boatyard.yaml import Yaml, load_yaml_model
 from boatyard.score import (
@@ -142,6 +144,11 @@ def generate_compose(config: ConfigFile, lock: LockFile) -> list[Path]:
     outputs: list[Path] = []
     for name, entry in config.local_service_entries():
         workloads = load_workloads(score_dir, entry.workloads, ComposeWorkloadDocument)
+        _refuse_colliding_spellings(name, workloads)
+        for workload in workloads:
+            for container_name, container in workload.document.containers.items():
+                if container.image is not None:
+                    _refuse_unknown_axis_refs(workload.file_name, container_name, container.image, config.images, axes)
 
         output_path = compose_bundle_output_path(config.root, name)
         tool_state = output_path.parent / f".{TOOL}"
@@ -170,10 +177,10 @@ def generate_compose(config: ConfigFile, lock: LockFile) -> list[Path]:
         document = load_yaml_model(ComposeDocument, output_path)
 
         # Attribute rendered container services to their owning workloads
-        services_map: dict[str, tuple[ComposeService, WorkloadDocument | None, str]] = {
+        services_map: dict[str, tuple[ComposeService, LoadedWorkload | None, str]] = {
             (service_name := f"{Path(workload.file_name).stem}-{container_name}"): (
                 document.services[service_name],
-                workload.document,
+                workload,
                 container_name,
             )
             for workload in workloads
@@ -194,12 +201,27 @@ def generate_compose(config: ConfigFile, lock: LockFile) -> list[Path]:
 
             services_map[service_name] = (service, None, service_name)
 
-        # Namespace every service under the entry with its bare name as a network alias
+        # Namespace every service under the entry with its bare name as a network alias; a
+        # bundle's bare service names are its compose identity, so one name claims one service.
         network = f"{name}-net"
         collapsed = {collapsed_name for _service, _workload, collapsed_name in services_map.values()}
+        claim_sites: dict[str, str] = {}
         document.services = {}
         document.networks = {network: {}}
         for service, workload, collapsed_name in services_map.values():
+            site = (
+                f"{workload.file_name}: containers.{collapsed_name}"
+                if workload is not None
+                else (
+                    "the reserved barrier name" if collapsed_name == BARRIER_SERVICE else "the rendered services text"
+                )
+            )
+            if collapsed_name in claim_sites:
+                raise ValueError(
+                    f"services entry {name!r}: the service name {collapsed_name!r} is claimed at "
+                    f"{claim_sites[collapsed_name]} and {site}"
+                )
+            claim_sites[collapsed_name] = site
             document.services[f"{name}-{collapsed_name}"] = service
             service.networks = {network: {"aliases": [collapsed_name]}}
 
@@ -236,7 +258,7 @@ def generate_compose(config: ConfigFile, lock: LockFile) -> list[Path]:
 
                 # Double every $ except on targets the workload declared consumer-interpolated
                 text = path.read_text(encoding="utf-8")
-                if workload and bind_volume.target not in workload.consumer_interpolated_targets:
+                if workload and bind_volume.target not in workload.document.consumer_interpolated_targets:
                     text = double_dollars(text)
 
                 document.configs[f"{name}-{path.name}"] = ComposeConfig(content=text)
@@ -253,6 +275,38 @@ def generate_compose(config: ConfigFile, lock: LockFile) -> list[Path]:
         shutil.rmtree(tool_state, ignore_errors=True)
 
     return outputs
+
+
+def _refuse_colliding_spellings(entry_name: str, workloads: list[LoadedWorkload]) -> None:
+    # One workload claims each rendered spelling; score-compose keys its output services by them.
+    spellings: dict[str, str] = {}
+    for workload in workloads:
+        for container_name in workload.document.containers:
+            site = f"{workload.file_name}: containers.{container_name}"
+            spelling = f"{Path(workload.file_name).stem}-{container_name}"
+            if spelling in spellings:
+                raise ValueError(
+                    f"services entry {entry_name!r}: the rendered spelling {spelling!r} "
+                    f"is claimed at {spellings[spelling]} and {site}"
+                )
+            spellings[spelling] = site
+
+
+def _refuse_unknown_axis_refs(
+    file_name: str,
+    container_name: str,
+    image: str,
+    images: dict[str, Image],
+    axes: dict[str, list[str]],
+) -> None:
+    for match in PLACEHOLDER.finditer(image):
+        axis = match.group(1)
+        if axis not in axes:
+            continue
+        stem = image[: match.start()].rpartition("/")[2].removesuffix("-")
+        build = images.get(stem)
+        if build is None or build.axis != axis:
+            raise ValueError(f"{file_name}: containers.{container_name}.image: {stem} carries no {axis} variant fan")
 
 
 def _rewrite_sentinel(entry_name: str, match: re.Match[str]) -> str:

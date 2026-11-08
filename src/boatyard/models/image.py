@@ -198,9 +198,7 @@ def _parse_dockerfile(directory: Path, root: Path) -> DockerfileFacts:
     )
 
 
-def _effective_axis(
-    name: str, contexts: Mapping[str, list[str]], own_axes: Mapping[str, str | None]
-) -> str | None:
+def _effective_axis(name: str, contexts: Mapping[str, list[str]], own_axes: Mapping[str, str | None]) -> str | None:
     if contexts[name]:
         return _effective_axis(contexts[name][0], contexts, own_axes)
     return own_axes[name]

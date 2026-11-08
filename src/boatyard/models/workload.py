@@ -79,29 +79,6 @@ class WorkloadDocument(BaseModel):
         annotation = self.metadata.annotations.get(CONSUMER_INTERPOLATED_ANNOTATION)
         return annotation.split(",") if annotation is not None else []
 
-    def interpolated_file_texts(self, root: Path) -> list[str]:
-        texts: list[str] = []
-        for container in self.containers.values():
-            for target, spec in container.files.items():
-                if target not in self.consumer_interpolated_targets:
-                    continue
-                if not is_mapping(spec):
-                    continue
-                content = spec.get("content")
-                if not isinstance(content, str):
-                    content = None
-                    source = spec.get("source")
-                    if isinstance(source, str):
-                        files_path = root / source
-                        if not files_path.is_file():
-                            raise ValueError(
-                                f"{self.metadata.name}.yaml: files source {source!r} does not exist at the repo root"
-                            )
-                        content = files_path.read_text(encoding="utf-8")
-                if content is not None:
-                    texts.append(content)
-        return texts
-
 
 class ComposeWorkloadDocument(WorkloadDocument):
     @model_validator(mode="after")

@@ -120,7 +120,7 @@ def _write_lock(
     )
 
 
-def _write_bundle_output(root: Path, name: str, services: list[str]) -> Path:
+def _write_bundle_output(root: Path, name: str, services: list[str], environment: dict[str, str] | None = None) -> Path:
     path = root / "stack" / "generated" / "compose" / f"compose.{name}.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     network = f"{name}-net"
@@ -130,6 +130,7 @@ def _write_bundle_output(root: Path, name: str, services: list[str]) -> Path:
                 f"{name}-{service}": {
                     "image": f"demo/{service}:1",
                     "networks": {network: {"aliases": [service]}},
+                    **({"environment": dict(environment)} if environment is not None else {}),
                 }
                 for service in services
             },
@@ -323,8 +324,10 @@ def _write_consumer_tree(
     bundles: str | None = "placeframe-cuda,auth-keycloak",
     extra_values: dict[str, object] | None = None,
     api_environment: dict[str, str] | None = None,
+    bundle_environment: dict[str, str] | None = None,
 ) -> Path:
-    # Write the canonical consumer tree; bundles=None selects nothing.
+    # Write the canonical consumer tree; bundles=None selects nothing. bundle_environment
+    # spells what generate-score rendered into the artifact (bare slots expand at render).
     _write_config(
         root,
         {
@@ -363,8 +366,9 @@ def _write_consumer_tree(
         entries=dict(ALPINE_OWNED),
         bundles={"AUTH_KEYCLOAK_BUNDLE": KEYCLOAK_PINNED, "LIVEKIT_BUNDLE": LIVEKIT_PINNED},
     )
-    cuda = _write_bundle_output(root, "placeframe-cuda", ["api", "grafana"])
-    _write_bundle_output(root, "placeframe-rocm", ["api", "grafana"])
+    rendered_environment = api_environment if bundle_environment is None else bundle_environment
+    cuda = _write_bundle_output(root, "placeframe-cuda", ["api", "grafana"], environment=rendered_environment)
+    _write_bundle_output(root, "placeframe-rocm", ["api", "grafana"], environment=rendered_environment)
     _write_workload(root, "api.yaml", "api", environment=api_environment)
     values: dict[str, object] = {"public_url": "http://192.168.8.10:58080"}
     if bundles is not None:
@@ -835,7 +839,10 @@ class TestUpValidation:
     def test_a_bare_workload_sha_slot_is_a_render_concern_not_a_demand(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        _write_consumer_tree(tmp_path, api_environment={"VERSION": "${API_SHA}"})
+        # The bare workload slot expands at render; the artifact carries the expansion, not a slot.
+        _write_consumer_tree(
+            tmp_path, api_environment={"VERSION": "${API_SHA}"}, bundle_environment={"VERSION": "tree-abc"}
+        )
 
         result = self._invoke_up(tmp_path, monkeypatch)
 

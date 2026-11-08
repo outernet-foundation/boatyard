@@ -23,7 +23,6 @@ from pydantic import (
 import yaml
 
 from boatyard.models.pyproject import PYPROJECT_PATH, PyprojectToml
-from boatyard.models.workload import WorkloadDocument, load_workloads, select_provisioner_files
 from boatyard.models.image import Image, load_images
 from boatyard.temp import PLATFORM_PATTERN, SHA256_DIGEST_REGEX
 from boatyard.yaml import Yaml, is_mapping, load_yaml_model
@@ -103,7 +102,6 @@ class ConfigFile(BaseModel):
     helm_version: str = "3.22.1"
 
     images: dict[str, Image] = Field(default_factory=dict, exclude=True)
-    consumer_surfaces: dict[str, dict[str, Slot]] = Field(default_factory=dict, exclude=True)
     root: Path = Field(default_factory=Path.cwd, exclude=True)
 
     @classmethod
@@ -258,15 +256,12 @@ class ConfigFile(BaseModel):
             for name, value in row.entry.vars.items():
                 if name in axes and value not in axes[name]:
                     raise ValueError(
-                        f"{row.site}: vars: {name}={value!r} names no declared variant "
-                        f"of {name} ({axes[name]})"
+                        f"{row.site}: vars: {name}={value!r} names no declared variant of {name} ({axes[name]})"
                     )
         if self.k8s is not None:
             for name, value in self.k8s.vars.items():
                 if name in axes and value not in axes[name]:
-                    raise ValueError(
-                        f"k8s.vars: {name}={value!r} names no declared variant of {name} ({axes[name]})"
-                    )
+                    raise ValueError(f"k8s.vars: {name}={value!r} names no declared variant of {name} ({axes[name]})")
         return self
 
 
@@ -333,8 +328,7 @@ class ServiceGroup(BaseModel):
                 raise ValueError("an axes group carries its workloads at the group level")
             [axis, values] = next(iter(self.axes.items()))
             self.options = {
-                variant: ServiceEntry(workloads=list(self.workloads), vars={axis: variant})
-                for variant in values
+                variant: ServiceEntry(workloads=list(self.workloads), vars={axis: variant}) for variant in values
             }
         elif self.workloads:
             raise ValueError("group-level workloads: ride only with axes:")
@@ -526,72 +520,12 @@ def _derive(config: ConfigFile, root: Path) -> None:
         if not values.is_file():
             raise ValueError(f"{values.as_posix()}: the chart's values file is required")
 
-    surfaces: dict[str, dict[str, Slot]] = {}
-    for entry_name, entry in config.local_service_entries():
-        score_dir = root / config.score_dir
-        workloads = load_workloads(score_dir, entry.workloads, WorkloadDocument)
-        provisioner_files = select_provisioner_files(score_dir, "compose", workloads)
-
-        # A bundle's bare service names are its compose identity: workload containers, type-joined
-        # provisioner services, and the reserved barrier name each claim one, and one workload
-        # claims each rendered spelling. The same texts carry the compose consumer surface of the
-        # entry: suffixed workload slots (bare slots are render-expanded or refused), provisioner
-        # services/state/outputs text (odd $ rides verbatim into the artifact), and
-        # consumer-interpolated files text (authored $$ lands single-$ in the artifact).
-        claims: dict[str, list[str]] = {BARRIER_SERVICE: ["the reserved barrier name"]}
-        spellings: dict[str, list[str]] = {}
-        slots: dict[str, Slot] = {}
-        for workload in workloads:
-            document = workload.document
-            merge_slots(slots, workload.text, parity=1, suffixed_only=True)
-            for container_name, container in document.containers.items():
-                site = f"{workload.file_name}: containers.{container_name}"
-                claims.setdefault(container_name, []).append(site)
-                spelling = f"{Path(workload.file_name).stem}-{container_name}"
-                spellings.setdefault(spelling, []).append(site)
-                if container.image is not None:
-                    _refuse_unknown_axis_refs(workload.file_name, container_name, container.image, images, axes)
-            for content in document.interpolated_file_texts(root):
-                merge_slots(slots, content, parity=0, suffixed_only=False)
-        for file_name, entries in provisioner_files:
-            for provisioner in entries:
-                if not is_mapping(provisioner):
-                    continue
-                services = provisioner.get("services")
-                if is_mapping(services):
-                    for service_name in services:
-                        claims.setdefault(service_name, []).append(f"{file_name}: services.{service_name}")
-                for field in ("services", "state", "outputs"):
-                    value = provisioner.get(field)
-                    if is_mapping(value):
-                        merge_slots(
-                            slots, yaml.dump(value, default_flow_style=False), parity=1, suffixed_only=False
-                        )
-        _refuse_duplicated_claims(entry_name, "service name", claims)
-        _refuse_duplicated_claims(entry_name, "rendered spelling", spellings)
-        for key in set(config.base_images) | set(config.owned_images):
-            slots.pop(key, None)
-        surfaces[entry_name] = slots
-    config.consumer_surfaces = surfaces
-
-
-def _refuse_unknown_axis_refs(
-    file_name: str,
-    container_name: str,
-    image: str,
-    images: dict[str, Image],
-    axes: dict[str, list[str]],
-) -> None:
-    for match in PLACEHOLDER.finditer(image):
-        axis = match.group(1)
-        if axis not in axes:
-            continue
-        stem = image[: match.start()].rpartition("/")[2].removesuffix("-")
-        build = images.get(stem)
-        if build is None or build.axis != axis:
-            raise ValueError(
-                f"{file_name}: containers.{container_name}.image: {stem} carries no {axis} variant fan"
-            )
+    # Declared inputs exist: every referenced workload file is on disk beside the config.
+    for row in flatten_service_members(config.services):
+        for workload_name in row.entry.workloads:
+            workload_path = root / config.score_dir / workload_name
+            if not workload_path.is_file():
+                raise ValueError(f"{workload_path.as_posix()}: the workload file is required")
 
 
 def variant_axes(services: dict[str, ServiceGroup | ServiceEntry]) -> dict[str, list[str]]:
@@ -604,8 +538,7 @@ def variant_axes(services: dict[str, ServiceGroup | ServiceEntry]) -> dict[str, 
         axis, values = next(iter(member.axes.items()))
         if axis in axes:
             raise ValueError(
-                f"services.{name}.axes: {axis} is already declared at {sites[axis]} "
-                "(one selection point per axis)"
+                f"services.{name}.axes: {axis} is already declared at {sites[axis]} (one selection point per axis)"
             )
         axes[axis] = list(values)
         sites[axis] = f"services.{name}.axes"
@@ -634,14 +567,6 @@ def flatten_service_members(services: dict[str, ServiceGroup | ServiceEntry]) ->
                 )
             )
     return flattened
-
-
-def _refuse_duplicated_claims(entry_name: str, subject: str, claims: Mapping[str, list[str]]) -> None:
-    for name, sites in sorted(claims.items()):
-        if len(sites) > 1:
-            raise ValueError(
-                f"services entry {entry_name!r}: the {subject} {name!r} is claimed at " + " and ".join(sites)
-            )
 
 
 def require_workload_reference(name: str) -> None:
@@ -694,16 +619,6 @@ def artifact_slots(texts: list[str]) -> dict[str, Slot]:
                 continue
             slots[match.group(2)] = Slot(required=not (match.group(3) or "").startswith(":-"))
     return slots
-
-
-def merge_slots(slots: dict[str, Slot], text: str, *, parity: int, suffixed_only: bool) -> None:
-    for match in COMPOSE_SLOT.finditer(text):
-        if len(match.group(1)) % 2 != parity:
-            continue
-        if suffixed_only and match.group(3) is None:
-            continue
-        required = not (match.group(3) or "").startswith(":-")
-        slots[match.group(2)] = Slot(required=slots.get(match.group(2), Slot()).required or required)
 
 
 def refuse_unresolved_references(

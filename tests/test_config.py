@@ -65,29 +65,14 @@ def write_dockerfile(tmp_path: Path, service: str, text: str, top: str = "worklo
     (directory / "Dockerfile").write_text(text, encoding="utf-8")
 
 
-def write_workload(
-    tmp_path: Path, file_name: str, containers: list[str], resource_types: list[str] | None = None
-) -> None:
+def write_workload(tmp_path: Path, file_name: str, containers: list[str]) -> None:
     score = tmp_path / "stack" / "score"
     score.mkdir(parents=True, exist_ok=True)
     document: dict[str, object] = {
         "metadata": {"name": Path(file_name).stem},
         "containers": {name: {} for name in containers},
     }
-    if resource_types is not None:
-        document["resources"] = {f"resource-{index}": {"type": kind} for index, kind in enumerate(resource_types)}
     (score / file_name).write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
-
-
-def write_compose_provisioner(tmp_path: Path, file_name: str, resource_type: str, services: list[str]) -> None:
-    directory = tmp_path / "stack" / "score" / "compose"
-    directory.mkdir(parents=True, exist_ok=True)
-    entry = {
-        "uri": "tmp://example",
-        "type": resource_type,
-        "services": {name: {"image": "alpine:3.21"} for name in services},
-    }
-    (directory / file_name).write_text(yaml.safe_dump([entry], sort_keys=False), encoding="utf-8")
 
 
 def test_load_missing_file_raises_file_not_found(tmp_path: Path) -> None:
@@ -272,7 +257,13 @@ class TestVariants:
     def test_options_and_axes_on_one_group_rejected(self, tmp_path: Path) -> None:
         self._write_services_config(
             tmp_path,
-            {"gpu": {"axes": {"TORCH_DEVICE": ["cuda"]}, "options": {"cuda": {"workloads": ["gpu.yaml"]}}, "workloads": ["gpu.yaml"]}},
+            {
+                "gpu": {
+                    "axes": {"TORCH_DEVICE": ["cuda"]},
+                    "options": {"cuda": {"workloads": ["gpu.yaml"]}},
+                    "workloads": ["gpu.yaml"],
+                }
+            },
         )
 
         with pytest.raises(ValidationError, match="exactly one of options: or axes:"):
@@ -326,7 +317,8 @@ class TestVariants:
         )
 
         with pytest.raises(
-            ValidationError, match=r"services\.edge\.options\.fast: vars: TORCH_DEVICE='metal' names no declared variant"
+            ValidationError,
+            match=r"services\.edge\.options\.fast: vars: TORCH_DEVICE='metal' names no declared variant",
         ):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
@@ -1622,54 +1614,6 @@ class TestBareServiceNameClaims:
                 "services": {"core": {"workloads": workloads}},
             },
         )
-
-    def test_a_container_name_shared_across_workloads_refuses(self, tmp_path: Path) -> None:
-        write_workload(tmp_path, "alpha.yaml", ["sidecar"])
-        write_workload(tmp_path, "beta.yaml", ["sidecar"])
-        self._local_config(tmp_path, ["alpha.yaml", "beta.yaml"])
-
-        with pytest.raises(
-            ValueError,
-            match=r"is claimed at alpha.yaml: containers.sidecar and beta.yaml: containers.sidecar",
-        ):
-            ConfigFile.load(tmp_path / "boatyard.yml")
-
-    def test_a_container_claiming_the_barrier_name_refuses(self, tmp_path: Path) -> None:
-        write_workload(tmp_path, "api.yaml", ["wait-for-resources"])
-        self._local_config(tmp_path, ["api.yaml"])
-
-        with pytest.raises(ValueError, match="the reserved barrier name"):
-            ConfigFile.load(tmp_path / "boatyard.yml")
-
-    def test_a_provisioner_service_claiming_a_container_name_refuses(self, tmp_path: Path) -> None:
-        write_workload(tmp_path, "api.yaml", ["migrations"], resource_types=["s3-bucket"])
-        write_compose_provisioner(tmp_path, "buckets.yaml", "s3-bucket", ["migrations"])
-        self._local_config(tmp_path, ["api.yaml"])
-
-        with pytest.raises(
-            ValueError,
-            match=r"is claimed at api.yaml: containers.migrations and compose/buckets.yaml: services.migrations",
-        ):
-            ConfigFile.load(tmp_path / "boatyard.yml")
-
-    def test_an_unreferenced_provisioner_service_does_not_collide(self, tmp_path: Path) -> None:
-        write_workload(tmp_path, "api.yaml", ["migrations"])
-        write_compose_provisioner(tmp_path, "buckets.yaml", "s3-bucket", ["migrations"])
-        self._local_config(tmp_path, ["api.yaml"])
-
-        assert ConfigFile.load(tmp_path / "boatyard.yml") is not None
-
-    def test_ambiguous_rendered_spellings_refuse(self, tmp_path: Path) -> None:
-        write_workload(tmp_path, "web.yaml", ["api-x"])
-        write_workload(tmp_path, "web-api.yaml", ["x"])
-        self._local_config(tmp_path, ["web.yaml", "web-api.yaml"])
-
-        with pytest.raises(
-            ValueError,
-            match=r"the rendered spelling 'web-api-x' is claimed at web.yaml: containers.api-x"
-            r" and web-api.yaml: containers.x",
-        ):
-            ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_a_missing_workload_file_refuses(self, tmp_path: Path) -> None:
         self._local_config(tmp_path, ["api.yaml"])

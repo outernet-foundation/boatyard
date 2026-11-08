@@ -104,10 +104,42 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
     if values.gateway is not None and config.gateway is None:
         raise ValueError(f"{source}: gateway: is set but boatyard.yml declares no gateway")
 
-    # Demand tables: authored consumer surfaces, lock-recorded bundle slots, override texts.
-    slots_by_unit: dict[str, dict[str, Slot]] = dict(config.consumer_surfaces)
-    homes = dict.fromkeys(config.consumer_surfaces, "images")
+    # path_overrides name vocabulary members; only ref entries are overridable.
     remote_names = {name for name, _reference, _entry in config.remote_declared_entries()}
+    bundle_vocabulary = {row.name for row in members}
+    unknown_overrides: list[str] = []
+    local_override_names: list[str] = []
+    for name in values.path_overrides:
+        if name not in bundle_vocabulary:
+            unknown_overrides.append(name)
+        elif name not in remote_names:
+            local_override_names.append(name)
+    if unknown_overrides:
+        raise ValueError(
+            f"path_overrides: names {sorted(unknown_overrides)} "
+            f"are not in the bundle vocabulary {sorted(bundle_vocabulary)}"
+        )
+    if local_override_names:
+        raise ValueError(
+            f"path_overrides: names {sorted(local_override_names)} are not ref entries "
+            f"(the ref entries are {sorted(remote_names)})"
+        )
+
+    # Demand tables: a local entry's consumer surface is its rendered bundle's artifact text,
+    # beside lock-recorded bundle slots and override texts.
+    root = config.root
+    slots_by_unit: dict[str, dict[str, Slot]] = {}
+    homes: dict[str, str] = {}
+    bundle_texts: dict[str, str] = {}
+    for entry_name, _entry in config.local_service_entries():
+        homes[entry_name] = "images"
+        bundle_path = compose_bundle_output_path(root, entry_name)
+        if not bundle_path.is_file():
+            raise ValueError(
+                f"services entry {entry_name!r} lacks its bundle output {bundle_path.as_posix()} (run generate-score)"
+            )
+        bundle_texts[entry_name] = bundle_path.read_text(encoding="utf-8")
+        slots_by_unit[entry_name] = artifact_slots([bundle_texts[entry_name]])
     for name in remote_names:
         homes[name] = "bundles"
         record = lock.bundles.get(bundle_lock_key(name))
@@ -226,28 +258,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
             f"{source}: values.{homes[unit]}.{unit} requires {absent}, which no declared source fills{note}"
         )
 
-    # path_overrides name vocabulary members; only ref entries are overridable.
-    bundle_vocabulary = {row.name for row in members}
-    unknown_overrides: list[str] = []
-    local_override_names: list[str] = []
-    for name in values.path_overrides:
-        if name not in bundle_vocabulary:
-            unknown_overrides.append(name)
-        elif name not in remote_names:
-            local_override_names.append(name)
-    if unknown_overrides:
-        raise ValueError(
-            f"path_overrides: names {sorted(unknown_overrides)} "
-            f"are not in the bundle vocabulary {sorted(bundle_vocabulary)}"
-        )
-    if local_override_names:
-        raise ValueError(
-            f"path_overrides: names {sorted(local_override_names)} are not ref entries "
-            f"(the ref entries are {sorted(remote_names)})"
-        )
-
     # The per-entry walk: includes, lock fans, tree fans.
-    root = config.root
     lock_entries: dict[str, str] = {}
     tree_entries: dict[str, str] = {}
     shas_by_root: dict[Path, dict[str, str]] = {}
@@ -264,8 +275,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
 
         if service.entry.ref is None:
             bundle_compose_path = compose_bundle_output_path(root, name)
-            if not bundle_compose_path.is_file():
-                raise ValueError(f"selected entry {name!r} lacks its bundle output {bundle_compose_path.as_posix()}")
+            text = bundle_texts[name]
             lock_references = lock.manifest_references(values.platform)
             tree_root, tree_images = root, config.images
         else:
@@ -282,9 +292,9 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
             producer_lock = LockFile.load(producer_root / LOCK_PATH, producer_config)
             lock_references = producer_lock.manifest_references(values.platform)
             tree_root, tree_images = producer_root, producer_config.images
+            text = bundle_compose_path.read_text(encoding="utf-8")
 
         # Refuse reserved services and unresolved route/port references against the bundle text
-        text = bundle_compose_path.read_text(encoding="utf-8")
         service_names = refuse_unresolved_references(name, service.routes, service.ports, [text], prefix=f"{name}-")
         if EDGE_SERVICE_NAME in service_names:
             raise ValueError(

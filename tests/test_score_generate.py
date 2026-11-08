@@ -694,6 +694,103 @@ def test_generate_compose_never_walks_the_source_tree(tmp_path: Path, monkeypatc
     assert "image: ghcr.io/org/api:${CORE__BOATYARD_TREE__API_SHA}" in artifact
 
 
+def _generate_compose_multi(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    generated: str,
+    workload_containers: dict[str, list[str]],
+) -> None:
+    (tmp_path / "stack" / "score").mkdir(parents=True)
+    for workload_name, containers in workload_containers.items():
+        document: dict[str, object] = {
+            "metadata": {"name": workload_name},
+            "containers": {name: {} for name in containers},
+        }
+        path = tmp_path / "stack" / "score" / f"{workload_name}.yaml"
+        path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+    recorder = ComposeBashRecorder(generated)
+    monkeypatch.setattr(score_module, "bash", recorder.run)
+    config = _root_config(
+        repository="ghcr.io/org/repo",
+        project_name="example",
+        platforms=["linux/amd64"],
+        services={"core": {"workloads": [f"{name}.yaml" for name in workload_containers]}},
+    )
+    config.root = tmp_path
+    score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK))
+
+
+class TestRenderedNameClaims:
+    def test_a_container_name_shared_across_workloads_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        with pytest.raises(
+            ValueError,
+            match=r"is claimed at alpha.yaml: containers.sidecar and beta.yaml: containers.sidecar",
+        ):
+            _generate_compose_multi(
+                monkeypatch,
+                tmp_path,
+                "services:\n  alpha-sidecar:\n    image: demo/a:1\n  beta-sidecar:\n    image: demo/b:1\n",
+                {"alpha": ["sidecar"], "beta": ["sidecar"]},
+            )
+
+    def test_a_container_claiming_the_barrier_name_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        with pytest.raises(ValueError, match="the reserved barrier name"):
+            _generate_compose_multi(
+                monkeypatch,
+                tmp_path,
+                "services:\n"
+                "  api-api:\n    image: demo/api:1\n"
+                "  api-wait-for-resources:\n    image: demo/wait:1\n"
+                "  wait-for-resources:\n    image: demo/alpine:1\n",
+                {"api": ["api", "wait-for-resources"]},
+            )
+
+    def test_a_provisioner_service_claiming_a_container_name_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        with pytest.raises(
+            ValueError,
+            match=r"is claimed at api.yaml: containers.migrations and the rendered services text",
+        ):
+            _generate_compose_multi(
+                monkeypatch,
+                tmp_path,
+                "services:\n  api-migrations:\n    image: demo/migrate:1\n  migrations:\n    image: demo/x:1\n",
+                {"api": ["migrations"]},
+            )
+
+    def test_ambiguous_rendered_spellings_refuse(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        with pytest.raises(
+            ValueError,
+            match=r"the rendered spelling 'web-api-x' is claimed at web.yaml: containers.api-x"
+            r" and web-api.yaml: containers.x",
+        ):
+            _generate_compose_multi(
+                monkeypatch,
+                tmp_path,
+                "services:\n  web-api-x:\n    image: demo/web:1\n",
+                {"web": ["api-x"], "web-api": ["x"]},
+            )
+
+    def test_a_provisioner_service_rides_beside_workload_containers(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _generate_compose_multi(
+            monkeypatch,
+            tmp_path,
+            "services:\n  api-api:\n    image: demo/api:1\n  pf-postgres:\n    image: demo/pg:16\n",
+            {"api": ["api"]},
+        )
+
+        output = tmp_path / "stack" / "generated" / "compose" / "compose.core.yaml"
+        document = yaml.safe_load(output.read_text(encoding="utf-8"))
+        assert list(document["services"]) == ["core-api", "core-pf-postgres"]
+
+
 SHIPPED_TEMPLATES = {
     "probe-adapter-healthchecks.tpl",
     "restart.tpl",
