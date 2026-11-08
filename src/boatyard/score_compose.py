@@ -133,7 +133,8 @@ def generate_compose(config: ConfigFile, lock: LockFile) -> list[Path]:
     score_dir = config.root / config.score_dir
     state_prefix = f".{TOOL}/"
     values_path = config.root / VALUES_FILE
-    platform = ValuesFile.load(values_path, config, lock).platform if values_path.is_file() else None
+    # The values file answers only its platform here; the full validation is up's
+    platform = ValuesFile.load(values_path).platform if values_path.is_file() else None
     images = lock.manifest_references(platform)
 
     # The build-set slot supply mints the barrier; a workload ${X_SHA} naming no build

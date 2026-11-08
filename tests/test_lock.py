@@ -1057,7 +1057,7 @@ class TestPairedLoad:
         )
 
         with pytest.raises(
-            ValidationError,
+            ValueError,
             match=r"records platforms \['linux/amd64', 'linux/arm64'\] but boatyard\.yml declares \['linux/amd64'\]",
         ):
             LockFile.load(tmp_path / LOCK_PATH, self._config(tmp_path))
@@ -1078,7 +1078,7 @@ class TestPairedLoad:
         )
 
         with pytest.raises(
-            ValidationError,
+            ValueError,
             match=r"image entry UV_IMAGE records platforms \['linux/amd64', 'linux/arm64'\] but the lock records "
             r"\['linux/amd64'\]",
         ):
@@ -1100,7 +1100,7 @@ class TestPairedLoad:
             },
         )
 
-        with pytest.raises(ValidationError, match=r"lacks the \['ALPINE_IMAGE', 'UV_IMAGE'\] image entries"):
+        with pytest.raises(ValueError, match=r"lacks the \['ALPINE_IMAGE', 'UV_IMAGE'\] image entries"):
             LockFile.load(tmp_path / LOCK_PATH, self._config(tmp_path))
 
     def test_an_orphan_entry_refuses_naming_the_lock_verb(self, tmp_path: Path) -> None:
@@ -1122,7 +1122,7 @@ class TestPairedLoad:
             },
         )
 
-        with pytest.raises(ValidationError, match=r"no longer declares \(\['GHOST_IMAGE'\]\)"):
+        with pytest.raises(ValueError, match=r"no longer declares \(\['GHOST_IMAGE'\]\)"):
             LockFile.load(tmp_path / LOCK_PATH, self._config(tmp_path))
 
     def test_a_missing_lock_in_a_platforms_repo_refuses_as_stale(
@@ -1148,7 +1148,7 @@ class TestPairedLoad:
             },
         )
 
-        with pytest.raises(ValidationError, match=r"records platforms \[\] but boatyard.yml declares"):
+        with pytest.raises(ValueError, match=r"records platforms \[\] but boatyard.yml declares"):
             LockFile.load(tmp_path / LOCK_PATH, self._config(tmp_path))
 
     def test_a_missing_lock_in_a_bundles_only_repo_reads_as_empty(

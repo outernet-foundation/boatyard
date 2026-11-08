@@ -290,7 +290,9 @@ class TestBaseImages:
     def test_bare_path_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "base_images": {"LOKI_IMAGE": "docker.io/grafana/loki"}})
 
-        with pytest.raises(ValidationError, match=r"LOKI_IMAGE: 'docker\.io/grafana/loki' must carry a tag or a digest"):
+        with pytest.raises(
+            ValidationError, match=r"LOKI_IMAGE: 'docker\.io/grafana/loki' must carry a tag or a digest"
+        ):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_env_slot_rejected(self, tmp_path: Path) -> None:
@@ -1047,9 +1049,7 @@ class TestRoutes:
             },
         )
 
-        with pytest.raises(
-            ValidationError, match=r"route path /x/\* is already declared at services\.one\.options\.a"
-        ):
+        with pytest.raises(ValidationError, match=r"route path /x/\* is already declared at services\.one\.options\.a"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     @pytest.mark.parametrize(

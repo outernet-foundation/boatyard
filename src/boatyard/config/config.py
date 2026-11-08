@@ -195,170 +195,8 @@ class ConfigFile(BaseModel):
         if "${" in path.read_text(encoding="utf-8"):
             raise ValueError(f"{path.as_posix()}: boatyard.yml carries no ${{...}} spelling")
         config = load_yaml_model(cls, path)
-        config.resolve(path.parent)
+        _derive(config, path.parent)
         return config
-
-    def resolve(self, root: Path) -> Self:
-        # Self-check the installed version.
-        installed = importlib.metadata.version("boatyard")
-        if installed != DEV_SENTINEL and not SpecifierSet(self.requires).contains(installed, prereleases=True):
-            raise ValueError(f"boatyard {installed} does not satisfy requires={self.requires!r}")
-        self.root = root
-
-        # Resolve {uv} and {python} templates in base_images against the toolchain pins.
-        pins: dict[str, str] = {}
-        used = sorted({
-            key for reference in self.base_images.values() for key in TEMPLATE_KEY_PATTERN.findall(reference)
-        })
-        for key in used:
-            if key == "uv":
-                pyproject = root / PYPROJECT_PATH
-                pyproject_document = PyprojectToml.model_validate(
-                    tomllib.loads(pyproject.read_text(encoding="utf-8")) if pyproject.is_file() else {}
-                )
-                declared = (
-                    pyproject_document.tool.uv.required_version
-                    if pyproject_document.tool is not None and pyproject_document.tool.uv is not None
-                    else None
-                )
-                if not declared:
-                    raise ValueError(f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version is not declared")
-                pin_match = re.fullmatch(r"==(?P<version>[^,*\s]+)", declared.strip())
-                if pin_match is None:
-                    raise ValueError(
-                        f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version {declared!r} "
-                        "must be an exact == pin like '==0.12.15'"
-                    )
-                pins[key] = pin_match.group("version")
-            elif key == "python":
-                python_version = root / PYTHON_VERSION_PATH
-                if not python_version.is_file():
-                    raise ValueError(f"{PYTHON_VERSION_PATH.as_posix()}: the {{python}} template requires this file")
-                # Take the first non-empty line.
-                version = next(
-                    (line.strip() for line in python_version.read_text(encoding="utf-8").splitlines() if line.strip()),
-                    "",
-                )
-                if not version:
-                    raise ValueError(
-                        f"{PYTHON_VERSION_PATH.as_posix()}: the {{python}} template requires a non-empty file"
-                    )
-                pins[key] = version
-            else:
-                raise ValueError(
-                    f"base_images template key {{{key}}} is not one of the toolchain pins {{uv}}, {{python}}"
-                )
-        self.base_images = {
-            name: TEMPLATE_KEY_PATTERN.sub(partial(_resolve_template_key, pins), reference)
-            for name, reference in self.base_images.items()
-        }
-
-        # Derive the service build set from the Dockerfile tree.
-        service_builds = derive_services(root, self.variants)
-
-        computable = {service_sha_env(name) for name in service_builds}
-        for service in service_builds.values():
-            unknown = [argument for argument in service.sha_args if argument not in computable]
-            if unknown:
-                raise ValueError(
-                    f"workloads/{service.name}/{DOCKERFILE_NAME}: ARG {', '.join(unknown)} names no service directory"
-                )
-        if service_builds and self.repository is None:
-            listed = ", ".join(sorted(service_builds))
-            raise ValueError(f"repository is required by the Dockerfile service directories {listed}")
-        self.service_builds = service_builds
-
-        # Enforce the lock pairing laws.
-        declared_charts = self.declared_charts
-        declares_routes = any(
-            entry.routes
-            or (isinstance(entry, ServiceGroup) and any(option.routes for option in entry.options.values()))
-            for entry in self.services.values()
-        )
-        if declares_routes and self.gateway is None:
-            raise ValueError("routes require a gateway declaration")
-        for chart in declared_charts:
-            values = root / self.score_dir / "k8s" / "values" / f"{chart}.yaml"
-            if not values.is_file():
-                raise ValueError(f"{values.as_posix()}: the chart's values file is required")
-
-        surfaces: dict[str, dict[str, SlotDemand]] = {}
-        for entry_name, entry in self.local_service_entries():
-            score_dir = root / self.score_dir
-            for workload_name in entry.workloads:
-                workload_path = score_dir / workload_name
-                if not workload_path.is_file():
-                    raise ValueError(f"{workload_path.as_posix()}: the workload file is required")
-            workloads = load_workloads(score_dir, entry.workloads, WorkloadDocument)
-
-            # A bundle's bare service names are its compose identity: workload containers, type-joined
-            # provisioner services, and the reserved barrier name each claim one, and one workload
-            # claims each rendered spelling.
-            claims: dict[str, list[str]] = {BARRIER_SERVICE: ["the reserved barrier name"]}
-            spellings: dict[str, list[str]] = {}
-            for workload in workloads:
-                for container_name in workload.document.containers:
-                    site = f"{workload.file_name}: containers.{container_name}"
-                    claims.setdefault(container_name, []).append(site)
-                    spelling = f"{Path(workload.file_name).stem}-{container_name}"
-                    spellings.setdefault(spelling, []).append(site)
-            for file_name, entries in select_provisioner_files(score_dir, "compose", workloads):
-                for provisioner in entries:
-                    if not is_mapping(provisioner):
-                        continue
-                    services = provisioner.get("services")
-                    if not is_mapping(services):
-                        continue
-                    for service_name in services:
-                        claims.setdefault(service_name, []).append(f"{file_name}: services.{service_name}")
-            _refuse_duplicated_claims(entry_name, "service name", claims)
-            _refuse_duplicated_claims(entry_name, "rendered spelling", spellings)
-
-            # The compose consumer surface of a local entry, from authored text: suffixed workload
-            # slots (bare slots are render-expanded or refused), type-joined provisioner
-            # services/state/outputs text (odd $ rides verbatim into the artifact), and
-            # consumer-interpolated files text (authored $$ lands single-$ in the artifact).
-            demands: dict[str, SlotDemand] = {}
-            for workload in workloads:
-                text = (score_dir / workload.file_name).read_text(encoding="utf-8")
-                merge_slot_demands(demands, text, parity=1, suffixed_only=True)
-            for _file_name, entries in select_provisioner_files(score_dir, "compose", workloads):
-                for provisioner in entries:
-                    if not is_mapping(provisioner):
-                        continue
-                    for field in ("services", "state", "outputs"):
-                        value = provisioner.get(field)
-                        if is_mapping(value):
-                            merge_slot_demands(
-                                demands, yaml.dump(value, default_flow_style=False), parity=1, suffixed_only=False
-                            )
-            for workload in workloads:
-                document = workload.document
-                for container in document.containers.values():
-                    for target, spec in container.files.items():
-                        if target not in document.consumer_interpolated_targets:
-                            continue
-                        if not is_mapping(spec):
-                            continue
-                        content = spec.get("content")
-                        if not isinstance(content, str):
-                            content = None
-                            source = spec.get("source")
-                            if isinstance(source, str):
-                                files_path = root / source
-                                if not files_path.is_file():
-                                    raise ValueError(
-                                        f"{workload.file_name}: files source {source!r} does not exist at the repo root"
-                                    )
-                                content = files_path.read_text(encoding="utf-8")
-                        if content is not None:
-                            merge_slot_demands(demands, content, parity=0, suffixed_only=False)
-            for key in set(self.base_images) | set(self.owned_images):
-                demands.pop(key, None)
-            surfaces[entry_name] = demands
-        self.consumer_surfaces = surfaces
-
-        return self
 
     @property
     def declared_charts(self) -> dict[str, str]:
@@ -378,7 +216,7 @@ class ConfigFile(BaseModel):
 
     @property
     def port_declaring_entries(self) -> list[str]:
-        # Options inherit their group's port declarations, mirroring resolve_services
+        # Options inherit their group's port declarations
         names: list[str] = []
         for row in _flatten_service_members(self.services):
             member = self.services[row.root]
@@ -411,27 +249,6 @@ class ConfigFile(BaseModel):
     def tree_sentinels(self) -> dict[str, str]:
         # The compose barrier pre-images over the build-set slot supply; TREE_SENTINEL_PATTERN finds them
         return {slot: f"{TREE_SLOT_MARKER}{slot}__" for slot in (service_sha_env(name) for name in self.service_builds)}
-
-    def resolve_services(self, choices: Mapping[str, str]) -> list[ResolvedService]:
-        resolved: list[ResolvedService] = []
-        for name, member in self.services.items():
-            if isinstance(member, ServiceGroup):
-                option_name = choices.get(name)
-                if option_name is None:
-                    continue
-                option = member.options[option_name]
-                resolved.append(
-                    ResolvedService(
-                        name=qualified_option_name(name, option_name),
-                        entry=option,
-                        routes=option.routes + member.routes,
-                        ports=option.ports + member.ports,
-                        auth=name == AUTH_GROUP_NAME,
-                    )
-                )
-            else:
-                resolved.append(ResolvedService(name=name, entry=member, routes=member.routes, ports=member.ports))
-        return resolved
 
     @field_validator("requires")
     @classmethod
@@ -553,8 +370,165 @@ class ConfigFile(BaseModel):
         if any_local and not self.repository:
             raise ValueError("repository is required by the local entries (workloads:)")
         if (self.base_images or self.owned_images) and not self.platforms:
-            raise ValueError("platforms is required when images are declared (an amd64-only repo declares [linux/amd64])")
+            raise ValueError(
+                "platforms is required when images are declared (an amd64-only repo declares [linux/amd64])"
+            )
         return self
+
+
+def _derive(config: ConfigFile, root: Path) -> None:
+    # The load-time derivation over the parsed file: toolchain templates, the Dockerfile build
+    # set, the file-reference checks, and the per-entry consumer surfaces.
+    installed = importlib.metadata.version("boatyard")
+    if installed != DEV_SENTINEL and not SpecifierSet(config.requires).contains(installed, prereleases=True):
+        raise ValueError(f"boatyard {installed} does not satisfy requires={config.requires!r}")
+    config.root = root
+
+    # Resolve {uv} and {python} templates in base_images against the toolchain pins.
+    pins: dict[str, str] = {}
+    used = sorted({key for reference in config.base_images.values() for key in TEMPLATE_KEY_PATTERN.findall(reference)})
+    for key in used:
+        if key == "uv":
+            pyproject = root / PYPROJECT_PATH
+            pyproject_document = PyprojectToml.model_validate(
+                tomllib.loads(pyproject.read_text(encoding="utf-8")) if pyproject.is_file() else {}
+            )
+            declared = (
+                pyproject_document.tool.uv.required_version
+                if pyproject_document.tool is not None and pyproject_document.tool.uv is not None
+                else None
+            )
+            if not declared:
+                raise ValueError(f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version is not declared")
+            pin_match = re.fullmatch(r"==(?P<version>[^,*\s]+)", declared.strip())
+            if pin_match is None:
+                raise ValueError(
+                    f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version {declared!r} "
+                    "must be an exact == pin like '==0.12.15'"
+                )
+            pins[key] = pin_match.group("version")
+        elif key == "python":
+            python_version = root / PYTHON_VERSION_PATH
+            if not python_version.is_file():
+                raise ValueError(f"{PYTHON_VERSION_PATH.as_posix()}: the {{python}} template requires this file")
+            # Take the first non-empty line.
+            version = next(
+                (line.strip() for line in python_version.read_text(encoding="utf-8").splitlines() if line.strip()),
+                "",
+            )
+            if not version:
+                raise ValueError(f"{PYTHON_VERSION_PATH.as_posix()}: the {{python}} template requires a non-empty file")
+            pins[key] = version
+        else:
+            raise ValueError(f"base_images template key {{{key}}} is not one of the toolchain pins {{uv}}, {{python}}")
+    config.base_images = {
+        name: TEMPLATE_KEY_PATTERN.sub(partial(_resolve_template_key, pins), reference)
+        for name, reference in config.base_images.items()
+    }
+
+    # Derive the service build set from the Dockerfile tree.
+    service_builds = derive_services(root, config.variants)
+
+    computable = {service_sha_env(name) for name in service_builds}
+    for service in service_builds.values():
+        unknown = [argument for argument in service.sha_args if argument not in computable]
+        if unknown:
+            raise ValueError(
+                f"workloads/{service.name}/{DOCKERFILE_NAME}: ARG {', '.join(unknown)} names no service directory"
+            )
+    if service_builds and config.repository is None:
+        listed = ", ".join(sorted(service_builds))
+        raise ValueError(f"repository is required by the Dockerfile service directories {listed}")
+    config.service_builds = service_builds
+
+    # Enforce the lock pairing laws.
+    declared_charts = config.declared_charts
+    declares_routes = any(
+        entry.routes or (isinstance(entry, ServiceGroup) and any(option.routes for option in entry.options.values()))
+        for entry in config.services.values()
+    )
+    if declares_routes and config.gateway is None:
+        raise ValueError("routes require a gateway declaration")
+    for chart in declared_charts:
+        values = root / config.score_dir / "k8s" / "values" / f"{chart}.yaml"
+        if not values.is_file():
+            raise ValueError(f"{values.as_posix()}: the chart's values file is required")
+
+    surfaces: dict[str, dict[str, SlotDemand]] = {}
+    for entry_name, entry in config.local_service_entries():
+        score_dir = root / config.score_dir
+        for workload_name in entry.workloads:
+            workload_path = score_dir / workload_name
+            if not workload_path.is_file():
+                raise ValueError(f"{workload_path.as_posix()}: the workload file is required")
+        workloads = load_workloads(score_dir, entry.workloads, WorkloadDocument)
+
+        # A bundle's bare service names are its compose identity: workload containers, type-joined
+        # provisioner services, and the reserved barrier name each claim one, and one workload
+        # claims each rendered spelling.
+        claims: dict[str, list[str]] = {BARRIER_SERVICE: ["the reserved barrier name"]}
+        spellings: dict[str, list[str]] = {}
+        for workload in workloads:
+            for container_name in workload.document.containers:
+                site = f"{workload.file_name}: containers.{container_name}"
+                claims.setdefault(container_name, []).append(site)
+                spelling = f"{Path(workload.file_name).stem}-{container_name}"
+                spellings.setdefault(spelling, []).append(site)
+        for file_name, entries in select_provisioner_files(score_dir, "compose", workloads):
+            for provisioner in entries:
+                if not is_mapping(provisioner):
+                    continue
+                services = provisioner.get("services")
+                if not is_mapping(services):
+                    continue
+                for service_name in services:
+                    claims.setdefault(service_name, []).append(f"{file_name}: services.{service_name}")
+        _refuse_duplicated_claims(entry_name, "service name", claims)
+        _refuse_duplicated_claims(entry_name, "rendered spelling", spellings)
+
+        # The compose consumer surface of a local entry, from authored text: suffixed workload
+        # slots (bare slots are render-expanded or refused), type-joined provisioner
+        # services/state/outputs text (odd $ rides verbatim into the artifact), and
+        # consumer-interpolated files text (authored $$ lands single-$ in the artifact).
+        demands: dict[str, SlotDemand] = {}
+        for workload in workloads:
+            text = (score_dir / workload.file_name).read_text(encoding="utf-8")
+            merge_slot_demands(demands, text, parity=1, suffixed_only=True)
+        for _file_name, entries in select_provisioner_files(score_dir, "compose", workloads):
+            for provisioner in entries:
+                if not is_mapping(provisioner):
+                    continue
+                for field in ("services", "state", "outputs"):
+                    value = provisioner.get(field)
+                    if is_mapping(value):
+                        merge_slot_demands(
+                            demands, yaml.dump(value, default_flow_style=False), parity=1, suffixed_only=False
+                        )
+        for workload in workloads:
+            document = workload.document
+            for container in document.containers.values():
+                for target, spec in container.files.items():
+                    if target not in document.consumer_interpolated_targets:
+                        continue
+                    if not is_mapping(spec):
+                        continue
+                    content = spec.get("content")
+                    if not isinstance(content, str):
+                        content = None
+                        source = spec.get("source")
+                        if isinstance(source, str):
+                            files_path = root / source
+                            if not files_path.is_file():
+                                raise ValueError(
+                                    f"{workload.file_name}: files source {source!r} does not exist at the repo root"
+                                )
+                            content = files_path.read_text(encoding="utf-8")
+                    if content is not None:
+                        merge_slot_demands(demands, content, parity=0, suffixed_only=False)
+        for key in set(config.base_images) | set(config.owned_images):
+            demands.pop(key, None)
+        surfaces[entry_name] = demands
+    config.consumer_surfaces = surfaces
 
 
 class ServiceGroup(BaseModel):

@@ -4,12 +4,12 @@ from pathlib import Path
 
 import pytest
 import yaml
-from pydantic import ValidationError
 
 from boatyard.config.config import ConfigFile
 from boatyard.config.lock import LOCK_PATH, LockFile
 from boatyard.config.values import ValuesFile
 from boatyard.paths import VALUES_FILE
+from boatyard.resolve import AssemblyPlan, resolve
 
 FAKE_DIGEST = "sha256:" + "a" * 64
 MONITOR_PINNED = f"ghcr.io/org/monitor:1.0.0@{FAKE_DIGEST}"
@@ -114,6 +114,20 @@ def _write_repo(
     return root
 
 
+def _write_bundle_backed_repo(
+    tmp_path: Path,
+    values: dict[str, object],
+    *,
+    slots: dict[str, object] | None = None,
+    gateway: int | None = None,
+) -> Path:
+    root = _write_repo(tmp_path, values, slots=slots, gateway=gateway)
+    bundle_output = root / "stack" / "generated" / "compose" / "compose.core.yaml"
+    bundle_output.parent.mkdir(parents=True)
+    bundle_output.write_text("services:\n  core-api:\n    image: demo:1\n", encoding="utf-8")
+    return root
+
+
 def _filled_values(extra: dict[str, object] | None = None) -> dict[str, object]:
     values: dict[str, object] = {
         "values": {
@@ -133,9 +147,13 @@ def _core_values(**overrides: str) -> dict[str, str]:
 
 
 def _load(root: Path) -> ValuesFile:
+    return ValuesFile.load(root / VALUES_FILE)
+
+
+def _resolve(root: Path) -> AssemblyPlan:
     config = ConfigFile.load(root / "boatyard.yml")
     lock = LockFile.load(root / LOCK_PATH, config)
-    return ValuesFile.load(root / VALUES_FILE, config, lock)
+    return resolve(config, lock, ValuesFile.load(root / VALUES_FILE))
 
 
 def _refusal(
@@ -148,23 +166,25 @@ def _refusal(
     gateway: int | None = None,
     ports: list[dict[str, object]] | None = None,
 ) -> str:
-    with pytest.raises(ValidationError) as report:
-        _load(
+    try:
+        _resolve(
             _write_repo(tmp_path, values, slots=slots, workload=workload, secrets=secrets, gateway=gateway, ports=ports)
         )
-    return str(report.value)
+    except ValueError as error:
+        return str(error)
+    raise AssertionError("expected a refusal")
 
 
 def test_a_filled_surface_loads_and_flattens(tmp_path: Path) -> None:
-    parsed = _load(_write_repo(tmp_path, _filled_values(), slots={"MON_TOKEN": {"required": True}}))
+    root = _write_bundle_backed_repo(tmp_path, _filled_values(), slots={"MON_TOKEN": {"required": True}})
 
-    assert parsed.choices == {}
-    assert parsed.flattened == {
+    assert _load(root).flattened == {
         "API_TOKEN": "one",
         "BIND_TOKEN": "two",
         "PROV_TOKEN": "three",
         "MON_TOKEN": "four",
     }
+    assert [service.name for service in _resolve(root).services] == ["core", "monitor"]
 
 
 def test_an_orphan_key_refuses_naming_the_section(tmp_path: Path) -> None:
@@ -346,8 +366,8 @@ def test_an_unselected_options_section_still_orphan_refuses(tmp_path: Path) -> N
     values["values"]["images"]["placeframe-cuda"] = {"GHOST": "x"}
     (root / VALUES_FILE).write_text(yaml.safe_dump(values), encoding="utf-8")
 
-    with pytest.raises(ValidationError, match="demanded by no surface"):
-        _load(root)
+    with pytest.raises(ValueError, match="demanded by no surface"):
+        _resolve(root)
 
 
 def test_an_absent_override_file_refuses_at_load(tmp_path: Path) -> None:
@@ -391,16 +411,15 @@ def test_a_fill_refusal_names_shell_set_values_as_ignored(tmp_path: Path, monkey
 def test_a_reference_to_a_sibling_key_resolves_at_render(tmp_path: Path) -> None:
     values = _filled_values()
     values["values"]["images"]["core"] = _core_values(API_TOKEN="${PROV_TOKEN}-token")  # type: ignore[index]
+    root = _write_bundle_backed_repo(tmp_path, values)
 
-    parsed = _load(_write_repo(tmp_path, values))
-
-    assert parsed.flattened == {
+    assert _load(root).flattened == {
         "API_TOKEN": "${PROV_TOKEN}-token",
         "BIND_TOKEN": "two",
         "PROV_TOKEN": "three",
         "MON_TOKEN": "four",
     }
-    assert parsed.resolved == {
+    assert _resolve(root).values == {
         "API_TOKEN": "three-token",
         "BIND_TOKEN": "two",
         "PROV_TOKEN": "three",
@@ -413,10 +432,9 @@ def test_a_reference_chains_through_another_reference(tmp_path: Path) -> None:
     values["values"]["images"]["core"] = _core_values(  # type: ignore[index]
         API_TOKEN="u${BIND_TOKEN}", BIND_TOKEN="${PROV_TOKEN}b"
     )
+    root = _write_bundle_backed_repo(tmp_path, values)
 
-    parsed = _load(_write_repo(tmp_path, values))
-
-    assert parsed.resolved == {
+    assert _resolve(root).values == {
         "API_TOKEN": "uthreeb",
         "BIND_TOKEN": "threeb",
         "PROV_TOKEN": "three",
@@ -427,10 +445,9 @@ def test_a_reference_chains_through_another_reference(tmp_path: Path) -> None:
 def test_the_minted_public_url_is_a_reference_root(tmp_path: Path) -> None:
     values = _filled_values({"public_url": "https://example.dev"})
     values["values"]["images"]["core"] = _core_values(API_TOKEN="${PUBLIC_URL}/token")  # type: ignore[index]
+    root = _write_bundle_backed_repo(tmp_path, values)
 
-    parsed = _load(_write_repo(tmp_path, values))
-
-    assert parsed.resolved == {
+    assert _resolve(root).values == {
         "PUBLIC_URL": "https://example.dev",
         "API_TOKEN": "https://example.dev/token",
         "BIND_TOKEN": "two",
@@ -451,10 +468,9 @@ def test_the_minted_public_url_is_no_root_when_public_url_is_absent(tmp_path: Pa
 def test_the_minted_edge_base_url_is_a_reference_root(tmp_path: Path) -> None:
     values = _filled_values()
     values["values"]["images"]["core"] = _core_values(API_TOKEN="${EDGE_BASE_URL}/jwks")  # type: ignore[index]
+    root = _write_bundle_backed_repo(tmp_path, values, gateway=9443)
 
-    parsed = _load(_write_repo(tmp_path, values, gateway=9443))
-
-    assert parsed.resolved == {
+    assert _resolve(root).values == {
         "EDGE_BASE_URL": "http://edge:8443",
         "API_TOKEN": "http://edge:8443/jwks",
         "BIND_TOKEN": "two",
@@ -548,7 +564,7 @@ def test_assembly_renders_resolved_values_with_the_minted_slot(tmp_path: Path) -
     bundle_output.parent.mkdir(parents=True)
     bundle_output.write_text("services:\n  core-api:\n    image: demo:1\n", encoding="utf-8")
 
-    plan = _load(root).assembly()
+    plan = _resolve(root)
 
     assert plan.values == {
         "PUBLIC_URL": "https://example.dev",
@@ -567,7 +583,7 @@ def test_assembly_fills_the_minted_edge_base_url(tmp_path: Path) -> None:
     bundle_output.parent.mkdir(parents=True)
     bundle_output.write_text("services:\n  core-api:\n    image: demo:1\n", encoding="utf-8")
 
-    plan = _load(root).assembly()
+    plan = _resolve(root)
 
     assert plan.values == {
         "EDGE_BASE_URL": "http://edge:8443",

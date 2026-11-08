@@ -24,6 +24,7 @@ from boatyard.config.config import (
 from boatyard.config.lock import LockFile
 from boatyard.config.values import ValuesFile
 from boatyard.paths import DEFAULT_CONFIG_PATH, LOCK_PATH, VALUES_FILE
+from boatyard.resolve import resolve
 
 # Name the edge's Caddyfile configs key
 EDGE_CONFIG_NAME = "devkit-edge-caddyfile"
@@ -49,14 +50,13 @@ def up(
     if not (root / VALUES_FILE).exists():
         raise ValueError(f"{VALUES_FILE.as_posix()} is required")
     lock = LockFile.load(config.root / LOCK_PATH, config)
-    config_values = ValuesFile.load(root / VALUES_FILE, config, lock)
+    config_values = ValuesFile.load(root / VALUES_FILE)
 
-    # Resolve the chosen options into leaf services
-    services = config.resolve_services(config_values.choices)
-
-    # Derive the includes, the fan entries, and the flattened validated values
-    plan = config_values.assembly()
-    consumer_entries = lock.manifest_references(config_values.platform)
+    # One resolve answers the selected services, the includes, the fan entries, the flattened
+    # validated values, and the platform manifest table
+    plan = resolve(config, lock, config_values)
+    services = plan.services
+    consumer_entries = plan.consumer_entries
 
     # Group the ports under their namespaced owners into per-service stanzas, the typed
     # values overrides winning over the config's integer defaults
