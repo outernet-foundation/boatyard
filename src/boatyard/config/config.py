@@ -57,12 +57,6 @@ DECLARED_REFERENCE_PATTERN = re.compile(
 
 TEMPLATE_KEY_PATTERN = re.compile(r"\{([a-z][a-z0-9_]*)\}")
 
-FROM_LINE_PATTERN = re.compile(r"^FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?", re.IGNORECASE)
-ARG_LINE_PATTERN = re.compile(r"^ARG\s+([A-Za-z_][A-Za-z0-9_]*)")
-COPY_FROM_LINE_PATTERN = re.compile(r"^COPY\s+--from=(\S+)", re.IGNORECASE)
-BARE_IDENTIFIER_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
-BUILD_ARG_REFERENCE_PATTERN = re.compile(r"^\$\{[A-Za-z0-9_]+\}$")
-
 # Match the range operators a ref tag must never carry; exact tags only.
 REF_TAG_OPERATOR_PATTERN = re.compile(r"[<>=!~^*]")
 
@@ -526,57 +520,7 @@ def _derive(config: ConfigFile, root: Path) -> None:
                 tops.add(top.name)
     require_single_top(tops, "Dockerfile image directories")
 
-    images: dict[str, Image] = {}
-    for name, directory in image_dirs.items():
-        dockerfile = directory / DOCKERFILE_NAME
-        relative = dockerfile.relative_to(root).as_posix()
-        from_images: list[str] = []
-        copy_from_values: list[str] = []
-        stages: set[str] = set()
-        args: list[str] = []
-        for line in dockerfile.read_text(encoding="utf-8").splitlines():
-            from_match = FROM_LINE_PATTERN.match(line.strip())
-            if from_match is not None:
-                from_images.append(from_match.group(1))
-                if from_match.group(2) is not None:
-                    stages.add(from_match.group(2))
-                continue
-            copy_from_match = COPY_FROM_LINE_PATTERN.match(line.strip())
-            if copy_from_match is not None:
-                copy_from_values.append(copy_from_match.group(1))
-                continue
-            arg_match = ARG_LINE_PATTERN.match(line.strip())
-            if arg_match is not None:
-                args.append(arg_match.group(1))
-        contexts: list[str] = []
-        for image in from_images:
-            if image in stages:
-                continue
-            if BARE_IDENTIFIER_PATTERN.fullmatch(image) is None:
-                if BUILD_ARG_REFERENCE_PATTERN.fullmatch(image) is None:
-                    raise ValueError(f"{relative}: FROM {image} must reference a base_images build arg")
-                continue
-            if image not in image_dirs:
-                raise ValueError(f"{relative}: FROM {image} names no image directory or stage")
-            contexts.append(image)
-        for value in copy_from_values:
-            if "/" in value:
-                raise ValueError(f"{relative}: COPY --from={value} must reference a base_images build arg")
-        declared_axis_args = [argument for argument in args if argument in axes]
-        if len(declared_axis_args) > 1:
-            raise ValueError(
-                f"{relative}: declares two variant-axis ARGs ({', '.join(declared_axis_args)}); "
-                "an image carries one axis"
-            )
-        axis_arg = declared_axis_args[0] if declared_axis_args else None
-        images[name] = Image(
-            name=name,
-            dockerfile=relative,
-            contexts=sorted(set(contexts)),
-            axis=axis_arg,
-            variants=list(axes[axis_arg]) if axis_arg is not None else [],
-            sha_args=sorted({arg for arg in args if arg.endswith("_SHA")}),
-        )
+    images = {directory.name: Image.load(directory, root, axes, image_dirs) for directory in image_dirs.values()}
 
     effective_axes = {name: _effective_axis(name, images, ()) for name in images}
     for name, build in images.items():
