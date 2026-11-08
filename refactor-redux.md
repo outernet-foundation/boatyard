@@ -74,18 +74,6 @@ repository prefix was hand-spelled inside every ref (17 sites in placeframe).
   currently lives only on neural-networks-base).
 - boatyard.yml, values files, and consumer `ref:`s: no change.
 
-## The variant-bundle wrench (recorded, deliberately not done)
-
-api and lease-server ride core-cuda/core-rocm without varying — real duplication, known
-cost. The split is blocked by live service-port references crossing the GPU boundary in
-both directions: api needs localizer (`LOCALIZER_CONTAINER_URL`), reconstructor needs
-lease-server (`LEASE_SERVER_URL`). Bundles are separate score generations on separate
-per-entry networks; a workload in one bundle cannot resolve a service-port in another. The
-fix is assembly-time service-port resolution with shared networking — a mechanism of its
-own, the next line's candidate. Post-redux the wrongness is gone (the axis no longer
-claims these workloads vary; their images receive identical refs in both renderings); what
-remains is compose-text duplication.
-
 ## What dies
 
 The directory walk and the one-top-dir rule, `_effective_axis`, the stem surgery in
@@ -95,4 +83,4 @@ the slot-in-image grammar, and the repository prefix inside score files.
 ## This file
 
 This file exists to be executed and deleted. Sections are fixed, in order: identity,
-problem, rulings, errors, moves, transition, wrench, deaths, this section.
+problem, rulings, errors, moves, transition, deaths, this section.
