@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Set as AbstractSet
 from pathlib import Path
 from typing import Annotated, Self
 
@@ -155,24 +154,3 @@ def _coerce_section(values: object) -> dict[str, str]:
 
 
 SectionMap = Annotated[dict[str, str], BeforeValidator(_coerce_section)]
-
-
-def peel_references(references: Mapping[str, AbstractSet[str]]) -> tuple[list[str], list[str]]:
-    # Answer the peel order (a name peels only after every name it references peels) and
-    # the names a cycle leaves blocked
-    blocked: dict[str, set[str]] = {name: set(targets) for name, targets in references.items()}
-    order: list[str] = []
-    ready = sorted(name for name, targets in blocked.items() if not targets)
-    while ready:
-        name = ready.pop(0)
-        blocked.pop(name)
-        order.append(name)
-        newly_ready: list[str] = []
-        for successor, targets in blocked.items():
-            if not targets:
-                continue
-            targets.discard(name)
-            if not targets:
-                newly_ready.append(successor)
-        ready.extend(sorted(newly_ready))
-    return order, sorted(blocked)

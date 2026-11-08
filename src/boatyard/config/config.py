@@ -126,36 +126,13 @@ class ConfigFile(BaseModel):
     def declared_charts(self) -> dict[str, str]:
         return self.k8s.charts if self.k8s is not None else {}
 
-    @property
-    def selectable_options(self) -> dict[str, tuple[str, str]]:
-        return {
-            row.name: (row.root, row.option)
-            for row in _flatten_service_members(self.services)
-            if row.option is not None
-        }
-
-    @property
-    def bare_entries(self) -> list[str]:
-        return [row.root for row in _flatten_service_members(self.services) if row.option is None]
-
-    @property
-    def port_declaring_entries(self) -> list[str]:
-        # Options inherit their group's port declarations
-        names: list[str] = []
-        for row in _flatten_service_members(self.services):
-            member = self.services[row.root]
-            group_ports = member.ports if isinstance(member, ServiceGroup) else []
-            if row.entry.ports or group_ports:
-                names.append(row.name)
-        return names
-
     def local_service_entries(self) -> list[tuple[str, ServiceEntry]]:
-        return [(row.name, row.entry) for row in _flatten_service_members(self.services) if not row.entry.remote]
+        return [(row.name, row.entry) for row in flatten_service_members(self.services) if not row.entry.remote]
 
     def remote_declared_entries(self) -> list[tuple[str, str, ServiceEntry]]:
         return [
             (row.name, row.entry.ref.removeprefix(OCI_REFERENCE_PREFIX), row.entry)
-            for row in _flatten_service_members(self.services)
+            for row in flatten_service_members(self.services)
             if row.entry.ref is not None
         ]
 
@@ -248,7 +225,7 @@ class ConfigFile(BaseModel):
         # The qualified vocabulary (options as group-dash-option, bare entries as their root
         # name) must be collision-free: two declaration sites never produce one spelling.
         vocabulary: dict[str, str] = {}
-        for row in _flatten_service_members(services):
+        for row in flatten_service_members(services):
             if row.name in vocabulary:
                 raise ValueError(f"{row.site}: {row.name} is already claimed at {vocabulary[row.name]}")
             vocabulary[row.name] = row.site
@@ -290,7 +267,7 @@ class ConfigFile(BaseModel):
         # Compose is unconditional; k8s is the optional substrate.
         if not self.services:
             raise ValueError("services is required")
-        any_local = any(not row.entry.remote for row in _flatten_service_members(self.services))
+        any_local = any(not row.entry.remote for row in flatten_service_members(self.services))
         if any_local and not self.repository:
             raise ValueError("repository is required by the local entries (workloads:)")
         if (self.base_images or self.owned_images) and not self.platforms:
@@ -648,7 +625,7 @@ def _derive(config: ConfigFile, root: Path) -> None:
     config.consumer_surfaces = surfaces
 
 
-def _flatten_service_members(services: dict[str, ServiceGroup | ServiceEntry]) -> list[FlattenedServiceEntry]:
+def flatten_service_members(services: dict[str, ServiceGroup | ServiceEntry]) -> list[FlattenedServiceEntry]:
     # Options ride under their qualified name; bare entries are their own root.
     flattened: list[FlattenedServiceEntry] = []
     for root_name, member in services.items():
