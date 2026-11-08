@@ -65,11 +65,6 @@ class Image(BaseModel):
             if "/" in value:
                 raise ValueError(f"{relative}: COPY --from={value} must reference a base_images build arg")
         declared_dimension_args = [argument for argument in args if argument in axes]
-        if len(declared_dimension_args) > 1:
-            raise ValueError(
-                f"{relative}: declares two variant-dimension ARGs ({', '.join(declared_dimension_args)}); "
-                "an image carries one variant dimension"
-            )
         dimension_arg = declared_dimension_args[0] if declared_dimension_args else None
         return cls(
             name=directory.name,

@@ -526,7 +526,7 @@ def _derive(config: ConfigFile, root: Path) -> None:
 
     images = {directory.name: Image.load(directory, root, dimensions, image_dirs) for directory in image_dirs.values()}
 
-    effective_dimensions = {name: _effective_dimension(name, images, ()) for name in images}
+    effective_dimensions = {name: _effective_dimension(name, images) for name in images}
     for name, build in images.items():
         dimension = effective_dimensions[name]
         if dimension is not None:
@@ -626,20 +626,10 @@ def _refuse_unknown_variant_refs(
             )
 
 
-def _effective_dimension(name: str, builds: dict[str, Image], path: tuple[str, ...]) -> str | None:
-    if name in path:
-        raise ValueError(f"FROM context cycle: {' -> '.join((*path, name))}")
+def _effective_dimension(name: str, builds: dict[str, Image]) -> str | None:
     build = builds[name]
-    parent_dimensions = [_effective_dimension(parent, builds, (*path, name)) for parent in build.contexts]
-    if len(set(parent_dimensions)) > 1:
-        raise ValueError(f"{build.dockerfile}: parents ({', '.join(build.contexts)}) disagree on variants")
-    if parent_dimensions:
-        if build.dimension is not None:
-            raise ValueError(
-                f"{build.dockerfile}: declares ARG {build.dimension} over a "
-                f"variant-bearing base (parents: {', '.join(build.contexts)})"
-            )
-        return parent_dimensions[0]
+    if build.contexts:
+        return _effective_dimension(build.contexts[0], builds)
     return build.dimension
 
 

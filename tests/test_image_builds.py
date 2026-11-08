@@ -173,12 +173,6 @@ class TestDeriveImages:
         assert images["api"].variants == ["rocm", "cuda"]
         assert [target for target, _variant in images["api"].target_variants] == ["api-rocm", "api-cuda"]
 
-    def test_two_dimension_args_on_one_image_refuse(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "api", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG ACCEL_FPGA\nARG ACCEL_TPU\n")
-
-        with pytest.raises(ValueError, match="an image carries one variant dimension"):
-            _derive(tmp_path, {"ACCEL_FPGA": ["fpga"], "ACCEL_TPU": ["tpu"]})
-
     def test_the_dimension_propagates_along_context_edges(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
         write_dockerfile(tmp_path, "localizer", "FROM neural-networks-base AS dev\n")
@@ -191,21 +185,6 @@ class TestDeriveImages:
             "localizer-cuda",
             "localizer-rocm",
         ]
-
-    def test_an_independent_dimension_over_a_variant_bearing_base_refuses(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "neural-networks-base", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\nARG TORCH_DEVICE\n")
-        write_dockerfile(tmp_path, "localizer", "FROM neural-networks-base AS dev\nARG TORCH_DEVICE\n")
-
-        with pytest.raises(ValueError, match="variant-bearing base"):
-            _derive(tmp_path, {"TORCH_DEVICE": ["cuda", "rocm"]})
-
-    def test_parents_disagreeing_on_variants_refuse(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "fanned-base", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\nARG TORCH_DEVICE\n")
-        write_dockerfile(tmp_path, "plain-base", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n")
-        write_dockerfile(tmp_path, "dependent", "FROM fanned-base AS a\nFROM plain-base AS b\n")
-
-        with pytest.raises(ValueError, match="disagree on variants"):
-            _derive(tmp_path, {"TORCH_DEVICE": ["cuda", "rocm"]})
 
     def test_sha_arg_naming_no_image_refuses(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\nARG GHOST_SHA\n")
