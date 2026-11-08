@@ -33,8 +33,9 @@ Design intent and silent-failure traps, one fact per bullet.
   file-sourced configs, score's bind inlining) is doubled via `double_dollars` in
   `models/config_file.py` — the one home. Text outside a compose document (k8s manifests) never
   doubles.
-- An absent `secrets:` section fails generate-score; `secrets: []` states zero — absence and
-  emptiness mean different things throughout.
+- The mint list (`secrets.txt`) is the k8s rendering's consumed secret refs, walked from the
+  generated output — no secret vocabulary is authored anywhere, and a compose-only rendering
+  mints an empty list.
 - Plain score-compose silently drops `httpGet` probes; boatyard's lens makes the omission loud
   instead via the workload's `outernet.internal/probe-adapter` annotation.
 - Substrate needs live in workload files as `outernet.internal/*` annotations — `boatyard.yml`
