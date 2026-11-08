@@ -65,13 +65,13 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
 
 ## Modules
 
-- `config/config.py` — schema + load (`ConfigFile.load`, `ConfigFile.resolve_services(choices)`);
-  shared leaf for slot markers, name joins, `double_dollars`, workload lens.
+- `config/config.py` — schema + load (`ConfigFile.load`); shared leaf for slot markers, name
+  joins, `double_dollars`, workload lens.
 - `config/lock.py` — lock schema; `LockFile.load(path, config)` is the only parser consumers use.
-- `config/values.py` — values file, selection and override validation, the `assembly()` plan
-  `up` renders from.
+- `config/values.py` — the values file schema: sections, typed overrides, the section key grammar.
 - `config/k8s_pins.py` — pins parsing.
 - `dockerfiles.py` — Dockerfile-derived build set, tree-tag sha machinery.
+- `resolve.py` — the `resolve(config, lock, values)` fold answering the assembly plan `up` renders.
 - `lock.py` — relock engine + crane resolution.
 - `compose.py` — the compose invocation spelling.
 - `build.py` — build pipeline.
