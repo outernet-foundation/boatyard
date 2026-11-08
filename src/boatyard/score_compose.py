@@ -29,7 +29,7 @@ from boatyard.models.config_file import (
 )
 from boatyard.models.lock_file import LockFile
 from boatyard.models.values_file import ValuesFile
-from boatyard.models.workload import ComposeWorkloadDocument, LoadedWorkload, load_workloads
+from boatyard.models.workload import ComposeWorkloadDocument, LoadedWorkload, load_workload
 from boatyard.models.image import Image
 from boatyard.paths import VALUES_FILE
 from boatyard.yaml import Yaml, load_yaml_model
@@ -143,12 +143,11 @@ def generate_compose(config: ConfigFile, lock: LockFile) -> list[Path]:
     axes = variant_axes(config.services)
     outputs: list[Path] = []
     for name, entry in config.local_service_entries():
-        workloads = load_workloads(score_dir, entry.workloads, ComposeWorkloadDocument)
+        workloads = [
+            load_workload(score_dir, workload_name, ComposeWorkloadDocument) for workload_name in entry.workloads
+        ]
         _refuse_colliding_spellings(name, workloads)
-        for workload in workloads:
-            for container_name, container in workload.document.containers.items():
-                if container.image is not None:
-                    _refuse_unknown_axis_refs(workload.file_name, container_name, container.image, config.images, axes)
+        _refuse_unbacked_variant_slots(workloads, config.images, axes)
 
         output_path = compose_bundle_output_path(config.root, name)
         tool_state = output_path.parent / f".{TOOL}"
@@ -292,21 +291,27 @@ def _refuse_colliding_spellings(entry_name: str, workloads: list[LoadedWorkload]
             spellings[spelling] = site
 
 
-def _refuse_unknown_axis_refs(
-    file_name: str,
-    container_name: str,
-    image: str,
+def _refuse_unbacked_variant_slots(
+    workloads: list[LoadedWorkload],
     images: dict[str, Image],
     axes: dict[str, list[str]],
 ) -> None:
-    for match in PLACEHOLDER.finditer(image):
-        axis = match.group(1)
-        if axis not in axes:
-            continue
-        stem = image[: match.start()].rpartition("/")[2].removesuffix("-")
-        build = images.get(stem)
-        if build is None or build.axis != axis:
-            raise ValueError(f"{file_name}: containers.{container_name}.image: {stem} carries no {axis} variant fan")
+    # An authored image ref's ${AXIS} slot must stem-match a derived image fanning on that axis;
+    # otherwise render silently expands it into a tag no build target produces.
+    for workload in workloads:
+        for container_name, container in workload.document.containers.items():
+            if container.image is None:
+                continue
+            for match in PLACEHOLDER.finditer(container.image):
+                axis = match.group(1)
+                if axis not in axes:
+                    continue
+                stem = container.image[: match.start()].rpartition("/")[2].removesuffix("-")
+                build = images.get(stem)
+                if build is None or build.axis != axis:
+                    raise ValueError(
+                        f"{workload.file_name}: containers.{container_name}.image: {stem} carries no {axis} variant fan"
+                    )
 
 
 def _rewrite_sentinel(entry_name: str, match: re.Match[str]) -> str:

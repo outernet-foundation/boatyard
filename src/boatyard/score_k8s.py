@@ -20,7 +20,7 @@ from boatyard.models.config_file import (
 )
 from boatyard.models.k8s_pins import load_pins
 from boatyard.models.lock_file import LockFile
-from boatyard.models.workload import WorkloadDocument, load_workloads
+from boatyard.models.workload import WorkloadDocument, load_workload
 from boatyard.markers import MarkerContext, resolve_markers
 from boatyard.paths import K8S_PINS_PATH
 from boatyard.yaml import Yaml, is_list, is_mapping
@@ -61,7 +61,7 @@ def generate_k8s(
 ) -> tuple[Path, set[str]]:
     score_dir = config.root / config.score_dir
     index_images = lock.index_references()
-    workloads = load_workloads(score_dir, k8s.workloads, WorkloadDocument)
+    workloads = [load_workload(score_dir, name, WorkloadDocument) for name in k8s.workloads]
 
     output_path = config.root / (config.k8s_local_output if local else config.k8s_output)
 

@@ -137,16 +137,13 @@ class LoadedWorkload(NamedTuple):
     document: WorkloadDocument
 
 
-def load_workloads(score_dir: Path, names: list[str], lens: type[WorkloadDocument]) -> list[LoadedWorkload]:
-    loaded: list[LoadedWorkload] = []
-    for name in names:
-        workload_path = score_dir / name
-        if not workload_path.is_file():
-            raise ValueError(f"{workload_path.as_posix()}: the workload file is required")
-        text = workload_path.read_text(encoding="utf-8")
-        raw = yaml.safe_load(text)
-        loaded.append(LoadedWorkload(name, text, raw, lens.parse(raw, name)))
-    return loaded
+def load_workload(score_dir: Path, file_name: str, lens: type[WorkloadDocument]) -> LoadedWorkload:
+    workload_path = score_dir / file_name
+    if not workload_path.is_file():
+        raise ValueError(f"{workload_path.as_posix()}: the workload file is required")
+    text = workload_path.read_text(encoding="utf-8")
+    raw = yaml.safe_load(text)
+    return LoadedWorkload(file_name, text, raw, lens.parse(raw, file_name))
 
 
 def select_provisioner_files(
