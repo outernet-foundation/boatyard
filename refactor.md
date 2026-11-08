@@ -16,8 +16,8 @@ file is deleted.
   then the handoff; the next session takes the next move.
 
 Moves 1–8 landed; their specs are deleted and git log holds the detail (one commit per move,
-by the branch shape law). Next: Move 9 — the numbering is stable, landed numbers retire with
-their specs. Move 9's name is undecided — decide before it executes.
+by the branch shape law). Next: Move 10, then Move 9 last — the numbering is stable, landed
+numbers retire with their specs. Move 9's name is undecided — decide before it executes.
 
 ## Closed rulings
 
@@ -32,6 +32,10 @@ Recorded so they are not re-litigated; reopening one is the operator's call, not
   the `{target: {ref, digest, tags}}` manifests, and every computed tree tag must appear in
   the union's `tags[]`. The enumerate-and-merge shape stays inline in boatyard until a third
   consumer appears. Ad-hoc `--push-to` builds are unpinnable by design.
+- D3 — Move 10 and the config audit commit beneath it are one config rearchitecture commit:
+  `git commit --fixup` plus autosquash after the branch-local check, never a second code
+  commit; AGENTS.md lines the move invalidates still fold into the line's doc commits, never
+  the squash.
 - No pin bootstrap: first k8s generation without a pins file fails naming the bump verb,
   always. The lock bootstraps resolutions (recomputable, checkable); a bootstrap pin would be
   an unverified decision — records cannot bootstrap.
@@ -80,6 +84,25 @@ is the operator's call) or dies with the line.
 
 ## Moves
 
+### Move 10 — pure models, one resolve [NEXT]
+
+- The three config models become pure schemas: per-file shape only (`extra="forbid"`, per-field
+  and single cross-field validators per the placement conventions); every cross-file step —
+  selection fold, lock pairing, demand tables, misplaced/unfilled/undeclared refusals, producer
+  projection, tree fans — moves into one `resolve(config, lock, values)` answering the assembly
+  plan. Verbs call it eagerly, so validate-at-the-earliest-moment survives as a call discipline.
+- Resolve is deterministic and offline: file reads, YAML parses, sha256 tree hashes. Network and
+  subprocesses stay in the verbs that write or execute; a resolve that can fail on the network
+  is a design violation.
+- The `choices` field dies: the selection resolves once and consumers thread the resolved
+  services; no intermediate `{group: option}` state survives on the model.
+- One semantic shift, decided: generate-score reads `platform:` without the full values
+  validation; unfilled-slot refusals move to `up`, the verb that requires the values file.
+- Behavior-preserving elsewhere — same artifacts, same error text — with config consumers
+  (verbs, score modules, build, lock engine, publish) and tests migrating load-time assertions
+  to resolve calls inside the same commit.
+- Lands per D3.
+
 ### Move 9 — tree vocabulary rename [LAST; name undecided]
 
 - One stroke, nothing forks mid-line: the marker (`__BOATYARD_TREE__` → `__BOATYARD_{NAME}__`),
@@ -116,8 +139,9 @@ is the operator's call) or dies with the line.
 
 ## What still dies
 
-The current tree vocabulary (Move 9). Everything else the line set out to kill already died
-with Moves 1–8.
+The current tree vocabulary (Move 9) and the cross-file validator plumbing — `choices` state,
+pydantic context threading, the load-then-resolve two-phase constructor (Move 10). Everything
+else the line set out to kill already died with Moves 1–8.
 
 ## This file
 
