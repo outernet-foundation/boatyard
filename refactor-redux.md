@@ -12,26 +12,39 @@ hand-composed refs with axis and sha blanks (workloads), `{{ env "X_SHA" }}` env
 and `lock:`/`lock-image:` markers (chart values, k8s manifests). No document declared its
 image; boatyard reconstructed the relationship by walking Dockerfile directories, matching
 stems cut from hand-written ref strings, and propagating axis ARGs down FROM chains. The
-repository prefix was hand-spelled inside every ref (17 sites in placeframe).
+variant fan was excavated from Dockerfile ARGs while being declared, wrongly, on service
+groups. The repository prefix was hand-spelled inside every ref (17 sites in placeframe).
 
 ## Design rulings
 
-- The consumer-to-image edge is authored at the consuming document, structurally. One
-  grammar, two syntaxes: workload containers carry `outernet.internal/dockerfile: <path>`
-  or `outernet.internal/lock: <base_images key>` annotations; provisioner manifests and
-  chart values carry `dockerfile:` or `lock:` markers on the image field (`lock` and
-  `lock-image` exist today; `dockerfile` is new).
+- Service-image edges are authored at the consuming document, structurally. One grammar,
+  two syntaxes: workload containers carry `outernet.internal/dockerfile: <path>` or
+  `outernet.internal/lock: <base_images key>` annotations; provisioner manifests and chart
+  values carry `dockerfile:` or `lock:` markers on the image field.
 - `image:` is never authored in a workload file. The lens rejects the key; the render pass
   injects the composed reference before score sees the document. `${NAME_SHA}` slots
   survive only as data uses of minted values (`SERVICE_VERSION`).
-- The build set is the closure over declared edges, extended by FROM lines inside reached
-  Dockerfiles. The directory walk dies. There is no reverse check: an unreferenced
-  Dockerfile is silently not built, the same as an unlisted score file. The forward check
-  errors on a declared path that does not exist.
-- A fan is declared by the leaf Dockerfile: an image fans on an axis iff its own ARG names
-  a declared axis. FROM-chain propagation dies. Group `axes:` keep their option-expansion
-  role and value vocabulary; they no longer imply per-workload variance — an image without
-  the ARG receives the same reference in every rendering of the group.
+- `base_images` is the single registry of things builds are founded on, with two entry
+  shapes. Pulled: `KEY: "host/path:tag"`, lock-resolved. Built:
+  `KEY: {dockerfile: <path>, axis: {AXIS: [values]}}`, closure-resolved. A built base's
+  published name is its dockerfile directory stem; the map key is only the ARG/FROM name —
+  two declared facts, no convention joining them.
+- One FROM grammar: every base reference is `ARG KEY` plus `FROM ${KEY}` (the shape
+  api/Dockerfile already uses). Bare-name FROMs and their stem-matching resolution die.
+  The build set is the closure over declared edges (annotations, markers, built entries)
+  extended through FROM edges into built bases. No directory walk. No reverse check: an
+  unreferenced Dockerfile is silently not built, like an unlisted score file.
+- The fan is declared on the built base entry (axis name and values inline), verified by
+  the matching ARG in that Dockerfile, and inherited by every image whose FROM edges reach
+  it. There is no top-level axes map and no group `axes:` block. Bake's per-variant base
+  wiring is re-keyed on the declared names (arg value or additional_contexts — the
+  executor decides and records it here).
+- The group fan is derived: a member whose image closure fans publishes one rendering per
+  value (core-cuda/core-rocm); authored `options:` groups are unaffected; a closure fanning
+  two axes refuses (the cross-product law). The options/axes lexical discriminator dies
+  with group axes — the closure decides (fanned closure means a selectable group; no fan
+  means an unconditional member). If the pydantic union still needs a lexical marker, the
+  executor adds the minimal one and records it here.
 - One composer serves annotations and markers: repository (config) + directory stem +
   selected variant (only when the image fans) + tag. Compose renderings emit the
   per-machine slot spelling through the existing sentinel pass; k8s renderings emit
@@ -40,11 +53,15 @@ repository prefix was hand-spelled inside every ref (17 sites in placeframe).
 
 ## Loud errors
 
-- A declared dockerfile path that does not exist.
-- A lock annotation or marker naming no base_images key.
-- A group axis no reached image fans on.
-- `FROM <bare-name>` resolving to zero or multiple declared image stems.
-- A workload container without exactly one source annotation, or carrying an authored
+- A declared dockerfile path (annotation, marker, or built entry) that does not exist.
+- A lock annotation or marker naming no pulled base_images key, or naming a built entry.
+- `FROM ${KEY}` naming no base_images key.
+- A built entry's declared axis with no matching ARG in its Dockerfile.
+- A built base entry no reached Dockerfile consumes (dead declaration).
+- A built entry present in the lock (the lock pairs pulled entries only).
+- Two built entries declaring one axis name with different value sets.
+- A member whose image closure fans two axes.
+- A workload container without exactly one source annotation, or with an authored
   `image:` key.
 
 ## Moves
@@ -52,33 +69,50 @@ repository prefix was hand-spelled inside every ref (17 sites in placeframe).
 1. `markers.py`: the reference composer and the `dockerfile:` marker arm.
 2. `models/workload.py` + `score.py`: source annotations, `image:` rejected, injection at
    the per-run copy pass.
-3. `models/image.py`: the Dockerfile facts parse stays; the walk is replaced by closure
-   derivation from declared edges; `_effective_axis` deleted; leaf-ARG fan.
-4. `models/config_file.py`: `_derive` walks declared edges (workload annotations, selected
-   provisioner markers) for the closure and the consumer surfaces; `_refuse_unknown_axis_refs`
-   deleted; the axis-coverage error added.
+3. `models/image.py`: the facts parse stays; closure derivation from declared edges;
+   FROM resolution against base_images; declared fan plus inheritance; the ARG-sniffing
+   derivation (`own_axes`, `_effective_axis`) dies.
+4. `models/config_file.py`: dual-shape `base_images`; the derived group fan and the
+   discrimination decision; `_derive` walks declared edges for the closure and surfaces;
+   `_refuse_unknown_axis_refs` deleted.
 5. `build.py` and the verbs (`tree-tags`, `matrix`, `publish`, `bump`): consume the
-   closure; no behavior change expected beyond inputs.
-6. Tests: walk-derived set tests become closure-derived; lens grammar tests for the
-   annotation rules; composer tests per substrate; placeframe-shaped integration fixtures.
+   closure; re-key the per-variant base wiring on declared names.
+6. `models/lock_file.py` + `lock.py`: pairing skips built entries; built entries in the
+   lock refuse.
+7. Tests: closure-derived sets, dual-shape base_images, FROM grammar, fan inheritance,
+   composer per substrate, lens rules, placeframe-shaped fixtures.
 
 ## Placeframe transition
 
+- boatyard.yml: a built entry joins base_images; the core `axes:` block is deleted;
+  routes and ports are re-spelled in flow style:
+
+      base_images:
+        NEURAL_NETWORKS_BASE:
+          dockerfile: workloads/neural-networks-base/Dockerfile
+          axis:
+            TORCH_DEVICE: [cuda, rocm]
+
+- Dockerfiles: reconstructor and localizer add `ARG NEURAL_NETWORKS_BASE` and re-spell
+  `FROM neural-networks-base` as `FROM ${NEURAL_NETWORKS_BASE}`. neural-networks-base is
+  unchanged — its `ARG TORCH_DEVICE` stays as the branching mechanism the declared fan is
+  checked against.
 - Workloads: api, lease-server, reconstructor, localizer gain
   `outernet.internal/dockerfile` annotations; keycloak and ngrok gain
   `outernet.internal/lock` annotations. The image lines are deleted.
 - Provisioners: postgres, seaweedfs, oidc-issuer manifests (both renderings) replace
   `{{ env "X_SHA" }}` image lines with `dockerfile:` markers; compose observability
   replaces `${X_IMAGE:?err}` slots with `lock:` markers (the k8s side already locks).
-- Dockerfiles: `ARG TORCH_DEVICE` added to the reconstructor and localizer leaves (the ARG
-  currently lives only on neural-networks-base).
-- boatyard.yml, values files, and consumer `ref:`s: no change.
+- Values files, bundle names, and consumer `ref:`s: no change (core-cuda/core-rocm now
+  derive from the fan).
 
 ## What dies
 
-The directory walk and the one-top-dir rule, `_effective_axis`, the stem surgery in
-`_refuse_unknown_axis_refs`, hand-composed image refs, `{{ env "X_SHA" }}` image lines,
-the slot-in-image grammar, and the repository prefix inside score files.
+The directory walk and the one-top-dir rule, the ARG-sniffing fan derivation, the
+bare-name FROM grammar and its stem resolution, the stem surgery in
+`_refuse_unknown_axis_refs`, group `axes:` blocks, hand-composed image refs,
+`{{ env "X_SHA" }}` image lines, the slot-in-image grammar, and the repository prefix
+inside score files.
 
 ## This file
 
