@@ -487,20 +487,7 @@ def _derive(config: ConfigFile, root: Path) -> None:
             pyproject_document = PyprojectToml.model_validate(
                 tomllib.loads(pyproject.read_text(encoding="utf-8")) if pyproject.is_file() else {}
             )
-            declared = (
-                pyproject_document.tool.uv.required_version
-                if pyproject_document.tool is not None and pyproject_document.tool.uv is not None
-                else None
-            )
-            if not declared:
-                raise ValueError(f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version is not declared")
-            pin_match = re.fullmatch(r"==(?P<version>[^,*\s]+)", declared.strip())
-            if pin_match is None:
-                raise ValueError(
-                    f"{PYPROJECT_PATH.as_posix()}: tool.uv.required-version {declared!r} "
-                    "must be an exact == pin like '==0.12.15'"
-                )
-            pins[key] = pin_match.group("version")
+            pins[key] = pyproject_document.uv_version_pin()
         elif key == "python":
             python_version = root / PYTHON_VERSION_PATH
             if not python_version.is_file():
