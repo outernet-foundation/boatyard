@@ -117,7 +117,7 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
         bundles[key] = ConfigLockBundle(reference=pinned, slots=artifact_slot_demands(texts))
 
     images: dict[str, ConfigLockEntry] = {}
-    for name, reference in config.base_images.items():
+    for name, reference in {**config.base_images, **config.owned_images}.items():
         base = mirrored_ref(reference, prefix)
         committed_entry = committed.images.get(name)
 
@@ -163,12 +163,12 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
         for platform in config.platforms:
             if len(matches[platform]) != 1:
                 raise ValueError(
-                    f"base_images entry {name}: platform {platform} "
+                    f"image pin {name}: platform {platform} "
                     f"matches {len(matches[platform])} upstream manifests, expected exactly one"
                 )
             child = matches[platform][0]
             if not child.digest.startswith("sha256:"):
-                raise ValueError(f"base_images entry {name}: upstream index child must carry a digest ({child!r})")
+                raise ValueError(f"image pin {name}: upstream index child must carry a digest ({child!r})")
             selected[platform] = child.digest
 
         # Record the mirror-prefixed index and one reference per platform.

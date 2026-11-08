@@ -69,8 +69,6 @@ def _write_repo(
     (score / "compose").mkdir()
     (score / "compose" / "services.yaml").write_text(PROVISIONER, encoding="utf-8")
     base_images: dict[str, str] = {"LOKI_IMAGE": "docker.io/grafana/loki:3.0"}
-    if gateway is not None:
-        base_images["CADDY_IMAGE"] = "docker.io/library/caddy:2.8"
     core_entry: dict[str, object] = {"workloads": ["api.yaml"]}
     if ports is not None:
         core_entry["ports"] = ports
@@ -93,12 +91,16 @@ def _write_repo(
         "LOKI_IMAGE": {
             "index": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}",
             "platforms": {"linux/amd64": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}"},
-        }
+        },
+        "ALPINE_IMAGE": {
+            "index": f"ghcr.io/org/alpine:3.20@{FAKE_DIGEST}",
+            "platforms": {"linux/amd64": f"ghcr.io/org/alpine:3.20@{FAKE_DIGEST}"},
+        },
     }
     if gateway is not None:
         lock_images["CADDY_IMAGE"] = {
-            "index": f"docker.io/library/caddy:2.8@{FAKE_DIGEST}",
-            "platforms": {"linux/amd64": f"docker.io/library/caddy:2.8@{FAKE_DIGEST}"},
+            "index": f"ghcr.io/org/caddy:2.8@{FAKE_DIGEST}",
+            "platforms": {"linux/amd64": f"ghcr.io/org/caddy:2.8@{FAKE_DIGEST}"},
         }
     root.joinpath(*LOCK_PATH.parts).write_text(
         yaml.safe_dump({

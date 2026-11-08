@@ -109,6 +109,9 @@ BARRIER_SERVICE = "wait-for-resources"
 CADDY_IMAGE = "CADDY_IMAGE"
 ALPINE_IMAGE = "ALPINE_IMAGE"
 
+DEFAULT_BARRIER_IMAGE = "docker.io/library/alpine:3.20"
+DEFAULT_EDGE_IMAGE = "docker.io/library/caddy:2.8.4-alpine"
+
 COMPOSE_OUTPUT_DIR = Path("stack/generated/compose")
 
 Target = Literal["both", "compose", "k8s"]
@@ -178,6 +181,8 @@ class ConfigFile(BaseModel):
     gateway: PortNumber | None = None
     repository: str | None = None
     base_images: dict[AllCapsName, str] = Field(default_factory=dict)
+    barrier_image: str = DEFAULT_BARRIER_IMAGE
+    edge_image: str = DEFAULT_EDGE_IMAGE
     variants: dict[AllCapsName, list[str]] = Field(default_factory=dict)
     platforms: list[str] = Field(default_factory=list)
     project_name: str
@@ -296,8 +301,6 @@ class ConfigFile(BaseModel):
         )
         if declares_routes and self.gateway is None:
             raise ValueError("routes are declared; gateway is required")
-        if self.gateway is not None and CADDY_IMAGE not in self.base_images:
-            raise ValueError("gateway is declared; base_images must declare CADDY_IMAGE")
         for chart in declared_charts:
             values = root / self.score_dir / "k8s" / "values" / f"{chart}.yaml"
             if not values.is_file():
@@ -311,7 +314,9 @@ class ConfigFile(BaseModel):
                     raise ValueError(f"{workload_path.as_posix()}: the workload file is required")
             workloads = load_workloads(root / self.score_dir, entry.workloads, WorkloadDocument)
             refuse_colliding_service_names(entry_name, workloads, root / self.score_dir)
-            surfaces[entry_name] = authored_slot_demands(workloads, root / self.score_dir, root, set(self.base_images))
+            surfaces[entry_name] = authored_slot_demands(
+                workloads, root / self.score_dir, root, set(self.base_images) | set(self.owned_images)
+            )
         self.consumer_surfaces = surfaces
 
         return self
@@ -352,6 +357,16 @@ class ConfigFile(BaseModel):
             for row in _flatten_service_members(self.services)
             if row.entry.ref is not None
         ]
+
+    @property
+    def owned_images(self) -> dict[str, str]:
+        # Boatyard-emitted service pins: the barrier rides local entries, the edge a gateway
+        owned: dict[str, str] = {}
+        if self.local_service_entries():
+            owned[ALPINE_IMAGE] = self.barrier_image
+        if self.gateway is not None:
+            owned[CADDY_IMAGE] = self.edge_image
+        return owned
 
     @property
     def tree_sentinels(self) -> dict[str, str]:
@@ -402,9 +417,22 @@ class ConfigFile(BaseModel):
     @classmethod
     def _validate_base_images(cls, value: dict[AllCapsName, str]) -> dict[AllCapsName, str]:
         for name, reference in value.items():
+            if name in (ALPINE_IMAGE, CADDY_IMAGE):
+                raise ValueError(
+                    f"base_images.{name}: the barrier and edge pins are boatyard-owned "
+                    f"(barrier_image:/edge_image:); base_images holds Dockerfile build inputs only"
+                )
             match = DECLARED_REFERENCE_PATTERN.fullmatch(reference)
             if match is None or not (match.group("tag") or match.group("digest")):
                 raise ValueError(f"base_images.{name}: {reference!r} must be 'path:tag' or 'path@digest'")
+        return value
+
+    @field_validator("barrier_image", "edge_image")
+    @classmethod
+    def _validate_owned_image_pins(cls, value: str, info: ValidationInfo) -> str:
+        match = DECLARED_REFERENCE_PATTERN.fullmatch(value)
+        if match is None or not (match.group("tag") or match.group("digest")):
+            raise ValueError(f"{info.field_name}: {value!r} must be 'path:tag' or 'path@digest'")
         return value
 
     @field_validator("variants")
@@ -492,10 +520,8 @@ class ConfigFile(BaseModel):
             if any_local and not self.repository:
                 raise ValueError("local entries (workloads:) are declared; repository is required")
 
-        if self.base_images and not self.platforms:
-            raise ValueError(
-                "base_images are declared; platforms is required (an amd64-only repo declares [linux/amd64])"
-            )
+        if (self.base_images or self.owned_images) and not self.platforms:
+            raise ValueError("images are declared; platforms is required (an amd64-only repo declares [linux/amd64])")
         return self
 
 

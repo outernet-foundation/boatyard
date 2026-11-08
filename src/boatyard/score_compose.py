@@ -135,8 +135,6 @@ def generate_compose(config: ConfigFile, lock: LockFile) -> list[Path]:
     values_path = config.root / VALUES_FILE
     platform = ValuesFile.load(values_path, config, lock).platform if values_path.is_file() else None
     images = lock.manifest_references(platform)
-    if ALPINE_IMAGE not in config.base_images:
-        raise ValueError("local entries require base_images to declare ALPINE_IMAGE")
 
     # The build-set slot supply mints the barrier; a workload ${X_SHA} naming no build
     # refuses at render_score's leftover check.
@@ -190,7 +188,7 @@ def generate_compose(config: ConfigFile, lock: LockFile) -> list[Path]:
             # Pin the barrier image to the lock slot
             if service_name == BARRIER_SERVICE:
                 barrier_service = document.services[BARRIER_SERVICE]
-                barrier_service.image = "${ALPINE_IMAGE:?err}"
+                barrier_service.image = f"${{{ALPINE_IMAGE}:?err}}"
                 services_map[BARRIER_SERVICE] = (barrier_service, None, BARRIER_SERVICE)
                 continue
 

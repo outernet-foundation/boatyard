@@ -59,7 +59,6 @@ def _write_edge_tree(
         "requires": ">=0.0",
         "project_name": "edge-demo",
         "platforms": ["linux/amd64"],
-        "base_images": {"CADDY_IMAGE": "docker.io/library/caddy:2.8.4-alpine"},
         "services": services,
     }
     if gateway is not None:

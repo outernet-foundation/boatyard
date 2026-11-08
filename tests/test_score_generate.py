@@ -34,10 +34,6 @@ def _root_config(**sections: object) -> ConfigFile:
     payload.update(sections)
     if "services" in payload:
         payload.setdefault("gateway", 8080)
-        declared_images = payload.get("base_images")
-        if not isinstance(declared_images, dict):
-            declared_images = {}
-        payload["base_images"] = {"ALPINE_IMAGE": "docker.io/library/alpine:3.20", **declared_images}
         payload.setdefault("platforms", ["linux/amd64"])
     return ConfigFile.model_validate(payload)
 
@@ -331,9 +327,7 @@ class TestMarkerSubstrateResolution:
         )
         platform_lines = "".join(f"  - {platform}\n" for platform in platforms)
         base_image_lines = (
-            "base_images:\n"
-            "  LOKI_IMAGE: docker.io/grafana/loki:3.5.0\n"
-            "  ALPINE_IMAGE: docker.io/library/alpine:3.21.0\n"
+            "base_images:\n  LOKI_IMAGE: docker.io/grafana/loki:3.5.0\nbarrier_image: docker.io/library/alpine:3.21.0\n"
         )
         (tmp_path / "boatyard.yml").write_text(
             "requires: '>=0'\n"
@@ -842,13 +836,12 @@ def test_barrier_pin_stays_unregistered_without_provisioner_services(
     assert templates == [["probe-adapter-healthchecks.tpl", "restart.tpl"]]
 
 
-def test_generate_compose_requires_the_alpine_base_image(tmp_path: Path) -> None:
+def test_generate_compose_pins_the_barrier_to_the_owned_alpine_slot(tmp_path: Path) -> None:
     config = _bundle_config()
-    config.base_images.pop("ALPINE_IMAGE")
     config.root = tmp_path
 
-    with pytest.raises(ValueError, match="local entries require base_images to declare ALPINE_IMAGE"):
-        score_compose_module.generate_compose(config, LockFile.model_validate({}))
+    assert config.base_images == {}
+    assert list(config.owned_images) == ["ALPINE_IMAGE", "CADDY_IMAGE"]
 
 
 def test_provisioners_register_by_resource_type_closure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1444,7 +1437,6 @@ def _verb_repo(tmp_path: Path, secrets: object = {}) -> None:
             "platforms": ["linux/amd64"],
             "base_images": {
                 "LOKI_IMAGE": "docker.io/grafana/loki:3.5.0",
-                "ALPINE_IMAGE": "docker.io/library/alpine:3.21.0",
             },
             "secrets": secrets,
             "services": {"core": {"workloads": ["api.yaml"]}},

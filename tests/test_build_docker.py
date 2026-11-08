@@ -45,13 +45,11 @@ def _write_repo(
         "requires": ">=0",
         "repository": repository,
         "project_name": "demo",
+        "platforms": platforms or ["linux/amd64"],
         "services": {"core": {"workloads": ["api.yaml"]}},
     }
     if base_images:
-        payload["platforms"] = platforms or ["linux/amd64"]
         payload["base_images"] = base_images
-    elif platforms:
-        payload["platforms"] = platforms
     if variants:
         payload["variants"] = variants
     if charts:
@@ -118,7 +116,13 @@ def _fixed_index(command: str) -> str:
                 "digest": DIGEST_A,
                 "size": 1234,
                 "platform": {"os": "linux", "architecture": "amd64"},
-            }
+            },
+            {
+                "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                "digest": DIGEST_A,
+                "size": 1234,
+                "platform": {"os": "linux", "architecture": "arm64"},
+            },
         ]
     })
 
@@ -215,6 +219,8 @@ def _prepare(
     monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
     monkeypatch.setattr(build_module, "host_platform", _amd64_host)
     monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
+    monkeypatch.setattr(lock_module, "bash_output", _fixed_index)
+    monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
     monkeypatch.setattr(build_module, "push_build", recorder.shelve)
     monkeypatch.setattr(build_module, "install_oras", lambda: None)
     monkeypatch.setattr(build_module, "bash_output", _head_sha)
@@ -265,6 +271,8 @@ class TestDefaultTargets:
         monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
+        monkeypatch.setattr(lock_module, "bash_output", _fixed_index)
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL}, platforms=["linux/arm64"])
 
@@ -370,6 +378,8 @@ class TestVariantSelection:
         monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
+        monkeypatch.setattr(lock_module, "bash_output", _fixed_index)
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
         monkeypatch.chdir(tmp_path)
         _write_repo(
             tmp_path,
@@ -411,6 +421,10 @@ class TestBakeFailure:
         monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
+        monkeypatch.setattr(lock_module, "bash_output", _fixed_index)
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
+        monkeypatch.setattr(lock_module, "bash_output", _fixed_index)
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": EXTERNAL})
 
@@ -471,6 +485,8 @@ class TestPushDestination:
         monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
+        monkeypatch.setattr(lock_module, "bash_output", _fixed_index)
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL})
 
@@ -485,6 +501,8 @@ class TestPushDestination:
         monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
+        monkeypatch.setattr(lock_module, "bash_output", _fixed_index)
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL})
 
@@ -509,6 +527,8 @@ class TestPushDestination:
         monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
+        monkeypatch.setattr(lock_module, "bash_output", _fixed_index)
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL})
 
@@ -553,6 +573,8 @@ class TestDigestShelving:
         monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
+        monkeypatch.setattr(lock_module, "bash_output", _fixed_index)
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
         monkeypatch.delenv("REGISTRY", raising=False)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL})
@@ -676,14 +698,14 @@ class TestRenderBakeArgs:
             tmp_path,
             [],
             dockerfiles={"api": EXTERNAL},
-            base_images={"UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:0.12.15", "ALPINE_IMAGE": "alpine:3.20"},
+            base_images={"UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:0.12.15", "EXTRA_IMAGE": "alpine:3.20"},
         )
 
         services = _rendered_services(recorder.rendered)
 
         assert services["api"]["build"]["args"] == {
             "UV_BASE_IMAGE": "${UV_BASE_IMAGE:-}",
-            "ALPINE_IMAGE": "${ALPINE_IMAGE:-}",
+            "EXTRA_IMAGE": "${EXTRA_IMAGE:-}",
         }
 
     def test_sha_args_render_only_for_declaring_dockerfiles(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -834,13 +856,6 @@ class TestRenderBakePlatforms:
         services = _rendered_services(recorder.rendered)
 
         assert services["zed-capture"]["build"]["platforms"] == ["linux/arm64"]
-
-    def test_undeclared_platforms_render_no_key(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        recorder = _prepare(monkeypatch, tmp_path, [], dockerfiles={"api": EXTERNAL})
-
-        services = _rendered_services(recorder.rendered)
-
-        assert "platforms" not in services["api"]["build"]
 
 
 def test_render_bake_carries_only_bake_read_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

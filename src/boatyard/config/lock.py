@@ -52,14 +52,15 @@ class LockFile(BaseModel):
                     f"{source}: image entry {name} records platforms {sorted(entry.platforms)} "
                     f"but the lock records {recorded} (run boatyard lock)"
                 )
-        missing_images = sorted(set(config.base_images) - self.images.keys())
+        effective_images = set(config.base_images) | set(config.owned_images)
+        missing_images = sorted(effective_images - self.images.keys())
         if missing_images:
-            raise ValueError(f"{source}: lacks the {missing_images} entries base_images declares (run boatyard lock)")
+            raise ValueError(f"{source}: lacks the {missing_images} image entries (run boatyard lock)")
         missing_charts = sorted({chart_lock_key(chart) for chart in config.declared_charts} - self.charts.keys())
         if missing_charts:
             raise ValueError(f"{source}: lacks the {missing_charts} entries k8s.charts declares (run boatyard lock)")
         declared_names = (
-            set(config.base_images)
+            effective_images
             | {chart_lock_key(chart) for chart in config.declared_charts}
             | {bundle_lock_key(name) for name, _reference, _entry in config.remote_declared_entries()}
         )

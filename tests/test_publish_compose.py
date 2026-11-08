@@ -219,7 +219,7 @@ class TestPublishComposeVerb:
                 "repository": REPOSITORY,
                 "project_name": "livekit-tier",
                 "platforms": ["linux/amd64"],
-                "base_images": {"CADDY_IMAGE": "docker.io/library/caddy:2.8.4-alpine"},
+                "gateway": 18443,
                 "services": {"livekit-tier": {"workloads": ["livekit-token.yaml"]}},
             },
         )
@@ -232,7 +232,10 @@ class TestPublishComposeVerb:
         (tmp_path / LOCK_PATH).write_text(
             yaml.safe_dump({
                 "platforms": ["linux/amd64"],
-                "images": {"CADDY_IMAGE": {"index": CADDY_LOCK_REF, "platforms": {"linux/amd64": CADDY_LOCK_REF}}},
+                "images": {
+                    "CADDY_IMAGE": {"index": CADDY_LOCK_REF, "platforms": {"linux/amd64": CADDY_LOCK_REF}},
+                    "ALPINE_IMAGE": {"index": CADDY_LOCK_REF, "platforms": {"linux/amd64": CADDY_LOCK_REF}},
+                },
             }),
             encoding="utf-8",
         )
@@ -327,7 +330,6 @@ class TestBundleMode:
         merged: dict[str, Any] = {
             **(sections or ROOT_BUNDLE_SECTION),
             "platforms": ["linux/amd64"],
-            "base_images": {"ALPINE_IMAGE": "alpine:3.20"},
         }
         _write_config(tmp_path, merged)
         (tmp_path / "workloads").mkdir()

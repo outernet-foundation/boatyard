@@ -17,7 +17,6 @@ from boatyard.config.config import (
 from boatyard.config.lock import LOCK_PATH, LockFile
 from boatyard.yaml import load_yaml_model
 
-EDGE_BASE_IMAGES = {"CADDY_IMAGE": "docker.io/library/caddy:2.8.4-alpine"}
 EDGE_PLATFORMS = ["linux/amd64"]
 
 DIGEST = "sha256:" + "a" * 64
@@ -289,13 +288,13 @@ class TestBaseImages:
         }
 
     def test_bare_path_rejected(self, tmp_path: Path) -> None:
-        write_config(tmp_path, {"requires": ">=0.1", "base_images": {"ALPINE_IMAGE": "docker.io/library/alpine"}})
+        write_config(tmp_path, {"requires": ">=0.1", "base_images": {"LOKI_IMAGE": "docker.io/grafana/loki"}})
 
         with pytest.raises(ValidationError, match="path:tag"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_env_slot_rejected(self, tmp_path: Path) -> None:
-        write_config(tmp_path, {"requires": ">=0.1", "base_images": {"ALPINE_IMAGE": "${ALPINE_REF}"}})
+        write_config(tmp_path, {"requires": ">=0.1", "base_images": {"LOKI_IMAGE": "${LOKI_REF}"}})
 
         with pytest.raises(ValueError, match="interpolation lives in score sources and committed artifacts"):
             ConfigFile.load(tmp_path / "boatyard.yml")
@@ -639,7 +638,6 @@ class TestServices:
                 "repository": "ghcr.io/org/repo",
                 "project_name": "example",
                 "gateway": 58080,
-                "base_images": EDGE_BASE_IMAGES,
                 "platforms": EDGE_PLATFORMS,
                 "services": {
                     "auth": {
@@ -872,7 +870,6 @@ class TestServices:
                 "requires": ">=0.1",
                 "project_name": "example",
                 "gateway": 8080,
-                "base_images": EDGE_BASE_IMAGES,
                 "platforms": EDGE_PLATFORMS,
                 "services": {
                     "livekit": {
@@ -892,6 +889,7 @@ class TestQualifiedVocabulary:
             "requires": ">=0.1",
             "repository": "ghcr.io/org/repo",
             "project_name": "example",
+            "platforms": ["linux/amd64"],
             "services": services,
         }
 
@@ -954,7 +952,6 @@ class TestAuthGroup:
             "requires": ">=0.1",
             "project_name": "example",
             "gateway": 8080,
-            "base_images": EDGE_BASE_IMAGES,
             "platforms": EDGE_PLATFORMS,
             "services": {"auth": {"options": options}},
         }
@@ -1018,7 +1015,6 @@ class TestRoutes:
             "requires": ">=0.1",
             "project_name": "example",
             "gateway": 8080,
-            "base_images": EDGE_BASE_IMAGES,
             "platforms": EDGE_PLATFORMS,
             "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG, "routes": routes}},
         }
@@ -1104,22 +1100,7 @@ class TestRoutes:
 
 
 class TestGatewayKey:
-    def test_a_gateway_without_the_caddy_base_image_refuses(self, tmp_path: Path) -> None:
-        write_config(
-            tmp_path,
-            {
-                "requires": ">=0.1",
-                "project_name": "example",
-                "gateway": 8443,
-                "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG}},
-            },
-        )
-
-        with pytest.raises(ValueError, match="CADDY_IMAGE"):
-            ConfigFile.load(tmp_path / "boatyard.yml")
-
-    def test_a_routeless_gateway_with_caddy_loads(self, tmp_path: Path) -> None:
-        write_lock(tmp_path, bundles=bundle_entries("livekit"))
+    def test_the_barrier_and_edge_names_refuse_in_base_images(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,
             {
@@ -1127,6 +1108,54 @@ class TestGatewayKey:
                 "project_name": "example",
                 "platforms": ["linux/amd64"],
                 "base_images": {"CADDY_IMAGE": "docker.io/library/caddy:2.8.4-alpine"},
+                "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG}},
+            },
+        )
+
+        with pytest.raises(ValidationError, match="barrier and edge pins are boatyard-owned"):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
+    def test_the_owned_pins_carry_the_tool_pin_shape(self, tmp_path: Path) -> None:
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "project_name": "example",
+                "platforms": ["linux/amd64"],
+                "barrier_image": "docker.io/library/alpine",
+                "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG}},
+            },
+        )
+
+        with pytest.raises(ValidationError, match=r"barrier_image: 'docker\.io/library/alpine' must be"):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
+    def test_a_gateway_owns_the_edge_pin_and_overrides_ship_theirs(self, tmp_path: Path) -> None:
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "project_name": "example",
+                "platforms": ["linux/amd64"],
+                "gateway": 8080,
+                "edge_image": "docker.io/library/caddy:2.9.0",
+                "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG}},
+            },
+        )
+
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
+
+        assert config is not None
+        assert config.owned_images == {"CADDY_IMAGE": "docker.io/library/caddy:2.9.0"}
+
+    def test_a_routeless_gateway_loads(self, tmp_path: Path) -> None:
+        write_lock(tmp_path, bundles=bundle_entries("livekit"))
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "project_name": "example",
+                "platforms": ["linux/amd64"],
                 "gateway": 8080,
                 "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG}},
             },
@@ -1143,7 +1172,6 @@ class TestGatewayKey:
                 "requires": ">=0.1",
                 "project_name": "example",
                 "gateway": 8443,
-                "base_images": EDGE_BASE_IMAGES,
                 "platforms": EDGE_PLATFORMS,
                 "services": {
                     "livekit": {
@@ -1183,7 +1211,6 @@ class TestPorts:
             "repository": "ghcr.io/org/repo",
             "project_name": "example",
             "gateway": 8080,
-            "base_images": EDGE_BASE_IMAGES,
             "platforms": EDGE_PLATFORMS,
             "services": services,
         }
@@ -1360,6 +1387,7 @@ class TestRepository:
                 "requires": ">=0.1",
                 "repository": "ghcr.io/org/repo",
                 "project_name": "example",
+                "platforms": ["linux/amd64"],
                 "services": {"rathole-client": {"workloads": ["rathole-client.yaml"]}},
             },
         )
@@ -1457,13 +1485,14 @@ class TestLockPairing:
 
         assert [name for name, _declared, _entry in config.remote_declared_entries()] == ["livekit"]
 
-    def test_no_declarations_need_no_lock(self, tmp_path: Path) -> None:
+    def test_a_local_repo_loads_without_a_lock_file(self, tmp_path: Path) -> None:
         write_workload(tmp_path, "api.yaml", ["api"])
         write_config(
             tmp_path,
             {
                 "requires": ">=0.1",
                 "repository": "ghcr.io/org/repo",
+                "platforms": ["linux/amd64"],
                 "services": {"core": {"workloads": ["api.yaml"]}},
                 "project_name": "example",
             },
@@ -1497,6 +1526,7 @@ class TestBareServiceNameClaims:
             {
                 "requires": ">=0.1",
                 "repository": "ghcr.io/org/repo",
+                "platforms": ["linux/amd64"],
                 "services": {"core": {"workloads": workloads}},
             },
         )
@@ -1563,6 +1593,7 @@ class TestBareServiceNameClaims:
             {
                 "requires": ">=0.1",
                 "repository": "ghcr.io/org/repo",
+                "platforms": ["linux/amd64"],
                 "services": {
                     "one": {"workloads": ["alpha.yaml"]},
                     "two": {"workloads": ["beta.yaml"]},
@@ -1579,6 +1610,7 @@ def test_direct_model_construction_is_valid_for_tests(tmp_path: Path) -> None:
         "repository": "ghcr.io/org/repo",
         "project_name": "example",
         "gateway": 8080,
+        "platforms": ["linux/amd64"],
         "services": {"core": {"workloads": ["api.yaml"]}},
     })
     config.root = tmp_path
@@ -1599,6 +1631,7 @@ def test_local_service_entries_flatten_in_declaration_order_skipping_refs(tmp_pa
             "requires": ">=0.1",
             "repository": "ghcr.io/org/repo",
             "project_name": "example",
+            "platforms": ["linux/amd64"],
             "services": {
                 "identity": {"options": {"keycloak": {"ref": "oci://ghcr.io/org/repo/keycloak:0.3.1"}}},
                 "placeframe": {
