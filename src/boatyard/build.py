@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, m
 
 from boatyard.models.config_file import ConfigFile
 from boatyard.yaml import Yaml
-from boatyard.models.image import Image, image_sha_env
+from boatyard.models.image import Image, compute_shas, image_sha_env
 from boatyard.lock import relock
 
 
@@ -105,7 +105,7 @@ def run_build(
     pushing = push or push_to is not None
     destination = push_to
 
-    image_shas = {image_sha_env(name): image.compute_sha(config.root) for name, image in config.images.items()}
+    image_shas = compute_shas(config.images, config.root)
     os.environ.update(image_shas)
 
     if not config.images:

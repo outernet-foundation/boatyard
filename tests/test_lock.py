@@ -31,7 +31,11 @@ LOCK_BASE_IMAGES = {
 runner = CliRunner()
 
 
-def _refuse_the_tree_walk(_self: Image, _root: Path) -> str:
+def _empty_hash_context(_root: Path) -> list[str]:
+    return []
+
+
+def _refuse_the_tree_walk(_self: Image, _root: Path, _context: list[str]) -> str:
     raise AssertionError("the lock verb never walks the source tree")
 
 
@@ -172,6 +176,7 @@ def _invoke(
     monkeypatch.setattr(lock_module, "bash_output", IndexRegistry().bash_output)
     monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
     monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
+    monkeypatch.setattr("boatyard.models.image.hash_context", _empty_hash_context)
     monkeypatch.setattr(Image, "compute_sha", _refuse_the_tree_walk)
     monkeypatch.chdir(tmp_path)
     _write_repo(tmp_path, base_images=base_images, charts=charts, platforms=platforms)
@@ -189,6 +194,7 @@ class TestSelfSkip:
         assert not (tmp_path / LOCK_PATH).exists()
 
     def test_skips_without_declarations(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr("boatyard.models.image.hash_context", _empty_hash_context)
         monkeypatch.setattr(Image, "compute_sha", _refuse_the_tree_walk)
         monkeypatch.setattr(lock_module, "bash_output", IndexRegistry().bash_output)
         monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
@@ -242,6 +248,7 @@ class TestImageRecording:
         monkeypatch.setattr(lock_module, "bash_output", registry.bash_output)
         monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
         monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
+        monkeypatch.setattr("boatyard.models.image.hash_context", _empty_hash_context)
         monkeypatch.setattr(Image, "compute_sha", _refuse_the_tree_walk)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, base_images=LOCK_BASE_IMAGES)
@@ -314,6 +321,7 @@ class TestImageRecording:
         monkeypatch.setattr(lock_module, "bash_output", registry.bash_output)
         monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
         monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
+        monkeypatch.setattr("boatyard.models.image.hash_context", _empty_hash_context)
         monkeypatch.setattr(Image, "compute_sha", _refuse_the_tree_walk)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
@@ -344,6 +352,7 @@ class TestImageRecording:
         monkeypatch.setattr(lock_module, "bash_output", registry.bash_output)
         monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
         monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
+        monkeypatch.setattr("boatyard.models.image.hash_context", _empty_hash_context)
         monkeypatch.setattr(Image, "compute_sha", _refuse_the_tree_walk)
         monkeypatch.chdir(tmp_path)
         _write_repo(
@@ -465,6 +474,7 @@ def _lock_against_index(
     monkeypatch.setattr(lock_module, "bash_output", ManifestOutput(json.dumps({"manifests": manifests})))
     monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
     monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
+    monkeypatch.setattr("boatyard.models.image.hash_context", _empty_hash_context)
     monkeypatch.setattr(Image, "compute_sha", _refuse_the_tree_walk)
     monkeypatch.chdir(tmp_path)
     _write_repo(tmp_path, platforms=platforms)
@@ -646,6 +656,7 @@ class TestBundleRecording:
         monkeypatch.setattr(lock_module, "resolve_remote_digest", recorder.resolve)
         monkeypatch.setattr(lock_module, "bash_output", registry.bash_output)
         monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
+        monkeypatch.setattr("boatyard.models.image.hash_context", _empty_hash_context)
         monkeypatch.setattr(Image, "compute_sha", _refuse_the_tree_walk)
         monkeypatch.chdir(tmp_path)
         services = ref_services or {"tunnel": {"options": {"rathole": {"ref": self.TUNNEL_RATHOLE}}}}
@@ -895,6 +906,7 @@ class TestResolveRemoteDigest:
 
 class TestLockCheck:
     def _prepare(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setattr("boatyard.models.image.hash_context", _empty_hash_context)
         monkeypatch.setattr(Image, "compute_sha", _refuse_the_tree_walk)
         monkeypatch.setattr(lock_module, "bash_output", IndexRegistry().bash_output)
         monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
@@ -1186,6 +1198,7 @@ class TestPairedLoad:
         monkeypatch.setattr(lock_module, "bash_output", IndexRegistry().bash_output)
         monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
         monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
+        monkeypatch.setattr("boatyard.models.image.hash_context", _empty_hash_context)
         monkeypatch.setattr(Image, "compute_sha", _refuse_the_tree_walk)
         monkeypatch.chdir(tmp_path)
 
