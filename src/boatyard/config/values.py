@@ -17,11 +17,9 @@ from boatyard.config.config import (
     ENV_NAME_PATTERN,
     PortNumber,
     RESERVED_SLOT_MARKERS,
-    Yaml,
-    is_mapping,
 )
 from boatyard.paths import VALUES_FILE
-from boatyard.yaml import load_yaml_model
+from boatyard.yaml import Yaml, is_mapping, load_yaml_model
 
 PUBLIC_URL_SLOT = "PUBLIC_URL"
 EDGE_BASE_URL_SLOT = "EDGE_BASE_URL"
@@ -29,56 +27,8 @@ EDGE_BASE_URL_SLOT = "EDGE_BASE_URL"
 OVERRIDE_LAYOUT = ("stack", "generated", "compose")
 
 
-def _coerce_section(values: object) -> dict[str, str]:
-    if not is_mapping(values):
-        raise ValueError("a section is a NAME: value mapping")
-    coerced: dict[str, str] = {}
-    for name, value in values.items():
-        if isinstance(value, bool):
-            coerced[name] = str(value).lower()
-        elif isinstance(value, (int, float, str)):
-            coerced[name] = str(value)
-        else:
-            raise TypeError(f"{name}: a section value is a scalar, not {type(value).__name__}")
-    return coerced
-
-
-SectionMap = Annotated[dict[str, str], BeforeValidator(_coerce_section)]
-
-
-class PublicUrl(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    raw: str
-    forwarded_proto: str
-    forwarded_port: str
-
-    @model_validator(mode="before")
-    @classmethod
-    def _parse(cls, value: str) -> dict[str, str]:
-        scheme, separator, rest = value.partition("://")
-        if not separator:
-            raise ValueError(f"public_url: {value!r} must carry a scheme (https://example.dev)")
-        hostport = rest.partition("/")[0]
-        if ":" in hostport:
-            forwarded_port = hostport.rpartition(":")[2]
-        elif scheme == "https":
-            forwarded_port = "443"
-        else:
-            forwarded_port = "80"
-        return {"raw": value, "forwarded_proto": scheme, "forwarded_port": forwarded_port}
-
-    @property
-    def forwarded(self) -> dict[str, Yaml]:
-        return {"FORWARDED_PROTO": self.forwarded_proto, "FORWARDED_PORT": self.forwarded_port}
-
-
-class ValuesSections(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    images: dict[str, SectionMap] = Field(default_factory=dict)
-    bundles: dict[str, SectionMap] = Field(default_factory=dict)
-    shared: SectionMap = Field(default_factory=dict)
+def _default_sections() -> ValuesSections:
+    return ValuesSections()
 
 
 class ValuesFile(BaseModel):
@@ -90,7 +40,7 @@ class ValuesFile(BaseModel):
     platform: str | None = None
     gateway: PortNumber | None = None
     ports: dict[str, PortNumber] = Field(default_factory=dict)
-    values: ValuesSections = Field(default_factory=ValuesSections)
+    values: ValuesSections = Field(default_factory=_default_sections)
     source: str = Field(default=VALUES_FILE.name, exclude=True)
 
     @model_validator(mode="after")
@@ -153,6 +103,58 @@ class ValuesFile(BaseModel):
             raise ValueError(f"{site}: {name} is not hand-settable (minted from public_url)")
         if name == EDGE_BASE_URL_SLOT:
             raise ValueError(f"{site}: {name} is not hand-settable (minted from the gateway declaration)")
+
+
+class PublicUrl(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    raw: str
+    forwarded_proto: str
+    forwarded_port: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def _parse(cls, value: str) -> dict[str, str]:
+        scheme, separator, rest = value.partition("://")
+        if not separator:
+            raise ValueError(f"public_url: {value!r} must carry a scheme (https://example.dev)")
+        hostport = rest.partition("/")[0]
+        if ":" in hostport:
+            forwarded_port = hostport.rpartition(":")[2]
+        elif scheme == "https":
+            forwarded_port = "443"
+        else:
+            forwarded_port = "80"
+        return {"raw": value, "forwarded_proto": scheme, "forwarded_port": forwarded_port}
+
+    @property
+    def forwarded(self) -> dict[str, Yaml]:
+        return {"FORWARDED_PROTO": self.forwarded_proto, "FORWARDED_PORT": self.forwarded_port}
+
+
+class ValuesSections(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    images: dict[str, SectionMap] = Field(default_factory=dict)
+    bundles: dict[str, SectionMap] = Field(default_factory=dict)
+    shared: SectionMap = Field(default_factory=dict)
+
+
+def _coerce_section(values: object) -> dict[str, str]:
+    if not is_mapping(values):
+        raise ValueError("a section is a NAME: value mapping")
+    coerced: dict[str, str] = {}
+    for name, value in values.items():
+        if isinstance(value, bool):
+            coerced[name] = str(value).lower()
+        elif isinstance(value, (int, float, str)):
+            coerced[name] = str(value)
+        else:
+            raise TypeError(f"{name}: a section value is a scalar, not {type(value).__name__}")
+    return coerced
+
+
+SectionMap = Annotated[dict[str, str], BeforeValidator(_coerce_section)]
 
 
 def peel_references(references: Mapping[str, AbstractSet[str]]) -> tuple[list[str], list[str]]:

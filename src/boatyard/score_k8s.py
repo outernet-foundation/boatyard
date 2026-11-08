@@ -17,18 +17,15 @@ from boatyard.config.config import (
     K8sConfig,
     PLACEHOLDER,
     SecretsDeclaration,
-    WorkloadDocument,
-    Yaml,
     ConfigFile,
     chart_lock_key,
-    is_list,
-    is_mapping,
-    load_workloads,
 )
 from boatyard.config.k8s_pins import load_pins
 from boatyard.config.lock import LockFile
+from boatyard.config.workload import WorkloadDocument, load_workloads
 from boatyard.markers import MarkerContext, resolve_markers
 from boatyard.paths import K8S_PINS_PATH
+from boatyard.yaml import Yaml, is_list, is_mapping
 from boatyard.score import (
     dump_yaml,
     render_score,

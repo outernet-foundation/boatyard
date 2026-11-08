@@ -12,12 +12,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from boatyard.config.config import (
     OCI_REFERENCE_PREFIX,
     ConfigFile,
-    Yaml,
     artifact_slot_demands,
     bundle_lock_key,
     chart_lock_key,
-    is_list,
-    is_mapping,
     mirrored_ref,
     refuse_unresolved_references,
 )
@@ -29,7 +26,7 @@ from boatyard.config.lock import (
     ConfigLockEntry,
 )
 from boatyard.temp import SHA256_DIGEST_REGEX
-from boatyard.yaml import load_yaml_model
+from boatyard.yaml import Yaml, is_list, is_mapping, load_yaml_model
 
 DIGEST_TAIL_PATTERN = re.compile(rf"@{SHA256_DIGEST_REGEX}$")
 COMPOSE_FILE_MEDIA_TYPE = "application/vnd.docker.compose.file+yaml"

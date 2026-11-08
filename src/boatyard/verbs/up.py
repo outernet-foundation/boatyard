@@ -18,13 +18,13 @@ from boatyard.config.config import (
     EDGE_LISTEN_PORT,
     EDGE_SERVICE_NAME,
     ConfigFile,
-    Yaml,
     double_dollars,
 )
 from boatyard.config.lock import LockFile
 from boatyard.config.values import ValuesFile
 from boatyard.paths import DEFAULT_CONFIG_PATH, LOCK_PATH, VALUES_FILE
 from boatyard.resolve import resolve
+from boatyard.yaml import Yaml
 
 # Name the edge's Caddyfile configs key
 EDGE_CONFIG_NAME = "devkit-edge-caddyfile"

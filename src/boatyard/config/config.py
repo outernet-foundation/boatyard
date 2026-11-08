@@ -6,7 +6,7 @@ import tomllib
 from collections.abc import Mapping
 from functools import partial
 from pathlib import Path
-from typing import Annotated, Literal, NamedTuple, Self, TypeIs
+from typing import Annotated, Literal, NamedTuple, Self
 
 from packaging.specifiers import SpecifierSet
 from pydantic import (
@@ -23,6 +23,8 @@ from pydantic import (
 )
 import yaml
 
+from boatyard.config.pyproject import PYPROJECT_PATH, PyprojectToml
+from boatyard.config.workload import WorkloadDocument, load_workloads, select_provisioner_files
 from boatyard.dockerfiles import (
     DOCKERFILE_NAME,
     ServiceBuild,
@@ -30,13 +32,12 @@ from boatyard.dockerfiles import (
     service_sha_env,
 )
 from boatyard.temp import PLATFORM_PATTERN, SHA256_DIGEST_REGEX
-from boatyard.yaml import load_yaml_model
+from boatyard.yaml import Yaml, is_mapping, load_yaml_model
 
 DEV_SENTINEL = "0.0.0.dev0"
 
 DEFAULT_MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
 
-PYPROJECT_PATH = Path("pyproject.toml")
 PYTHON_VERSION_PATH = Path(".python-version")
 
 ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
@@ -48,42 +49,6 @@ PLACEHOLDER = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
 
 # Match a compose brace slot with its preceding dollar run.
 COMPOSE_SLOT = re.compile(r"(\$+)\{([A-Z][A-Z0-9_]*)(:[^{}]*)?\}")
-
-type Yaml = str | int | float | bool | list[Yaml] | dict[str, Yaml] | None
-
-
-def _require_port_range(value: int) -> int:
-    if not 1 <= value <= 65535:
-        raise ValueError(f"{value} is outside the port range 1-65535")
-    return value
-
-
-PortNumber = Annotated[int, Field(strict=True), AfterValidator(_require_port_range)]
-
-
-def _require_all_caps_name(value: str) -> str:
-    if ENV_NAME_PATTERN.fullmatch(value) is None:
-        raise ValueError(f"{value!r} must be an ALL_CAPS env name")
-    return value
-
-
-AllCapsName = Annotated[str, AfterValidator(_require_all_caps_name)]
-
-
-class SlotDemand(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    required: bool = True
-
-
-def _require_nonempty_values(values: dict[str, str]) -> dict[str, str]:
-    empty = sorted(name for name, value in values.items() if not value)
-    if empty:
-        raise ValueError(f"vars values must be non-empty: {', '.join(empty)}")
-    return values
-
-
-VarsMap = Annotated[dict[str, str], AfterValidator(_require_nonempty_values)]
 
 # Match path:tag or path@digest.
 DECLARED_REFERENCE_PATTERN = re.compile(
@@ -113,53 +78,12 @@ Target = Literal["both", "compose", "k8s"]
 
 Substrate = Literal["compose", "k8s"]
 
+LOCK_SLOT_MARKER = "__BOATYARD_LOCK__"
+TREE_SLOT_MARKER = "__BOATYARD_TREE__"
 
-class UvToolTable(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+RESERVED_SLOT_MARKERS = (LOCK_SLOT_MARKER, TREE_SLOT_MARKER)
 
-    required_version: str | None = Field(default=None, alias="required-version")
-
-
-class ToolTable(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    uv: UvToolTable | None = None
-
-
-class PyprojectToml(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    tool: ToolTable | None = None
-
-
-class SecretsDeclaration(RootModel[dict[AllCapsName, "SecretKey"]]):
-    @model_validator(mode="before")
-    @classmethod
-    def _coerce_string_specs(cls, value: Yaml) -> Yaml:
-        if value is None:
-            value = {}
-        if not is_mapping(value):
-            raise ValueError("must be a KEY: description mapping")
-        return {name: ({"description": spec} if isinstance(spec, str) else spec) for name, spec in value.items()}
-
-    def validate_consumed(self, consumed: set[str], rendering: Substrate, source: str) -> None:
-        undeclared = sorted(consumed - self.root.keys())
-        if undeclared:
-            raise ValueError(f"{source}: the {rendering} rendering consumes undeclared keys: " + ", ".join(undeclared))
-
-
-class SecretKey(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    description: str
-    mint: bool = False
-
-    @field_validator("description")
-    @classmethod
-    def _require_description(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("description must be non-empty")
-        return value
+TREE_SENTINEL_PATTERN = re.compile(re.escape(TREE_SLOT_MARKER) + r"([A-Z][A-Z0-9_]*)__")
 
 
 class ConfigFile(BaseModel):
@@ -376,6 +300,199 @@ class ConfigFile(BaseModel):
         return self
 
 
+def _require_all_caps_name(value: str) -> str:
+    if ENV_NAME_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"{value!r} must be an ALL_CAPS env name")
+    return value
+
+
+AllCapsName = Annotated[str, AfterValidator(_require_all_caps_name)]
+
+
+def _require_port_range(value: int) -> int:
+    if not 1 <= value <= 65535:
+        raise ValueError(f"{value} is outside the port range 1-65535")
+    return value
+
+
+PortNumber = Annotated[int, Field(strict=True), AfterValidator(_require_port_range)]
+
+
+def _require_nonempty_values(values: dict[str, str]) -> dict[str, str]:
+    empty = sorted(name for name, value in values.items() if not value)
+    if empty:
+        raise ValueError(f"vars values must be non-empty: {', '.join(empty)}")
+    return values
+
+
+VarsMap = Annotated[dict[str, str], AfterValidator(_require_nonempty_values)]
+
+
+class SecretsDeclaration(RootModel[dict[AllCapsName, "SecretKey"]]):
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_string_specs(cls, value: Yaml) -> Yaml:
+        if value is None:
+            value = {}
+        if not is_mapping(value):
+            raise ValueError("must be a KEY: description mapping")
+        return {name: ({"description": spec} if isinstance(spec, str) else spec) for name, spec in value.items()}
+
+    def validate_consumed(self, consumed: set[str], rendering: Substrate, source: str) -> None:
+        undeclared = sorted(consumed - self.root.keys())
+        if undeclared:
+            raise ValueError(f"{source}: the {rendering} rendering consumes undeclared keys: " + ", ".join(undeclared))
+
+
+class SecretKey(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    description: str
+    mint: bool = False
+
+    @field_validator("description")
+    @classmethod
+    def _require_description(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("description must be non-empty")
+        return value
+
+
+class ServiceGroup(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    options: dict[str, ServiceEntry]
+    routes: list[RouteConfig] = Field(default_factory=list)
+    ports: list[PortDeclaration] = Field(default_factory=list)
+
+
+class ServiceEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ref: str | None = None
+    workloads: list[str] = Field(default_factory=list)
+    vars: VarsMap = Field(default_factory=dict)
+    routes: list[RouteConfig] = Field(default_factory=list)
+    ports: list[PortDeclaration] = Field(default_factory=list)
+
+    @property
+    def remote(self) -> bool:
+        return self.ref is not None
+
+    @model_validator(mode="after")
+    def _validate(self) -> Self:
+        if self.ref is not None:
+            if not self.ref.startswith(OCI_REFERENCE_PREFIX):
+                raise ValueError(f"ref {self.ref!r} must be an OCI include ({OCI_REFERENCE_PREFIX}host/path:tag)")
+            remainder = self.ref.removeprefix(OCI_REFERENCE_PREFIX)
+            if "@" in remainder:
+                raise ValueError(f"ref {self.ref!r} must carry a published tag, not a digest")
+            reference, separator, tag = remainder.rpartition(":")
+            if not separator or not reference or not tag or re.search(r"\s", remainder):
+                raise ValueError(f"ref {self.ref!r} must carry a tag ({OCI_REFERENCE_PREFIX}host/path:tag)")
+            if tag == "latest":
+                raise ValueError(f"ref {self.ref!r} must not carry the mutable tag 'latest'")
+            if REF_TAG_OPERATOR_PATTERN.search(tag) or any(part in ("x", "X") for part in tag.split(".")):
+                raise ValueError(f"ref {self.ref!r}: the tag {tag!r} must be an exact tag, not a range")
+        if self.ref is not None and self.workloads:
+            raise ValueError("an entry declares ref: or workloads:, not both")
+        if self.ref is None and not self.workloads:
+            raise ValueError("ref: or workloads: is required")
+        if self.ref is not None and self.vars:
+            raise ValueError("vars is not allowed with ref:")
+        for name in self.workloads:
+            require_workload_reference(name)
+        return self
+
+
+def _service_member_kind(value: Yaml) -> str:
+    return "group" if is_mapping(value) and "options" in value else "entry"
+
+
+ServiceMember = Annotated[
+    Annotated[ServiceGroup, Tag("group")] | Annotated[ServiceEntry, Tag("entry")],
+    Discriminator(_service_member_kind),
+]
+
+
+class RouteConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    upstream: str
+    strip_prefix: bool = False
+    raw: str | None = None
+
+    @model_validator(mode="after")
+    def _validate(self) -> Self:
+        if re.fullmatch(r"(?:/\*|/(?:[^/\s*]+(?:/[^/\s*]+)*)?(?:/\*)?)", self.path) is None:
+            raise ValueError(f"route path {self.path!r} must be a /-rooted segment chain, optionally wildcarded as …/*")
+        if re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*:[0-9]+", self.upstream) is None:
+            raise ValueError(
+                f"route upstream {self.upstream!r} must be a service name and a literal port (grafana:3000)"
+            )
+        if self.strip_prefix and not self.path.endswith("/*"):
+            raise ValueError(f"route {self.path}: the path must end in /* for strip_prefix")
+        return self
+
+
+class PortDeclaration(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    service: str
+    published: PortNumber
+    target: PortNumber
+    protocol: Literal["tcp", "udp"] = "tcp"
+    host_ip: str | None = None
+
+
+class K8sConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workloads: list[str] = Field(default_factory=list)
+    vars: VarsMap = Field(default_factory=dict)
+    charts: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate(self) -> Self:
+        for name in self.workloads:
+            require_workload_reference(name)
+        for name, reference in self.charts.items():
+            if not name:
+                raise ValueError("charts: names must be non-empty")
+            if not reference.startswith(OCI_REFERENCE_PREFIX):
+                raise ValueError(
+                    f"charts.{name}: {reference!r} must be an upstream-native OCI reference "
+                    f"({OCI_REFERENCE_PREFIX}host/path:tag or {OCI_REFERENCE_PREFIX}host/path@digest)"
+                )
+            _require_declared_reference(reference.removeprefix(OCI_REFERENCE_PREFIX), f"charts.{name}")
+        if not (self.workloads or self.charts):
+            raise ValueError("the k8s section must declare workloads or charts")
+        return self
+
+
+class SlotDemand(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    required: bool = True
+
+
+class FlattenedServiceEntry(NamedTuple):
+    root: str
+    option: str | None
+    name: str
+    site: str
+    entry: ServiceEntry
+
+
+class ResolvedService(NamedTuple):
+    name: str
+    entry: ServiceEntry
+    routes: list[RouteConfig]
+    ports: list[PortDeclaration]
+    auth: bool = False
+
+
 def _derive(config: ConfigFile, root: Path) -> None:
     # The load-time derivation over the parsed file: toolchain templates, the Dockerfile build
     # set, the file-reference checks, and the per-entry consumer surfaces.
@@ -531,61 +648,6 @@ def _derive(config: ConfigFile, root: Path) -> None:
     config.consumer_surfaces = surfaces
 
 
-class ServiceGroup(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    options: dict[str, ServiceEntry]
-    routes: list[RouteConfig] = Field(default_factory=list)
-    ports: list[PortDeclaration] = Field(default_factory=list)
-
-
-class ServiceEntry(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    ref: str | None = None
-    workloads: list[str] = Field(default_factory=list)
-    vars: VarsMap = Field(default_factory=dict)
-    routes: list[RouteConfig] = Field(default_factory=list)
-    ports: list[PortDeclaration] = Field(default_factory=list)
-
-    @property
-    def remote(self) -> bool:
-        return self.ref is not None
-
-    @model_validator(mode="after")
-    def _validate(self) -> Self:
-        if self.ref is not None:
-            if not self.ref.startswith(OCI_REFERENCE_PREFIX):
-                raise ValueError(f"ref {self.ref!r} must be an OCI include ({OCI_REFERENCE_PREFIX}host/path:tag)")
-            remainder = self.ref.removeprefix(OCI_REFERENCE_PREFIX)
-            if "@" in remainder:
-                raise ValueError(f"ref {self.ref!r} must carry a published tag, not a digest")
-            reference, separator, tag = remainder.rpartition(":")
-            if not separator or not reference or not tag or re.search(r"\s", remainder):
-                raise ValueError(f"ref {self.ref!r} must carry a tag ({OCI_REFERENCE_PREFIX}host/path:tag)")
-            if tag == "latest":
-                raise ValueError(f"ref {self.ref!r} must not carry the mutable tag 'latest'")
-            if REF_TAG_OPERATOR_PATTERN.search(tag) or any(part in ("x", "X") for part in tag.split(".")):
-                raise ValueError(f"ref {self.ref!r}: the tag {tag!r} must be an exact tag, not a range")
-        if self.ref is not None and self.workloads:
-            raise ValueError("an entry declares ref: or workloads:, not both")
-        if self.ref is None and not self.workloads:
-            raise ValueError("ref: or workloads: is required")
-        if self.ref is not None and self.vars:
-            raise ValueError("vars is not allowed with ref:")
-        for name in self.workloads:
-            require_workload_reference(name)
-        return self
-
-
-class FlattenedServiceEntry(NamedTuple):
-    root: str
-    option: str | None
-    name: str
-    site: str
-    entry: ServiceEntry
-
-
 def _flatten_service_members(services: dict[str, ServiceGroup | ServiceEntry]) -> list[FlattenedServiceEntry]:
     # Options ride under their qualified name; bare entries are their own root.
     flattened: list[FlattenedServiceEntry] = []
@@ -608,230 +670,6 @@ def _flatten_service_members(services: dict[str, ServiceGroup | ServiceEntry]) -
                 )
             )
     return flattened
-
-
-def _service_member_kind(value: Yaml) -> str:
-    return "group" if is_mapping(value) and "options" in value else "entry"
-
-
-ServiceMember = Annotated[
-    Annotated[ServiceGroup, Tag("group")] | Annotated[ServiceEntry, Tag("entry")],
-    Discriminator(_service_member_kind),
-]
-
-
-class RouteConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    path: str
-    upstream: str
-    strip_prefix: bool = False
-    raw: str | None = None
-
-    @model_validator(mode="after")
-    def _validate(self) -> Self:
-        if re.fullmatch(r"(?:/\*|/(?:[^/\s*]+(?:/[^/\s*]+)*)?(?:/\*)?)", self.path) is None:
-            raise ValueError(f"route path {self.path!r} must be a /-rooted segment chain, optionally wildcarded as …/*")
-        if re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*:[0-9]+", self.upstream) is None:
-            raise ValueError(
-                f"route upstream {self.upstream!r} must be a service name and a literal port (grafana:3000)"
-            )
-        if self.strip_prefix and not self.path.endswith("/*"):
-            raise ValueError(f"route {self.path}: the path must end in /* for strip_prefix")
-        return self
-
-
-class PortDeclaration(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    service: str
-    published: PortNumber
-    target: PortNumber
-    protocol: Literal["tcp", "udp"] = "tcp"
-    host_ip: str | None = None
-
-
-class ResolvedService(NamedTuple):
-    name: str
-    entry: ServiceEntry
-    routes: list[RouteConfig]
-    ports: list[PortDeclaration]
-    auth: bool = False
-
-
-class K8sConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    workloads: list[str] = Field(default_factory=list)
-    vars: VarsMap = Field(default_factory=dict)
-    charts: dict[str, str] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def _validate(self) -> Self:
-        for name in self.workloads:
-            require_workload_reference(name)
-        for name, reference in self.charts.items():
-            if not name:
-                raise ValueError("charts: names must be non-empty")
-            if not reference.startswith(OCI_REFERENCE_PREFIX):
-                raise ValueError(
-                    f"charts.{name}: {reference!r} must be an upstream-native OCI reference "
-                    f"({OCI_REFERENCE_PREFIX}host/path:tag or {OCI_REFERENCE_PREFIX}host/path@digest)"
-                )
-            _require_declared_reference(reference.removeprefix(OCI_REFERENCE_PREFIX), f"charts.{name}")
-        if not (self.workloads or self.charts):
-            raise ValueError("the k8s section must declare workloads or charts")
-        return self
-
-
-PROBE_ADAPTER_ANNOTATION = "outernet.internal/probe-adapter"
-PROBE_ADAPTERS = ("python-urllib", "bash-http")
-RESTART_ANNOTATION = "outernet.internal/restart"
-COMPOSE_RESTART_POLICIES = ("no", "always", "on-failure", "unless-stopped")
-CONSUMER_INTERPOLATED_ANNOTATION = "outernet.internal/consumer-interpolated"
-
-
-class WorkloadMetadata(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    name: str | None = None
-    annotations: dict[str, str] = Field(default_factory=dict)
-
-
-class WorkloadProbe(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    http_get: Yaml | None = Field(default=None, alias="httpGet")
-
-
-class WorkloadContainer(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    image: str | None = None
-    files: dict[str, Yaml] = Field(default_factory=dict)
-    readiness_probe: WorkloadProbe | None = Field(default=None, alias="readinessProbe")
-    liveness_probe: WorkloadProbe | None = Field(default=None, alias="livenessProbe")
-
-    @field_validator("image")
-    @classmethod
-    def _require_image_slot(cls, value: str | None) -> str | None:
-        if value is not None and "${" not in value and "{{" not in value:
-            raise ValueError(f"image {value!r} must bind to the lock or a service sha via a ${{NAME}} slot")
-        return value
-
-
-class WorkloadResource(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    type: str
-
-
-class WorkloadDocument(BaseModel):
-    model_config = ConfigDict(extra="allow", populate_by_name=True)
-
-    metadata: WorkloadMetadata = Field(default_factory=WorkloadMetadata)
-    containers: dict[str, WorkloadContainer] = Field(default_factory=dict)
-    resources: dict[str, WorkloadResource] = Field(default_factory=dict)
-
-    @classmethod
-    def parse(cls, raw: Yaml, file_name: str) -> Self:
-        return cls.model_validate(raw, context={"source": file_name})
-
-    @model_validator(mode="after")
-    def _require_name_matching_file_stem(self, info: ValidationInfo) -> Self:
-        source = info.context.get("source") if info.context is not None else None
-        if source is not None and self.metadata.name != Path(source).stem:
-            raise ValueError(f"metadata.name must be {Path(source).stem!r} to match the workload file name")
-        return self
-
-    @model_validator(mode="after")
-    def _validate_deployment_surface_annotations(self) -> Self:
-        annotations = self.metadata.annotations
-
-        adapter = annotations.get(PROBE_ADAPTER_ANNOTATION)
-        if adapter is not None and adapter not in PROBE_ADAPTERS:
-            raise ValueError(
-                f"{PROBE_ADAPTER_ANNOTATION} must be one of the supported adapters {list(PROBE_ADAPTERS)}, not {adapter!r}"
-            )
-
-        restart = annotations.get(RESTART_ANNOTATION)
-        if restart is not None and restart not in COMPOSE_RESTART_POLICIES:
-            raise ValueError(
-                f"{RESTART_ANNOTATION} must be one of the compose restart policies "
-                f"{list(COMPOSE_RESTART_POLICIES)}, not {restart!r}"
-            )
-
-        consumer_interpolated = annotations.get(CONSUMER_INTERPOLATED_ANNOTATION)
-        if consumer_interpolated is not None:
-            if not consumer_interpolated.strip():
-                raise ValueError(
-                    f"{CONSUMER_INTERPOLATED_ANNOTATION} must be a non-empty comma-separated "
-                    "list of the workload's files: paths"
-                )
-            declared_files = {target for container in self.containers.values() for target in container.files}
-            for entry in consumer_interpolated.split(","):
-                if entry != entry.strip() or not entry:
-                    raise ValueError(
-                        f"{CONSUMER_INTERPOLATED_ANNOTATION} entry {entry!r} must be non-empty and unpadded"
-                    )
-                if entry not in declared_files:
-                    raise ValueError(
-                        f"{CONSUMER_INTERPOLATED_ANNOTATION} entry {entry!r} names no declared files: path"
-                    )
-
-        return self
-
-    @property
-    def consumer_interpolated_targets(self) -> list[str]:
-        annotation = self.metadata.annotations.get(CONSUMER_INTERPOLATED_ANNOTATION)
-        return annotation.split(",") if annotation is not None else []
-
-
-class ComposeWorkloadDocument(WorkloadDocument):
-    @model_validator(mode="after")
-    def _require_probe_adapter_for_http_get(self) -> Self:
-        if self.metadata.annotations.get(PROBE_ADAPTER_ANNOTATION) is not None:
-            return self
-        for container in self.containers.values():
-            for probe, block in (
-                ("readinessProbe", container.readiness_probe),
-                ("livenessProbe", container.liveness_probe),
-            ):
-                if block is not None and block.http_get is not None:
-                    raise ValueError(f"a {probe} httpGet requires {PROBE_ADAPTER_ANNOTATION}")
-        return self
-
-
-class LoadedWorkload(NamedTuple):
-    file_name: str
-    raw: Yaml
-    document: WorkloadDocument
-
-
-def load_workloads(score_dir: Path, names: list[str], lens: type[WorkloadDocument]) -> list[LoadedWorkload]:
-    loaded: list[LoadedWorkload] = []
-    for name in names:
-        raw = yaml.safe_load((score_dir / name).read_text(encoding="utf-8"))
-        loaded.append(LoadedWorkload(name, raw, lens.parse(raw, name)))
-    return loaded
-
-
-def select_provisioner_files(
-    score_dir: Path,
-    rendering: str,
-    workloads: list[LoadedWorkload],
-) -> list[tuple[str, list[Yaml]]]:
-    # A provisioner file participates when an entry workload references its resource type.
-    referenced = {resource.type for workload in workloads for resource in workload.document.resources.values()}
-    rendering_dir = score_dir / rendering
-    if not rendering_dir.is_dir():
-        return []
-    selected: list[tuple[str, list[Yaml]]] = []
-    for path in sorted(rendering_dir.glob("*.yaml")):
-        entries = yaml.safe_load(path.read_text(encoding="utf-8"))
-        if is_list(entries) and any(is_mapping(entry) and entry.get("type") in referenced for entry in entries):
-            selected.append((f"{rendering}/{path.name}", entries))
-    return selected
 
 
 def _refuse_duplicated_claims(entry_name: str, subject: str, claims: Mapping[str, list[str]]) -> None:
@@ -865,12 +703,6 @@ def lock_key_prefix(name: str) -> str:
     return name.upper().replace("-", "_") + "_"
 
 
-LOCK_SLOT_MARKER = "__BOATYARD_LOCK__"
-TREE_SLOT_MARKER = "__BOATYARD_TREE__"
-
-RESERVED_SLOT_MARKERS = (LOCK_SLOT_MARKER, TREE_SLOT_MARKER)
-
-
 def env_lock_slot(entry_name: str, lock_key: str) -> str:
     # The marker reserves the fan spelling against values-file keys; the values parse refuses it
     return entry_name.upper().replace("-", "_") + LOCK_SLOT_MARKER + lock_key
@@ -878,9 +710,6 @@ def env_lock_slot(entry_name: str, lock_key: str) -> str:
 
 def env_tree_slot(entry_name: str, sha_env_name: str) -> str:
     return entry_name.upper().replace("-", "_") + TREE_SLOT_MARKER + sha_env_name
-
-
-TREE_SENTINEL_PATTERN = re.compile(re.escape(TREE_SLOT_MARKER) + r"([A-Z][A-Z0-9_]*)__")
 
 
 def chart_lock_key(name: str) -> str:
@@ -947,14 +776,6 @@ def mirrored_ref(reference: str, prefix: str) -> str:
 
 def _resolve_template_key(pins: Mapping[str, str], match: re.Match[str]) -> str:
     return pins[match.group(1)]
-
-
-def is_mapping(value: object) -> TypeIs[dict[str, Yaml]]:
-    return isinstance(value, dict)
-
-
-def is_list(value: object) -> TypeIs[list[Yaml]]:
-    return isinstance(value, list)
 
 
 def double_dollars(text: str) -> str:

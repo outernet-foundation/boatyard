@@ -22,13 +22,10 @@ from pydantic import (
 from boatyard.config.config import (
     PLACEHOLDER,
     Substrate,
-    Yaml,
-    is_mapping,
-    LoadedWorkload,
-    select_provisioner_files,
     ConfigFile,
 )
-from boatyard.yaml import load_yaml_model
+from boatyard.config.workload import LoadedWorkload, select_provisioner_files
+from boatyard.yaml import Yaml, is_mapping, load_yaml_model
 from boatyard.markers import MarkerContext, resolve_markers
 
 PATCH_TEMPLATES_DIR = "score_patch_templates"

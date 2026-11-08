@@ -18,8 +18,10 @@ from boatyard import score_compose as score_compose_module
 from boatyard import score_k8s as score_k8s_module
 from boatyard import score_generate as score_generate_module
 from boatyard.verbs import score as score_verb_module
-from boatyard.config.config import ConfigFile, K8sConfig, SecretsDeclaration, WorkloadDocument
+from boatyard.config import workload as workload_module
+from boatyard.config.config import ConfigFile, K8sConfig, SecretsDeclaration
 from boatyard.config.lock import LockFile
+from boatyard.config.workload import WorkloadDocument
 from boatyard.dockerfiles import ServiceBuild
 from boatyard.paths import K8S_PINS_PATH
 from boatyard.score import write_file
@@ -731,7 +733,7 @@ def test_self_gating_templates_fall_back_to_an_empty_patches_document() -> None:
 def test_the_healthcheck_template_ships_both_probe_adapter_spells() -> None:
     text = (files("boatyard") / "score_patch_templates" / "probe-adapter-healthchecks.tpl").read_text(encoding="utf-8")
 
-    assert config_module.PROBE_ADAPTERS == ("python-urllib", "bash-http")
+    assert workload_module.PROBE_ADAPTERS == ("python-urllib", "bash-http")
     assert "urllib.request.urlopen" in text
     assert "/dev/tcp/127.0.0.1" in text
 

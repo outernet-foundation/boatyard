@@ -1,9 +1,20 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TypeIs
 
 import yaml
 from pydantic import BaseModel
+
+type Yaml = str | int | float | bool | list[Yaml] | dict[str, Yaml] | None
+
+
+def is_mapping(value: object) -> TypeIs[dict[str, Yaml]]:
+    return isinstance(value, dict)
+
+
+def is_list(value: object) -> TypeIs[list[Yaml]]:
+    return isinstance(value, list)
 
 
 def load_yaml(path: Path) -> object:

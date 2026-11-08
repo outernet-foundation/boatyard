@@ -19,20 +19,17 @@ from boatyard.config.config import (
     BARRIER_SERVICE,
     COMPOSE_SLOT,
     TREE_SENTINEL_PATTERN,
-    ComposeWorkloadDocument,
-    WorkloadDocument,
-    Yaml,
     compose_bundle_output_path,
     double_dollars,
     env_lock_slot,
     env_tree_slot,
-    load_workloads,
     ConfigFile,
 )
 from boatyard.config.lock import LockFile
 from boatyard.config.values import ValuesFile
+from boatyard.config.workload import ComposeWorkloadDocument, WorkloadDocument, load_workloads
 from boatyard.paths import VALUES_FILE
-from boatyard.yaml import load_yaml_model
+from boatyard.yaml import Yaml, load_yaml_model
 from boatyard.score import (
     dump_yaml,
     render_score,

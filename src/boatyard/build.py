@@ -18,7 +18,8 @@ from build_artifact_registry.setup_oras import install_oras
 from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, model_validator
 
 from boatyard import dockerfiles
-from boatyard.config.config import ConfigFile, Yaml
+from boatyard.config.config import ConfigFile
+from boatyard.yaml import Yaml
 from boatyard.dockerfiles import ServiceBuild, service_sha_env
 from boatyard.lock import relock
 
