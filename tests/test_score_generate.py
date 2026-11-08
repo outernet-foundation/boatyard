@@ -3,6 +3,7 @@ import shutil
 from hashlib import sha256
 from importlib.resources import files
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import typer
@@ -18,7 +19,6 @@ from boatyard import score_k8s as score_k8s_module
 from boatyard import score_generate as score_generate_module
 from boatyard.verbs import score as score_verb_module
 from boatyard.config.config import ConfigFile, K8sConfig, WorkloadDocument
-from boatyard.config.k8s_pins import render_pins
 from boatyard.config.lock import LockFile
 from boatyard.dockerfiles import ServiceBuild
 from boatyard.paths import K8S_PINS_PATH
@@ -152,6 +152,10 @@ def _write_values(tmp_path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def _write_pins(tmp_path: Path, pins: dict[str, str]) -> None:
+    (tmp_path / K8S_PINS_PATH).write_text(yaml.safe_dump(pins), encoding="utf-8")
+
+
 def _generate_with_chart(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, config: ConfigFile, images: dict[str, str]
 ) -> HelmRecorder:
@@ -162,7 +166,7 @@ def _generate_with_chart(
     monkeypatch.setattr(score_k8s_module, "bash_output", helm.run)
     assert config.k8s is not None
     config.root = tmp_path
-    (tmp_path / K8S_PINS_PATH).write_text(render_pins({}), encoding="utf-8")
+    _write_pins(tmp_path, {})
     lock = LockFile.model_validate({
         "images": {name: {"index": ref} for name, ref in images.items() if not name.endswith("_CHART")},
         "charts": {name: ref for name, ref in images.items() if name.endswith("_CHART")},
@@ -266,6 +270,28 @@ def test_values_lock_markers_resolve_after_includes(tmp_path: Path, monkeypatch:
     assert resolved["image"]["digest"] == DIGEST
 
 
+def _offline_tool_ensure(monkeypatch: pytest.MonkeyPatch, on_path: str | None, version_output: str = "") -> list[str]:
+    commands: list[str] = []
+
+    def _record(command: str, **_kwargs: object) -> None:
+        commands.append(command)
+
+    def _which(binary: str) -> str | None:
+        return on_path
+
+    def _always_true(command: str) -> bool:
+        return True
+
+    def _version_output(command: str) -> str:
+        return version_output
+
+    monkeypatch.setattr(score_generate_module, "shutil", SimpleNamespace(which=_which))
+    monkeypatch.setattr(score_generate_module, "bash_check", _always_true)
+    monkeypatch.setattr(score_generate_module, "bash_output", _version_output)
+    monkeypatch.setattr(score_generate_module, "bash", _record)
+    return commands
+
+
 class TestMarkerSubstrateResolution:
     def _multi_arch_lock(self) -> LockFile:
         return LockFile.model_validate({
@@ -320,11 +346,8 @@ class TestMarkerSubstrateResolution:
         recorder = WorkloadContentsRecorder()
         self.recorder = recorder
 
-        def _skip_tools(requirements: list[score_generate_module.ToolRequirement]) -> None:
-            return None
-
         monkeypatch.setattr(score_module, "bash", recorder.run)
-        monkeypatch.setattr(score_generate_module, "ensure_tools", _skip_tools)
+        _offline_tool_ensure(monkeypatch, on_path=None)
         monkeypatch.chdir(tmp_path)
         score_verb_module.generate_score(target="compose")
         return recorder.workload_contents["api.yaml"]
@@ -369,7 +392,7 @@ class TestMarkerSubstrateResolution:
             k8s={"workloads": [], "charts": {"loki": CHART_REF}},
         )
         config.root = tmp_path
-        (tmp_path / K8S_PINS_PATH).write_text(render_pins({}), encoding="utf-8")
+        _write_pins(tmp_path, {})
         lock = self._multi_arch_lock()
         assert config.k8s is not None
 
@@ -710,7 +733,7 @@ def test_workload_sha_slots_render_as_marker_protected_tree_slots(
     assert generate_env["API_SHA"] == "__BOATYARD_TREE__API_SHA__"
     assert "image: ghcr.io/org/api:${CORE__BOATYARD_TREE__API_SHA}" in artifact
     assert "tree-" not in artifact
-    assert score_compose_module.TREE_SENTINEL_PATTERN.search(artifact) is None
+    assert config_module.TREE_SENTINEL_PATTERN.search(artifact) is None
 
 
 def test_generate_compose_never_walks_the_source_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1205,7 +1228,7 @@ def test_k8s_builtin_templates_register_on_every_init(tmp_path: Path, monkeypatc
     monkeypatch.setattr(score_k8s_module, "bash_output", HelmRecorder().run)
     config = _root_config(k8s={"workloads": ["api.yaml"]})
     config.root = tmp_path
-    (tmp_path / K8S_PINS_PATH).write_text(render_pins({}), encoding="utf-8")
+    _write_pins(tmp_path, {})
 
     assert config.k8s is not None
     generate_k8s(config, config.k8s, LockFile.model_validate({}), local=False, secrets=_empty_secrets())
@@ -1226,7 +1249,7 @@ def test_k8s_instance_suffixes_are_preseeded_deterministically(tmp_path: Path, m
     monkeypatch.setattr(score_k8s_module, "bash_output", HelmRecorder().run)
     config = _root_config(k8s={"workloads": ["api.yaml"]})
     config.root = tmp_path
-    (tmp_path / K8S_PINS_PATH).write_text(render_pins({}), encoding="utf-8")
+    _write_pins(tmp_path, {})
 
     assert config.k8s is not None
     generate_k8s(config, config.k8s, LockFile.model_validate({}), local=False, secrets=_empty_secrets())
@@ -1264,7 +1287,7 @@ def _refuse_the_tree_walk(root: Path, builds: object) -> dict[str, str]:
 
 
 def test_k8s_generation_bakes_the_pins_file_tags(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    (tmp_path / K8S_PINS_PATH).write_text(render_pins({"API_SHA": PINNED_TAG}), encoding="utf-8")
+    _write_pins(tmp_path, {"API_SHA": PINNED_TAG})
     recorder = _pins_k8s_recorder(monkeypatch, tmp_path, SHA_WORKLOAD)
     config, k8s = _pinned_config(tmp_path)
     monkeypatch.setattr(score_k8s_module.dockerfiles, "compute_service_shas", _refuse_the_tree_walk)
@@ -1289,7 +1312,7 @@ def test_k8s_generation_without_a_pins_file_refuses_naming_bump(
 def test_k8s_generation_refuses_a_workload_sha_slot_no_pin_covers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    (tmp_path / K8S_PINS_PATH).write_text(render_pins({"API_SHA": PINNED_TAG}), encoding="utf-8")
+    _write_pins(tmp_path, {"API_SHA": PINNED_TAG})
     workload = SHA_WORKLOAD + "  sidecar:\n    image: ghcr.io/org/sidecar:${WORKER_SHA}\n"
     _pins_k8s_recorder(monkeypatch, tmp_path, workload)
     config, k8s = _pinned_config(tmp_path)
@@ -1491,11 +1514,8 @@ def test_generate_score_writes_the_mint_list_from_the_declaration(
     )
     recorder = WorkloadContentsRecorder()
 
-    def _skip_tools(requirements: list[score_generate_module.ToolRequirement]) -> None:
-        return None
-
     monkeypatch.setattr(score_module, "bash", recorder.run)
-    monkeypatch.setattr(score_generate_module, "ensure_tools", _skip_tools)
+    _offline_tool_ensure(monkeypatch, on_path=None)
     monkeypatch.chdir(tmp_path)
 
     score_verb_module.generate_score(target="compose")
@@ -1512,28 +1532,25 @@ def _k8s_only_repo(tmp_path: Path) -> None:
 
 
 def test_generate_score_on_a_compose_only_repo_derives_compose_and_requests_only_the_compose_tool(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     _verb_repo(tmp_path)
     (tmp_path / "stack" / "secrets.yaml").write_text("PUBLIC_URL: the public address\n", encoding="utf-8")
     recorder = WorkloadContentsRecorder()
-    requested: list[list[score_generate_module.ToolRequirement]] = []
-
-    def _capture_tools(requirements: list[score_generate_module.ToolRequirement]) -> None:
-        requested.append(requirements)
 
     monkeypatch.setattr(score_module, "bash", recorder.run)
-    monkeypatch.setattr(score_generate_module, "ensure_tools", _capture_tools)
+    _offline_tool_ensure(monkeypatch, on_path=None)
     monkeypatch.chdir(tmp_path)
 
     score_verb_module.generate_score()
 
-    assert [requirement.binary for requirement in requested[0]] == ["score-compose"]
+    installed = [line.split()[1] for line in capsys.readouterr().out.splitlines() if line.startswith("Install ")]
+    assert installed == ["score-compose"]
     assert (tmp_path / "stack" / "generated" / "compose" / "compose.core.yaml").is_file()
 
 
 def test_generate_artifacts_on_a_k8s_only_repo_requests_no_compose_tool(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     (tmp_path / "stack" / "score" / "k8s" / "values").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "k8s" / "values" / "loki.yaml").write_text("chart: {}\n", encoding="utf-8")
@@ -1546,20 +1563,17 @@ def test_generate_artifacts_on_a_k8s_only_repo_requests_no_compose_tool(
         k8s={"workloads": ["api.yaml"], "charts": {"loki": CHART_REF}},
     )
     config.root = tmp_path
-    requested: list[list[score_generate_module.ToolRequirement]] = []
-
-    def _capture_tools(requirements: list[score_generate_module.ToolRequirement]) -> None:
-        requested.append(requirements)
 
     def _stub_generate_k8s(*args: object, **kwargs: object) -> Path:
         return tmp_path / "manifests.yaml"
 
-    monkeypatch.setattr(score_generate_module, "ensure_tools", _capture_tools)
+    _offline_tool_ensure(monkeypatch, on_path=None)
     monkeypatch.setattr(score_generate_module, "generate_k8s", _stub_generate_k8s)
 
     outputs = score_generate_module.generate_artifacts(config)
 
-    assert [requirement.binary for requirement in requested[0]] == ["score-k8s", "helm"]
+    installed = [line.split()[1] for line in capsys.readouterr().out.splitlines() if line.startswith("Install ")]
+    assert installed == ["score-k8s", "helm"]
     assert outputs == [tmp_path / "manifests.yaml", tmp_path / "stack" / "generated" / "secrets.txt"]
 
 
@@ -1593,79 +1607,49 @@ def test_generate_score_on_a_k8s_only_repo_refuses_an_explicit_both(
         score_verb_module.generate_score(target="both")
 
 
-def test_ensure_tools_installs_a_binary_missing_from_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    monkeypatch.setenv("PATH", str(bin_dir))
-    commands: list[str] = []
+def _generate_compose_with_stubbed_tools(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, on_path: str | None, version_output: str
+) -> list[str]:
+    _verb_repo(tmp_path)
+    (tmp_path / "stack" / "secrets.yaml").write_text("", encoding="utf-8")
+    monkeypatch.setattr(score_module, "bash", WorkloadContentsRecorder().run)
+    commands = _offline_tool_ensure(monkeypatch, on_path=on_path, version_output=version_output)
+    monkeypatch.chdir(tmp_path)
 
-    def _record(command: str, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
-        commands.append(command)
+    score_verb_module.generate_score(target="compose")
 
-    monkeypatch.setattr(score_generate_module, "bash", _record)
-    requirement = score_generate_module.ToolRequirement(
-        binary="score-compose",
-        version="1.2.3",
-        probe="score-compose 1.2.3",
-        archive="https://example.com/score-compose_1.2.3_linux_amd64.tar.gz",
-        extract="score-compose",
+    return commands
+
+
+def test_generation_installs_a_tool_missing_from_the_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    commands = _generate_compose_with_stubbed_tools(tmp_path, monkeypatch, on_path=None, version_output="")
+
+    pinned = ConfigFile.model_fields["score_compose_version"].default
+    assert commands[0].startswith(
+        f"curl -fsSL https://github.com/score-spec/score-compose/releases/download/{pinned}/"
+        f"score-compose_{pinned}_linux_amd64.tar.gz -o "
     )
 
-    score_generate_module.ensure_tools([requirement])
 
-    assert commands[0].startswith("curl -fsSL https://example.com/score-compose_1.2.3_linux_amd64.tar.gz")
-
-
-def test_ensure_tools_reinstalls_on_a_version_mismatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    stub = bin_dir / "score-compose"
-    stub.write_text('#!/bin/sh\necho "score-compose 0.0.0"\n', encoding="utf-8")
-    stub.chmod(0o755)
-    monkeypatch.setenv("PATH", str(bin_dir))
-    commands: list[str] = []
-
-    def _record(command: str, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
-        commands.append(command)
-
-    monkeypatch.setattr(score_generate_module, "bash", _record)
-    requirement = score_generate_module.ToolRequirement(
-        binary="score-compose",
-        version="1.2.3",
-        probe="score-compose 1.2.3",
-        archive="https://example.com/score-compose_1.2.3_linux_amd64.tar.gz",
-        extract="score-compose",
+def test_generation_reinstalls_a_tool_on_a_version_mismatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    commands = _generate_compose_with_stubbed_tools(
+        tmp_path, monkeypatch, on_path="/bin/true", version_output="score-compose 0.0.0"
     )
 
-    score_generate_module.ensure_tools([requirement])
+    pinned = ConfigFile.model_fields["score_compose_version"].default
+    assert commands[0].startswith(
+        f"curl -fsSL https://github.com/score-spec/score-compose/releases/download/{pinned}/"
+        f"score-compose_{pinned}_linux_amd64.tar.gz -o "
+    )
 
-    assert commands[0].startswith("curl -fsSL https://example.com/score-compose_1.2.3_linux_amd64.tar.gz")
 
-
-def test_ensure_tools_skips_install_when_the_pinned_version_is_present(
+def test_generation_skips_install_when_the_pinned_version_is_present(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    stub = bin_dir / "score-compose"
-    stub.write_text('#!/bin/sh\necho "score-compose 1.2.3"\n', encoding="utf-8")
-    stub.chmod(0o755)
-    monkeypatch.setenv("PATH", str(bin_dir))
-    commands: list[str] = []
-
-    def _record(command: str, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
-        commands.append(command)
-
-    monkeypatch.setattr(score_generate_module, "bash", _record)
-    requirement = score_generate_module.ToolRequirement(
-        binary="score-compose",
-        version="1.2.3",
-        probe="score-compose 1.2.3",
-        archive="https://example.com/score-compose_1.2.3_linux_amd64.tar.gz",
-        extract="score-compose",
+    pinned = ConfigFile.model_fields["score_compose_version"].default
+    commands = _generate_compose_with_stubbed_tools(
+        tmp_path, monkeypatch, on_path="/bin/true", version_output=f"score-compose {pinned}"
     )
-
-    score_generate_module.ensure_tools([requirement])
 
     assert commands == []
 

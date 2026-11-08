@@ -5,7 +5,7 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from boatyard.config.k8s_pins import K8sPinsFile, render_pins
+from boatyard.config.k8s_pins import parse_pins
 from boatyard.paths import K8S_PINS_PATH
 from boatyard.verbs import bump as bump_verb
 
@@ -13,7 +13,6 @@ HEAD = "a" * 40
 OTHER_HEAD = "b" * 40
 API_TAG = "tree-" + "c" * 40
 WORKER_TAG = "tree-" + "d" * 40
-SERVICE_SHAS = {"API_SHA": API_TAG, "WORKER_SHA": WORKER_TAG}
 PINS_HEADER = "# Deploy record written by 'boatyard bump' — the sole writer; never hand-edit\n"
 
 
@@ -40,11 +39,13 @@ class BumpHarness:
         tmp_path: Path,
         shards: dict[str, dict[str, object]] | None = None,
         registry: bool = True,
+        service_shas: dict[str, str] | None = None,
     ) -> None:
         self.tmp_path = tmp_path
         self.generated: dict[str, object] = {}
         self.pulled: list[str] = []
         self.git = GitStub()
+        self.service_shas = service_shas if service_shas is not None else {"WORKER_SHA": WORKER_TAG, "API_SHA": API_TAG}
         resolved_shards = (
             shards
             if shards is not None
@@ -69,14 +70,14 @@ class BumpHarness:
 
         def _fake_generate(config: object, **kwargs: object) -> list[Path]:
             self.generated.update(kwargs)
-            assert self.pins_text() == PINS_HEADER + f"API_SHA: {API_TAG}\nWORKER_SHA: {WORKER_TAG}\n"
+            assert parse_pins(yaml.safe_load(self.pins_text())) == self.service_shas
             return []
 
         def _shelf_tags(registry: str, project: str, platform: str, **kwargs: object) -> list[str]:
             return sorted(resolved_shards)
 
         def _service_shas(root: Path, builds: object) -> dict[str, str]:
-            return dict(SERVICE_SHAS)
+            return dict(self.service_shas)
 
         if registry:
             monkeypatch.setenv("REGISTRY", "ghcr.io/org/builds")
@@ -198,26 +199,23 @@ def test_bump_is_idempotent_per_head(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert harness.pins_text() == first
 
 
-def test_render_pins_sorts_and_stamps_the_header() -> None:
-    assert render_pins({"WORKER_SHA": WORKER_TAG, "API_SHA": API_TAG}) == (
-        PINS_HEADER + f"API_SHA: {API_TAG}\nWORKER_SHA: {WORKER_TAG}\n"
-    )
-    assert render_pins({}) == PINS_HEADER + "{}\n"
+def test_bump_writes_the_empty_record_for_a_shaless_head(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    harness = BumpHarness(monkeypatch, tmp_path, service_shas={})
 
+    harness.run()
 
-def test_the_rendered_pins_file_loads_back_unchanged() -> None:
-    assert K8sPinsFile.model_validate(yaml.safe_load(render_pins(SERVICE_SHAS))).root == SERVICE_SHAS
+    assert harness.pins_text() == PINS_HEADER + "{}\n"
 
 
 def test_pins_refuse_a_non_tree_tag_value() -> None:
     with pytest.raises(ValidationError, match="tree-<oid>"):
-        K8sPinsFile.model_validate({"API_SHA": "latest"})
+        parse_pins({"API_SHA": "latest"})
 
 
 def test_pins_refuse_a_non_sha_slot_name() -> None:
     with pytest.raises(ValidationError, match=r"\*_SHA"):
-        K8sPinsFile.model_validate({"API_IMAGE": API_TAG})
+        parse_pins({"API_IMAGE": API_TAG})
 
 
 def test_an_empty_pins_declaration_loads_as_the_empty_record() -> None:
-    assert K8sPinsFile.model_validate(None).root == {}
+    assert parse_pins(None) == {}

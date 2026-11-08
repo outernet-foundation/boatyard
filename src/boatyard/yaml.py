@@ -6,18 +6,21 @@ import yaml
 from pydantic import BaseModel
 
 
-def load_yaml_model[ModelT: BaseModel](
-    model: type[ModelT], path: Path, context: dict[str, object] | None = None
-) -> ModelT:
+def load_yaml(path: Path) -> object:
+    # Strict load: refuse duplicate keys, coerce an empty document to the empty mapping
     source = path.as_posix()
     text = path.read_text(encoding="utf-8")
     document_node = yaml.SafeLoader(text).get_single_node()
     if document_node is not None:
         _reject_duplicate_keys(document_node, source)
-    loaded: object = yaml.safe_load(text)
-    if loaded is None:
-        loaded = {}
-    return model.model_validate(loaded, context=context)
+    loaded = yaml.safe_load(text)
+    return {} if loaded is None else loaded
+
+
+def load_yaml_model[ModelT: BaseModel](
+    model: type[ModelT], path: Path, context: dict[str, object] | None = None
+) -> ModelT:
+    return model.model_validate(load_yaml(path), context=context)
 
 
 def _reject_duplicate_keys(node: yaml.Node, source: str) -> None:

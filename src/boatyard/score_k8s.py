@@ -23,7 +23,7 @@ from boatyard.config.config import (
     is_list,
     is_mapping,
 )
-from boatyard.config.k8s_pins import K8sPinsFile
+from boatyard.config.k8s_pins import load_pins
 from boatyard.config.lock import LockFile
 from boatyard.markers import MarkerContext, resolve_markers
 from boatyard.paths import K8S_PINS_PATH
@@ -70,30 +70,32 @@ def generate_k8s(
     images = lock.index_references()
     workloads = load_workloads(score_dir, k8s.workloads, WorkloadDocument)
 
-    if local:
-        service_shas = dockerfiles.compute_service_shas(config.root, config.service_builds)
-    else:
-        # The scan rides the same dump text render_score substitutes over.
-        demanded = {
-            name
-            for workload in workloads
-            for name in PLACEHOLDER.findall(dump_yaml(workload.raw))
-            if name.endswith("_SHA")
-        }
-        service_shas = K8sPinsFile.load(config.root / K8S_PINS_PATH, demanded).root
-
     output_path = config.root / (config.k8s_local_output if local else config.k8s_output)
-    tool_state = output_path.parent / ".score-k8s"
 
     render_score(
         config,
         substrate="k8s",
         workloads=workloads,
-        rendering_vars={**k8s.vars, STORAGE_CLASS_VAR: LOCAL_STORAGE_CLASS if local else CLOUD_STORAGE_CLASS},
+        variable_values={
+            STORAGE_CLASS_VAR: LOCAL_STORAGE_CLASS if local else CLOUD_STORAGE_CLASS,
+            **k8s.vars,
+            **(
+                dockerfiles.compute_service_shas(config.root, config.service_builds)
+                if local
+                else load_pins(
+                    config.root / K8S_PINS_PATH,
+                    {
+                        name
+                        for workload in workloads
+                        for name in PLACEHOLDER.findall(dump_yaml(workload.raw))
+                        if name.endswith("_SHA")
+                    },
+                )
+            ),
+        },
         templates=[GPU_POD_TEMPLATE, SCALE_TO_ZERO_TEMPLATE],
         output=output_path,
         images=images,
-        service_shas=service_shas,
     )
 
     # Render the charts through helm template.
@@ -140,28 +142,33 @@ def generate_k8s(
     decorated.sort()
     write_file(output_path, "".join(f"---\n{block}" for *_, block in decorated))
 
-    shutil.rmtree(tool_state, ignore_errors=True)
+    shutil.rmtree(output_path.parent / ".score-k8s", ignore_errors=True)
 
     # Validate the consumed secrets against the declaration.
-    consumed: set[str] = set()
-    for block in split_documents(output_path.read_text(encoding="utf-8")):
-        collect_secret_keys(yaml.safe_load(block), f"{config.project_name}-secrets", consumed)
+    secret_name = f"{config.project_name}-secrets"
+    consumed = {
+        key
+        for block in split_documents(output_path.read_text(encoding="utf-8"))
+        for key in collect_secret_keys(yaml.safe_load(block), secret_name)
+    }
     secrets.validate_consumed(consumed, "k8s", SECRETS_FILE.as_posix())
 
     return output_path
 
 
-def collect_secret_keys(node: Yaml, secret_name: str, consumed: set[str]) -> None:
+def collect_secret_keys(node: Yaml, secret_name: str) -> set[str]:
+    keys: set[str] = set()
     if is_mapping(node):
         reference = node.get("secretKeyRef")
         if is_mapping(reference) and reference.get("name") == secret_name:
             key = reference.get("key")
             if isinstance(key, str):
-                consumed.add(key)
+                keys.add(key)
 
         for value in node.values():
-            collect_secret_keys(value, secret_name, consumed)
+            keys |= collect_secret_keys(value, secret_name)
 
     elif is_list(node):
         for item in node:
-            collect_secret_keys(item, secret_name, consumed)
+            keys |= collect_secret_keys(item, secret_name)
+    return keys

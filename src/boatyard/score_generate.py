@@ -104,7 +104,19 @@ def generate_artifacts(
                 extract="--strip-components=1 linux-amd64/helm",
             ),
         ]
-    ensure_tools(requirements)
+    for requirement in requirements:
+        if (
+            shutil.which(requirement.binary) is not None
+            and bash_check(f"{requirement.binary} version")
+            and requirement.probe in bash_output(f"{requirement.binary} version")
+        ):
+            continue
+        print(f"Install {requirement.binary} {requirement.version}")
+        sudo = "sudo " if os.geteuid() != 0 else ""
+        with TemporaryDirectory() as directory:
+            archive = Path(directory) / Path(requirement.archive).name
+            bash(f"curl -fsSL {requirement.archive} -o {archive.as_posix()}")
+            bash(f"{sudo}tar -xzf {archive.as_posix()} -C /usr/local/bin {requirement.extract}")
 
     outputs: list[Path] = []
     if target in ("both", "compose"):
@@ -123,19 +135,3 @@ def generate_artifacts(
     outputs.append(secrets_output)
 
     return outputs
-
-
-def ensure_tools(requirements: list[ToolRequirement]) -> None:
-    for requirement in requirements:
-        if (
-            shutil.which(requirement.binary) is not None
-            and bash_check(f"{requirement.binary} version")
-            and requirement.probe in bash_output(f"{requirement.binary} version")
-        ):
-            continue
-        print(f"Install {requirement.binary} {requirement.version}")
-        sudo = "sudo " if os.geteuid() != 0 else ""
-        with TemporaryDirectory() as directory:
-            archive = Path(directory) / Path(requirement.archive).name
-            bash(f"curl -fsSL {requirement.archive} -o {archive.as_posix()}")
-            bash(f"{sudo}tar -xzf {archive.as_posix()} -C /usr/local/bin {requirement.extract}")

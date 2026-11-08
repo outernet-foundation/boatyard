@@ -567,8 +567,27 @@ class TestK8sSection:
         with pytest.raises(ValidationError, match="must declare workloads or charts"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
+    def test_empty_vars_values_refuse(self, tmp_path: Path) -> None:
+        write_config(tmp_path, {"requires": ">=0.1", "k8s": {"workloads": ["api.yaml"], "vars": {"FOO": ""}}})
+
+        with pytest.raises(ValidationError, match="vars values must be non-empty: FOO"):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
 
 class TestServices:
+    def test_empty_vars_values_refuse(self, tmp_path: Path) -> None:
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "project_name": "example",
+                "services": {"core": {"workloads": ["api.yaml"], "vars": {"FOO": ""}}},
+            },
+        )
+
+        with pytest.raises(ValidationError, match="vars values must be non-empty: FOO"):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
     def test_groups_options_and_bare_entries_load(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,

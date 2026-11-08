@@ -83,6 +83,16 @@ def _require_all_caps_name(value: str) -> str:
 
 AllCapsName = Annotated[str, AfterValidator(_require_all_caps_name)]
 
+
+def _require_nonempty_values(values: dict[str, str]) -> dict[str, str]:
+    empty = sorted(name for name, value in values.items() if not value)
+    if empty:
+        raise ValueError(f"vars values must be non-empty: {', '.join(empty)}")
+    return values
+
+
+VarsMap = Annotated[dict[str, str], AfterValidator(_require_nonempty_values)]
+
 # Match path:tag or path@digest.
 DECLARED_REFERENCE_PATTERN = re.compile(
     rf"^(?P<path>[^:@\s$]+)(?::(?P<tag>[^@\s$]+))?(?:@(?P<digest>{SHA256_DIGEST_REGEX}))?$"
@@ -271,6 +281,11 @@ class ConfigFile(BaseModel):
             if row.entry.ref is not None
         ]
 
+    @property
+    def tree_sentinels(self) -> dict[str, str]:
+        # The compose barrier pre-images over the build-set slot supply; TREE_SENTINEL_PATTERN finds them
+        return {slot: f"{TREE_SLOT_MARKER}{slot}__" for slot in (service_sha_env(name) for name in self.service_builds)}
+
     def resolve_services(self, choices: Mapping[str, str]) -> list[ResolvedService]:
         resolved: list[ResolvedService] = []
         for name, member in self.services.items():
@@ -425,7 +440,7 @@ class ServiceEntry(BaseModel):
 
     ref: str | None = None
     workloads: list[str] = Field(default_factory=list)
-    vars: dict[str, str] = Field(default_factory=dict)
+    vars: VarsMap = Field(default_factory=dict)
     routes: list[RouteConfig] = Field(default_factory=list)
     ports: list[PortDeclaration] = Field(default_factory=list)
 
@@ -533,7 +548,7 @@ class K8sConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     workloads: list[str] = Field(default_factory=list)
-    vars: dict[str, str] = Field(default_factory=dict)
+    vars: VarsMap = Field(default_factory=dict)
     charts: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -720,6 +735,9 @@ def env_lock_slot(entry_name: str, lock_key: str) -> str:
 
 def env_tree_slot(entry_name: str, sha_env_name: str) -> str:
     return entry_name.upper().replace("-", "_") + TREE_SLOT_MARKER + sha_env_name
+
+
+TREE_SENTINEL_PATTERN = re.compile(re.escape(TREE_SLOT_MARKER) + r"([A-Z][A-Z0-9_]*)__")
 
 
 def chart_lock_key(name: str) -> str:

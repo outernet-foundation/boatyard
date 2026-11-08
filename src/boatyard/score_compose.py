@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import shutil
+from functools import partial
 from pathlib import Path
 from typing import Literal, Self
 
@@ -15,6 +16,7 @@ from pydantic import (
 
 from boatyard.config.config import (
     COMPOSE_SLOT,
+    TREE_SENTINEL_PATTERN,
     TREE_SLOT_MARKER,
     ComposeWorkloadDocument,
     WorkloadDocument,
@@ -27,7 +29,6 @@ from boatyard.config.config import (
 )
 from boatyard.config.lock import LOCK_PATH, LockFile
 from boatyard.config.values import ValuesFile
-from boatyard.dockerfiles import service_sha_env
 from boatyard.paths import VALUES_FILE
 from boatyard.yaml import load_yaml_model
 from boatyard.score import (
@@ -40,8 +41,6 @@ from boatyard.score import (
 )
 
 TOOL = "score-compose"
-
-TREE_SENTINEL_PATTERN = re.compile(re.escape(TREE_SLOT_MARKER) + r"([A-Z][A-Z0-9_]*)__")
 
 
 BARRIER_SERVICE = "wait-for-resources"
@@ -142,8 +141,9 @@ def generate_compose(config: ConfigFile, lock: LockFile, secrets: SecretsDeclara
     if "ALPINE_IMAGE" not in images:
         raise ValueError(f"{LOCK_PATH.as_posix()}: the image lock must carry the ALPINE_IMAGE entry")
 
-    # Only the slot name set is load-bearing; the values never enter a compose artifact.
-    tree_slots = {service_sha_env(name) for name in config.service_builds}
+    # The build-set slot supply mints the barrier; a workload ${X_SHA} naming no build
+    # refuses at render_score's leftover check.
+    sentinels = config.tree_sentinels
     outputs: list[Path] = []
     consumed: set[str] = set()
     for name, entry in config.local_service_entries():
@@ -158,7 +158,7 @@ def generate_compose(config: ConfigFile, lock: LockFile, secrets: SecretsDeclara
             config,
             substrate="compose",
             workloads=workloads,
-            rendering_vars=entry.vars,
+            variable_values={**sentinels, **entry.vars},
             templates=[
                 HEALTHCHECK_TEMPLATE,
                 RESTART_TEMPLATE,
@@ -170,7 +170,6 @@ def generate_compose(config: ConfigFile, lock: LockFile, secrets: SecretsDeclara
             ],
             output=output_path,
             images=images,
-            service_shas={sha: f"{TREE_SLOT_MARKER}{sha}__" for sha in tree_slots},
         )
 
         # Parse the rendering into the typed document
@@ -257,31 +256,9 @@ def generate_compose(config: ConfigFile, lock: LockFile, secrets: SecretsDeclara
 
         # Rewrite the sha sentinels, scan the consumed secrets, and namespace the lock-key slots
         text = dump_yaml(document.dump())
-        slotted: list[str] = []
-        cursor = 0
-        for match in TREE_SENTINEL_PATTERN.finditer(text):
-            slotted.append(text[cursor : match.start()])
-            cursor = match.end()
-            slotted.append("${" + env_tree_slot(name, match.group(1)) + "}")
-        slotted.append(text[cursor:])
-        text = "".join(slotted)
-        namespaced: list[str] = []
-        cursor = 0
-        for match in COMPOSE_SLOT.finditer(text):
-            namespaced.append(text[cursor : match.start()])
-            cursor = match.end()
-            if len(match.group(1)) % 2 == 1:
-                slot = match.group(2)
-                if slot in images:
-                    namespaced.append(f"{match.group(1)}{{{env_lock_slot(name, slot)}{match.group(3) or ''}}}")
-                    continue
-                if TREE_SLOT_MARKER in slot:
-                    namespaced.append(match.group(0))
-                    continue
-                consumed.add(slot)
-            namespaced.append(match.group(0))
-        namespaced.append(text[cursor:])
-        write_file(output_path, "".join(namespaced))
+        text = TREE_SENTINEL_PATTERN.sub(partial(_rewrite_sentinel, name), text)
+        text = COMPOSE_SLOT.sub(partial(_namespace_slot, name, images, consumed), text)
+        write_file(output_path, text)
         outputs.append(output_path)
 
         # Remove the entry's compose state dir
@@ -290,3 +267,19 @@ def generate_compose(config: ConfigFile, lock: LockFile, secrets: SecretsDeclara
     secrets.validate_consumed(consumed, "compose", SECRETS_FILE.as_posix())
 
     return outputs
+
+
+def _rewrite_sentinel(entry_name: str, match: re.Match[str]) -> str:
+    return "${" + env_tree_slot(entry_name, match.group(1)) + "}"
+
+
+def _namespace_slot(entry_name: str, images: dict[str, str], consumed: set[str], match: re.Match[str]) -> str:
+    # Odd $-parity is interpolation: lock keys rename under the entry, tree slots ride as-is,
+    # everything else is a consumer surface the secrets declaration must cover
+    if len(match.group(1)) % 2 == 1:
+        slot = match.group(2)
+        if slot in images:
+            return f"{match.group(1)}{{{env_lock_slot(entry_name, slot)}{match.group(3) or ''}}}"
+        if TREE_SLOT_MARKER not in slot:
+            consumed.add(slot)
+    return match.group(0)

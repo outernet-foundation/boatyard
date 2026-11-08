@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, RootModel
 from boatyard import dockerfiles
 from boatyard.build import DIGEST_FILE_NAME, DIGEST_PLATFORM, DIGEST_PROJECT
 from boatyard.config.config import ConfigFile
-from boatyard.config.k8s_pins import render_pins
+from boatyard.config.k8s_pins import PINS_HEADER, parse_pins
 from boatyard.paths import DEFAULT_CONFIG_PATH, K8S_PINS_PATH
 from boatyard.score_generate import generate_artifacts
 
@@ -51,7 +51,9 @@ def bump() -> None:
     service_shas = dockerfiles.compute_service_shas(root, config.service_builds)
     certify_head(service_shas)
 
-    (root / K8S_PINS_PATH).write_text(render_pins(service_shas), encoding="utf-8")
+    pins = parse_pins(service_shas)
+    body = "".join(f"{name}: {tag}\n" for name, tag in sorted(pins.items())) or "{}\n"
+    (root / K8S_PINS_PATH).write_text(PINS_HEADER + body, encoding="utf-8")
     generate_artifacts(config, target="k8s")
     for name, tag in sorted(service_shas.items()):
         print(f"{name}={tag}")

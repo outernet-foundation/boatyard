@@ -131,11 +131,10 @@ def render_score(
     config: ConfigFile,
     substrate: Substrate,
     workloads: list[LoadedWorkload],
-    rendering_vars: dict[str, str],
+    variable_values: dict[str, str],
+    images: dict[str, str],
     templates: list[str],
     output: Path,
-    images: dict[str, str],
-    service_shas: dict[str, str],
 ) -> None:
     # Derive the per-substrate names and create the output parent
     root = config.root
@@ -147,13 +146,8 @@ def render_score(
     project_name = None if substrate == "k8s" else config.project_name
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    # List the variable sources lowest-priority first so later ones overwrite earlier ones
-    variable_values = {
-        variable: value
-        for source in (images, service_shas, rendering_vars)
-        for variable, value in source.items()
-        if value
-    }
+    # The lock images ride as bindings underneath the caller's values
+    variable_values = {**images, **variable_values}
 
     with (
         as_file(files("boatyard") / PATCH_TEMPLATES_DIR) as builtin_templates,
