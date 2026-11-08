@@ -79,6 +79,29 @@ class WorkloadDocument(BaseModel):
         annotation = self.metadata.annotations.get(CONSUMER_INTERPOLATED_ANNOTATION)
         return annotation.split(",") if annotation is not None else []
 
+    def interpolated_file_texts(self, root: Path) -> list[str]:
+        texts: list[str] = []
+        for container in self.containers.values():
+            for target, spec in container.files.items():
+                if target not in self.consumer_interpolated_targets:
+                    continue
+                if not is_mapping(spec):
+                    continue
+                content = spec.get("content")
+                if not isinstance(content, str):
+                    content = None
+                    source = spec.get("source")
+                    if isinstance(source, str):
+                        files_path = root / source
+                        if not files_path.is_file():
+                            raise ValueError(
+                                f"{self.metadata.name}.yaml: files source {source!r} does not exist at the repo root"
+                            )
+                        content = files_path.read_text(encoding="utf-8")
+                if content is not None:
+                    texts.append(content)
+        return texts
+
 
 class ComposeWorkloadDocument(WorkloadDocument):
     @model_validator(mode="after")
@@ -132,6 +155,7 @@ class WorkloadProbe(BaseModel):
 
 class LoadedWorkload(NamedTuple):
     file_name: str
+    text: str
     raw: Yaml
     document: WorkloadDocument
 
@@ -139,8 +163,12 @@ class LoadedWorkload(NamedTuple):
 def load_workloads(score_dir: Path, names: list[str], lens: type[WorkloadDocument]) -> list[LoadedWorkload]:
     loaded: list[LoadedWorkload] = []
     for name in names:
-        raw = yaml.safe_load((score_dir / name).read_text(encoding="utf-8"))
-        loaded.append(LoadedWorkload(name, raw, lens.parse(raw, name)))
+        workload_path = score_dir / name
+        if not workload_path.is_file():
+            raise ValueError(f"{workload_path.as_posix()}: the workload file is required")
+        text = workload_path.read_text(encoding="utf-8")
+        raw = yaml.safe_load(text)
+        loaded.append(LoadedWorkload(name, text, raw, lens.parse(raw, name)))
     return loaded
 
 

@@ -613,10 +613,6 @@ def _derive(config: ConfigFile, root: Path) -> None:
     surfaces: dict[str, dict[str, SlotDemand]] = {}
     for entry_name, entry in config.local_service_entries():
         score_dir = root / config.score_dir
-        for workload_name in entry.workloads:
-            workload_path = score_dir / workload_name
-            if not workload_path.is_file():
-                raise ValueError(f"{workload_path.as_posix()}: the workload file is required")
         workloads = load_workloads(score_dir, entry.workloads, WorkloadDocument)
         provisioner_files = select_provisioner_files(score_dir, "compose", workloads)
 
@@ -631,31 +627,14 @@ def _derive(config: ConfigFile, root: Path) -> None:
         demands: dict[str, SlotDemand] = {}
         for workload in workloads:
             document = workload.document
-            text = (score_dir / workload.file_name).read_text(encoding="utf-8")
-            merge_slot_demands(demands, text, parity=1, suffixed_only=True)
-            for container_name, container in document.containers.items():
+            merge_slot_demands(demands, workload.text, parity=1, suffixed_only=True)
+            for container_name in document.containers:
                 site = f"{workload.file_name}: containers.{container_name}"
                 claims.setdefault(container_name, []).append(site)
                 spelling = f"{Path(workload.file_name).stem}-{container_name}"
                 spellings.setdefault(spelling, []).append(site)
-                for target, spec in container.files.items():
-                    if target not in document.consumer_interpolated_targets:
-                        continue
-                    if not is_mapping(spec):
-                        continue
-                    content = spec.get("content")
-                    if not isinstance(content, str):
-                        content = None
-                        source = spec.get("source")
-                        if isinstance(source, str):
-                            files_path = root / source
-                            if not files_path.is_file():
-                                raise ValueError(
-                                    f"{workload.file_name}: files source {source!r} does not exist at the repo root"
-                                )
-                            content = files_path.read_text(encoding="utf-8")
-                    if content is not None:
-                        merge_slot_demands(demands, content, parity=0, suffixed_only=False)
+            for content in document.interpolated_file_texts(root):
+                merge_slot_demands(demands, content, parity=0, suffixed_only=False)
         for file_name, entries in provisioner_files:
             for provisioner in entries:
                 if not is_mapping(provisioner):
