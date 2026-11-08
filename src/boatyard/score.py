@@ -8,7 +8,6 @@ from hashlib import sha256
 from importlib.resources import as_file, files
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Literal, Self
 
 import yaml
 from bashrun.bash import bash
@@ -16,15 +15,13 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    RootModel,
     ValidationInfo,
     field_validator,
-    model_validator,
 )
 
 from boatyard.config.config import (
-    ENV_NAME_PATTERN,
     PLACEHOLDER,
+    Substrate,
     Yaml,
     is_mapping,
     LoadedWorkload,
@@ -36,49 +33,9 @@ from boatyard.markers import MarkerContext, resolve_markers
 
 PATCH_TEMPLATES_DIR = "score_patch_templates"
 
-SECRETS_FILE = Path("stack/secrets.yaml")
 SECRETS_OUTPUT = Path("stack/generated/secrets.txt")
 
 STRING_FORM_FIELDS = ("state", "outputs", "volumes", "services", "manifests")
-
-Substrate = Literal["compose", "k8s"]
-
-
-class SecretsDeclaration(RootModel[dict[str, "SecretKey"]]):
-    @model_validator(mode="before")
-    @classmethod
-    def _coerce_string_specs(cls, value: Yaml) -> Yaml:
-        if value is None:
-            value = {}
-        if not is_mapping(value):
-            raise ValueError("must be a KEY: description mapping")
-        return {name: ({"description": spec} if isinstance(spec, str) else spec) for name, spec in value.items()}
-
-    @model_validator(mode="after")
-    def _require_all_caps_keys(self) -> Self:
-        for name in self.root:
-            if not ENV_NAME_PATTERN.match(name):
-                raise ValueError(f"{name!r} must be an ALL_CAPS key")
-        return self
-
-    def validate_consumed(self, consumed: set[str], rendering: Substrate, source: str) -> None:
-        undeclared = sorted(consumed - self.root.keys())
-        if undeclared:
-            raise ValueError(f"{source}: the {rendering} rendering consumes undeclared keys: " + ", ".join(undeclared))
-
-
-class SecretKey(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    description: str
-    mint: bool = False
-
-    @field_validator("description")
-    @classmethod
-    def _require_description(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("description must be non-empty")
-        return value
 
 
 class AuthoredProvisioner(BaseModel):

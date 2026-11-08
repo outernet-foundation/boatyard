@@ -18,11 +18,11 @@ from boatyard import score_compose as score_compose_module
 from boatyard import score_k8s as score_k8s_module
 from boatyard import score_generate as score_generate_module
 from boatyard.verbs import score as score_verb_module
-from boatyard.config.config import ConfigFile, K8sConfig, WorkloadDocument
+from boatyard.config.config import ConfigFile, K8sConfig, SecretsDeclaration, WorkloadDocument
 from boatyard.config.lock import LockFile
 from boatyard.dockerfiles import ServiceBuild
 from boatyard.paths import K8S_PINS_PATH
-from boatyard.score import SecretsDeclaration, write_file
+from boatyard.score import write_file
 from boatyard.score_compose import BindVolume, ComposeService
 from boatyard.score_k8s import generate_k8s
 
@@ -341,13 +341,13 @@ class TestMarkerSubstrateResolution:
             "project_name: example\n"
             f"platforms:\n{platform_lines}"
             f"{base_image_lines}"
+            "secrets: {}\n"
             "services:\n"
             "  core:\n"
             "    workloads:\n"
             "      - api.yaml\n",
             encoding="utf-8",
         )
-        (tmp_path / "stack" / "secrets.yaml").write_text("", encoding="utf-8")
         recorder = WorkloadContentsRecorder()
         self.recorder = recorder
 
@@ -1420,7 +1420,7 @@ def test_variable_placeholders_refuse_or_stay_escaped(tmp_path: Path) -> None:
         bash("score-compose generate refused-variables.yaml --output refused.yaml", cwd=tmp_path)
 
 
-def _verb_repo(tmp_path: Path) -> None:
+def _verb_repo(tmp_path: Path, secrets: object = {}) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "api.yaml").write_text(
         "metadata:\n  name: api\ncontainers:\n  api:\n    image: ${LOKI_IMAGE}\n", encoding="utf-8"
@@ -1442,37 +1442,42 @@ def _verb_repo(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     (tmp_path / "boatyard.yml").write_text(
-        "requires: '>=0'\n"
-        "repository: ghcr.io/org/repo\n"
-        "project_name: example\n"
-        "platforms:\n"
-        "  - linux/amd64\n"
-        "base_images:\n"
-        "  LOKI_IMAGE: docker.io/grafana/loki:3.5.0\n"
-        "  ALPINE_IMAGE: docker.io/library/alpine:3.21.0\n"
-        "services:\n"
-        "  core:\n"
-        "    workloads:\n"
-        "      - api.yaml\n",
+        yaml.safe_dump({
+            "requires": ">=0",
+            "repository": "ghcr.io/org/repo",
+            "project_name": "example",
+            "platforms": ["linux/amd64"],
+            "base_images": {
+                "LOKI_IMAGE": "docker.io/grafana/loki:3.5.0",
+                "ALPINE_IMAGE": "docker.io/library/alpine:3.21.0",
+            },
+            "secrets": secrets,
+            "services": {"core": {"workloads": ["api.yaml"]}},
+        }),
         encoding="utf-8",
     )
 
 
-def test_generate_score_refuses_a_missing_secrets_declaration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_generate_score_refuses_an_absent_secrets_section(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _verb_repo(tmp_path)
+    config = yaml.safe_load((tmp_path / "boatyard.yml").read_text(encoding="utf-8"))
+    del config["secrets"]
+    (tmp_path / "boatyard.yml").write_text(yaml.safe_dump(config), encoding="utf-8")
     monkeypatch.chdir(tmp_path)
 
-    with pytest.raises(ValueError, match="secrets declaration is required"):
+    with pytest.raises(ValueError, match="the secrets section is required"):
         score_verb_module.generate_score(target="compose")
 
 
 def test_generate_score_writes_the_mint_list_from_the_declaration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _verb_repo(tmp_path)
-    (tmp_path / "stack" / "secrets.yaml").write_text(
-        "PUBLIC_URL: the public address\nS3_ACCESS_KEY:\n  description: s3 credentials\n  mint: true\n",
-        encoding="utf-8",
+    _verb_repo(
+        tmp_path,
+        secrets={
+            "PUBLIC_URL": "the public address",
+            "S3_ACCESS_KEY": {"description": "s3 credentials", "mint": True},
+        },
     )
     recorder = WorkloadContentsRecorder()
 
@@ -1498,8 +1503,7 @@ def _k8s_only_repo(tmp_path: Path) -> None:
 def test_generate_score_on_a_compose_only_repo_derives_compose_and_requests_only_the_compose_tool(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    _verb_repo(tmp_path)
-    (tmp_path / "stack" / "secrets.yaml").write_text("PUBLIC_URL: the public address\n", encoding="utf-8")
+    _verb_repo(tmp_path, secrets={"PUBLIC_URL": "the public address"})
     recorder = WorkloadContentsRecorder()
 
     monkeypatch.setattr(score_module, "bash", recorder.run)
@@ -1521,10 +1525,10 @@ def test_generate_artifacts_on_a_k8s_only_repo_requests_no_compose_tool(
     (tmp_path / "boatyard.lock.yml").write_text(
         yaml.safe_dump({"charts": {"LOKI_CHART": MIRRORED_CHART}}), encoding="utf-8"
     )
-    (tmp_path / "stack" / "secrets.yaml").write_text("", encoding="utf-8")
     config = _root_config(
         repository="ghcr.io/org/repo",
         k8s={"workloads": ["api.yaml"], "charts": {"loki": CHART_REF}},
+        secrets={},
     )
     config.root = tmp_path
 
@@ -1575,7 +1579,6 @@ def _generate_compose_with_stubbed_tools(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, on_path: str | None, version_output: str
 ) -> list[str]:
     _verb_repo(tmp_path)
-    (tmp_path / "stack" / "secrets.yaml").write_text("", encoding="utf-8")
     monkeypatch.setattr(score_module, "bash", WorkloadContentsRecorder().run)
     commands = _offline_tool_ensure(monkeypatch, on_path=on_path, version_output=version_output)
     monkeypatch.chdir(tmp_path)

@@ -16,6 +16,7 @@ from boatyard import dockerfiles
 from boatyard.config.config import (
     K8sConfig,
     PLACEHOLDER,
+    SecretsDeclaration,
     WorkloadDocument,
     Yaml,
     ConfigFile,
@@ -29,8 +30,6 @@ from boatyard.config.lock import LockFile
 from boatyard.markers import MarkerContext, resolve_markers
 from boatyard.paths import K8S_PINS_PATH
 from boatyard.score import (
-    SECRETS_FILE,
-    SecretsDeclaration,
     dump_yaml,
     render_score,
     split_documents,
@@ -151,7 +150,7 @@ def generate_k8s(
         for block in split_documents(output_path.read_text(encoding="utf-8"))
         for key in collect_secret_keys(yaml.safe_load(block), secret_name)
     }
-    secrets.validate_consumed(consumed, "k8s", SECRETS_FILE.as_posix())
+    secrets.validate_consumed(consumed, "k8s", "boatyard.yml: secrets")
 
     return output_path
 

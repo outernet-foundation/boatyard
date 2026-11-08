@@ -21,6 +21,7 @@ from boatyard.config.config import (
     TREE_SENTINEL_PATTERN,
     TREE_SLOT_MARKER,
     ComposeWorkloadDocument,
+    SecretsDeclaration,
     WorkloadDocument,
     Yaml,
     compose_bundle_output_path,
@@ -35,8 +36,6 @@ from boatyard.config.values import ValuesFile
 from boatyard.paths import VALUES_FILE
 from boatyard.yaml import load_yaml_model
 from boatyard.score import (
-    SECRETS_FILE,
-    SecretsDeclaration,
     dump_yaml,
     render_score,
     write_file,
@@ -258,7 +257,7 @@ def generate_compose(config: ConfigFile, lock: LockFile, secrets: SecretsDeclara
         # Remove the entry's compose state dir
         shutil.rmtree(tool_state, ignore_errors=True)
 
-    secrets.validate_consumed(consumed, "compose", SECRETS_FILE.as_posix())
+    secrets.validate_consumed(consumed, "compose", "boatyard.yml: secrets")
 
     return outputs
 

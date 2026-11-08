@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from boatyard.score import SecretKey, SecretsDeclaration
+from boatyard.config.config import SecretKey, SecretsDeclaration
 
 
 def test_secret_key_rejects_empty_descriptions() -> None:

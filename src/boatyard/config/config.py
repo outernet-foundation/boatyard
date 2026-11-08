@@ -15,6 +15,7 @@ from pydantic import (
     ConfigDict,
     Discriminator,
     Field,
+    RootModel,
     Tag,
     ValidationInfo,
     field_validator,
@@ -115,6 +116,8 @@ COMPOSE_OUTPUT_DIR = Path("stack/generated/compose")
 
 Target = Literal["both", "compose", "k8s"]
 
+Substrate = Literal["compose", "k8s"]
+
 
 class UvToolTable(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -134,6 +137,43 @@ class PyprojectToml(BaseModel):
     tool: ToolTable | None = None
 
 
+class SecretsDeclaration(RootModel[dict[str, "SecretKey"]]):
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_string_specs(cls, value: Yaml) -> Yaml:
+        if value is None:
+            value = {}
+        if not is_mapping(value):
+            raise ValueError("must be a KEY: description mapping")
+        return {name: ({"description": spec} if isinstance(spec, str) else spec) for name, spec in value.items()}
+
+    @model_validator(mode="after")
+    def _require_all_caps_keys(self) -> Self:
+        for name in self.root:
+            if not ENV_NAME_PATTERN.match(name):
+                raise ValueError(f"{name!r} must be an ALL_CAPS key")
+        return self
+
+    def validate_consumed(self, consumed: set[str], rendering: Substrate, source: str) -> None:
+        undeclared = sorted(consumed - self.root.keys())
+        if undeclared:
+            raise ValueError(f"{source}: the {rendering} rendering consumes undeclared keys: " + ", ".join(undeclared))
+
+
+class SecretKey(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    description: str
+    mint: bool = False
+
+    @field_validator("description")
+    @classmethod
+    def _require_description(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("description must be non-empty")
+        return value
+
+
 class ConfigFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -146,6 +186,7 @@ class ConfigFile(BaseModel):
     project_name: str
     services: dict[str, ServiceMember] = Field(default_factory=dict)
     k8s: K8sConfig | None = None
+    secrets: SecretsDeclaration | None = None
     mirror_prefix: str = DEFAULT_MIRROR_PREFIX
 
     score_dir: Path = Path("stack/score")

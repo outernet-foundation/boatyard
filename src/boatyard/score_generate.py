@@ -11,10 +11,9 @@ from bashrun.bash import bash, bash_check, bash_output
 
 from boatyard.config.config import ConfigFile, Target
 from boatyard.config.lock import LOCK_PATH, LockFile
-from boatyard.score import SECRETS_FILE, SECRETS_OUTPUT, SecretsDeclaration, write_file
+from boatyard.score import SECRETS_OUTPUT, write_file
 from boatyard.score_compose import generate_compose
 from boatyard.score_k8s import generate_k8s
-from boatyard.yaml import load_yaml_model
 
 
 class ToolRequirement(NamedTuple):
@@ -64,11 +63,10 @@ def generate_artifacts(
     if not lock.images and not lock.charts:
         raise ValueError(f"{lock_path.as_posix()}: the image lock carries no entries")
 
-    # Require the secrets declaration and treat an empty file as the empty declaration
-    secrets_path = root / SECRETS_FILE
-    if not secrets_path.is_file():
-        raise ValueError(f"{secrets_path.as_posix()}: the secrets declaration is required")
-    secrets = load_yaml_model(SecretsDeclaration, secrets_path)
+    # Require the secrets section and treat an empty mapping as the stated empty declaration
+    secrets = config.secrets
+    if secrets is None:
+        raise ValueError("boatyard.yml: the secrets section is required; secrets: {} states zero secrets")
 
     requirements: list[ToolRequirement] = []
     if target in ("both", "compose"):
