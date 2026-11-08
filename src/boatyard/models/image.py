@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Container, Mapping
+from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
-from typing import Self
+from typing import NamedTuple, Self
 
 from bashrun.bash import bash, bash_output
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -27,53 +27,6 @@ class Image(BaseModel):
     dimension: str | None = None
     variants: list[str] = Field(default_factory=list)
     sha_args: list[str] = Field(default_factory=list)
-
-    @classmethod
-    def load(cls, directory: Path, root: Path, axes: Mapping[str, list[str]], siblings: Container[str]) -> Image:
-        dockerfile = directory / DOCKERFILE_NAME
-        relative = dockerfile.relative_to(root).as_posix()
-        from_images: list[str] = []
-        copy_from_values: list[str] = []
-        stages: set[str] = set()
-        args: list[str] = []
-        for line in dockerfile.read_text(encoding="utf-8").splitlines():
-            from_match = FROM_LINE_PATTERN.match(line.strip())
-            if from_match is not None:
-                from_images.append(from_match.group(1))
-                if from_match.group(2) is not None:
-                    stages.add(from_match.group(2))
-                continue
-            copy_from_match = COPY_FROM_LINE_PATTERN.match(line.strip())
-            if copy_from_match is not None:
-                copy_from_values.append(copy_from_match.group(1))
-                continue
-            arg_match = ARG_LINE_PATTERN.match(line.strip())
-            if arg_match is not None:
-                args.append(arg_match.group(1))
-        contexts: list[str] = []
-        for image in from_images:
-            if image in stages:
-                continue
-            if BARE_IDENTIFIER_PATTERN.fullmatch(image) is None:
-                if BUILD_ARG_REFERENCE_PATTERN.fullmatch(image) is None:
-                    raise ValueError(f"{relative}: FROM {image} must reference a base_images build arg")
-                continue
-            if image not in siblings:
-                raise ValueError(f"{relative}: FROM {image} names no image directory or stage")
-            contexts.append(image)
-        for value in copy_from_values:
-            if "/" in value:
-                raise ValueError(f"{relative}: COPY --from={value} must reference a base_images build arg")
-        declared_dimension_args = [argument for argument in args if argument in axes]
-        dimension_arg = declared_dimension_args[0] if declared_dimension_args else None
-        return cls(
-            name=directory.name,
-            dockerfile=relative,
-            contexts=sorted(set(contexts)),
-            dimension=dimension_arg,
-            variants=list(axes[dimension_arg]) if dimension_arg is not None else [],
-            sha_args=sorted({arg for arg in args if arg.endswith("_SHA")}),
-        )
 
     def compute_sha(self, repo_root: Path) -> str:
         repo_root = repo_root.resolve()
@@ -150,6 +103,104 @@ class Image(BaseModel):
         return self.name.upper().replace("-", "_") + "_SHA"
 
 
-def require_single_top(tops: set[str], subject: str) -> None:
+class DockerfileFacts(NamedTuple):
+    name: str
+    dockerfile: str
+    context_candidates: list[str]
+    args: list[str]
+
+
+def load_images(root: Path, dimensions: Mapping[str, list[str]]) -> dict[str, Image]:
+    directories: dict[str, Path] = {}
+    tops: set[str] = set()
+    for top in sorted(root.iterdir()):
+        if not top.is_dir() or top.name.startswith("."):
+            continue
+        for child in sorted(top.iterdir()):
+            if child.is_dir() and (child / DOCKERFILE_NAME).is_file():
+                directories[child.name] = child
+                tops.add(top.name)
     if len(tops) > 1:
-        raise ValueError(f"{subject} span multiple top-level directories: {sorted(tops)}")
+        raise ValueError(f"Dockerfile image directories span multiple top-level directories: {sorted(tops)}")
+
+    facts = {name: _parse_dockerfile(directory, root) for name, directory in sorted(directories.items())}
+
+    contexts: dict[str, list[str]] = {}
+    for name, fact in facts.items():
+        for candidate in fact.context_candidates:
+            if candidate not in facts:
+                raise ValueError(f"{fact.dockerfile}: FROM {candidate} names no image directory or stage")
+        contexts[name] = sorted(set(fact.context_candidates))
+
+    own_dimensions: dict[str, str | None] = {}
+    for name, fact in facts.items():
+        dimension_args = [argument for argument in fact.args if argument in dimensions]
+        own_dimensions[name] = dimension_args[0] if dimension_args else None
+
+    images: dict[str, Image] = {}
+    for name, fact in facts.items():
+        dimension = _effective_dimension(name, contexts, own_dimensions)
+        images[name] = Image(
+            name=fact.name,
+            dockerfile=fact.dockerfile,
+            contexts=contexts[name],
+            dimension=dimension,
+            variants=list(dimensions[dimension]) if dimension is not None else [],
+            sha_args=sorted({argument for argument in fact.args if argument.endswith("_SHA")}),
+        )
+
+    computable = {image.sha_env for image in images.values()}
+    for image in images.values():
+        unknown = [argument for argument in image.sha_args if argument not in computable]
+        if unknown:
+            raise ValueError(f"{image.dockerfile}: ARG {', '.join(unknown)} names no image directory")
+    return images
+
+
+def _parse_dockerfile(directory: Path, root: Path) -> DockerfileFacts:
+    dockerfile = directory / DOCKERFILE_NAME
+    relative = dockerfile.relative_to(root).as_posix()
+    from_images: list[str] = []
+    copy_from_values: list[str] = []
+    stages: set[str] = set()
+    args: list[str] = []
+    for line in dockerfile.read_text(encoding="utf-8").splitlines():
+        from_match = FROM_LINE_PATTERN.match(line.strip())
+        if from_match is not None:
+            from_images.append(from_match.group(1))
+            if from_match.group(2) is not None:
+                stages.add(from_match.group(2))
+            continue
+        copy_from_match = COPY_FROM_LINE_PATTERN.match(line.strip())
+        if copy_from_match is not None:
+            copy_from_values.append(copy_from_match.group(1))
+            continue
+        arg_match = ARG_LINE_PATTERN.match(line.strip())
+        if arg_match is not None:
+            args.append(arg_match.group(1))
+    context_candidates: list[str] = []
+    for image in from_images:
+        if image in stages:
+            continue
+        if BARE_IDENTIFIER_PATTERN.fullmatch(image) is None:
+            if BUILD_ARG_REFERENCE_PATTERN.fullmatch(image) is None:
+                raise ValueError(f"{relative}: FROM {image} must reference a base_images build arg")
+            continue
+        context_candidates.append(image)
+    for value in copy_from_values:
+        if "/" in value:
+            raise ValueError(f"{relative}: COPY --from={value} must reference a base_images build arg")
+    return DockerfileFacts(
+        name=directory.name,
+        dockerfile=relative,
+        context_candidates=context_candidates,
+        args=args,
+    )
+
+
+def _effective_dimension(
+    name: str, contexts: Mapping[str, list[str]], own_dimensions: Mapping[str, str | None]
+) -> str | None:
+    if contexts[name]:
+        return _effective_dimension(contexts[name][0], contexts, own_dimensions)
+    return own_dimensions[name]

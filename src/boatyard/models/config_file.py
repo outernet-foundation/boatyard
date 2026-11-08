@@ -24,11 +24,7 @@ import yaml
 
 from boatyard.models.pyproject import PYPROJECT_PATH, PyprojectToml
 from boatyard.models.workload import WorkloadDocument, load_workloads, select_provisioner_files
-from boatyard.models.image import (
-    DOCKERFILE_NAME,
-    Image,
-    require_single_top,
-)
+from boatyard.models.image import Image, load_images
 from boatyard.temp import PLATFORM_PATTERN, SHA256_DIGEST_REGEX
 from boatyard.yaml import Yaml, is_mapping, load_yaml_model
 
@@ -513,31 +509,7 @@ def _derive(config: ConfigFile, root: Path) -> None:
 
     # Derive the image build set from the Dockerfile tree.
     dimensions = variant_dimensions(config.services)
-    image_dirs: dict[str, Path] = {}
-    tops: set[str] = set()
-    for top in sorted(root.iterdir()):
-        if not top.is_dir() or top.name.startswith("."):
-            continue
-        for child in sorted(top.iterdir()):
-            if child.is_dir() and (child / DOCKERFILE_NAME).is_file():
-                image_dirs[child.name] = child
-                tops.add(top.name)
-    require_single_top(tops, "Dockerfile image directories")
-
-    images = {directory.name: Image.load(directory, root, dimensions, image_dirs) for directory in image_dirs.values()}
-
-    effective_dimensions = {name: _effective_dimension(name, images) for name in images}
-    for name, build in images.items():
-        dimension = effective_dimensions[name]
-        if dimension is not None:
-            build.dimension = dimension
-            build.variants = list(dimensions[dimension])
-
-    computable = {image.sha_env for image in images.values()}
-    for image in images.values():
-        unknown = [argument for argument in image.sha_args if argument not in computable]
-        if unknown:
-            raise ValueError(f"{image.dockerfile}: ARG {', '.join(unknown)} names no image directory")
+    images = load_images(root, dimensions)
     if images and config.repository is None:
         listed = ", ".join(sorted(images))
         raise ValueError(f"repository is required by the Dockerfile image directories {listed}")
@@ -624,13 +596,6 @@ def _refuse_unknown_variant_refs(
             raise ValueError(
                 f"{file_name}: containers.{container_name}.image: {stem} carries no {dimension} variant fan"
             )
-
-
-def _effective_dimension(name: str, builds: dict[str, Image]) -> str | None:
-    build = builds[name]
-    if build.contexts:
-        return _effective_dimension(build.contexts[0], builds)
-    return build.dimension
 
 
 def variant_dimensions(services: dict[str, ServiceGroup | ServiceEntry]) -> dict[str, list[str]]:
