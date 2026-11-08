@@ -8,7 +8,7 @@ from hashlib import sha256
 from importlib.resources import as_file, files
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Literal, NamedTuple, Self
+from typing import Literal, Self
 
 import yaml
 from bashrun.bash import bash
@@ -26,10 +26,10 @@ from boatyard.config.config import (
     ENV_NAME_PATTERN,
     PLACEHOLDER,
     Yaml,
-    is_list,
     is_mapping,
+    LoadedWorkload,
+    select_provisioner_files,
     ConfigFile,
-    WorkloadDocument,
 )
 from boatyard.yaml import load_yaml_model
 from boatyard.markers import MarkerContext, resolve_markers
@@ -107,12 +107,6 @@ class LiteralBlockDumper(yaml.SafeDumper):
     pass
 
 
-class LoadedWorkload(NamedTuple):
-    file_name: str
-    raw: Yaml
-    document: WorkloadDocument
-
-
 class ToolState(BaseModel):
     # Type only the workloads shape of the tool-owned state file
     model_config = ConfigDict(extra="allow")
@@ -153,17 +147,8 @@ def render_score(
         as_file(files("boatyard") / PATCH_TEMPLATES_DIR) as builtin_templates,
         ExitStack() as stack,
     ):
-        # Collect the resource types the workloads reference
-        referenced = {resource.type for workload in workloads for resource in workload.document.resources.values()}
-
         # Select the rendering's provisioner files that declare a referenced type
-        selected: list[tuple[str, list[Yaml]]] = []
-        rendering_dir = score_dir / rendering
-        if rendering_dir.is_dir():
-            for path in sorted(rendering_dir.glob("*.yaml")):
-                entries = yaml.safe_load(path.read_text(encoding="utf-8"))
-                if is_list(entries) and any(is_mapping(entry) and entry.get("type") in referenced for entry in entries):
-                    selected.append((f"{rendering}/{path.name}", entries))
+        selected = select_provisioner_files(score_dir, rendering, workloads)
 
         # Compile the selected provisioners into a per-run tempdir under score_dir
         paths: list[Path] = []
@@ -231,14 +216,6 @@ def render_score(
         # Run generate over the expanded copies
         rendered = " ".join((copies_directory / workload.file_name).as_posix() for workload in workloads)
         bash(f"{tool} generate {rendered} --output {output.as_posix()}", cwd=working_dir, env=variable_values)
-
-
-def load_workloads(score_dir: Path, names: list[str], lens: type[WorkloadDocument]) -> list[LoadedWorkload]:
-    loaded: list[LoadedWorkload] = []
-    for name in names:
-        raw = yaml.safe_load((score_dir / name).read_text(encoding="utf-8"))
-        loaded.append(LoadedWorkload(name, raw, lens.parse(raw, name)))
-    return loaded
 
 
 def dump_yaml(value: Yaml) -> str:

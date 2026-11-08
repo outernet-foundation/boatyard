@@ -66,6 +66,31 @@ def write_dockerfile(tmp_path: Path, service: str, text: str, top: str = "worklo
     (directory / "Dockerfile").write_text(text, encoding="utf-8")
 
 
+def write_workload(
+    tmp_path: Path, file_name: str, containers: list[str], resource_types: list[str] | None = None
+) -> None:
+    score = tmp_path / "stack" / "score"
+    score.mkdir(parents=True, exist_ok=True)
+    document: dict[str, object] = {
+        "metadata": {"name": Path(file_name).stem},
+        "containers": {name: {} for name in containers},
+    }
+    if resource_types is not None:
+        document["resources"] = {f"resource-{index}": {"type": kind} for index, kind in enumerate(resource_types)}
+    (score / file_name).write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+
+
+def write_compose_provisioner(tmp_path: Path, file_name: str, resource_type: str, services: list[str]) -> None:
+    directory = tmp_path / "stack" / "score" / "compose"
+    directory.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "uri": "tmp://example",
+        "type": resource_type,
+        "services": {name: {"image": "alpine:3.21"} for name in services},
+    }
+    (directory / file_name).write_text(yaml.safe_dump([entry], sort_keys=False), encoding="utf-8")
+
+
 def test_load_missing_file_raises_file_not_found(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         ConfigFile.load(tmp_path / "boatyard.yml")
@@ -606,6 +631,7 @@ class TestServices:
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_groups_options_and_bare_entries_load(self, tmp_path: Path) -> None:
+        write_workload(tmp_path, "api.yaml", ["api"])
         write_config(
             tmp_path,
             {
@@ -870,6 +896,8 @@ class TestQualifiedVocabulary:
         }
 
     def test_the_same_option_name_in_two_groups_loads_qualified(self, tmp_path: Path) -> None:
+        write_workload(tmp_path, "api.yaml", ["api"])
+        write_workload(tmp_path, "edge.yaml", ["edge"])
         write_config(
             tmp_path,
             self._config({
@@ -1252,6 +1280,7 @@ class TestPorts:
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_the_mapping_form_spells_the_owning_service_and_host_ip(self, tmp_path: Path) -> None:
+        write_workload(tmp_path, "api.yaml", ["api"])
         write_config(
             tmp_path,
             self._ports_config({
@@ -1324,6 +1353,7 @@ class TestRepository:
     def test_repository_without_service_builds_loads(self, tmp_path: Path) -> None:
         # The publish shape for a repo whose whole runtime is its own workload set: no
         # Dockerfile service builds, repository naming the artifact registry.
+        write_workload(tmp_path, "rathole-client.yaml", ["rathole-client"])
         write_config(
             tmp_path,
             {
@@ -1428,6 +1458,7 @@ class TestLockPairing:
         assert [name for name, _declared, _entry in config.remote_declared_entries()] == ["livekit"]
 
     def test_no_declarations_need_no_lock(self, tmp_path: Path) -> None:
+        write_workload(tmp_path, "api.yaml", ["api"])
         write_config(
             tmp_path,
             {
@@ -1459,6 +1490,89 @@ class TestServiceDerivation:
         assert sorted(config.service_builds) == ["api"]
 
 
+class TestBareServiceNameClaims:
+    def _local_config(self, tmp_path: Path, workloads: list[str]) -> None:
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "repository": "ghcr.io/org/repo",
+                "services": {"core": {"workloads": workloads}},
+            },
+        )
+
+    def test_a_container_name_shared_across_workloads_refuses(self, tmp_path: Path) -> None:
+        write_workload(tmp_path, "alpha.yaml", ["sidecar"])
+        write_workload(tmp_path, "beta.yaml", ["sidecar"])
+        self._local_config(tmp_path, ["alpha.yaml", "beta.yaml"])
+
+        with pytest.raises(
+            ValueError,
+            match=r"is claimed at alpha.yaml: containers.sidecar and beta.yaml: containers.sidecar",
+        ):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
+    def test_a_container_claiming_the_barrier_name_refuses(self, tmp_path: Path) -> None:
+        write_workload(tmp_path, "api.yaml", ["wait-for-resources"])
+        self._local_config(tmp_path, ["api.yaml"])
+
+        with pytest.raises(ValueError, match="the reserved barrier name"):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
+    def test_a_provisioner_service_claiming_a_container_name_refuses(self, tmp_path: Path) -> None:
+        write_workload(tmp_path, "api.yaml", ["migrations"], resource_types=["s3-bucket"])
+        write_compose_provisioner(tmp_path, "buckets.yaml", "s3-bucket", ["migrations"])
+        self._local_config(tmp_path, ["api.yaml"])
+
+        with pytest.raises(
+            ValueError,
+            match=r"is claimed at api.yaml: containers.migrations and compose/buckets.yaml: services.migrations",
+        ):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
+    def test_an_unreferenced_provisioner_service_does_not_collide(self, tmp_path: Path) -> None:
+        write_workload(tmp_path, "api.yaml", ["migrations"])
+        write_compose_provisioner(tmp_path, "buckets.yaml", "s3-bucket", ["migrations"])
+        self._local_config(tmp_path, ["api.yaml"])
+
+        assert ConfigFile.load(tmp_path / "boatyard.yml") is not None
+
+    def test_ambiguous_rendered_spellings_refuse(self, tmp_path: Path) -> None:
+        write_workload(tmp_path, "web.yaml", ["api-x"])
+        write_workload(tmp_path, "web-api.yaml", ["x"])
+        self._local_config(tmp_path, ["web.yaml", "web-api.yaml"])
+
+        with pytest.raises(
+            ValueError,
+            match=r"the rendered spelling 'web-api-x' is claimed at web.yaml: containers.api-x"
+            r" and web-api.yaml: containers.x",
+        ):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
+    def test_a_missing_workload_file_refuses(self, tmp_path: Path) -> None:
+        self._local_config(tmp_path, ["api.yaml"])
+
+        with pytest.raises(ValueError, match="the workload file is required"):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
+    def test_the_same_container_name_across_entries_loads(self, tmp_path: Path) -> None:
+        write_workload(tmp_path, "alpha.yaml", ["sidecar"])
+        write_workload(tmp_path, "beta.yaml", ["sidecar"])
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "repository": "ghcr.io/org/repo",
+                "services": {
+                    "one": {"workloads": ["alpha.yaml"]},
+                    "two": {"workloads": ["beta.yaml"]},
+                },
+            },
+        )
+
+        assert ConfigFile.load(tmp_path / "boatyard.yml") is not None
+
+
 def test_direct_model_construction_is_valid_for_tests(tmp_path: Path) -> None:
     config = ConfigFile.model_validate({
         "requires": ">=0.1",
@@ -1476,6 +1590,8 @@ def test_direct_model_construction_is_valid_for_tests(tmp_path: Path) -> None:
 
 
 def test_local_service_entries_flatten_in_declaration_order_skipping_refs(tmp_path: Path) -> None:
+    write_workload(tmp_path, "api.yaml", ["api"])
+    write_workload(tmp_path, "solo.yaml", ["solo"])
     write_lock(tmp_path, bundles=bundle_entries("identity-keycloak", "livekit"))
     write_config(
         tmp_path,

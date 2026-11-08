@@ -107,6 +107,7 @@ OCI_REFERENCE_PREFIX = "oci://"
 
 AUTH_GROUP_NAME = "auth"
 EDGE_SERVICE_NAME = "edge"
+BARRIER_SERVICE = "wait-for-resources"
 CADDY_IMAGE = "CADDY_IMAGE"
 ALPINE_IMAGE = "ALPINE_IMAGE"
 
@@ -257,6 +258,9 @@ class ConfigFile(BaseModel):
             values = root / self.score_dir / "k8s" / "values" / f"{chart}.yaml"
             if not values.is_file():
                 raise ValueError(f"{values.as_posix()}: the chart's values file is required")
+
+        for entry_name, entry in self.local_service_entries():
+            refuse_colliding_service_names(entry_name, entry, root / self.score_dir)
 
         return self
 
@@ -693,6 +697,79 @@ class ComposeWorkloadDocument(WorkloadDocument):
                 if block is not None and block.http_get is not None:
                     raise ValueError(f"a {probe} httpGet requires {PROBE_ADAPTER_ANNOTATION}")
         return self
+
+
+class LoadedWorkload(NamedTuple):
+    file_name: str
+    raw: Yaml
+    document: WorkloadDocument
+
+
+def refuse_colliding_service_names(entry_name: str, entry: ServiceEntry, score_dir: Path) -> None:
+    # A bundle's bare service names are its compose identity: workload containers, type-joined
+    # provisioner services, and the reserved barrier name each claim one, and one workload
+    # claims each rendered spelling.
+    for workload_name in entry.workloads:
+        workload_path = score_dir / workload_name
+        if not workload_path.is_file():
+            raise ValueError(f"{workload_path.as_posix()}: the workload file is required")
+
+    workloads = load_workloads(score_dir, entry.workloads, WorkloadDocument)
+    claims: dict[str, list[str]] = {BARRIER_SERVICE: ["the reserved barrier name"]}
+    spellings: dict[str, list[str]] = {}
+    for workload in workloads:
+        for container_name in workload.document.containers:
+            site = f"{workload.file_name}: containers.{container_name}"
+            claims.setdefault(container_name, []).append(site)
+            spelling = f"{Path(workload.file_name).stem}-{container_name}"
+            spellings.setdefault(spelling, []).append(site)
+
+    for file_name, entries in select_provisioner_files(score_dir, "compose", workloads):
+        for provisioner in entries:
+            if not is_mapping(provisioner):
+                continue
+            services = provisioner.get("services")
+            if not is_mapping(services):
+                continue
+            for service_name in services:
+                claims.setdefault(service_name, []).append(f"{file_name}: services.{service_name}")
+
+    _refuse_duplicated_claims(entry_name, "service name", claims)
+    _refuse_duplicated_claims(entry_name, "rendered spelling", spellings)
+
+
+def load_workloads(score_dir: Path, names: list[str], lens: type[WorkloadDocument]) -> list[LoadedWorkload]:
+    loaded: list[LoadedWorkload] = []
+    for name in names:
+        raw = yaml.safe_load((score_dir / name).read_text(encoding="utf-8"))
+        loaded.append(LoadedWorkload(name, raw, lens.parse(raw, name)))
+    return loaded
+
+
+def select_provisioner_files(
+    score_dir: Path,
+    rendering: str,
+    workloads: list[LoadedWorkload],
+) -> list[tuple[str, list[Yaml]]]:
+    # A provisioner file participates when an entry workload references its resource type.
+    referenced = {resource.type for workload in workloads for resource in workload.document.resources.values()}
+    rendering_dir = score_dir / rendering
+    if not rendering_dir.is_dir():
+        return []
+    selected: list[tuple[str, list[Yaml]]] = []
+    for path in sorted(rendering_dir.glob("*.yaml")):
+        entries = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if is_list(entries) and any(is_mapping(entry) and entry.get("type") in referenced for entry in entries):
+            selected.append((f"{rendering}/{path.name}", entries))
+    return selected
+
+
+def _refuse_duplicated_claims(entry_name: str, subject: str, claims: Mapping[str, list[str]]) -> None:
+    for name, sites in sorted(claims.items()):
+        if len(sites) > 1:
+            raise ValueError(
+                f"services entry {entry_name!r}: the {subject} {name!r} is claimed at " + " and ".join(sites)
+            )
 
 
 def require_workload_reference(name: str) -> None:

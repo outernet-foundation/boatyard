@@ -61,6 +61,9 @@ def _write_repo(
             values.parent.mkdir(parents=True, exist_ok=True)
             values.write_text("chart: {}\n", encoding="utf-8")
     (root / "boatyard.yml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    score = root / "stack" / "score"
+    score.mkdir(parents=True, exist_ok=True)
+    (score / "api.yaml").write_text("metadata:\n  name: api\ncontainers:\n  api: {}\n", encoding="utf-8")
     if (base_images or charts) and not (root / LOCK_PATH).exists():
         (root / LOCK_PATH).write_text("", encoding="utf-8")
 
@@ -886,15 +889,7 @@ class TestHostPlatform:
 
 class TestPushFlags:
     def _parse(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, arguments: list[str]) -> tuple[bool, str | None]:
-        (tmp_path / "boatyard.yml").write_text(
-            yaml.safe_dump({
-                "requires": ">=0.0",
-                "project_name": "demo",
-                "repository": "ghcr.io/org/demo",
-                "services": {"core": {"workloads": ["api.yaml"]}},
-            }),
-            encoding="utf-8",
-        )
+        _write_repo(tmp_path)
         monkeypatch.chdir(tmp_path)
         recorded: list[tuple[bool, str | None]] = []
 
@@ -921,15 +916,7 @@ class TestPushFlags:
         assert self._parse(tmp_path, monkeypatch, [f"--push-to={LOCAL_REGISTRY}"]) == (False, LOCAL_REGISTRY)
 
     def test_push_and_push_to_refuse_together(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        (tmp_path / "boatyard.yml").write_text(
-            yaml.safe_dump({
-                "requires": ">=0.0",
-                "project_name": "demo",
-                "repository": "ghcr.io/org/demo",
-                "services": {"core": {"workloads": ["api.yaml"]}},
-            }),
-            encoding="utf-8",
-        )
+        _write_repo(tmp_path)
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(build, "run_build", _record_failure)
 

@@ -16,6 +16,7 @@ from pydantic import (
 
 from boatyard.config.config import (
     ALPINE_IMAGE,
+    BARRIER_SERVICE,
     COMPOSE_SLOT,
     TREE_SENTINEL_PATTERN,
     TREE_SLOT_MARKER,
@@ -26,6 +27,7 @@ from boatyard.config.config import (
     double_dollars,
     env_lock_slot,
     env_tree_slot,
+    load_workloads,
     ConfigFile,
 )
 from boatyard.config.lock import LockFile
@@ -36,7 +38,6 @@ from boatyard.score import (
     SECRETS_FILE,
     SecretsDeclaration,
     dump_yaml,
-    load_workloads,
     render_score,
     write_file,
 )
@@ -44,7 +45,6 @@ from boatyard.score import (
 TOOL = "score-compose"
 
 
-BARRIER_SERVICE = "wait-for-resources"
 HEALTHCHECK_TEMPLATE = "probe-adapter-healthchecks.tpl"
 RESTART_TEMPLATE = "restart.tpl"
 GPU_COMPOSE_TEMPLATES = {"cuda": "gpu-cuda.tpl", "rocm": "gpu-rocm.tpl"}
@@ -200,15 +200,9 @@ def generate_compose(config: ConfigFile, lock: LockFile, secrets: SecretsDeclara
 
             services_map[service_name] = (service, None, service_name)
 
-        # Refuse a collapsed name claimed twice
-        collapsed_names = [collapsed_name for _service, _workload, collapsed_name in services_map.values()]
-        if len(collapsed_names) != len(set(collapsed_names)):
-            duplicates = sorted({collapsed for collapsed in collapsed_names if collapsed_names.count(collapsed) > 1})
-            raise ValueError(f"the service names {duplicates} are each claimed by more than one rendered service")
-
         # Namespace every service under the entry with its bare name as a network alias
         network = f"{name}-net"
-        collapsed = set(collapsed_names)
+        collapsed = {collapsed_name for _service, _workload, collapsed_name in services_map.values()}
         document.services = {}
         document.networks = {network: {}}
         for service, workload, collapsed_name in services_map.values():

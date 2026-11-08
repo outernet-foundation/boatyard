@@ -22,6 +22,7 @@ from boatyard.config.config import (
     chart_lock_key,
     is_list,
     is_mapping,
+    load_workloads,
 )
 from boatyard.config.k8s_pins import load_pins
 from boatyard.config.lock import LockFile
@@ -31,7 +32,6 @@ from boatyard.score import (
     SECRETS_FILE,
     SecretsDeclaration,
     dump_yaml,
-    load_workloads,
     render_score,
     split_documents,
     write_file,

@@ -159,6 +159,9 @@ def _write_producer(root: Path, services: list[str], lock: dict[str, Any] | None
     )
     if lock is not None:
         producer_root = root / "producer"
+        producer_score = producer_root / "stack" / "score"
+        producer_score.mkdir(parents=True, exist_ok=True)
+        (producer_score / "api.yaml").write_text("metadata:\n  name: api\ncontainers:\n  api: {}\n", encoding="utf-8")
         (producer_root / "boatyard.yml").write_text(
             yaml.safe_dump({
                 "requires": ">=0.0",

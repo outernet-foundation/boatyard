@@ -224,6 +224,11 @@ class TestPublishComposeVerb:
             },
         )
         (tmp_path / "workloads").mkdir()
+        score = tmp_path / "stack" / "score"
+        score.mkdir(parents=True)
+        (score / "livekit-token.yaml").write_text(
+            "metadata:\n  name: livekit-token\ncontainers:\n  livekit-token: {}\n", encoding="utf-8"
+        )
         (tmp_path / LOCK_PATH).write_text(
             yaml.safe_dump({
                 "platforms": ["linux/amd64"],
@@ -326,6 +331,12 @@ class TestBundleMode:
         }
         _write_config(tmp_path, merged)
         (tmp_path / "workloads").mkdir()
+        score = tmp_path / "stack" / "score"
+        score.mkdir(parents=True)
+        (score / "api.yaml").write_text("metadata:\n  name: api\ncontainers:\n  api: {}\n", encoding="utf-8")
+        (score / "gateway.yaml").write_text(
+            "metadata:\n  name: gateway\ncontainers:\n  gateway: {}\n", encoding="utf-8"
+        )
         alpine = "alpine:3.20@sha256:" + "a" * 64
         (tmp_path / LOCK_PATH).write_text(
             yaml.safe_dump({

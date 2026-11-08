@@ -139,6 +139,9 @@ def _write_repo(
     if ref_services:
         payload["project_name"] = "demo"
         payload["services"] = ref_services
+        score = root / "stack" / "score"
+        score.mkdir(parents=True, exist_ok=True)
+        (score / "api.yaml").write_text("metadata:\n  name: api\ncontainers:\n  api: {}\n", encoding="utf-8")
     (root / "boatyard.yml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     if (base_images or charts or caller_refs) and not (root / LOCK_PATH).exists():
         (root / LOCK_PATH).write_text("", encoding="utf-8")
