@@ -618,51 +618,26 @@ def _derive(config: ConfigFile, root: Path) -> None:
             if not workload_path.is_file():
                 raise ValueError(f"{workload_path.as_posix()}: the workload file is required")
         workloads = load_workloads(score_dir, entry.workloads, WorkloadDocument)
+        provisioner_files = select_provisioner_files(score_dir, "compose", workloads)
 
         # A bundle's bare service names are its compose identity: workload containers, type-joined
         # provisioner services, and the reserved barrier name each claim one, and one workload
-        # claims each rendered spelling.
+        # claims each rendered spelling. The same texts carry the compose consumer surface of the
+        # entry: suffixed workload slots (bare slots are render-expanded or refused), provisioner
+        # services/state/outputs text (odd $ rides verbatim into the artifact), and
+        # consumer-interpolated files text (authored $$ lands single-$ in the artifact).
         claims: dict[str, list[str]] = {BARRIER_SERVICE: ["the reserved barrier name"]}
         spellings: dict[str, list[str]] = {}
+        demands: dict[str, SlotDemand] = {}
         for workload in workloads:
-            for container_name in workload.document.containers:
+            document = workload.document
+            text = (score_dir / workload.file_name).read_text(encoding="utf-8")
+            merge_slot_demands(demands, text, parity=1, suffixed_only=True)
+            for container_name, container in document.containers.items():
                 site = f"{workload.file_name}: containers.{container_name}"
                 claims.setdefault(container_name, []).append(site)
                 spelling = f"{Path(workload.file_name).stem}-{container_name}"
                 spellings.setdefault(spelling, []).append(site)
-        for file_name, entries in select_provisioner_files(score_dir, "compose", workloads):
-            for provisioner in entries:
-                if not is_mapping(provisioner):
-                    continue
-                services = provisioner.get("services")
-                if not is_mapping(services):
-                    continue
-                for service_name in services:
-                    claims.setdefault(service_name, []).append(f"{file_name}: services.{service_name}")
-        _refuse_duplicated_claims(entry_name, "service name", claims)
-        _refuse_duplicated_claims(entry_name, "rendered spelling", spellings)
-
-        # The compose consumer surface of a local entry, from authored text: suffixed workload
-        # slots (bare slots are render-expanded or refused), type-joined provisioner
-        # services/state/outputs text (odd $ rides verbatim into the artifact), and
-        # consumer-interpolated files text (authored $$ lands single-$ in the artifact).
-        demands: dict[str, SlotDemand] = {}
-        for workload in workloads:
-            text = (score_dir / workload.file_name).read_text(encoding="utf-8")
-            merge_slot_demands(demands, text, parity=1, suffixed_only=True)
-        for _file_name, entries in select_provisioner_files(score_dir, "compose", workloads):
-            for provisioner in entries:
-                if not is_mapping(provisioner):
-                    continue
-                for field in ("services", "state", "outputs"):
-                    value = provisioner.get(field)
-                    if is_mapping(value):
-                        merge_slot_demands(
-                            demands, yaml.dump(value, default_flow_style=False), parity=1, suffixed_only=False
-                        )
-        for workload in workloads:
-            document = workload.document
-            for container in document.containers.values():
                 for target, spec in container.files.items():
                     if target not in document.consumer_interpolated_targets:
                         continue
@@ -681,6 +656,22 @@ def _derive(config: ConfigFile, root: Path) -> None:
                             content = files_path.read_text(encoding="utf-8")
                     if content is not None:
                         merge_slot_demands(demands, content, parity=0, suffixed_only=False)
+        for file_name, entries in provisioner_files:
+            for provisioner in entries:
+                if not is_mapping(provisioner):
+                    continue
+                services = provisioner.get("services")
+                if is_mapping(services):
+                    for service_name in services:
+                        claims.setdefault(service_name, []).append(f"{file_name}: services.{service_name}")
+                for field in ("services", "state", "outputs"):
+                    value = provisioner.get(field)
+                    if is_mapping(value):
+                        merge_slot_demands(
+                            demands, yaml.dump(value, default_flow_style=False), parity=1, suffixed_only=False
+                        )
+        _refuse_duplicated_claims(entry_name, "service name", claims)
+        _refuse_duplicated_claims(entry_name, "rendered spelling", spellings)
         for key in set(config.base_images) | set(config.owned_images):
             demands.pop(key, None)
         surfaces[entry_name] = demands

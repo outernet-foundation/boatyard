@@ -112,22 +112,3 @@ def compute_service_shas(repo_root: Path, service_builds: dict[str, ServiceBuild
         result[service_sha_env(PurePosixPath(service_dir).name)] = f"tree-{tree_hash}"
 
     return result
-
-
-def _effective_axis(name: str, builds: dict[str, ServiceBuild], path: tuple[str, ...]) -> str | None:
-    if name in path:
-        raise ValueError(f"FROM context cycle: {' -> '.join((*path, name))}")
-    build = builds[name]
-    parent_axes = [_effective_axis(parent, builds, (*path, name)) for parent in build.contexts]
-    if len(set(parent_axes)) > 1:
-        raise ValueError(
-            f"workloads/{name}/{DOCKERFILE_NAME}: parents ({', '.join(build.contexts)}) disagree on variants"
-        )
-    if parent_axes:
-        if build.axis is not None:
-            raise ValueError(
-                f"workloads/{name}/{DOCKERFILE_NAME}: declares ARG {build.axis} over a "
-                f"variant-bearing base (parents: {', '.join(build.contexts)})"
-            )
-        return parent_axes[0]
-    return build.axis
