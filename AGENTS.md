@@ -36,8 +36,8 @@ Design intent and silent-failure traps, one fact per bullet.
 - The mint list (`secrets.txt`) is the k8s rendering's consumed secret refs, walked from the
   generated output — no secret vocabulary is authored anywhere, and a compose-only rendering
   mints an empty list.
-- A service group derives its option set from one declared variant dimension (`variants:` plus
-  group-level `workloads:`) or authors it (`options:`); the dimension name is the one spelling
+- A service group derives its option set from one declared variant axis (`axes:` plus
+  group-level `workloads:`) or authors it (`options:`); the axis name is the one spelling
   across the Dockerfile ARG, the workload slot, and the k8s selection — never re-described by hand.
 - Plain score-compose silently drops `httpGet` probes; boatyard's lens makes the omission loud
   instead via the workload's `outernet.internal/probe-adapter` annotation.
@@ -57,7 +57,7 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
 - `extra="forbid"` everywhere in pydantic models; per-field shape in `field_validator`s,
   cross-field shape in one `model_validator(mode="after")` per model.
 - Every `load()` takes a full path. YAML kinds go through `load_yaml_model` (`yaml.py` strict load);
-  `load_images(root, dimensions)` derives the image set from the Dockerfile tree;
+  `load_images(root, axes)` derives the image set from the Dockerfile tree;
   `LockFile.load(path, config)` reads a missing lock as the empty lock.
 - Every pydantic-modeled file kind owns exactly one module in `models/` (boatyard.yml, the lock,
   values, pins, workloads, the pyproject lens). Each module's types run root down, root
