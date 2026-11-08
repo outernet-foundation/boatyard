@@ -24,7 +24,7 @@ class Image(BaseModel):
     name: str
     dockerfile: str
     contexts: list[str] = Field(default_factory=list)
-    axis: str | None = None
+    dimension: str | None = None
     variants: list[str] = Field(default_factory=list)
     sha_args: list[str] = Field(default_factory=list)
 
@@ -64,19 +64,19 @@ class Image(BaseModel):
         for value in copy_from_values:
             if "/" in value:
                 raise ValueError(f"{relative}: COPY --from={value} must reference a base_images build arg")
-        declared_axis_args = [argument for argument in args if argument in axes]
-        if len(declared_axis_args) > 1:
+        declared_dimension_args = [argument for argument in args if argument in axes]
+        if len(declared_dimension_args) > 1:
             raise ValueError(
-                f"{relative}: declares two variant-axis ARGs ({', '.join(declared_axis_args)}); "
-                "an image carries one axis"
+                f"{relative}: declares two variant-dimension ARGs ({', '.join(declared_dimension_args)}); "
+                "an image carries one variant dimension"
             )
-        axis_arg = declared_axis_args[0] if declared_axis_args else None
+        dimension_arg = declared_dimension_args[0] if declared_dimension_args else None
         return cls(
             name=directory.name,
             dockerfile=relative,
             contexts=sorted(set(contexts)),
-            axis=axis_arg,
-            variants=list(axes[axis_arg]) if axis_arg is not None else [],
+            dimension=dimension_arg,
+            variants=list(axes[dimension_arg]) if dimension_arg is not None else [],
             sha_args=sorted({arg for arg in args if arg.endswith("_SHA")}),
         )
 
@@ -141,8 +141,8 @@ class Image(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> Self:
-        if (self.axis is None) != (not self.variants):
-            raise ValueError("axis and variants must be declared together")
+        if (self.dimension is None) != (not self.variants):
+            raise ValueError("dimension and variants must be declared together")
         return self
 
     @property

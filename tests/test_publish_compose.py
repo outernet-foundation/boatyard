@@ -97,8 +97,7 @@ ROOT_BUNDLE_SECTION = {
     "repository": REPOSITORY,
     "project_name": "example",
     "services": {
-        "core-cuda": {"workloads": ["api.yaml"], "vars": {"GPU_VARIANT": "cuda"}},
-        "core-rocm": {"workloads": ["api.yaml"], "vars": {"GPU_VARIANT": "rocm"}},
+        "core": {"variants": {"TORCH_DEVICE": ["cuda", "rocm"]}, "workloads": ["api.yaml"]},
         "gateway-open": {"workloads": ["gateway.yaml"]},
     },
 }

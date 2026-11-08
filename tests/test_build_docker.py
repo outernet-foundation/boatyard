@@ -46,12 +46,10 @@ def _write_repo(
         "repository": repository,
         "project_name": "demo",
         "platforms": platforms or ["linux/amd64"],
-        "services": {"core": {"workloads": ["api.yaml"]}},
+        "services": {"core": ({"variants": variants, "workloads": ["api.yaml"]} if variants else {"workloads": ["api.yaml"]})},
     }
     if base_images:
         payload["base_images"] = base_images
-    if variants:
-        payload["variants"] = variants
     if charts:
         payload["k8s"] = {"charts": charts}
         for chart in charts:

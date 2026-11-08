@@ -93,9 +93,8 @@ class ConfigFile(BaseModel):
     base_images: dict[AllCapsName, str] = Field(default_factory=dict)
     barrier_image: str = DEFAULT_BARRIER_IMAGE
     edge_image: str = DEFAULT_EDGE_IMAGE
-    variants: dict[AllCapsName, list[str]] = Field(default_factory=dict)
-    platforms: list[str] = Field(default_factory=list)
     project_name: str
+    platforms: list[str] = Field(default_factory=list)
     services: dict[str, ServiceMember] = Field(default_factory=dict)
     k8s: K8sConfig | None = None
     mirror_prefix: str = DEFAULT_MIRROR_PREFIX
@@ -184,21 +183,6 @@ class ConfigFile(BaseModel):
         _require_declared_reference(value, str(info.field_name))
         return value
 
-    @field_validator("variants")
-    @classmethod
-    def _validate_variants(cls, value: dict[AllCapsName, list[str]]) -> dict[AllCapsName, list[str]]:
-        for axis, values in value.items():
-            if not values:
-                raise ValueError(f"variants.{axis}: must declare at least one value")
-            seen: set[str] = set()
-            for variant in values:
-                if re.fullmatch(r"[a-z0-9][a-z0-9_-]*", variant) is None:
-                    raise ValueError(f"variants.{axis}: value {variant!r} must be a bare lowercase spelling like cuda")
-                if variant in seen:
-                    raise ValueError(f"variants.{axis}: value {variant!r} is declared twice")
-                seen.add(variant)
-        return value
-
     @field_validator("platforms")
     @classmethod
     def _validate_platforms(cls, value: list[str]) -> list[str]:
@@ -271,6 +255,22 @@ class ConfigFile(BaseModel):
             raise ValueError(
                 "platforms is required when images are declared (an amd64-only repo declares [linux/amd64])"
             )
+
+        # A var naming a declared dimension carries a declared variant of it.
+        dimensions = variant_dimensions(self.services)
+        for row in flatten_service_members(self.services):
+            for name, value in row.entry.vars.items():
+                if name in dimensions and value not in dimensions[name]:
+                    raise ValueError(
+                        f"{row.site}: vars: {name}={value!r} names no declared variant "
+                        f"of {name} ({dimensions[name]})"
+                    )
+        if self.k8s is not None:
+            for name, value in self.k8s.vars.items():
+                if name in dimensions and value not in dimensions[name]:
+                    raise ValueError(
+                        f"k8s.vars: {name}={value!r} names no declared variant of {name} ({dimensions[name]})"
+                    )
         return self
 
 
@@ -305,9 +305,46 @@ VarsMap = Annotated[dict[str, str], AfterValidator(_require_nonempty_values)]
 class ServiceGroup(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    options: dict[str, ServiceEntry]
+    options: dict[str, ServiceEntry] = Field(default_factory=dict)
+    variants: dict[AllCapsName, list[str]] = Field(default_factory=dict)
+    workloads: list[str] = Field(default_factory=list)
     routes: list[RouteConfig] = Field(default_factory=list)
     ports: list[PortDeclaration] = Field(default_factory=list)
+
+    @field_validator("variants")
+    @classmethod
+    def _validate_variants(cls, value: dict[AllCapsName, list[str]]) -> dict[AllCapsName, list[str]]:
+        if len(value) != 1:
+            raise ValueError("variants: declares exactly one dimension (a cross-product of dimensions is refused)")
+        for dimension, values in value.items():
+            if not values:
+                raise ValueError(f"variants.{dimension}: must declare at least one value")
+            seen: set[str] = set()
+            for variant in values:
+                if re.fullmatch(r"[a-z0-9][a-z0-9_-]*", variant) is None:
+                    raise ValueError(
+                        f"variants.{dimension}: value {variant!r} must be a bare lowercase spelling like cuda"
+                    )
+                if variant in seen:
+                    raise ValueError(f"variants.{dimension}: value {variant!r} is declared twice")
+                seen.add(variant)
+        return value
+
+    @model_validator(mode="after")
+    def _expand_variant_options(self) -> Self:
+        if bool(self.options) == bool(self.variants):
+            raise ValueError("a group declares exactly one of options: or variants:")
+        if self.variants:
+            if not self.workloads:
+                raise ValueError("a variants group carries its workloads at the group level")
+            [dimension, values] = next(iter(self.variants.items()))
+            self.options = {
+                variant: ServiceEntry(workloads=list(self.workloads), vars={dimension: variant})
+                for variant in values
+            }
+        elif self.workloads:
+            raise ValueError("group-level workloads: ride only with variants:")
+        return self
 
 
 class ServiceEntry(BaseModel):
@@ -350,7 +387,7 @@ class ServiceEntry(BaseModel):
 
 
 def _service_member_kind(value: Yaml) -> str:
-    return "group" if is_mapping(value) and "options" in value else "entry"
+    return "group" if is_mapping(value) and ("options" in value or "variants" in value) else "entry"
 
 
 ServiceMember = Annotated[
@@ -475,7 +512,7 @@ def _derive(config: ConfigFile, root: Path) -> None:
     }
 
     # Derive the image build set from the Dockerfile tree.
-    axes = config.variants
+    dimensions = variant_dimensions(config.services)
     image_dirs: dict[str, Path] = {}
     tops: set[str] = set()
     for top in sorted(root.iterdir()):
@@ -487,14 +524,14 @@ def _derive(config: ConfigFile, root: Path) -> None:
                 tops.add(top.name)
     require_single_top(tops, "Dockerfile image directories")
 
-    images = {directory.name: Image.load(directory, root, axes, image_dirs) for directory in image_dirs.values()}
+    images = {directory.name: Image.load(directory, root, dimensions, image_dirs) for directory in image_dirs.values()}
 
-    effective_axes = {name: _effective_axis(name, images, ()) for name in images}
+    effective_dimensions = {name: _effective_dimension(name, images, ()) for name in images}
     for name, build in images.items():
-        axis = effective_axes[name]
-        if axis is not None:
-            build.axis = axis
-            build.variants = list(axes[axis])
+        dimension = effective_dimensions[name]
+        if dimension is not None:
+            build.dimension = dimension
+            build.variants = list(dimensions[dimension])
 
     computable = {image.sha_env for image in images.values()}
     for image in images.values():
@@ -537,11 +574,15 @@ def _derive(config: ConfigFile, root: Path) -> None:
         for workload in workloads:
             document = workload.document
             merge_slots(slots, workload.text, parity=1, suffixed_only=True)
-            for container_name in document.containers:
+            for container_name, container in document.containers.items():
                 site = f"{workload.file_name}: containers.{container_name}"
                 claims.setdefault(container_name, []).append(site)
                 spelling = f"{Path(workload.file_name).stem}-{container_name}"
                 spellings.setdefault(spelling, []).append(site)
+                if container.image is not None:
+                    _refuse_unknown_variant_refs(
+                        workload.file_name, container_name, container.image, images, dimensions
+                    )
             for content in document.interpolated_file_texts(root):
                 merge_slots(slots, content, parity=0, suffixed_only=False)
         for file_name, entries in provisioner_files:
@@ -566,21 +607,58 @@ def _derive(config: ConfigFile, root: Path) -> None:
     config.consumer_surfaces = surfaces
 
 
-def _effective_axis(name: str, builds: dict[str, Image], path: tuple[str, ...]) -> str | None:
+def _refuse_unknown_variant_refs(
+    file_name: str,
+    container_name: str,
+    image: str,
+    images: dict[str, Image],
+    dimensions: dict[str, list[str]],
+) -> None:
+    for match in PLACEHOLDER.finditer(image):
+        dimension = match.group(1)
+        if dimension not in dimensions:
+            continue
+        stem = image[: match.start()].rpartition("/")[2].removesuffix("-")
+        build = images.get(stem)
+        if build is None or build.dimension != dimension:
+            raise ValueError(
+                f"{file_name}: containers.{container_name}.image: {stem} carries no {dimension} variant fan"
+            )
+
+
+def _effective_dimension(name: str, builds: dict[str, Image], path: tuple[str, ...]) -> str | None:
     if name in path:
         raise ValueError(f"FROM context cycle: {' -> '.join((*path, name))}")
     build = builds[name]
-    parent_axes = [_effective_axis(parent, builds, (*path, name)) for parent in build.contexts]
-    if len(set(parent_axes)) > 1:
+    parent_dimensions = [_effective_dimension(parent, builds, (*path, name)) for parent in build.contexts]
+    if len(set(parent_dimensions)) > 1:
         raise ValueError(f"{build.dockerfile}: parents ({', '.join(build.contexts)}) disagree on variants")
-    if parent_axes:
-        if build.axis is not None:
+    if parent_dimensions:
+        if build.dimension is not None:
             raise ValueError(
-                f"{build.dockerfile}: declares ARG {build.axis} over a "
+                f"{build.dockerfile}: declares ARG {build.dimension} over a "
                 f"variant-bearing base (parents: {', '.join(build.contexts)})"
             )
-        return parent_axes[0]
-    return build.axis
+        return parent_dimensions[0]
+    return build.dimension
+
+
+def variant_dimensions(services: dict[str, ServiceGroup | ServiceEntry]) -> dict[str, list[str]]:
+    # The declared variant dimensions: one declaring group each, values from its variants map
+    dimensions: dict[str, list[str]] = {}
+    sites: dict[str, str] = {}
+    for name, member in services.items():
+        if not isinstance(member, ServiceGroup) or not member.variants:
+            continue
+        dimension, values = next(iter(member.variants.items()))
+        if dimension in dimensions:
+            raise ValueError(
+                f"services.{name}.variants: {dimension} is already declared at {sites[dimension]} "
+                "(one selection point per dimension)"
+            )
+        dimensions[dimension] = list(values)
+        sites[dimension] = f"services.{name}.variants"
+    return dimensions
 
 
 def flatten_service_members(services: dict[str, ServiceGroup | ServiceEntry]) -> list[FlattenedServiceEntry]:

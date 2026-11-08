@@ -14,7 +14,13 @@ DEPENDENT = "FROM neural-networks-base\n"
 EXTERNAL = "ARG PY_IMAGE\nFROM ${PY_IMAGE}\n"
 
 
-def _write_repo(root: Path, dockerfiles: dict[str, str], *, config: dict[str, Any] | None = None) -> None:
+def _write_repo(
+    root: Path,
+    dockerfiles: dict[str, str],
+    *,
+    config: dict[str, Any] | None = None,
+    dimensions: dict[str, list[str]] | None = None,
+) -> None:
     for service, text in dockerfiles.items():
         directory = root / "workloads" / service
         directory.mkdir(parents=True, exist_ok=True)
@@ -25,6 +31,15 @@ def _write_repo(root: Path, dockerfiles: dict[str, str], *, config: dict[str, An
     if config is not None:
         payload.update(config)
     payload.setdefault("services", {"ext": {"ref": "oci://ghcr.io/org/ext:0.1.0"}})
+    if dimensions is not None:
+        score = root / "stack" / "score"
+        score.mkdir(parents=True, exist_ok=True)
+        (score / "gpu.yaml").write_text("metadata:\n  name: gpu\ncontainers: {}\n", encoding="utf-8")
+        payload["platforms"] = ["linux/amd64"]
+        payload["services"] = {
+            "gpu": {"variants": dimensions, "workloads": ["gpu.yaml"]},
+            **payload["services"],
+        }
     (root / "boatyard.yml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
 
@@ -33,8 +48,9 @@ def _invoke_matrix(
     tmp_path: Path,
     dockerfiles: dict[str, str],
     config: dict[str, Any] | None = None,
+    dimensions: dict[str, list[str]] | None = None,
 ) -> Any:
-    _write_repo(tmp_path, dockerfiles, config=config)
+    _write_repo(tmp_path, dockerfiles, config=config, dimensions=dimensions)
     monkeypatch.chdir(tmp_path)
     return runner.invoke(app, ["docker-build-matrix"])
 
@@ -50,7 +66,7 @@ def test_bases_group_with_their_dependents_per_variant(monkeypatch: Any, tmp_pat
             "reconstructor": DEPENDENT,
             "localizer": DEPENDENT,
         },
-        config={"variants": {"TORCH_DEVICE": ["cuda", "rocm"]}},
+        dimensions={"TORCH_DEVICE": ["cuda", "rocm"]},
     )
 
     assert result.exit_code == 0, result.output
@@ -61,7 +77,7 @@ def test_bases_group_with_their_dependents_per_variant(monkeypatch: Any, tmp_pat
     ]
 
 
-def test_a_service_arg_without_a_declared_axis_stays_common(monkeypatch: Any, tmp_path: Path) -> None:
+def test_a_service_arg_without_a_declared_dimension_stays_common(monkeypatch: Any, tmp_path: Path) -> None:
     result = _invoke_matrix(monkeypatch, tmp_path, {"api": FANNED, "postgres": EXTERNAL})
 
     assert result.exit_code == 0, result.output
@@ -73,7 +89,7 @@ def test_declared_values_reach_the_legs_verbatim(monkeypatch: Any, tmp_path: Pat
         monkeypatch,
         tmp_path,
         {"api": FANNED},
-        config={"variants": {"TORCH_DEVICE": ["rocm", "cuda"]}},
+        dimensions={"TORCH_DEVICE": ["rocm", "cuda"]},
     )
 
     assert result.exit_code == 0, result.output

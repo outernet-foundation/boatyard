@@ -1145,8 +1145,7 @@ def test_gpu_compose_templates_register_per_the_renderings_variant(
         project_name="example",
         platforms=["linux/amd64"],
         services={
-            "core-cuda": {"workloads": ["api.yaml"], "vars": {"GPU_VARIANT": "cuda"}},
-            "core-rocm": {"workloads": ["api.yaml"], "vars": {"GPU_VARIANT": "rocm"}},
+            "core": {"variants": {"TORCH_DEVICE": ["cuda", "rocm"]}, "workloads": ["api.yaml"]},
         },
     )
 

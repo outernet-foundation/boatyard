@@ -342,10 +342,8 @@ def _write_consumer_tree(
                     },
                 },
                 "placeframe": {
-                    "options": {
-                        "cuda": {"workloads": ["api.yaml"], "vars": {"GPU_VARIANT": "cuda"}},
-                        "rocm": {"workloads": ["api.yaml"], "vars": {"GPU_VARIANT": "rocm"}},
-                    },
+                    "variants": {"TORCH_DEVICE": ["cuda", "rocm"]},
+                    "workloads": ["api.yaml"],
                     "routes": [
                         {"path": "/grafana/*", "upstream": "grafana:3000"},
                         {"path": "/*", "upstream": "api:8000"},
