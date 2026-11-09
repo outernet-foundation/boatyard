@@ -34,6 +34,18 @@ treaty and the annotations riding into rendered metadata). Not yet done from the
 the per-entry workload reload still stands (compose/k8s renders reload their lenses; only
 the config-time load is shared), and move 4's lexical member grammar waits.
 
+The next session on this line completes it. Required, in dependency order: move 4's
+remaining half — the lexical member grammar (`ref:` spells an entry, `options:` an
+authored group, group-level `workloads:` a fan group; no provisional members, no
+post-parse reclassification, no group-level vars) with the derived group fan (one
+rendering per value of the single axis the group's image closure fans; a closure fanning
+nothing or two axes refuses) replacing the `axes:`-expansion in `_derive`; the reload
+death — one lens, one pass per `ConfigFile.load`, reused for declared edges, the derived
+fan, claims, and surfaces (where the compose-only probe-adapter check lands is the one
+open mechanic to settle); placeframe's core `axes:` block dies with the derived fan (the
+fan derives the group; bundle names core-cuda/core-rocm and consumer refs unchanged);
+then the line closes — this file is deleted and the closeout takes the record.
+
 Sandbox gaps this baseline hit: placeframe's venv holds a stale non-editable
 boatyard copy (verify through boatyard's own project env until placeframe runs `uv sync`),
 and `scripts/preflight.py` shells to a `preflight-python` entry point absent here (pytest +
@@ -125,8 +137,8 @@ Each move carries its landed state; unmarked moves are not started.
    and the one-top-dir rule are dead).
 4. `models/config_file.py`: PARTIALLY LANDED — dual-shape `base_images`,
    `pulled_base_images`, the config-time workload lens load, and the declared-edge
-   closure are in; the lexical member grammar and the closure-walking `_derive` wait
-   (group `axes:` blocks still expand options).
+   closure are in; the lexical member grammar and the closure-walking `_derive` are the
+   next session's required scope (group `axes:` blocks still expand options).
 5. `build.py` and the verbs (`tree-tags`, `matrix`, `publish`, `bump`): LANDED — the
    per-variant base wiring is re-keyed on declared names and the verbs consume the
    closure-derived set.
