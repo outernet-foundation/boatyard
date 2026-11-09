@@ -62,9 +62,21 @@ class BumpHarness:
             "platforms: [linux/amd64]\n"
             "base_images:\n  PY_IMAGE: docker.io/library/python:3.13-slim\n"
             "services:\n  ext:\n    ref: oci://ghcr.io/org/ext:0.1.0\n"
-            "k8s:\n  workloads:\n    - api.yaml\n",
+            "k8s:\n  workloads:\n    - api.yaml\n    - worker.yaml\n",
             encoding="utf-8",
         )
+        score = tmp_path / "stack" / "score"
+        score.mkdir(parents=True, exist_ok=True)
+        for directory in ("api", "worker"):
+            annotation = (
+                f"outernet.internal/dockerfile: {directory}=workloads/{directory}/Dockerfile"
+                if self.image_shas
+                else f"outernet.internal/lock: {directory}=PY_IMAGE"
+            )
+            (score / f"{directory}.yaml").write_text(
+                f"metadata:\n  name: {directory}\n  annotations:\n    {annotation}\ncontainers:\n  {directory}: {{}}\n",
+                encoding="utf-8",
+            )
         if self.image_shas:
             for directory in ("api", "worker"):
                 image_directory = tmp_path / "workloads" / directory

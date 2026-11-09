@@ -13,6 +13,8 @@ PROBE_ADAPTERS = ("python-urllib", "bash-http")
 RESTART_ANNOTATION = "outernet.internal/restart"
 COMPOSE_RESTART_POLICIES = ("no", "always", "on-failure", "unless-stopped")
 CONSUMER_INTERPOLATED_ANNOTATION = "outernet.internal/consumer-interpolated"
+DOCKERFILE_ANNOTATION = "outernet.internal/dockerfile"
+LOCK_ANNOTATION = "outernet.internal/lock"
 
 
 def _default_metadata() -> WorkloadMetadata:
@@ -72,12 +74,55 @@ class WorkloadDocument(BaseModel):
                         f"{CONSUMER_INTERPOLATED_ANNOTATION} entry {entry!r} names no declared files: path"
                     )
 
+        dockerfiles = _parse_source_annotation(annotations, DOCKERFILE_ANNOTATION)
+        locks = _parse_source_annotation(annotations, LOCK_ANNOTATION)
+        both = sorted(dockerfiles.keys() & locks.keys())
+        if both:
+            raise ValueError(
+                f"the container {both[0]!r} is named by both {DOCKERFILE_ANNOTATION} and {LOCK_ANNOTATION}"
+            )
+        unsourced = sorted(set(self.containers) - dockerfiles.keys() - locks.keys())
+        if unsourced:
+            raise ValueError(
+                f"the container {unsourced[0]!r} carries no source annotation "
+                f"({DOCKERFILE_ANNOTATION} or {LOCK_ANNOTATION})"
+            )
+        unknown = sorted((dockerfiles.keys() | locks.keys()) - set(self.containers))
+        if unknown:
+            raise ValueError(f"the source annotations name no container {unknown[0]!r} of this workload")
+
         return self
 
     @property
     def consumer_interpolated_targets(self) -> list[str]:
         annotation = self.metadata.annotations.get(CONSUMER_INTERPOLATED_ANNOTATION)
         return annotation.split(",") if annotation is not None else []
+
+    def container_sources(self) -> dict[str, tuple[str, str]]:
+        dockerfiles = _parse_source_annotation(self.metadata.annotations, DOCKERFILE_ANNOTATION)
+        locks = _parse_source_annotation(self.metadata.annotations, LOCK_ANNOTATION)
+        return {
+            **{name: ("dockerfile", value) for name, value in dockerfiles.items()},
+            **{name: ("lock", value) for name, value in locks.items()},
+        }
+
+
+def _parse_source_annotation(annotations: dict[str, str], name: str) -> dict[str, str]:
+    value = annotations.get(name)
+    if value is None:
+        return {}
+    if not value.strip():
+        raise ValueError(f"{name} must be a non-empty comma-separated list of container=source pairs")
+    sources: dict[str, str] = {}
+    for entry in value.split(","):
+        container, separator, source = entry.partition("=")
+        padded = container != container.strip() or source != source.strip()
+        if not separator or padded or not container or not source:
+            raise ValueError(f"{name} entry {entry!r} must be an unpadded container=source pair")
+        if container in sources:
+            raise ValueError(f"{name} names the container {container!r} twice")
+        sources[container] = source
+    return sources
 
 
 class ComposeWorkloadDocument(WorkloadDocument):
@@ -112,9 +157,12 @@ class WorkloadContainer(BaseModel):
 
     @field_validator("image")
     @classmethod
-    def _require_image_slot(cls, value: str | None) -> str | None:
-        if value is not None and "${" not in value and "{{" not in value:
-            raise ValueError(f"image {value!r} must bind to the lock or a service sha via a ${{NAME}} slot")
+    def _refuse_authored_image(cls, value: str | None) -> str | None:
+        if value is not None:
+            raise ValueError(
+                f"image is never authored in a workload file; declare {DOCKERFILE_ANNOTATION} "
+                f"or {LOCK_ANNOTATION} instead"
+            )
         return value
 
 

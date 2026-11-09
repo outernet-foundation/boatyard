@@ -65,12 +65,28 @@ def write_dockerfile(tmp_path: Path, service: str, text: str, top: str = "worklo
     (directory / "Dockerfile").write_text(text, encoding="utf-8")
 
 
-def write_workload(tmp_path: Path, file_name: str, containers: list[str]) -> None:
+def write_workload(tmp_path: Path, file_name: str) -> None:
     score = tmp_path / "stack" / "score"
     score.mkdir(parents=True, exist_ok=True)
     document: dict[str, object] = {
         "metadata": {"name": Path(file_name).stem},
-        "containers": {name: {} for name in containers},
+        "containers": {},
+    }
+    (score / file_name).write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+
+
+def write_dockerfile_workload(tmp_path: Path, file_name: str) -> None:
+    # A workload whose single container declares the dockerfile of its own stem
+    stem = Path(file_name).stem
+    write_dockerfile(tmp_path, stem, "ARG TOOLS_IMAGE\nFROM ${TOOLS_IMAGE}\n")
+    score = tmp_path / "stack" / "score"
+    score.mkdir(parents=True, exist_ok=True)
+    document: dict[str, object] = {
+        "metadata": {
+            "name": stem,
+            "annotations": {"outernet.internal/dockerfile": f"{stem}=workloads/{stem}/Dockerfile"},
+        },
+        "containers": {stem: {}},
     }
     (score / file_name).write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
 
@@ -335,12 +351,24 @@ class TestVariants:
     def test_declared_axes_reach_the_derived_images(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "neural-networks-base", "ARG TOOLS_IMAGE\nARG TORCH_DEVICE\nFROM ${TOOLS_IMAGE}\n")
         write_dockerfile(tmp_path, "localizer", "ARG NEURAL_NETWORKS_BASE\nFROM ${NEURAL_NETWORKS_BASE}\n")
+        score = tmp_path / "stack" / "score"
+        score.mkdir(parents=True, exist_ok=True)
+        (score / "localizer.yaml").write_text(
+            "metadata:\n"
+            "  name: localizer\n"
+            "  annotations:\n"
+            "    outernet.internal/dockerfile: localizer=workloads/localizer/Dockerfile\n"
+            "containers:\n"
+            "  localizer: {}\n",
+            encoding="utf-8",
+        )
         write_config(
             tmp_path,
             {
                 "requires": ">=0.1",
                 "repository": "ghcr.io/org/repo",
                 "platforms": ["linux/amd64"],
+                "k8s": {"workloads": ["localizer.yaml"]},
                 "base_images": {
                     "TOOLS_IMAGE": "docker.io/library/tools:1",
                     "NEURAL_NETWORKS_BASE": {
@@ -586,6 +614,7 @@ class TestBaseImageTemplates:
 
 class TestCharts:
     def test_tag_form_loads(self, tmp_path: Path) -> None:
+        write_workload(tmp_path, "api.yaml")
         write_config(
             tmp_path,
             {
@@ -657,6 +686,7 @@ class TestCharts:
 
 class TestK8sSection:
     def test_workloads_vars_and_charts_load(self, tmp_path: Path) -> None:
+        write_workload(tmp_path, "api.yaml")
         write_config(
             tmp_path,
             {
@@ -728,7 +758,7 @@ class TestServices:
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_groups_options_and_bare_entries_load(self, tmp_path: Path) -> None:
-        write_workload(tmp_path, "api.yaml", ["api"])
+        write_workload(tmp_path, "api.yaml")
         write_config(
             tmp_path,
             {
@@ -992,8 +1022,8 @@ class TestQualifiedVocabulary:
         }
 
     def test_the_same_option_name_in_two_groups_loads_qualified(self, tmp_path: Path) -> None:
-        write_workload(tmp_path, "api.yaml", ["api"])
-        write_workload(tmp_path, "edge.yaml", ["edge"])
+        write_workload(tmp_path, "api.yaml")
+        write_workload(tmp_path, "edge.yaml")
         write_config(
             tmp_path,
             self._config({
@@ -1407,7 +1437,7 @@ class TestPorts:
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_the_mapping_form_spells_the_owning_service_and_host_ip(self, tmp_path: Path) -> None:
-        write_workload(tmp_path, "api.yaml", ["api"])
+        write_workload(tmp_path, "api.yaml")
         write_config(
             tmp_path,
             self._ports_config({
@@ -1480,7 +1510,7 @@ class TestRepository:
     def test_repository_without_derived_images_loads(self, tmp_path: Path) -> None:
         # The publish shape for a repo whose whole runtime is its own workload set: no
         # Dockerfile image builds, repository naming the artifact registry.
-        write_workload(tmp_path, "rathole-client.yaml", ["rathole-client"])
+        write_workload(tmp_path, "rathole-client.yaml")
         write_config(
             tmp_path,
             {
@@ -1586,7 +1616,7 @@ class TestLockPairing:
         assert [name for name, _declared, _entry in config.remote_declared_entries()] == ["livekit"]
 
     def test_a_local_repo_loads_without_a_lock_file(self, tmp_path: Path) -> None:
-        write_workload(tmp_path, "api.yaml", ["api"])
+        write_workload(tmp_path, "api.yaml")
         write_config(
             tmp_path,
             {
@@ -1603,22 +1633,28 @@ class TestLockPairing:
 
 class TestImageDerivation:
     def test_repository_required_when_images_exist(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "api", "ARG TOOLS_IMAGE\nFROM ${TOOLS_IMAGE}\n")
+        write_dockerfile_workload(tmp_path, "api.yaml")
         write_config(
             tmp_path,
-            {"requires": ">=0.1", "platforms": ["linux/amd64"], "base_images": {"TOOLS_IMAGE": "docker.io/library/tools:1"}},
+            {
+                "requires": ">=0.1",
+                "k8s": {"workloads": ["api.yaml"]},
+                "platforms": ["linux/amd64"],
+                "base_images": {"TOOLS_IMAGE": "docker.io/library/tools:1"},
+            },
         )
 
         with pytest.raises(ValueError, match="repository is required"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_derived_images_attach_to_the_loaded_config(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "api", "ARG TOOLS_IMAGE\nFROM ${TOOLS_IMAGE}\n")
+        write_dockerfile_workload(tmp_path, "api.yaml")
         write_config(
             tmp_path,
             {
                 "requires": ">=0.1",
                 "repository": "ghcr.io/org/repo",
+                "k8s": {"workloads": ["api.yaml"]},
                 "platforms": ["linux/amd64"],
                 "base_images": {"TOOLS_IMAGE": "docker.io/library/tools:1"},
             },
@@ -1628,6 +1664,73 @@ class TestImageDerivation:
 
         assert config is not None
         assert sorted(config.images) == ["api"]
+
+    def test_a_lock_annotation_naming_no_pulled_base_images_key_refuses(self, tmp_path: Path) -> None:
+        score = tmp_path / "stack" / "score"
+        score.mkdir(parents=True, exist_ok=True)
+        (score / "keycloak.yaml").write_text(
+            "metadata:\n"
+            "  name: keycloak\n"
+            "  annotations:\n"
+            "    outernet.internal/lock: keycloak=KEYCLOAK_IMAGE\n"
+            "containers:\n"
+            "  keycloak: {}\n",
+            encoding="utf-8",
+        )
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "repository": "ghcr.io/org/repo",
+                "platforms": ["linux/amd64"],
+                "base_images": {
+                    "TOOLS_IMAGE": "docker.io/library/tools:1",
+                    "NEURAL_NETWORKS_BASE": {"dockerfile": "workloads/does-not-exist/Dockerfile"},
+                },
+                "services": {"identity": {"workloads": ["keycloak.yaml"]}},
+            },
+        )
+
+        with pytest.raises(
+            ValueError, match=r"keycloak\.yaml: the container 'keycloak' locks 'KEYCLOAK_IMAGE'.*pulled base_images"
+        ):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
+    def test_a_lock_annotation_naming_a_built_entry_refuses(self, tmp_path: Path) -> None:
+        write_dockerfile(tmp_path, "neural-networks-base", "ARG TOOLS_IMAGE\nARG TORCH_DEVICE\nFROM ${TOOLS_IMAGE}\n")
+        score = tmp_path / "stack" / "score"
+        score.mkdir(parents=True, exist_ok=True)
+        (score / "gpu.yaml").write_text(
+            "metadata:\n"
+            "  name: gpu\n"
+            "  annotations:\n"
+            "    outernet.internal/lock: gpu=NEURAL_NETWORKS_BASE\n"
+            "containers:\n"
+            "  gpu: {}\n",
+            encoding="utf-8",
+        )
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "repository": "ghcr.io/org/repo",
+                "platforms": ["linux/amd64"],
+                "base_images": {
+                    "TOOLS_IMAGE": "docker.io/library/tools:1",
+                    "NEURAL_NETWORKS_BASE": {
+                        "dockerfile": "workloads/neural-networks-base/Dockerfile",
+                        "axis": {"TORCH_DEVICE": ["cuda"]},
+                    },
+                },
+                "services": {"core": {"workloads": ["gpu.yaml"]}},
+            },
+        )
+        write_dockerfile(tmp_path, "localizer", "ARG NEURAL_NETWORKS_BASE\nFROM ${NEURAL_NETWORKS_BASE}\n")
+
+        with pytest.raises(
+            ValueError, match=r"gpu\.yaml: the container 'gpu' locks 'NEURAL_NETWORKS_BASE'.*pulled base_images"
+        ):
+            ConfigFile.load(tmp_path / "boatyard.yml")
 
 
 class TestBareServiceNameClaims:
@@ -1649,8 +1752,8 @@ class TestBareServiceNameClaims:
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_the_same_container_name_across_entries_loads(self, tmp_path: Path) -> None:
-        write_workload(tmp_path, "alpha.yaml", ["sidecar"])
-        write_workload(tmp_path, "beta.yaml", ["sidecar"])
+        write_workload(tmp_path, "alpha.yaml")
+        write_workload(tmp_path, "beta.yaml")
         write_config(
             tmp_path,
             {
@@ -1685,8 +1788,8 @@ def test_direct_model_construction_is_valid_for_tests(tmp_path: Path) -> None:
 
 
 def test_local_service_entries_flatten_in_declaration_order_skipping_refs(tmp_path: Path) -> None:
-    write_workload(tmp_path, "api.yaml", ["api"])
-    write_workload(tmp_path, "solo.yaml", ["solo"])
+    write_workload(tmp_path, "api.yaml")
+    write_workload(tmp_path, "solo.yaml")
     write_lock(tmp_path, bundles=bundle_entries("identity-keycloak", "livekit"))
     write_config(
         tmp_path,

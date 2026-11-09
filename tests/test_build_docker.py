@@ -41,12 +41,28 @@ def _write_repo(
         directory = root / "workloads" / service
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "Dockerfile").write_text(text, encoding="utf-8")
+    score = root / "stack" / "score"
+    score.mkdir(parents=True, exist_ok=True)
+    for service in dockerfiles or {}:
+        (score / f"{service}.yaml").write_text(
+            "metadata:\n"
+            f"  name: {service}\n"
+            "  annotations:\n"
+            f"    outernet.internal/dockerfile: {service}=workloads/{service}/Dockerfile\n"
+            "containers:\n"
+            f"  {service}: {{}}\n",
+            encoding="utf-8",
+        )
+    if not dockerfiles:
+        (score / "api.yaml").write_text("metadata:\n  name: api\ncontainers: {}\n", encoding="utf-8")
     payload: dict[str, Any] = {
         "requires": ">=0",
         "repository": repository,
         "project_name": "demo",
         "platforms": platforms or ["linux/amd64"],
-        "services": {"core": {"workloads": ["api.yaml"]}},
+        "services": {
+            "core": {"workloads": [f"{service}.yaml" for service in sorted(dockerfiles or {})] or ["api.yaml"]}
+        },
     }
     if base_images:
         payload["base_images"] = base_images
@@ -62,9 +78,6 @@ def _write_repo(
             values.parent.mkdir(parents=True, exist_ok=True)
             values.write_text("chart: {}\n", encoding="utf-8")
     (root / "boatyard.yml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-    score = root / "stack" / "score"
-    score.mkdir(parents=True, exist_ok=True)
-    (score / "api.yaml").write_text("metadata:\n  name: api\ncontainers:\n  api: {}\n", encoding="utf-8")
     if (base_images or charts) and not (root / LOCK_PATH).exists():
         (root / LOCK_PATH).write_text("", encoding="utf-8")
 

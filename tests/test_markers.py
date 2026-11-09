@@ -5,8 +5,9 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
+from boatyard.models.image import Image
 from boatyard.yaml import is_mapping
-from boatyard.markers import MarkerContext, resolve_markers
+from boatyard.markers import MarkerContext, declared_dockerfile_paths, resolve_markers
 
 RIVER = """// relay config
 loki.write "default" {
@@ -295,3 +296,78 @@ def test_image_values_with_slots_and_plain_non_image_keys_pass() -> None:
     }
 
     assert resolve_markers(node, MarkerContext(Path(), {}, "x.yaml")) == node
+
+
+def _provisioner_context(repository: str = "ghcr.io/org/repo", **images: Image) -> MarkerContext:
+    return MarkerContext(Path(), {}, "postgres.yaml", repository=repository, builds=images)
+
+
+def test_dockerfile_marker_composes_the_env_slot_reference() -> None:
+    image = Image(name="postgres", dockerfile="workloads/postgres/Dockerfile")
+
+    resolved = resolve_markers(
+        {"image": {"dockerfile": "workloads/postgres/Dockerfile"}},
+        _provisioner_context(postgres=image),
+    )
+
+    assert resolved == {"image": 'ghcr.io/org/repo/postgres:{{ env "POSTGRES_SHA" }}'}
+
+
+def test_dockerfile_marker_on_a_fanning_image_carries_the_axis_env_slot() -> None:
+    image = Image(
+        name="reconstructor",
+        dockerfile="workloads/reconstructor/Dockerfile",
+        axis="TORCH_DEVICE",
+        variants=["cuda", "rocm"],
+    )
+
+    resolved = resolve_markers(
+        {"image": {"dockerfile": "workloads/reconstructor/Dockerfile"}},
+        _provisioner_context(reconstructor=image),
+    )
+
+    assert resolved == {
+        "image": 'ghcr.io/org/repo/reconstructor-{{ env "TORCH_DEVICE" }}:{{ env "RECONSTRUCTOR_SHA" }}'
+    }
+
+
+def test_dockerfile_marker_without_the_provisioner_context_refuses() -> None:
+    with pytest.raises(ValueError, match="dockerfile: is a provisioner-manifest marker"):
+        resolve_markers(
+            {"image": {"dockerfile": "workloads/postgres/Dockerfile"}}, MarkerContext(Path(), {}, "loki.yaml")
+        )
+
+
+def test_dockerfile_marker_naming_no_build_set_image_refuses() -> None:
+    with pytest.raises(ValueError, match=r"postgres\.yaml.*names no image in the build set"):
+        resolve_markers(
+            {"image": {"dockerfile": "workloads/ghost/Dockerfile"}},
+            _provisioner_context(postgres=Image(name="postgres", dockerfile="workloads/postgres/Dockerfile")),
+        )
+
+
+def test_dockerfile_marker_with_a_non_string_value_refuses() -> None:
+    with pytest.raises(ValueError, match="path string"):
+        resolve_markers(
+            {"image": {"dockerfile": ["workloads/postgres/Dockerfile"]}},
+            _provisioner_context(),
+        )
+
+
+def test_declared_dockerfile_paths_walks_provisioner_entries() -> None:
+    entries: Any = [
+        {"uri": "template://example/config", "type": "example-config"},
+        {"services": {"pf-postgres": {"image": {"dockerfile": "workloads/postgres/Dockerfile"}}}},
+        {"manifests": [{"spec": {"containers": [{"image": {"dockerfile": "workloads/migrator/Dockerfile"}}]}}]},
+    ]
+
+    assert declared_dockerfile_paths(entries) == [
+        "workloads/postgres/Dockerfile",
+        "workloads/migrator/Dockerfile",
+    ]
+
+
+def test_declared_dockerfile_paths_leaves_lock_markers_alone() -> None:
+    entries: Any = [{"services": {"loki": {"image": {"lock": "LOKI_IMAGE"}}}}]
+
+    assert declared_dockerfile_paths(entries) == []

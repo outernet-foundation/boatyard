@@ -30,15 +30,29 @@ def _write_repo(
     config: dict[str, Any] | None = None,
     fan: dict[str, list[str]] | None = None,
 ) -> None:
+    score = root / "stack" / "score"
+    score.mkdir(parents=True, exist_ok=True)
+    referenced: list[str] = []
     for service, text in dockerfiles.items():
         directory = root / "workloads" / service
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "Dockerfile").write_text(text, encoding="utf-8")
+        (score / f"{service}.yaml").write_text(
+            "metadata:\n"
+            f"  name: {service}\n"
+            "  annotations:\n"
+            f"    outernet.internal/dockerfile: {service}=workloads/{service}/Dockerfile\n"
+            "containers:\n"
+            f"  {service}: {{}}\n",
+            encoding="utf-8",
+        )
+        referenced.append(f"{service}.yaml")
     payload: dict[str, Any] = {"requires": ">=0", "project_name": "demo"}
     if dockerfiles:
         payload["repository"] = "ghcr.io/example"
         payload["platforms"] = ["linux/amd64"]
         payload.setdefault("base_images", PY_BASE)
+        payload.setdefault("k8s", {"workloads": referenced})
         if fan is not None:
             payload["base_images"] = {**PY_BASE, **neural_base(fan)}
     if config is not None:

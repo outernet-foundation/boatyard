@@ -225,11 +225,20 @@ class TestPublishComposeVerb:
                 "services": {"livekit-tier": {"workloads": ["livekit-token.yaml"]}},
             },
         )
-        (tmp_path / "workloads").mkdir()
+        (tmp_path / "workloads" / "livekit-token").mkdir(parents=True)
+        (tmp_path / "workloads" / "livekit-token" / "Dockerfile").write_text(
+            "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n", encoding="utf-8"
+        )
         score = tmp_path / "stack" / "score"
         score.mkdir(parents=True)
         (score / "livekit-token.yaml").write_text(
-            "metadata:\n  name: livekit-token\ncontainers:\n  livekit-token: {}\n", encoding="utf-8"
+            "metadata:\n"
+            "  name: livekit-token\n"
+            "  annotations:\n"
+            "    outernet.internal/dockerfile: livekit-token=workloads/livekit-token/Dockerfile\n"
+            "containers:\n"
+            "  livekit-token: {}\n",
+            encoding="utf-8",
         )
         (tmp_path / LOCK_PATH).write_text(
             yaml.safe_dump({
@@ -334,13 +343,10 @@ class TestBundleMode:
             "platforms": ["linux/amd64"],
         }
         _write_config(tmp_path, merged)
-        (tmp_path / "workloads").mkdir()
         score = tmp_path / "stack" / "score"
         score.mkdir(parents=True)
-        (score / "api.yaml").write_text("metadata:\n  name: api\ncontainers:\n  api: {}\n", encoding="utf-8")
-        (score / "gateway.yaml").write_text(
-            "metadata:\n  name: gateway\ncontainers:\n  gateway: {}\n", encoding="utf-8"
-        )
+        (score / "api.yaml").write_text("metadata:\n  name: api\ncontainers: {}\n", encoding="utf-8")
+        (score / "gateway.yaml").write_text("metadata:\n  name: gateway\ncontainers: {}\n", encoding="utf-8")
         alpine = "alpine:3.20@sha256:" + "a" * 64
         (tmp_path / LOCK_PATH).write_text(
             yaml.safe_dump({

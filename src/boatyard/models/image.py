@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import NamedTuple, Self
@@ -152,8 +152,10 @@ def load_images(
     root: Path,
     base_images: Mapping[str, str | BuiltBaseEntry],
     owned_images: Mapping[str, str],
+    declared: Iterable[str],
 ) -> dict[str, Image]:
-    # A built entry declares its dockerfile and optional fan; its directory stem is the target name.
+    # The build set is the closure over declared edges: built entries, workload source
+    # annotations, and provisioner markers. Nothing walks the directory tree.
     built: dict[str, str] = {}
     for name, entry in base_images.items():
         if not isinstance(entry, BuiltBaseEntry):
@@ -163,17 +165,24 @@ def load_images(
             raise ValueError(f"base_images.{name}: {entry.dockerfile} does not exist")
         built[name] = PurePosixPath(entry.dockerfile).parent.name
 
+    declared_paths = sorted(
+        set(declared) | {entry.dockerfile for entry in base_images.values() if isinstance(entry, BuiltBaseEntry)}
+    )
     directories: dict[str, Path] = {}
-    tops: set[str] = set()
-    for top in sorted(root.iterdir()):
-        if not top.is_dir() or top.name.startswith("."):
-            continue
-        for child in sorted(top.iterdir()):
-            if child.is_dir() and (child / DOCKERFILE_NAME).is_file():
-                directories[child.name] = child
-                tops.add(top.name)
-    if len(tops) > 1:
-        raise ValueError(f"Dockerfile image directories span multiple top-level directories: {sorted(tops)}")
+    sites: dict[str, str] = {}
+    for dockerfile in declared_paths:
+        if dockerfile.startswith("/") or ".." in PurePosixPath(dockerfile).parts:
+            raise ValueError(f"{dockerfile}: a declared dockerfile path must be repo-relative")
+        directory = (root / dockerfile).parent
+        stem = PurePosixPath(dockerfile).parent.name
+        if stem not in directories:
+            directories[stem] = directory
+            sites[stem] = dockerfile
+        elif directories[stem] != directory:
+            raise ValueError(f"{dockerfile}: the image stem {stem!r} is already claimed at {sites[stem]}")
+    for stem, directory in directories.items():
+        if not (directory / DOCKERFILE_NAME).is_file():
+            raise ValueError(f"{sites[stem]}: the declared dockerfile does not exist")
 
     facts = {name: _parse_dockerfile(directory, root) for name, directory in sorted(directories.items())}
 

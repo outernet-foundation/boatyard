@@ -141,7 +141,12 @@ def _write_bundle_output(root: Path, name: str, services: list[str], environment
     return path
 
 
-def _write_producer(root: Path, services: list[str], lock: dict[str, Any] | None = None) -> Path:
+def _write_producer(
+    root: Path,
+    services: list[str],
+    lock: dict[str, Any] | None = None,
+    built: bool = False,
+) -> Path:
     # A sibling producer checkout carrying the fixed stack/generated/compose/ output layout.
     output = root / "producer" / "stack" / "generated" / "compose" / "compose.placeframe-cuda.yaml"
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -163,13 +168,32 @@ def _write_producer(root: Path, services: list[str], lock: dict[str, Any] | None
         producer_root = root / "producer"
         producer_score = producer_root / "stack" / "score"
         producer_score.mkdir(parents=True, exist_ok=True)
-        (producer_score / "api.yaml").write_text("metadata:\n  name: api\ncontainers:\n  api: {}\n", encoding="utf-8")
+        referenced: list[str] = []
+        for service in services:
+            if built:
+                (producer_score / f"{service}.yaml").write_text(
+                    "metadata:\n"
+                    f"  name: {service}\n"
+                    "  annotations:\n"
+                    f"    outernet.internal/dockerfile: {service}=workloads/{service}/Dockerfile\n"
+                    "containers:\n"
+                    f"  {service}: {{}}\n",
+                    encoding="utf-8",
+                )
+                image_directory = producer_root / "workloads" / service
+                image_directory.mkdir(parents=True, exist_ok=True)
+                (image_directory / "Dockerfile").write_text(
+                    "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n", encoding="utf-8"
+                )
+                referenced.append(f"{service}.yaml")
+        if not built:
+            (producer_score / "api.yaml").write_text("metadata:\n  name: api\ncontainers: {}\n", encoding="utf-8")
         (producer_root / "boatyard.yml").write_text(
             yaml.safe_dump({
                 "requires": ">=0.0",
                 "project_name": "producer",
                 "repository": "ghcr.io/org/producer",
-                "services": {"core": {"workloads": ["api.yaml"]}},
+                "services": {"core": {"workloads": referenced or ["api.yaml"]}},
                 "base_images": {
                     "LOKI_IMAGE": "docker.io/grafana/loki:3.0",
                 },
@@ -254,11 +278,10 @@ def _write_override_consumer(
 
 
 def _write_workload(root: Path, name: str, service_name: str, environment: dict[str, str] | None = None) -> None:
+    # Metadata-only: the container surface under test lives in the bundle artifacts
     path = root / "stack" / "score" / name
     path.parent.mkdir(parents=True, exist_ok=True)
     document: dict[str, object] = {"metadata": {"name": service_name}}
-    if environment is not None:
-        document["containers"] = {service_name: {"environment": environment}}
     path.write_text(yaml.safe_dump(document), encoding="utf-8")
 
 
@@ -1123,10 +1146,20 @@ class TestLockEnvSynthesis:
             },
         )
         _write_bundle_output(tmp_path, "apps-core", ["api"])
-        _write_workload(tmp_path, "api.yaml", "api")
         api_image = tmp_path / "workloads" / "api"
         api_image.mkdir(parents=True)
         (api_image / "Dockerfile").write_text("ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n", encoding="utf-8")
+        score = tmp_path / "stack" / "score"
+        score.mkdir(parents=True, exist_ok=True)
+        (score / "api.yaml").write_text(
+            "metadata:\n"
+            "  name: api\n"
+            "  annotations:\n"
+            "    outernet.internal/dockerfile: api=workloads/api/Dockerfile\n"
+            "containers:\n"
+            "  api: {}\n",
+            encoding="utf-8",
+        )
         _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST})
         _write_values_file(tmp_path, {"bundles": ["apps-core"]})
         monkeypatch.setattr(Image, "compute_sha", _producer_tree_sha)
@@ -1353,11 +1386,7 @@ class TestBundleOverrides:
     def test_the_producer_tree_fills_the_overridden_entrys_fan(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         consumer = tmp_path / "consumer"
         consumer.mkdir()
-        _write_producer(tmp_path, ["api", "grafana"], _producer_lock(["linux/amd64"]))
-        for name in ("api", "grafana"):
-            image_directory = tmp_path / "producer" / "workloads" / name
-            image_directory.mkdir(parents=True)
-            (image_directory / "Dockerfile").write_text("ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n", encoding="utf-8")
+        _write_producer(tmp_path, ["api", "grafana"], _producer_lock(["linux/amd64"]), built=True)
         _write_override_consumer(
             consumer,
             {"path_overrides": {"placeframe-cuda": OVERRIDE_PATH}},

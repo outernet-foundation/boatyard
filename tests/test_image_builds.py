@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 from boatyard.models.config_file import ConfigFile
-from boatyard.models.image import Image
+from boatyard.models.image import Image, load_images
 
 
 def write_dockerfile(tmp_path: Path, image_name: str, text: str, top: str = "workloads") -> None:
@@ -20,10 +20,27 @@ def _derive(
     tmp_path: Path,
     base_images: dict[str, Any] | None = None,
     local: bool = False,
+    declared: list[str] | None = None,
 ) -> dict[str, Image]:
+    # One annotated workload per dockerfile directory under workloads/, referenced from
+    # the config (services when local, k8s.workloads otherwise); `declared` narrows the
+    # seeded set for closure-semantics tests.
+    workloads_root = tmp_path / "workloads"
+    names = sorted(path.name for path in workloads_root.iterdir() if path.is_dir()) if workloads_root.is_dir() else []
+    if declared is not None:
+        names = sorted(set(names) & set(declared))
     score = tmp_path / "stack" / "score"
     score.mkdir(parents=True, exist_ok=True)
-    (score / "gpu.yaml").write_text("metadata:\n  name: gpu\ncontainers: {}\n", encoding="utf-8")
+    for name in names:
+        (score / f"{name}.yaml").write_text(
+            "metadata:\n"
+            f"  name: {name}\n"
+            "  annotations:\n"
+            f"    outernet.internal/dockerfile: {name}=workloads/{name}/Dockerfile\n"
+            "containers:\n"
+            f"  {name}: {{}}\n",
+            encoding="utf-8",
+        )
     payload: dict[str, Any] = {
         "requires": ">=0",
         "project_name": "demo",
@@ -34,12 +51,12 @@ def _derive(
             "PY_IMAGE": "docker.io/library/python:3.13-slim",
             **(base_images or {}),
         },
-        "services": (
-            {"gpu": {"workloads": ["gpu.yaml"]}}
-            if local
-            else {"ext": {"ref": "oci://ghcr.io/org/ext:0.1.0"}}
-        ),
+        "services": {"ext": {"ref": "oci://ghcr.io/org/ext:0.1.0"}},
     }
+    if local:
+        payload["services"] = {"core": {"workloads": [f"{name}.yaml" for name in names]}}
+    elif names:
+        payload["k8s"] = {"workloads": [f"{name}.yaml" for name in names]}
     (tmp_path / "boatyard.yml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     loaded = ConfigFile.load(tmp_path / "boatyard.yml")
     assert loaded is not None
@@ -231,12 +248,53 @@ class TestDeriveImages:
         with pytest.raises(ValueError, match="ARG GHOST_SHA names no image directory"):
             _derive(tmp_path)
 
-    def test_dockerfiles_spanning_multiple_top_level_dirs_refuse(self, tmp_path: Path) -> None:
+    def test_an_undeclared_dockerfile_is_silently_not_built(self, tmp_path: Path) -> None:
         write_dockerfile(tmp_path, "api", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\n")
-        write_dockerfile(tmp_path, "bridge", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\n", top="docker")
+        write_dockerfile(tmp_path, "bridge", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\n")
 
-        with pytest.raises(ValueError, match="span multiple top-level directories"):
-            _derive(tmp_path)
+        images = _derive(tmp_path, declared=["api"])
+
+        assert sorted(images) == ["api"]
+
+    def test_a_provisioner_marker_seeds_the_closure(self, tmp_path: Path) -> None:
+        write_dockerfile(tmp_path, "postgres", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\n")
+        score = tmp_path / "stack" / "score"
+        score.mkdir(parents=True, exist_ok=True)
+        (score / "gpu.yaml").write_text(
+            "metadata:\n  name: gpu\ncontainers: {}\nresources:\n  db:\n    type: postgres\n"
+        )
+        (score / "compose").mkdir()
+        (score / "compose" / "postgres.yaml").write_text(
+            "- uri: template://example/postgres\n"
+            "  type: postgres\n"
+            "  services:\n"
+            "    pf-postgres:\n"
+            "      image: {dockerfile: workloads/postgres/Dockerfile}\n"
+        )
+
+        images = _derive(tmp_path, local=True)
+
+        assert sorted(images) == ["postgres"]
+
+    def test_two_declared_paths_sharing_a_stem_refuse(self, tmp_path: Path) -> None:
+        write_dockerfile(tmp_path, "api", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\n")
+        write_dockerfile(tmp_path, "api", "ARG UV_IMAGE\nFROM ${UV_IMAGE}\n", top="docker")
+
+        with pytest.raises(ValueError, match="is already claimed at"):
+            load_images(
+                tmp_path,
+                {"UV_IMAGE": "ghcr.io/org/uv:1"},
+                {},
+                ["workloads/api/Dockerfile", "docker/api/Dockerfile"],
+            )
+
+    def test_a_declared_path_that_does_not_exist_refuses(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="the declared dockerfile does not exist"):
+            load_images(tmp_path, {"UV_IMAGE": "ghcr.io/org/uv:1"}, {}, ["workloads/ghost/Dockerfile"])
+
+    def test_an_absolute_declared_path_refuses(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="must be repo-relative"):
+            load_images(tmp_path, {"UV_IMAGE": "ghcr.io/org/uv:1"}, {}, ["/workloads/api/Dockerfile"])
 
 
 class TestBuiltBaseRefusals:

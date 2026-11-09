@@ -27,6 +27,17 @@ def _write_image(root: Path, name: str, text: str = "ARG PY_IMAGE\nFROM ${PY_IMA
     directory = root / "workloads" / name
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "Dockerfile").write_text(text, encoding="utf-8")
+    score = root / "stack" / "score"
+    score.mkdir(parents=True, exist_ok=True)
+    (score / f"{name}.yaml").write_text(
+        "metadata:\n"
+        f"  name: {name}\n"
+        "  annotations:\n"
+        f"    outernet.internal/dockerfile: {name}=workloads/{name}/Dockerfile\n"
+        "containers:\n"
+        f"  {name}: {{}}\n",
+        encoding="utf-8",
+    )
 
 
 def _tags(repo: Path, capfd: pytest.CaptureFixture[str], *images: str) -> list[str]:
@@ -45,6 +56,7 @@ def repo(tmp_path: Path) -> Path:
             "project_name": "demo",
             "platforms": ["linux/amd64"],
             "base_images": {"PY_IMAGE": "docker.io/library/python:3.13-slim"},
+            "k8s": {"workloads": ["api.yaml", "worker.yaml"]},
             "services": {"ext": {"ref": "oci://ghcr.io/org/ext:0.1.0"}},
         }),
         encoding="utf-8",

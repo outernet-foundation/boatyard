@@ -150,7 +150,7 @@ def _write_repo(
         payload["services"] = ref_services
         score = root / "stack" / "score"
         score.mkdir(parents=True, exist_ok=True)
-        (score / "api.yaml").write_text("metadata:\n  name: api\ncontainers:\n  api: {}\n", encoding="utf-8")
+        (score / "api.yaml").write_text("metadata:\n  name: api\ncontainers: {}\n", encoding="utf-8")
     (root / "boatyard.yml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     if (base_images or charts or caller_refs) and not (root / LOCK_PATH).exists():
         (root / LOCK_PATH).write_text("", encoding="utf-8")
@@ -168,13 +168,20 @@ def _invoke(
     base_images: dict[str, Any] | None = None,
     charts: dict[str, str] | None = None,
     platforms: list[str] | None = None,
+    ref_services: dict[str, Any] | None = None,
 ) -> Any:
     monkeypatch.setattr(lock_module, "bash_output", IndexRegistry().bash_output)
     monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
     monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
     monkeypatch.setattr(Image, "compute_sha", _refuse_the_tree_walk)
     monkeypatch.chdir(tmp_path)
-    _write_repo(tmp_path, base_images=base_images, charts=charts, platforms=platforms)
+    _write_repo(
+        tmp_path,
+        base_images=base_images,
+        charts=charts,
+        platforms=platforms,
+        ref_services=ref_services,
+    )
     return runner.invoke(app, ["lock", *arguments])
 
 
@@ -218,6 +225,17 @@ def _write_built_images(root: Path) -> None:
         directory = root / "workloads" / name
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "Dockerfile").write_text(text, encoding="utf-8")
+    score = root / "stack" / "score"
+    score.mkdir(parents=True, exist_ok=True)
+    (score / "localizer.yaml").write_text(
+        "metadata:\n"
+        "  name: localizer\n"
+        "  annotations:\n"
+        "    outernet.internal/dockerfile: localizer=workloads/localizer/Dockerfile\n"
+        "containers:\n"
+        "  localizer: {}\n",
+        encoding="utf-8",
+    )
 
 
 BUILT_BASE_IMAGES: dict[str, Any] = {
@@ -230,7 +248,13 @@ class TestImageRecording:
     def test_built_entries_are_never_recorded(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _write_built_images(tmp_path)
 
-        result = _invoke(monkeypatch, tmp_path, [], base_images=BUILT_BASE_IMAGES)
+        result = _invoke(
+            monkeypatch,
+            tmp_path,
+            [],
+            base_images=BUILT_BASE_IMAGES,
+            ref_services={"core": {"workloads": ["localizer.yaml"]}},
+        )
 
         assert result.exit_code == 0, result.output
         assert set(_read_lock(tmp_path)["images"]) == {"ALPINE_IMAGE", "UV_IMAGE"}
@@ -251,7 +275,13 @@ class TestImageRecording:
             encoding="utf-8",
         )
 
-        result = _invoke(monkeypatch, tmp_path, [], base_images=BUILT_BASE_IMAGES)
+        result = _invoke(
+            monkeypatch,
+            tmp_path,
+            [],
+            base_images=BUILT_BASE_IMAGES,
+            ref_services={"core": {"workloads": ["localizer.yaml"]}},
+        )
 
         assert result.exit_code != 0
         assert "records the built entries ['NEURAL_NETWORKS_BASE']" in str(result.exception)
@@ -1171,7 +1201,11 @@ class TestPairedLoad:
             LockFile.load(tmp_path / LOCK_PATH, self._config(tmp_path))
 
     def test_a_built_entry_in_the_committed_lock_refuses(self, tmp_path: Path) -> None:
-        _write_repo(tmp_path, base_images=BUILT_BASE_IMAGES)
+        _write_repo(
+            tmp_path,
+            base_images=BUILT_BASE_IMAGES,
+            ref_services={"core": {"workloads": ["localizer.yaml"]}},
+        )
         _write_built_images(tmp_path)
         self._write_committed(
             tmp_path,
@@ -1191,7 +1225,11 @@ class TestPairedLoad:
             LockFile.load(tmp_path / LOCK_PATH, self._config(tmp_path))
 
     def test_pairing_demands_only_the_pulled_entries(self, tmp_path: Path) -> None:
-        _write_repo(tmp_path, base_images=BUILT_BASE_IMAGES)
+        _write_repo(
+            tmp_path,
+            base_images=BUILT_BASE_IMAGES,
+            ref_services={"core": {"workloads": ["localizer.yaml"]}},
+        )
         _write_built_images(tmp_path)
         base = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15"
         self._write_committed(

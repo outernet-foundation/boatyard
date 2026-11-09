@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import shutil
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
 import yaml
@@ -14,7 +14,6 @@ from pydantic import (
 
 from boatyard.models.config_file import (
     K8sConfig,
-    PLACEHOLDER,
     ConfigFile,
     chart_lock_key,
 )
@@ -63,6 +62,14 @@ def generate_k8s(
     index_images = lock.index_references()
     workloads = [load_workload(score_dir, name, WorkloadDocument) for name in k8s.workloads]
 
+    # The pins demand is the declared dockerfile closure of the k8s rendering's workloads
+    demanded = {
+        config.images[PurePosixPath(value).parent.name].sha_env
+        for workload in workloads
+        for kind, value in workload.document.container_sources().values()
+        if kind == "dockerfile"
+    }
+
     output_path = config.root / (config.k8s_local_output if local else config.k8s_output)
 
     render_score(
@@ -75,15 +82,7 @@ def generate_k8s(
             **(
                 {image.sha_env: image.compute_sha(config.root) for image in config.images.values()}
                 if local
-                else load_pins(
-                    config.root / K8S_PINS_PATH,
-                    {
-                        name
-                        for workload in workloads
-                        for name in PLACEHOLDER.findall(dump_yaml(workload.raw))
-                        if name.endswith("_SHA")
-                    },
-                )
+                else load_pins(config.root / K8S_PINS_PATH, demanded)
             ),
         },
         templates=[GPU_POD_TEMPLATE, SCALE_TO_ZERO_TEMPLATE],

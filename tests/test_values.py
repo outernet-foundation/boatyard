@@ -19,9 +19,9 @@ metadata:
   name: api
   annotations:
     outernet.internal/consumer-interpolated: /etc/rathole/client.toml
+    outernet.internal/lock: api=LOKI_IMAGE
 containers:
   api:
-    image: ${LOKI_IMAGE}
     environment:
       TOKEN: ${API_TOKEN:?err}
     files:

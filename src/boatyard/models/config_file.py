@@ -24,6 +24,8 @@ import yaml
 
 from boatyard.models.pyproject import PYPROJECT_PATH, PyprojectToml
 from boatyard.models.image import BuiltBaseEntry, Image, load_images
+from boatyard.models.workload import WorkloadDocument, load_workload, select_provisioner_files
+from boatyard.markers import declared_dockerfile_paths
 from boatyard.temp import PLATFORM_PATTERN, SHA256_DIGEST_REGEX
 from boatyard.yaml import Yaml, is_mapping, load_yaml_model
 
@@ -166,7 +168,9 @@ class ConfigFile(BaseModel):
 
     @field_validator("base_images")
     @classmethod
-    def _validate_base_images(cls, value: dict[AllCapsName, str | BuiltBaseEntry]) -> dict[AllCapsName, str | BuiltBaseEntry]:
+    def _validate_base_images(
+        cls, value: dict[AllCapsName, str | BuiltBaseEntry]
+    ) -> dict[AllCapsName, str | BuiltBaseEntry]:
         for name, reference in value.items():
             if name in (ALPINE_IMAGE, CADDY_IMAGE):
                 raise ValueError(
@@ -507,11 +511,37 @@ def _derive(config: ConfigFile, root: Path) -> None:
         for name, reference in config.base_images.items()
     }
 
-    # Derive the image build set from the Dockerfile tree.
-    images = load_images(root, config.base_images, config.owned_images)
+    # Derive the image build set from the declared edges: workload source annotations and
+    # provisioner markers beside the built base_images entries.
+    score_dir = root / config.score_dir
+    local_names = {
+        name for row in flatten_service_members(config.services) if not row.entry.remote for name in row.entry.workloads
+    }
+    k8s_names = set(config.k8s.workloads) if config.k8s is not None else set()
+    workloads = [load_workload(score_dir, name, WorkloadDocument) for name in sorted(local_names | k8s_names)]
+    declared: list[str] = []
+    for workload in workloads:
+        for container, (kind, value) in workload.document.container_sources().items():
+            if kind == "dockerfile":
+                declared.append(value)
+            elif value not in config.pulled_base_images:
+                raise ValueError(
+                    f"{workload.file_name}: the container {container!r} locks {value!r}, "
+                    "which names no pulled base_images key"
+                )
+
+    selections = (
+        (rendering, [workload for workload in workloads if workload.file_name in names])
+        for rendering, names in (("compose", local_names), ("k8s", k8s_names))
+    )
+    for rendering, selected_workloads in selections:
+        for _name, entries in select_provisioner_files(score_dir, rendering, selected_workloads):
+            declared.extend(path for entry in entries if is_mapping(entry) for path in declared_dockerfile_paths(entry))
+
+    images = load_images(root, config.base_images, config.owned_images, declared)
     if images and config.repository is None:
         listed = ", ".join(sorted(images))
-        raise ValueError(f"repository is required by the Dockerfile image directories {listed}")
+        raise ValueError(f"repository is required by the declared Dockerfile images {listed}")
     config.images = images
 
     # Enforce the lock pairing laws.
@@ -526,13 +556,6 @@ def _derive(config: ConfigFile, root: Path) -> None:
         values = root / config.score_dir / "k8s" / "values" / f"{chart}.yaml"
         if not values.is_file():
             raise ValueError(f"{values.as_posix()}: the chart's values file is required")
-
-    # Declared inputs exist: every referenced workload file is on disk beside the config.
-    for row in flatten_service_members(config.services):
-        for workload_name in row.entry.workloads:
-            workload_path = root / config.score_dir / workload_name
-            if not workload_path.is_file():
-                raise ValueError(f"{workload_path.as_posix()}: the workload file is required")
 
 
 def variant_axes(services: dict[str, ServiceGroup | ServiceEntry]) -> dict[str, list[str]]:

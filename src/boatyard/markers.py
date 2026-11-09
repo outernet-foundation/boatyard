@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
-from typing import Literal, NamedTuple
+from pathlib import Path, PurePosixPath
+from typing import Literal, Mapping, NamedTuple
 
 import yaml
 from pydantic import BaseModel, ConfigDict
 
+from boatyard.models.image import Image
 from boatyard.yaml import Yaml, is_mapping
 
 TEXT_MARKER = "include"
@@ -14,6 +15,7 @@ YAML_MARKER = "include-yaml"
 LOCK_MARKER = "lock"
 LOCK_IMAGE_MARKER = "lock-image"
 LOCK_MARKERS = (LOCK_MARKER, LOCK_IMAGE_MARKER)
+DOCKERFILE_MARKER = "dockerfile"
 IMAGE_FIELD = "image"
 IMAGE_SLOT_PATTERN = re.compile(r"\$\{|{{")
 
@@ -30,6 +32,8 @@ class MarkerContext(NamedTuple):
     images: dict[str, str]
     source: str
     ancestors: tuple[Path, ...] = ()
+    repository: str | None = None
+    builds: Mapping[str, Image] | None = None
 
 
 class ImageReference(NamedTuple):
@@ -37,6 +41,15 @@ class ImageReference(NamedTuple):
     repository: str
     tag: str | None
     digest: str
+
+
+def compose_image_reference(repository: str, image: Image, tag: str, variant: str | None) -> str:
+    fragment = "" if variant is None else f"-{variant}"
+    return f"{repository}/{image.name}{fragment}:{tag}"
+
+
+def env_slot(name: str) -> str:
+    return f'{{{{ env "{name}" }}}}'
 
 
 def resolve_markers(node: Yaml, context: MarkerContext) -> Yaml:
@@ -57,8 +70,8 @@ def expand_includes(node: Yaml, context: MarkerContext) -> Yaml:
                 # Splice in the included structure
                 case [(marker, value)] if marker == YAML_MARKER:
                     expanded = include_yaml(value, context)
-                # Leave lock markers whole for the lock pass to consume or refuse
-                case [(marker, _)] if marker in LOCK_MARKERS:
+                # Leave lock and dockerfile markers whole for the lock pass to consume or refuse
+                case [(marker, _)] if marker in LOCK_MARKERS or marker == DOCKERFILE_MARKER:
                     expanded = node
                 # Resolve plain mappings child by child
                 case entries:
@@ -126,6 +139,9 @@ def resolve_locks(node: Yaml, context: MarkerContext) -> Yaml:
                 # Split the locked reference into chart fields
                 case [(marker, value)] if marker == LOCK_IMAGE_MARKER:
                     resolved = lock_image_fields(value, context.images, context.source)
+                # Compose the built-image reference from the declared dockerfile
+                case [(marker, value)] if marker == DOCKERFILE_MARKER:
+                    resolved = dockerfile_reference(value, context)
                 # Refuse literal images, then resolve plain mappings child by child
                 case entries:
                     _check_literal_image(node, context.source)
@@ -147,6 +163,50 @@ def locked_reference(value: Yaml, context: MarkerContext) -> str:
             raise ValueError(f"{context.source}: lock takes a lock-entry name string, not {type(value).__name__}")
 
     return reference
+
+
+def dockerfile_reference(value: Yaml, context: MarkerContext) -> str:
+    match value:
+        case str():
+            path = value
+        case _:
+            raise ValueError(
+                f"{context.source}: dockerfile takes a repo-root-relative path string, not {type(value).__name__}"
+            )
+
+    if context.repository is None or context.builds is None:
+        raise ValueError(
+            f"{context.source}: dockerfile: is a provisioner-manifest marker; chart values take lock:/lock-image: only"
+        )
+
+    image = context.builds.get(PurePosixPath(path).parent.name)
+    if image is None:
+        raise ValueError(f"{context.source}: dockerfile {path!r} names no image in the build set")
+
+    variant = env_slot(image.axis) if image.axis is not None else None
+    return compose_image_reference(context.repository, image, env_slot(image.sha_env), variant)
+
+
+def declared_dockerfile_paths(node: Yaml) -> list[str]:
+    paths: list[str] = []
+    match node:
+        case list():
+            for item in node:
+                paths.extend(declared_dockerfile_paths(item))
+        case dict():
+            match tuple(node.items()):
+                case [(marker, value)] if marker == DOCKERFILE_MARKER:
+                    match value:
+                        case str():
+                            paths.append(value)
+                        case _:
+                            raise ValueError(
+                                f"dockerfile takes a repo-root-relative path string, not {type(value).__name__}"
+                            )
+                case entries:
+                    for child in dict(entries).values():
+                        paths.extend(declared_dockerfile_paths(child))
+    return paths
 
 
 def lock_image_fields(value: Yaml, images: dict[str, str], source: str) -> dict[str, Yaml]:

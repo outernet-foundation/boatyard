@@ -307,7 +307,13 @@ class TestMarkerSubstrateResolution:
     def _compose_seam(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, platforms: list[str]) -> str:
         (tmp_path / "stack" / "score").mkdir(parents=True)
         (tmp_path / "stack" / "score" / "api.yaml").write_text(
-            "metadata:\n  name: api\ncontainers:\n  api:\n    image: ${LOKI_IMAGE}\n", encoding="utf-8"
+            "metadata:\n"
+            "  name: api\n"
+            "  annotations:\n"
+            "    outernet.internal/lock: api=LOKI_IMAGE\n"
+            "containers:\n"
+            "  api: {}\n",
+            encoding="utf-8",
         )
         loki_platforms = {
             platform: LOKI_MANIFEST if platform == "linux/amd64" else LOKI_INDEX for platform in platforms
@@ -436,7 +442,13 @@ def _generate_compose(
     container_name = workload if container is None else container
     (tmp_path / "stack" / "score").mkdir(parents=True)
     (tmp_path / "stack" / "score" / f"{workload}.yaml").write_text(
-        f"metadata:\n  name: {workload}\ncontainers:\n  {container_name}: {{}}\n", encoding="utf-8"
+        "metadata:\n"
+        f"  name: {workload}\n"
+        "  annotations:\n"
+        f"    outernet.internal/lock: {container_name}=ALPINE_IMAGE\n"
+        "containers:\n"
+        f"  {container_name}: {{}}\n",
+        encoding="utf-8",
     )
     (tmp_path / "workloads" / "api").mkdir(parents=True)
     (tmp_path / "workloads" / "api" / "config.yaml").write_text("key: ${FOO}\n", encoding="utf-8")
@@ -546,7 +558,13 @@ def test_generate_compose_renames_the_barrier_and_its_references_per_entry(
 def test_generate_compose_barrier_names_differ_per_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "api.yaml").write_text(
-        "metadata:\n  name: api\ncontainers:\n  api: {}\n", encoding="utf-8"
+        "metadata:\n"
+        "  name: api\n"
+        "  annotations:\n"
+        "    outernet.internal/lock: api=ALPINE_IMAGE\n"
+        "containers:\n"
+        "  api: {}\n",
+        encoding="utf-8",
     )
     (tmp_path / "stack" / "score" / "edge.yaml").write_text(
         "metadata:\n  name: edge\ncontainers: {}\n", encoding="utf-8"
@@ -591,14 +609,20 @@ class WorkloadContentsRecorder:
             output.write_text(self.generated, encoding="utf-8")
 
 
-def test_workload_image_slots_resolve_from_the_lock_into_the_rendered_copy(
+LOCK_ANNOTATION_API = (
+    "metadata:\n  name: api\n  annotations:\n    outernet.internal/lock: api=LOCK_KEY\ncontainers:\n  api: {}\n"
+)
+
+
+def _lock_annotation_workload(key: str) -> str:
+    return LOCK_ANNOTATION_API.replace("LOCK_KEY", key)
+
+
+def test_workload_lock_annotations_inject_the_locked_reference_into_the_rendered_copy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
-    (tmp_path / "stack" / "score" / "api.yaml").write_text(
-        "metadata:\n  name: api\ncontainers:\n  api:\n    image: ${API_IMAGE}\n",
-        encoding="utf-8",
-    )
+    (tmp_path / "stack" / "score" / "api.yaml").write_text(_lock_annotation_workload("API_IMAGE"), encoding="utf-8")
     recorder = WorkloadContentsRecorder()
     monkeypatch.setattr(score_module, "bash", recorder.run)
     config = _root_config(
@@ -614,18 +638,12 @@ def test_workload_image_slots_resolve_from_the_lock_into_the_rendered_copy(
         _lock_for_images({"API_IMAGE": "ghcr.io/org/api@sha256:" + "a" * 64, **ALPINE_LOCK}),
     )
 
-    assert (
-        recorder.workload_contents["api.yaml"]
-        == "metadata:\n  name: api\ncontainers:\n  api:\n    image: ghcr.io/org/api@sha256:" + "a" * 64 + "\n"
-    )
+    assert f"image: ghcr.io/org/api@sha256:{'a' * 64}\n" in recorder.workload_contents["api.yaml"]
 
 
-def test_workload_image_slot_with_no_lock_entry_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_workload_lock_annotation_with_no_lock_entry_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
-    (tmp_path / "stack" / "score" / "api.yaml").write_text(
-        "metadata:\n  name: api\ncontainers:\n  api:\n    image: ${API_IMAGE}\n",
-        encoding="utf-8",
-    )
+    (tmp_path / "stack" / "score" / "api.yaml").write_text(_lock_annotation_workload("API_IMAGE"), encoding="utf-8")
     recorder = WorkloadContentsRecorder()
     monkeypatch.setattr(score_module, "bash", recorder.run)
     config = _root_config(
@@ -636,52 +654,91 @@ def test_workload_image_slot_with_no_lock_entry_refuses(tmp_path: Path, monkeypa
     )
     config.root = tmp_path
 
-    with pytest.raises(ValueError, match=r"api\.yaml.*API_IMAGE.*image lock"):
+    with pytest.raises(ValueError, match=r"api\.yaml: containers\.api: API_IMAGE names no lock entry"):
         score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK))
 
 
-SENTINEL_RENDERING = "services:\n  api-api:\n    image: ghcr.io/org/api:__BOATYARD_TREE__API_SHA__\n"
+DOCKERFILE_ANNOTATION_API = (
+    "metadata:\n"
+    "  name: api\n"
+    "  annotations:\n"
+    "    outernet.internal/dockerfile: api=workloads/api/Dockerfile\n"
+    "containers:\n"
+    "  api: {}\n"
+)
 
 
 def _generate_compose_with_derived_images(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    image: Image | None = None,
+    entry_vars: dict[str, str] | None = None,
+    generated: str | None = None,
 ) -> tuple[WorkloadContentsRecorder, str]:
     (tmp_path / "stack" / "score").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "stack" / "score" / "api.yaml").write_text(
-        "metadata:\n  name: api\ncontainers:\n  api:\n    image: ghcr.io/org/api:${API_SHA}\n",
-        encoding="utf-8",
+    (tmp_path / "stack" / "score" / "api.yaml").write_text(DOCKERFILE_ANNOTATION_API, encoding="utf-8")
+    variant_fragment = (
+        ""
+        if image is None or image.axis is None or entry_vars is None or image.axis not in entry_vars
+        else f"-{entry_vars[image.axis]}"
     )
-    recorder = WorkloadContentsRecorder(SENTINEL_RENDERING)
+    recorder = WorkloadContentsRecorder(
+        generated
+        if generated is not None
+        else f"services:\n  api-api:\n    image: ghcr.io/org/repo/api{variant_fragment}:__BOATYARD_TREE__API_SHA__\n"
+    )
     monkeypatch.setattr(score_module, "bash", recorder.run)
+    entry: dict[str, object] = {"workloads": ["api.yaml"]}
+    if entry_vars is not None:
+        entry["vars"] = entry_vars
     config = _root_config(
         repository="ghcr.io/org/repo",
         project_name="example",
         platforms=["linux/amd64"],
-        services={"core": {"workloads": ["api.yaml"]}},
+        services={"core": entry},
     )
     config.root = tmp_path
-    config.images = {"api": Image(name="api", dockerfile="workloads/api/Dockerfile")}
+    config.images = {"api": image if image is not None else Image(name="api", dockerfile="workloads/api/Dockerfile")}
 
     score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK))
     output = tmp_path / "stack" / "generated" / "compose" / "compose.core.yaml"
     return recorder, output.read_text(encoding="utf-8")
 
 
-def test_workload_sha_slots_render_as_marker_protected_tree_slots(
+def test_workload_dockerfile_annotations_inject_the_composed_tree_slot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     recorder, artifact = _generate_compose_with_derived_images(monkeypatch, tmp_path)
 
-    assert (
-        recorder.workload_contents["api.yaml"]
-        == "metadata:\n  name: api\ncontainers:\n  api:\n    image: ghcr.io/org/api:__BOATYARD_TREE__API_SHA__\n"
-    )
+    assert "image: ghcr.io/org/repo/api:__BOATYARD_TREE__API_SHA__\n" in recorder.workload_contents["api.yaml"]
     generate_env = recorder.command_envs["score-compose generate"]
     assert generate_env is not None
     assert generate_env["API_SHA"] == "__BOATYARD_TREE__API_SHA__"
-    assert "image: ghcr.io/org/api:${CORE__BOATYARD_TREE__API_SHA}" in artifact
+    assert "image: ghcr.io/org/repo/api:${CORE__BOATYARD_TREE__API_SHA}" in artifact
     assert "tree-" not in artifact
     assert config_file_module.TREE_SENTINEL_PATTERN.search(artifact) is None
+
+
+def test_a_fanning_image_injects_the_selected_variant_fragment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    recorder, artifact = _generate_compose_with_derived_images(
+        monkeypatch,
+        tmp_path,
+        image=Image(name="api", dockerfile="workloads/api/Dockerfile", axis="TORCH_DEVICE", variants=["cuda", "rocm"]),
+        entry_vars={"TORCH_DEVICE": "cuda"},
+    )
+
+    assert "image: ghcr.io/org/repo/api-cuda:__BOATYARD_TREE__API_SHA__\n" in recorder.workload_contents["api.yaml"]
+    assert "image: ghcr.io/org/repo/api-cuda:${CORE__BOATYARD_TREE__API_SHA}" in artifact
+
+
+def test_a_fanning_image_with_no_selected_variant_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ValueError, match=r"api fans on TORCH_DEVICE, which this rendering selects no value for"):
+        _generate_compose_with_derived_images(
+            monkeypatch,
+            tmp_path,
+            image=Image(name="api", dockerfile="workloads/api/Dockerfile", axis="TORCH_DEVICE", variants=["cuda"]),
+        )
 
 
 def test_generate_compose_never_walks_the_source_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -691,7 +748,7 @@ def test_generate_compose_never_walks_the_source_tree(tmp_path: Path, monkeypatc
     monkeypatch.setattr(Image, "compute_sha", _refuse_the_walk)
     _recorder, artifact = _generate_compose_with_derived_images(monkeypatch, tmp_path)
 
-    assert "image: ghcr.io/org/api:${CORE__BOATYARD_TREE__API_SHA}" in artifact
+    assert "image: ghcr.io/org/repo/api:${CORE__BOATYARD_TREE__API_SHA}" in artifact
 
 
 def _generate_compose_multi(
@@ -703,7 +760,10 @@ def _generate_compose_multi(
     (tmp_path / "stack" / "score").mkdir(parents=True)
     for workload_name, containers in workload_containers.items():
         document: dict[str, object] = {
-            "metadata": {"name": workload_name},
+            "metadata": {
+                "name": workload_name,
+                "annotations": {"outernet.internal/lock": ",".join(f"{name}=ALPINE_IMAGE" for name in containers)},
+            },
             "containers": {name: {} for name in containers},
         }
         path = tmp_path / "stack" / "score" / f"{workload_name}.yaml"
@@ -966,9 +1026,10 @@ def test_provisioners_register_by_resource_type_closure(tmp_path: Path, monkeypa
 WORKLOAD_WITH_LIVENESS = """
 metadata:
   name: api
+  annotations:
+    outernet.internal/lock: api=ALPINE_IMAGE
 containers:
   api:
-    image: ${API_IMAGE:?err}
     livenessProbe:
       httpGet:
         path: /health
@@ -980,9 +1041,9 @@ metadata:
   name: api
   annotations:
     outernet.internal/probe-adapter: python-urllib
+    outernet.internal/lock: api=ALPINE_IMAGE
 containers:
   api:
-    image: ${API_IMAGE:?err}
     readinessProbe:
       httpGet:
         path: /ready
@@ -992,9 +1053,10 @@ containers:
 WORKLOAD_WITH_UNADAPTED_READINESS = """
 metadata:
   name: api
+  annotations:
+    outernet.internal/lock: api=ALPINE_IMAGE
 containers:
   api:
-    image: ${API_IMAGE:?err}
     readinessProbe:
       httpGet:
         path: /ready
@@ -1049,6 +1111,113 @@ def test_workload_resources_parse_typed() -> None:
     )
 
     assert document.resources["db"].type == "example-db"
+
+
+DOCKERFILE_SOURCES_API = {
+    "metadata": {
+        "name": "api",
+        "annotations": {"outernet.internal/dockerfile": "api=workloads/api/Dockerfile"},
+    },
+    "containers": {"api": {}},
+}
+
+
+class TestSourceAnnotations:
+    def test_container_sources_exposes_the_declared_edges(self) -> None:
+        document = WorkloadDocument.parse(DOCKERFILE_SOURCES_API, "api.yaml")
+
+        assert document.container_sources() == {"api": ("dockerfile", "workloads/api/Dockerfile")}
+
+    def test_lock_sources_parse_beside_dockerfile_sources(self) -> None:
+        document = WorkloadDocument.parse(
+            {
+                "metadata": {
+                    "name": "api",
+                    "annotations": {
+                        "outernet.internal/dockerfile": "api=workloads/api/Dockerfile",
+                        "outernet.internal/lock": "sidecar=KEYCLOAK_IMAGE",
+                    },
+                },
+                "containers": {"api": {}, "sidecar": {}},
+            },
+            "api.yaml",
+        )
+
+        assert document.container_sources() == {
+            "api": ("dockerfile", "workloads/api/Dockerfile"),
+            "sidecar": ("lock", "KEYCLOAK_IMAGE"),
+        }
+
+    def test_a_container_without_a_source_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"container 'sidecar' carries no source annotation"):
+            WorkloadDocument.parse(
+                {
+                    "metadata": {
+                        "name": "api",
+                        "annotations": {"outernet.internal/dockerfile": "api=workloads/api/Dockerfile"},
+                    },
+                    "containers": {"api": {}, "sidecar": {}},
+                },
+                "api.yaml",
+            )
+
+    def test_both_annotations_naming_one_container_refuse(self) -> None:
+        with pytest.raises(ValidationError, match=r"container 'api' is named by both"):
+            WorkloadDocument.parse(
+                {
+                    "metadata": {
+                        "name": "api",
+                        "annotations": {
+                            "outernet.internal/dockerfile": "api=workloads/api/Dockerfile",
+                            "outernet.internal/lock": "api=KEYCLOAK_IMAGE",
+                        },
+                    },
+                    "containers": {"api": {}},
+                },
+                "api.yaml",
+            )
+
+    def test_an_annotation_naming_no_container_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"name no container 'ghost'"):
+            WorkloadDocument.parse(
+                {
+                    "metadata": {
+                        "name": "api",
+                        "annotations": {"outernet.internal/lock": "ghost=KEYCLOAK_IMAGE"},
+                    },
+                    "containers": {},
+                },
+                "api.yaml",
+            )
+
+    def test_padded_or_pairless_entries_refuse(self) -> None:
+        for value in ("", "  ", "api =workloads/api/Dockerfile", "workloads/api/Dockerfile", "api=a,b"):
+            with pytest.raises(ValidationError, match="container=source"):
+                WorkloadDocument.parse(
+                    {
+                        "metadata": {
+                            "name": "api",
+                            "annotations": {"outernet.internal/dockerfile": value},
+                        },
+                        "containers": {},
+                    },
+                    "api.yaml",
+                )
+
+    def test_one_container_named_twice_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"names the container 'api' twice"):
+            WorkloadDocument.parse(
+                {
+                    "metadata": {
+                        "name": "api",
+                        "annotations": {
+                            "outernet.internal/dockerfile": "api=workloads/api/Dockerfile,api=workloads/other/Dockerfile"
+                        },
+                    },
+                    "containers": {"api": {}},
+                },
+                "api.yaml",
+            )
 
 
 def test_workload_resources_without_a_type_refuse() -> None:
@@ -1113,7 +1282,7 @@ def test_restart_annotation_with_an_enum_value_passes(tmp_path: Path, monkeypatc
 def test_bare_literal_workload_image_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _bundle_config()
 
-    with pytest.raises(ValidationError, match=r"image.*must bind"):
+    with pytest.raises(ValidationError, match=r"image is never authored"):
         _compose_init_templates(
             monkeypatch,
             tmp_path,
@@ -1121,6 +1290,21 @@ def test_bare_literal_workload_image_refuses(tmp_path: Path, monkeypatch: pytest
             {},
             {
                 "stack/score/api.yaml": "metadata:\n  name: api\ncontainers:\n  api:\n    image: ghcr.io/example/api:1\n",
+            },
+        )
+
+
+def test_an_authored_image_slot_refuses_like_a_literal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _bundle_config()
+
+    with pytest.raises(ValidationError, match=r"image is never authored"):
+        _compose_init_templates(
+            monkeypatch,
+            tmp_path,
+            config,
+            {},
+            {
+                "stack/score/api.yaml": "metadata:\n  name: api\ncontainers:\n  api:\n    image: ${API_IMAGE}\n",
             },
         )
 
@@ -1166,9 +1350,9 @@ metadata:
   name: rathole-client
   annotations:
     outernet.internal/consumer-interpolated: /etc/rathole/client.toml
+    outernet.internal/lock: rathole-client=ALPINE_IMAGE
 containers:
   rathole-client:
-    image: ${RATHOLE_IMAGE:?err}
     files:
       /etc/rathole/client.toml:
         content: |
@@ -1303,7 +1487,7 @@ def test_k8s_instance_suffixes_are_preseeded_deterministically(tmp_path: Path, m
 
 PINNED_TAG = "tree-" + "e" * 40
 LOCAL_TAG = "tree-" + "f" * 40
-SHA_WORKLOAD = "metadata:\n  name: api\ncontainers:\n  api:\n    image: ghcr.io/org/api:${API_SHA}\n"
+SHA_WORKLOAD = DOCKERFILE_ANNOTATION_API
 
 
 def _pins_k8s_recorder(
@@ -1319,7 +1503,7 @@ def _pins_k8s_recorder(
 
 
 def _pinned_config(tmp_path: Path) -> tuple[ConfigFile, K8sConfig]:
-    config = _root_config(k8s={"workloads": ["api.yaml"]})
+    config = _root_config(repository="ghcr.io/org/repo", k8s={"workloads": ["api.yaml"]})
     config.root = tmp_path
     config.images = {"api": Image(name="api", dockerfile="workloads/api/Dockerfile")}
     assert config.k8s is not None
@@ -1340,7 +1524,7 @@ def test_k8s_generation_bakes_the_pins_file_tags(tmp_path: Path, monkeypatch: py
 
     assert recorder.command_envs["generate"] is not None
     assert recorder.command_envs["generate"]["API_SHA"] == PINNED_TAG
-    assert f"image: ghcr.io/org/api:{PINNED_TAG}" in recorder.workload_contents["api.yaml"]
+    assert f"image: ghcr.io/org/repo/api:{PINNED_TAG}" in recorder.workload_contents["api.yaml"]
 
 
 def test_k8s_generation_without_a_pins_file_refuses_naming_bump(
@@ -1357,12 +1541,26 @@ def test_k8s_generation_refuses_a_workload_sha_slot_no_pin_covers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _write_pins(tmp_path, {"API_SHA": PINNED_TAG})
-    workload = SHA_WORKLOAD + "  sidecar:\n    image: ghcr.io/org/sidecar:${WORKER_SHA}\n"
+    workload = (
+        "metadata:\n"
+        "  name: api\n"
+        "  annotations:\n"
+        "    outernet.internal/dockerfile: api=workloads/api/Dockerfile,sidecar=workloads/worker/Dockerfile\n"
+        "containers:\n"
+        "  api: {}\n"
+        "  sidecar: {}\n"
+    )
     _pins_k8s_recorder(monkeypatch, tmp_path, workload)
-    config, k8s = _pinned_config(tmp_path)
+    config = _root_config(repository="ghcr.io/org/repo", k8s={"workloads": ["api.yaml"]})
+    config.root = tmp_path
+    config.images = {
+        "api": Image(name="api", dockerfile="workloads/api/Dockerfile"),
+        "worker": Image(name="worker", dockerfile="workloads/worker/Dockerfile"),
+    }
+    assert config.k8s is not None
 
     with pytest.raises(ValueError, match=r"boatyard\.k8s-pins\.yml: lacks pins for WORKER_SHA"):
-        generate_k8s(config, k8s, LockFile.model_validate({}), local=False)
+        generate_k8s(config, config.k8s, LockFile.model_validate({}), local=False)
 
 
 def test_local_k8s_generation_derives_working_tree_tags_without_pins(
@@ -1505,7 +1703,8 @@ def test_variable_placeholders_refuse_or_stay_escaped(tmp_path: Path) -> None:
 def _verb_repo(tmp_path: Path) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "api.yaml").write_text(
-        "metadata:\n  name: api\ncontainers:\n  api:\n    image: ${LOKI_IMAGE}\n", encoding="utf-8"
+        "metadata:\n  name: api\n  annotations:\n    outernet.internal/lock: api=LOKI_IMAGE\ncontainers:\n  api: {}\n",
+        encoding="utf-8",
     )
     (tmp_path / "boatyard.lock.yml").write_text(
         yaml.safe_dump({
@@ -1562,6 +1761,8 @@ def test_generate_score_writes_the_mint_list_from_the_k8s_rendering(
 
 
 def _k8s_only_repo(tmp_path: Path) -> None:
+    (tmp_path / "stack" / "score").mkdir(parents=True)
+    (tmp_path / "stack" / "score" / "api.yaml").write_text("metadata:\n  name: api\ncontainers: {}\n", encoding="utf-8")
     (tmp_path / "boatyard.yml").write_text(
         "requires: '>=0'\nproject_name: example\nrepository: ghcr.io/org/repo\n"
         "services:\n  ext:\n    ref: oci://ghcr.io/org/ext:0.1.0\n"

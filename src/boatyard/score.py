@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import copy
 import os
 import re
 import shlex
 from contextlib import ExitStack
 from hashlib import sha256
 from importlib.resources import as_file, files
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
 import yaml
@@ -26,7 +27,7 @@ from boatyard.models.config_file import (
 )
 from boatyard.models.workload import LoadedWorkload, select_provisioner_files
 from boatyard.yaml import Yaml, is_mapping, load_yaml_model
-from boatyard.markers import MarkerContext, resolve_markers
+from boatyard.markers import MarkerContext, compose_image_reference, resolve_markers
 
 PATCH_TEMPLATES_DIR = "score_patch_templates"
 
@@ -108,7 +109,13 @@ def render_score(
         paths: list[Path] = []
         directory = Path(stack.enter_context(TemporaryDirectory(prefix="compiled-provisioners-", dir=score_dir)))
         for name, entries in selected:
-            context = MarkerContext(root=root, images=images, source=name)
+            context = MarkerContext(
+                root=root,
+                images=images,
+                source=name,
+                repository=config.repository,
+                builds=config.images,
+            )
             compiled_entries: list[Yaml] = []
             for entry in entries:
                 resolved = resolve_markers(entry, context)
@@ -153,7 +160,7 @@ def render_score(
         copies_directory = Path(stack.enter_context(TemporaryDirectory()))
 
         for workload in workloads:
-            expanded = dump_yaml(workload.raw)
+            expanded = dump_yaml(injected_workload(config, workload, variable_values))
             for variable, value in variable_values.items():
                 expanded = expanded.replace(f"${{{variable}}}", value)
 
@@ -170,6 +177,45 @@ def render_score(
         # Run generate over the expanded copies
         rendered = " ".join((copies_directory / workload.file_name).as_posix() for workload in workloads)
         bash(f"{tool} generate {rendered} --output {output.as_posix()}", cwd=working_dir, env=variable_values)
+
+
+def injected_workload(config: ConfigFile, workload: LoadedWorkload, variable_values: dict[str, str]) -> Yaml:
+    # The image reference is composed from the container's declared source and injected
+    # before score sees the document; it is never authored in the workload file.
+    sources = workload.document.container_sources()
+    if not sources:
+        return workload.raw
+    document = copy.deepcopy(workload.raw)
+    for container, (kind, value) in sources.items():
+        if kind == "lock":
+            reference = variable_values.get(value)
+            if reference is None:
+                raise ValueError(f"{workload.file_name}: containers.{container}: {value} names no lock entry")
+            document["containers"][container]["image"] = reference
+            continue
+        stem = PurePosixPath(value).parent.name
+        image = config.images.get(stem)
+        if image is None:
+            raise ValueError(
+                f"{workload.file_name}: containers.{container}: the dockerfile {value!r} names no image in the build set"
+            )
+        if config.repository is None:
+            raise ValueError(f"{workload.file_name}: containers.{container}: repository is required by the build set")
+        variant = None
+        if image.axis is not None:
+            variant = variable_values.get(image.axis)
+            if variant is None:
+                raise ValueError(
+                    f"{workload.file_name}: containers.{container}: {image.name} fans on {image.axis}, "
+                    "which this rendering selects no value for"
+                )
+        tag = variable_values.get(image.sha_env)
+        if tag is None:
+            raise ValueError(
+                f"{workload.file_name}: containers.{container}: {image.sha_env} names no tree tag in this rendering"
+            )
+        document["containers"][container]["image"] = compose_image_reference(config.repository, image, tag, variant)
+    return document
 
 
 def dump_yaml(value: Yaml) -> str:
