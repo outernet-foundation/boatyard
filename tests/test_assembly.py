@@ -7,10 +7,11 @@ import yaml
 from typer.testing import CliRunner
 
 from boatyard.cli import app
-from boatyard.config import values
-from boatyard.config.config import ConfigFile, PortOrSlot
+from boatyard.models import values_file
+from boatyard.models.config_file import ConfigFile
+from boatyard.models.lock_file import LOCK_PATH, LockFile
 from boatyard.verbs import up
-from boatyard.config.lock import LOCK_PATH
+from boatyard.resolve import resolve
 
 FAKE_DIGEST = "sha256:" + "a" * 64
 LIVEKIT_SHA_TAG = "a" * 40
@@ -39,7 +40,7 @@ def _write_edge_tree(
     routes: list[dict[str, object]],
     *,
     auth: bool = False,
-    gateway: PortOrSlot | None = "${GATEWAY_PORT:?err}",
+    gateway: int | None = 58080,
     public_url: str = "http://192.168.8.10:58080",
 ) -> None:
     services: dict[str, object] = {
@@ -59,7 +60,6 @@ def _write_edge_tree(
         "requires": ">=0.0",
         "project_name": "edge-demo",
         "platforms": ["linux/amd64"],
-        "base_images": {"CADDY_IMAGE": "docker.io/library/caddy:2.8.4-alpine"},
         "services": services,
     }
     if gateway is not None:
@@ -86,7 +86,7 @@ def _write_edge_tree(
         }),
         encoding="utf-8",
     )
-    values: dict[str, object] = {"GATEWAY_PORT": 58080, "public_url": public_url}
+    values: dict[str, object] = {"public_url": public_url}
     if auth:
         values["bundles"] = ["auth-keycloak"]
     (tmp_path / "boatyard.values.yaml").write_text(
@@ -102,7 +102,7 @@ def _assembly_document(
     routes: list[dict[str, object]],
     *,
     auth: bool = False,
-    gateway: PortOrSlot | None = "${GATEWAY_PORT:?err}",
+    gateway: int | None = 58080,
     public_url: str = "http://192.168.8.10:58080",
 ) -> dict[str, Any]:
     _write_edge_tree(tmp_path, monkeypatch, routes, auth=auth, gateway=gateway, public_url=public_url)
@@ -221,7 +221,7 @@ class TestEdgeStanza:
         assert document["services"]["edge"] == {
             "image": CADDY_LOCK_ENTRY,
             "configs": [{"source": "devkit-edge-caddyfile", "target": "/etc/caddy/Caddyfile"}],
-            "ports": [{"target": 8443, "published": "${GATEWAY_PORT:?err}", "protocol": "tcp"}],
+            "ports": [{"target": 8443, "published": 58080, "protocol": "tcp"}],
             "networks": {"livekit-net": None},
         }
 
@@ -237,11 +237,11 @@ class TestEdgeStanza:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "routes are declared; gateway is required" in str(result.exception)
+        assert "routes require a gateway declaration" in str(result.exception)
 
 
 class TestValuesLoad:
-    def test_carves_typed_spellings_and_coerces_scalar_values(self, tmp_path: Path) -> None:
+    def test_folds_the_selection_and_validates_sections(self, tmp_path: Path) -> None:
         (tmp_path / "boatyard.yml").write_text(
             yaml.safe_dump(
                 {
@@ -261,7 +261,10 @@ class TestValuesLoad:
             yaml.safe_dump(
                 {
                     "bundles": {
-                        "CORE_CUDA_BUNDLE": {"reference": f"ghcr.io/org/core:0.1.0@{FAKE_DIGEST}"},
+                        "CORE_CUDA_BUNDLE": {
+                            "reference": f"ghcr.io/org/core:0.1.0@{FAKE_DIGEST}",
+                            "slots": {"RELOAD": {"required": False}, "GPU_MEM": {"required": True}},
+                        },
                         "UI_OPEN_BUNDLE": {"reference": f"ghcr.io/org/ui:0.1.0@{FAKE_DIGEST}"},
                     }
                 },
@@ -271,11 +274,19 @@ class TestValuesLoad:
             encoding="utf-8",
         )
         (tmp_path / "boatyard.values.yaml").write_text(
-            "bundles: [core-cuda, ui-open]\nGATEWAY_PORT: 8443\nRELOAD: true\n",
+            yaml.safe_dump(
+                {
+                    "bundles": ["core-cuda", "ui-open"],
+                    "values": {"RELOAD": True, "GPU_MEM": 512},
+                },
+                default_flow_style=False,
+                sort_keys=False,
+            ),
             encoding="utf-8",
         )
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
+        lock = LockFile.load(tmp_path / "boatyard.lock.yml", config)
+        parsed = values_file.ValuesFile.load(tmp_path / "boatyard.values.yaml")
 
-        parsed = values.ValuesFile.load(tmp_path / "boatyard.values.yaml", ConfigFile.load(tmp_path / "boatyard.yml"))
-
-        assert parsed.choices == {"core": "cuda", "ui": "open"}
-        assert parsed.variables == {"GATEWAY_PORT": "8443", "RELOAD": "true"}
+        assert [service.name for service in resolve(config, lock, parsed).services] == ["core-cuda", "ui-open"]
+        assert parsed.values == {"RELOAD": "true", "GPU_MEM": "512"}

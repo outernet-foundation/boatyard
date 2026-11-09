@@ -7,9 +7,10 @@ from typing import NamedTuple
 
 import yaml
 
-from boatyard.config.config import Yaml, double_dollars
+from boatyard.models.config_file import double_dollars
 from boatyard.score_compose import ComposeDocument
 from boatyard.lock import resolve_remote_digest
+from boatyard.yaml import Yaml
 
 VAR_PATTERN = re.compile(r"\$\{([A-Z][A-Z0-9_]*)(:[?\-+][^}]*)?\}")
 STUB_VALUE = "publish-stub"

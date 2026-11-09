@@ -7,17 +7,16 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from boatyard.config.config import (
+from boatyard.models.config_file import (
     DEV_SENTINEL,
     ConfigFile,
     ServiceEntry,
     ServiceGroup,
     bundle_lock_key,
 )
-from boatyard.config.lock import LOCK_PATH, LockFile
+from boatyard.models.lock_file import LOCK_PATH, LockFile
 from boatyard.yaml import load_yaml_model
 
-EDGE_BASE_IMAGES = {"CADDY_IMAGE": "docker.io/library/caddy:2.8.4-alpine"}
 EDGE_PLATFORMS = ["linux/amd64"]
 
 DIGEST = "sha256:" + "a" * 64
@@ -32,6 +31,7 @@ def bundle_entries(*qualified_names: str) -> dict[str, dict[str, object]]:
 
 def write_config(tmp_path: Path, payload: dict[str, object]) -> None:
     payload.setdefault("project_name", "example")
+    payload.setdefault("services", {"ext": {"ref": "oci://ghcr.io/org/ext:0.1.0"}})
     (tmp_path / "boatyard.yml").write_text(
         yaml.safe_dump(payload, default_flow_style=False, sort_keys=False), encoding="utf-8"
     )
@@ -63,6 +63,32 @@ def write_dockerfile(tmp_path: Path, service: str, text: str, top: str = "worklo
     directory = tmp_path / top / service
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "Dockerfile").write_text(text, encoding="utf-8")
+
+
+def write_workload(tmp_path: Path, file_name: str) -> None:
+    score = tmp_path / "stack" / "score"
+    score.mkdir(parents=True, exist_ok=True)
+    document: dict[str, object] = {
+        "metadata": {"name": Path(file_name).stem},
+        "containers": {},
+    }
+    (score / file_name).write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+
+
+def write_dockerfile_workload(tmp_path: Path, file_name: str) -> None:
+    # A workload whose single container declares the dockerfile of its own stem
+    stem = Path(file_name).stem
+    write_dockerfile(tmp_path, stem, "ARG TOOLS_IMAGE\nFROM ${TOOLS_IMAGE}\n")
+    score = tmp_path / "stack" / "score"
+    score.mkdir(parents=True, exist_ok=True)
+    document: dict[str, object] = {
+        "metadata": {
+            "name": stem,
+            "annotations": {"outernet.internal/dockerfile": f"{stem}=workloads/{stem}/Dockerfile"},
+        },
+        "containers": {stem: {}},
+    }
+    (score / file_name).write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
 
 
 def test_load_missing_file_raises_file_not_found(tmp_path: Path) -> None:
@@ -198,45 +224,217 @@ class TestWorkloadReferences:
 
 
 class TestVariants:
-    def test_declared_axes_load(self, tmp_path: Path) -> None:
-        write_config(tmp_path, {"requires": ">=0.1", "variants": {"TORCH_DEVICE": ["cuda", "rocm"]}})
+    def _write_gpu_tree(self, tmp_path: Path, *, with_axis: bool = True) -> None:
+        # gpu FROMs the local neural-networks-base (which declares the TORCH_DEVICE axis)
+        # when with_axis is on, and a remote base directly when off
+        write_dockerfile(
+            tmp_path,
+            "gpu",
+            "ARG NEURAL_NETWORKS_BASE\nFROM ${NEURAL_NETWORKS_BASE}\n"
+            if with_axis
+            else "ARG TOOLS_IMAGE\nFROM ${TOOLS_IMAGE}\n",
+        )
+        if with_axis:
+            write_dockerfile(
+                tmp_path, "neural-networks-base", "ARG TOOLS_IMAGE\nARG TORCH_DEVICE\nFROM ${TOOLS_IMAGE}\n"
+            )
+        score = tmp_path / "stack" / "score"
+        score.mkdir(parents=True, exist_ok=True)
+        (score / "gpu.yaml").write_text(
+            "metadata:\n"
+            "  name: gpu\n"
+            "  annotations:\n"
+            "    outernet.internal/dockerfile: gpu=workloads/gpu/Dockerfile\n"
+            "containers:\n"
+            "  gpu: {}\n",
+            encoding="utf-8",
+        )
+
+    def _write_group_config(
+        self,
+        tmp_path: Path,
+        services: dict[str, Any],
+        *,
+        built_base: dict[str, Any] | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        self._write_gpu_tree(tmp_path)
+        payload: dict[str, Any] = {
+            "requires": ">=0.1",
+            "repository": "ghcr.io/example/repo",
+            "platforms": ["linux/amd64"],
+            "base_images": {
+                "TOOLS_IMAGE": "docker.io/library/tools:1",
+                "NEURAL_NETWORKS_BASE": built_base
+                or {
+                    "dockerfile": "workloads/neural-networks-base/Dockerfile",
+                    "axis": {"TORCH_DEVICE": ["cuda", "rocm"]},
+                },
+            },
+            "services": services,
+        }
+        payload.update(extra or {})
+        write_config(tmp_path, payload)
+
+    def test_a_variant_group_derives_its_options_from_the_image_closure(self, tmp_path: Path) -> None:
+        self._write_group_config(tmp_path, {"gpu": {"workloads": ["gpu.yaml"]}})
 
         config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None
-        assert config.variants == {"TORCH_DEVICE": ["cuda", "rocm"]}
+        group = config.services["gpu"]
+        assert isinstance(group, ServiceGroup)
+        assert {name: option.vars for name, option in group.options.items()} == {
+            "cuda": {"TORCH_DEVICE": "cuda"},
+            "rocm": {"TORCH_DEVICE": "rocm"},
+        }
+        assert all(option.workloads == ["gpu.yaml"] for option in group.options.values())
+        assert config.variant_axes == {"TORCH_DEVICE": ["cuda", "rocm"]}
 
-    def test_lowercase_axis_name_rejected(self, tmp_path: Path) -> None:
-        write_config(tmp_path, {"requires": ">=0.1", "variants": {"torch_device": ["cuda"]}})
-
-        with pytest.raises(ValidationError, match="ALL_CAPS env name"):
-            ConfigFile.load(tmp_path / "boatyard.yml")
-
-    def test_duplicate_values_rejected(self, tmp_path: Path) -> None:
-        write_config(tmp_path, {"requires": ">=0.1", "variants": {"TORCH_DEVICE": ["cuda", "cuda"]}})
-
-        with pytest.raises(ValidationError, match="declared twice"):
-            ConfigFile.load(tmp_path / "boatyard.yml")
-
-    def test_uppercase_value_rejected(self, tmp_path: Path) -> None:
-        write_config(tmp_path, {"requires": ">=0.1", "variants": {"TORCH_DEVICE": ["CUDA"]}})
-
-        with pytest.raises(ValidationError, match="bare lowercase spelling"):
-            ConfigFile.load(tmp_path / "boatyard.yml")
-
-    def test_declared_axes_reach_the_derived_services(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "localizer", "ARG PY_IMAGE\nARG TORCH_DEVICE\nFROM ${PY_IMAGE}\n")
+    def test_a_variant_group_whose_closure_declares_no_axis_refuses(self, tmp_path: Path) -> None:
+        self._write_gpu_tree(tmp_path, with_axis=False)
         write_config(
             tmp_path,
-            {"requires": ">=0.1", "repository": "ghcr.io/example/repo", "variants": {"TORCH_DEVICE": ["cuda", "rocm"]}},
+            {
+                "requires": ">=0.1",
+                "repository": "ghcr.io/example/repo",
+                "platforms": ["linux/amd64"],
+                "base_images": {"TOOLS_IMAGE": "docker.io/library/tools:1"},
+                "services": {"gpu": {"workloads": ["gpu.yaml"]}},
+            },
+        )
+
+        with pytest.raises(ValueError, match=r"services\.gpu: the image closure.*declares no axis"):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
+    def test_a_variant_group_declaring_two_axes_refuses(self, tmp_path: Path) -> None:
+        write_dockerfile(tmp_path, "gpu", "ARG NEURAL_NETWORKS_BASE\nFROM ${NEURAL_NETWORKS_BASE}\n")
+        write_dockerfile(tmp_path, "neural-networks-base", "ARG TOOLS_IMAGE\nARG TORCH_DEVICE\nFROM ${TOOLS_IMAGE}\n")
+        write_dockerfile(tmp_path, "accel", "ARG ACCEL_BASE\nFROM ${ACCEL_BASE}\n")
+        write_dockerfile(tmp_path, "accel-base", "ARG TOOLS_IMAGE\nARG ACCEL_TYPE\nFROM ${TOOLS_IMAGE}\n")
+        score = tmp_path / "stack" / "score"
+        score.mkdir(parents=True, exist_ok=True)
+        for stem in ("gpu", "accel"):
+            (score / f"{stem}.yaml").write_text(
+                "metadata:\n"
+                f"  name: {stem}\n"
+                "  annotations:\n"
+                f"    outernet.internal/dockerfile: {stem}=workloads/{stem}/Dockerfile\n"
+                "containers:\n"
+                f"  {stem}: {{}}\n",
+                encoding="utf-8",
+            )
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "repository": "ghcr.io/example/repo",
+                "platforms": ["linux/amd64"],
+                "base_images": {
+                    "TOOLS_IMAGE": "docker.io/library/tools:1",
+                    "NEURAL_NETWORKS_BASE": {
+                        "dockerfile": "workloads/neural-networks-base/Dockerfile",
+                        "axis": {"TORCH_DEVICE": ["cuda", "rocm"]},
+                    },
+                    "ACCEL_BASE": {
+                        "dockerfile": "workloads/accel-base/Dockerfile",
+                        "axis": {"ACCEL_TYPE": ["fpga"]},
+                    },
+                },
+                "services": {"gpu": {"workloads": ["gpu.yaml", "accel.yaml"]}},
+            },
+        )
+
+        with pytest.raises(ValueError, match=r"services\.gpu: the image closure.*more than one axis"):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
+    def test_a_fan_group_and_an_authored_group_declared_together_refuse(self, tmp_path: Path) -> None:
+        self._write_group_config(
+            tmp_path,
+            {"gpu": {"options": {"cuda": {"workloads": ["gpu.yaml"]}}, "workloads": ["gpu.yaml"]}},
+        )
+
+        with pytest.raises(ValidationError, match="a group declares exactly one of options: or workloads:"):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
+    def test_a_derived_option_name_colliding_with_a_member_refuses(self, tmp_path: Path) -> None:
+        self._write_group_config(
+            tmp_path,
+            {
+                "gpu": {"workloads": ["gpu.yaml"]},
+                "gpu-cuda": {"ref": "oci://ghcr.io/org/repo/gpu-cuda:0.1.0"},
+            },
+        )
+
+        with pytest.raises(
+            ValueError,
+            match=r"services\.gpu-cuda: gpu-cuda is already claimed at services\.gpu\.options\.cuda",
+        ):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
+    def test_an_option_var_naming_an_undeclared_variant_refuses(self, tmp_path: Path) -> None:
+        self._write_group_config(
+            tmp_path,
+            {
+                "gpu": {"workloads": ["gpu.yaml"]},
+                "edge": {"options": {"fast": {"workloads": ["gpu.yaml"], "vars": {"TORCH_DEVICE": "metal"}}}},
+            },
+        )
+
+        with pytest.raises(
+            ValueError,
+            match=r"services\.edge\.options\.fast\.vars: TORCH_DEVICE='metal' names no declared variant",
+        ):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
+    def test_k8s_vars_naming_an_undeclared_variant_refuses(self, tmp_path: Path) -> None:
+        self._write_group_config(
+            tmp_path,
+            {"gpu": {"workloads": ["gpu.yaml"]}},
+            extra={"k8s": {"workloads": ["gpu.yaml"], "vars": {"TORCH_DEVICE": "metal"}}},
+        )
+
+        with pytest.raises(ValueError, match=r"k8s\.vars: TORCH_DEVICE='metal' names no declared variant"):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
+    def test_declared_axes_reach_the_derived_images(self, tmp_path: Path) -> None:
+        write_dockerfile(tmp_path, "neural-networks-base", "ARG TOOLS_IMAGE\nARG TORCH_DEVICE\nFROM ${TOOLS_IMAGE}\n")
+        write_dockerfile(tmp_path, "localizer", "ARG NEURAL_NETWORKS_BASE\nFROM ${NEURAL_NETWORKS_BASE}\n")
+        score = tmp_path / "stack" / "score"
+        score.mkdir(parents=True, exist_ok=True)
+        (score / "localizer.yaml").write_text(
+            "metadata:\n"
+            "  name: localizer\n"
+            "  annotations:\n"
+            "    outernet.internal/dockerfile: localizer=workloads/localizer/Dockerfile\n"
+            "containers:\n"
+            "  localizer: {}\n",
+            encoding="utf-8",
+        )
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "repository": "ghcr.io/org/repo",
+                "platforms": ["linux/amd64"],
+                "k8s": {"workloads": ["localizer.yaml"]},
+                "base_images": {
+                    "TOOLS_IMAGE": "docker.io/library/tools:1",
+                    "NEURAL_NETWORKS_BASE": {
+                        "dockerfile": "workloads/neural-networks-base/Dockerfile",
+                        "axis": {"TORCH_DEVICE": ["cuda", "rocm"]},
+                    },
+                },
+            },
         )
 
         config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None
-        assert config.service_builds["localizer"].axis == "TORCH_DEVICE"
-        assert config.service_builds["localizer"].variants == ["cuda", "rocm"]
-        assert [target for target, _variant in config.service_builds["localizer"].target_variants] == [
+        assert config.images["neural-networks-base"].axis == "TORCH_DEVICE"
+        assert config.images["localizer"].axis == "TORCH_DEVICE"
+        assert config.images["localizer"].variants == ["cuda", "rocm"]
+        assert [target for target, _variant in config.images["localizer"].target_variants] == [
             "localizer-cuda",
             "localizer-rocm",
         ]
@@ -263,21 +461,38 @@ class TestBaseImages:
         }
 
     def test_bare_path_rejected(self, tmp_path: Path) -> None:
-        write_config(tmp_path, {"requires": ">=0.1", "base_images": {"ALPINE_IMAGE": "docker.io/library/alpine"}})
+        write_config(tmp_path, {"requires": ">=0.1", "base_images": {"LOKI_IMAGE": "docker.io/grafana/loki"}})
 
-        with pytest.raises(ValidationError, match="path:tag"):
+        with pytest.raises(
+            ValidationError, match=r"LOKI_IMAGE: 'docker\.io/grafana/loki' must carry a tag or a digest"
+        ):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_env_slot_rejected(self, tmp_path: Path) -> None:
-        write_config(tmp_path, {"requires": ">=0.1", "base_images": {"ALPINE_IMAGE": "${ALPINE_REF}"}})
+        write_config(tmp_path, {"requires": ">=0.1", "base_images": {"LOKI_IMAGE": "${LOKI_REF}"}})
 
-        with pytest.raises(ValidationError, match="path:tag"):
+        with pytest.raises(ValueError, match=r"boatyard\.yml carries no \$\{\.\.\.\} spelling"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_lowercase_key_rejected(self, tmp_path: Path) -> None:
         write_config(tmp_path, {"requires": ">=0.1", "base_images": {"uv_image": "ghcr.io/astral-sh/uv:0.12.15"}})
 
         with pytest.raises(ValidationError, match="ALL_CAPS"):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
+    def test_mirror_prefixed_declaration_rejected(self, tmp_path: Path) -> None:
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "platforms": ["linux/amd64"],
+                "base_images": {"UV_IMAGE": "ghcr.io/outernet-foundation/mirror/ghcr.io/astral-sh/uv:0.12.15"},
+            },
+        )
+
+        with pytest.raises(
+            ValidationError, match=r"must not carry the mirror prefix .* \(declarations are upstream-native\)"
+        ):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
 
@@ -423,7 +638,7 @@ class TestBaseImageTemplates:
         )
         write_lock(tmp_path)
 
-        with pytest.raises(ValueError, match=r"\.python-version: the file is absent"):
+        with pytest.raises(ValueError, match=r"the \{python\} template requires \.python-version"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_empty_python_version_file_refuses(self, tmp_path: Path) -> None:
@@ -441,7 +656,7 @@ class TestBaseImageTemplates:
         )
         write_lock(tmp_path)
 
-        with pytest.raises(ValueError, match=r"\.python-version: the file is empty"):
+        with pytest.raises(ValueError, match=r"\.python-version names no version for the \{python\} template"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_unknown_template_key_refuses_listing_the_vocabulary(self, tmp_path: Path) -> None:
@@ -455,14 +670,13 @@ class TestBaseImageTemplates:
         )
         write_lock(tmp_path)
 
-        with pytest.raises(
-            ValueError, match=r"template key \{golang\} is unknown; the toolchain pins are \{uv\}, \{python\}"
-        ):
+        with pytest.raises(ValueError, match=r"template key \{golang\} is neither \{uv\} nor \{python\}"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
 
 class TestCharts:
     def test_tag_form_loads(self, tmp_path: Path) -> None:
+        write_workload(tmp_path, "api.yaml")
         write_config(
             tmp_path,
             {
@@ -509,6 +723,24 @@ class TestCharts:
         with pytest.raises(ValidationError, match="upstream-native OCI"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
+    def test_mirror_prefixed_declaration_rejected(self, tmp_path: Path) -> None:
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "k8s": {
+                    "charts": {
+                        "loki": "oci://ghcr.io/outernet-foundation/mirror/ghcr.io/grafana/helm-charts/loki:7.3.0"
+                    }
+                },
+            },
+        )
+
+        with pytest.raises(
+            ValidationError, match=r"must not carry the mirror prefix .* \(declarations are upstream-native\)"
+        ):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
     def test_env_slot_rejected(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,
@@ -518,7 +750,7 @@ class TestCharts:
             },
         )
 
-        with pytest.raises(ValidationError, match="tag or a digest"):
+        with pytest.raises(ValueError, match=r"boatyard\.yml carries no \$\{\.\.\.\} spelling"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_missing_values_file_refuses_at_load(self, tmp_path: Path) -> None:
@@ -528,12 +760,13 @@ class TestCharts:
         )
         write_lock(tmp_path)
 
-        with pytest.raises(ValueError, match=r"values/loki\.yaml.*values file is required"):
+        with pytest.raises(ValueError, match=r"the chart loki requires .*values/loki\.yaml"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
 
 class TestK8sSection:
     def test_workloads_vars_and_charts_load(self, tmp_path: Path) -> None:
+        write_workload(tmp_path, "api.yaml")
         write_config(
             tmp_path,
             {
@@ -549,7 +782,10 @@ class TestK8sSection:
         assert config.k8s.vars == {"GPU_VARIANT": "cuda"}
 
     def test_null_section_reads_as_absent(self, tmp_path: Path) -> None:
-        (tmp_path / "boatyard.yml").write_text('requires: ">=0.1"\nproject_name: example\nk8s:\n', encoding="utf-8")
+        (tmp_path / "boatyard.yml").write_text(
+            'requires: ">=0.1"\nproject_name: example\nservices:\n  ext:\n    ref: oci://ghcr.io/org/ext:0.1.0\nk8s:\n',
+            encoding="utf-8",
+        )
 
         config = ConfigFile.load(tmp_path / "boatyard.yml")
 
@@ -567,17 +803,49 @@ class TestK8sSection:
         with pytest.raises(ValidationError, match="must declare workloads or charts"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
+    def test_empty_vars_values_refuse(self, tmp_path: Path) -> None:
+        write_config(tmp_path, {"requires": ">=0.1", "k8s": {"workloads": ["api.yaml"], "vars": {"FOO": ""}}})
+
+        with pytest.raises(ValidationError, match="vars values must be non-empty: FOO"):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
 
 class TestServices:
+    def test_services_is_required(self, tmp_path: Path) -> None:
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "project_name": "example",
+                "services": {},
+            },
+        )
+
+        with pytest.raises(ValueError, match="services is required"):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
+    def test_empty_vars_values_refuse(self, tmp_path: Path) -> None:
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "project_name": "example",
+                "services": {"core": {"options": {"main": {"workloads": ["api.yaml"], "vars": {"FOO": ""}}}}},
+            },
+        )
+
+        with pytest.raises(ValidationError, match="vars values must be non-empty: FOO"):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
     def test_groups_options_and_bare_entries_load(self, tmp_path: Path) -> None:
+        write_workload(tmp_path, "api.yaml")
         write_config(
             tmp_path,
             {
                 "requires": ">=0.1",
                 "repository": "ghcr.io/org/repo",
                 "project_name": "example",
-                "gateway": "${GATEWAY_PORT:?err}",
-                "base_images": EDGE_BASE_IMAGES,
+                "gateway": 58080,
                 "platforms": EDGE_PLATFORMS,
                 "services": {
                     "auth": {
@@ -601,8 +869,8 @@ class TestServices:
                         "ports": [
                             {
                                 "service": "livekit",
-                                "published": "${LIVEKIT_SIGNALING_PORT:?err}",
-                                "target": "${LIVEKIT_SIGNALING_PORT:?err}",
+                                "published": 6178,
+                                "target": 6178,
                                 "protocol": "tcp",
                             }
                         ],
@@ -631,8 +899,12 @@ class TestServices:
                 "project_name": "example",
                 "services": {
                     "both": {
-                        "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
-                        "workloads": ["api.yaml"],
+                        "options": {
+                            "mixed": {
+                                "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
+                                "workloads": ["api.yaml"],
+                            }
+                        }
                     }
                 },
             },
@@ -702,7 +974,7 @@ class TestServices:
             },
         )
 
-        with pytest.raises(ValidationError, match=r"pins a digest.*the lock records the digest"):
+        with pytest.raises(ValidationError, match=r"ref .* must carry a published tag, not a digest"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_a_latest_ref_refuses(self, tmp_path: Path) -> None:
@@ -715,7 +987,7 @@ class TestServices:
             },
         )
 
-        with pytest.raises(ValidationError, match="'latest' is mutable and never a pin"):
+        with pytest.raises(ValidationError, match="must not carry the mutable tag 'latest'"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     @pytest.mark.parametrize("tag", [">=0.3.1", "0.3.x", "0.3.X", "0.3.*", "~0.3", "^0.3"])
@@ -729,7 +1001,7 @@ class TestServices:
             },
         )
 
-        with pytest.raises(ValidationError, match="is a range; exact tags only"):
+        with pytest.raises(ValidationError, match="must be an exact tag, not a range"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_a_tagless_ref_refuses(self, tmp_path: Path) -> None:
@@ -775,7 +1047,7 @@ class TestServices:
         assert config is not None
 
     def test_an_empty_workloads_list_refuses(self) -> None:
-        with pytest.raises(ValidationError, match="ref: or workloads: is required"):
+        with pytest.raises(ValidationError, match="a group declares exactly one of options: or workloads:"):
             ConfigFile.model_validate({
                 "requires": ">=0.1",
                 "repository": "ghcr.io/org/repo",
@@ -810,7 +1082,6 @@ class TestServices:
                 "requires": ">=0.1",
                 "project_name": "example",
                 "gateway": 8080,
-                "base_images": EDGE_BASE_IMAGES,
                 "platforms": EDGE_PLATFORMS,
                 "services": {
                     "livekit": {
@@ -830,10 +1101,13 @@ class TestQualifiedVocabulary:
             "requires": ">=0.1",
             "repository": "ghcr.io/org/repo",
             "project_name": "example",
+            "platforms": ["linux/amd64"],
             "services": services,
         }
 
     def test_the_same_option_name_in_two_groups_loads_qualified(self, tmp_path: Path) -> None:
+        write_workload(tmp_path, "api.yaml")
+        write_workload(tmp_path, "edge.yaml")
         write_config(
             tmp_path,
             self._config({
@@ -860,6 +1134,7 @@ class TestQualifiedVocabulary:
         assert ConfigFile.load(tmp_path / "boatyard.yml") is not None
 
     def test_two_sites_producing_one_qualified_spelling_refuse(self, tmp_path: Path) -> None:
+        write_workload(tmp_path, "api.yaml")
         write_config(
             tmp_path,
             self._config({
@@ -868,10 +1143,11 @@ class TestQualifiedVocabulary:
             }),
         )
 
-        with pytest.raises(ValidationError, match=r"a-b-c is already claimed at"):
+        with pytest.raises(ValueError, match=r"a-b-c is already claimed at"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_a_bare_entry_matching_a_qualified_spelling_refuses(self, tmp_path: Path) -> None:
+        write_workload(tmp_path, "api.yaml")
         write_config(
             tmp_path,
             self._config({
@@ -880,7 +1156,7 @@ class TestQualifiedVocabulary:
             }),
         )
 
-        with pytest.raises(ValidationError, match=r"tunnel-ngrok is already claimed at"):
+        with pytest.raises(ValueError, match=r"tunnel-ngrok is already claimed at"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
 
@@ -890,7 +1166,6 @@ class TestAuthGroup:
             "requires": ">=0.1",
             "project_name": "example",
             "gateway": 8080,
-            "base_images": EDGE_BASE_IMAGES,
             "platforms": EDGE_PLATFORMS,
             "services": {"auth": {"options": options}},
         }
@@ -944,7 +1219,7 @@ class TestAuthGroup:
             },
         )
 
-        with pytest.raises(ValidationError, match="auth is a reserved group name"):
+        with pytest.raises(ValidationError, match=r"services\.auth must be a group \(the name is reserved\)"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
 
@@ -954,7 +1229,6 @@ class TestRoutes:
             "requires": ">=0.1",
             "project_name": "example",
             "gateway": 8080,
-            "base_images": EDGE_BASE_IMAGES,
             "platforms": EDGE_PLATFORMS,
             "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG, "routes": routes}},
         }
@@ -987,7 +1261,7 @@ class TestRoutes:
             },
         )
 
-        with pytest.raises(ValidationError, match="edge-wide unique"):
+        with pytest.raises(ValidationError, match=r"route path /x/\* is already declared at services\.one\.options\.a"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     @pytest.mark.parametrize(
@@ -1014,7 +1288,7 @@ class TestRoutes:
         assert config is not None
 
     def test_an_upstream_without_a_literal_port_refuses(self, tmp_path: Path) -> None:
-        write_config(tmp_path, self._routed([{"path": "/*", "upstream": "api:${PORT}"}]))
+        write_config(tmp_path, self._routed([{"path": "/*", "upstream": "api:eight"}]))
 
         with pytest.raises(ValidationError, match="a service name and a literal port"):
             ConfigFile.load(tmp_path / "boatyard.yml")
@@ -1038,24 +1312,42 @@ class TestRoutes:
 
         assert config is not None
 
-
-class TestGatewayKey:
-    def test_a_gateway_without_the_caddy_base_image_refuses(self, tmp_path: Path) -> None:
+    def test_routes_without_a_gateway_refuse(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,
             {
                 "requires": ">=0.1",
                 "project_name": "example",
-                "gateway": 8443,
-                "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG}},
+                "services": {
+                    "livekit": {
+                        "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
+                        "routes": [{"path": "/*", "upstream": "x:1"}],
+                    },
+                },
             },
         )
 
-        with pytest.raises(ValueError, match="CADDY_IMAGE"):
+        with pytest.raises(ValidationError, match="routes require a gateway declaration"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
-    def test_a_routeless_gateway_with_caddy_loads(self, tmp_path: Path) -> None:
-        write_lock(tmp_path, bundles=bundle_entries("livekit"))
+    def test_group_level_routes_without_a_gateway_refuse_before_the_fan(self, tmp_path: Path) -> None:
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "project_name": "example",
+                "repository": "ghcr.io/org/example",
+                "platforms": ["linux/amd64"],
+                "services": {"livekit": {"workloads": ["api.yaml"], "routes": [{"path": "/*", "upstream": "x:1"}]}},
+            },
+        )
+
+        with pytest.raises(ValidationError, match="routes require a gateway declaration"):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
+
+class TestGatewayKey:
+    def test_the_barrier_and_edge_names_refuse_in_base_images(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,
             {
@@ -1063,6 +1355,56 @@ class TestGatewayKey:
                 "project_name": "example",
                 "platforms": ["linux/amd64"],
                 "base_images": {"CADDY_IMAGE": "docker.io/library/caddy:2.8.4-alpine"},
+                "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG}},
+            },
+        )
+
+        with pytest.raises(ValidationError, match="barrier and edge pins are boatyard-owned"):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
+    def test_the_owned_pins_carry_the_tool_pin_shape(self, tmp_path: Path) -> None:
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "project_name": "example",
+                "platforms": ["linux/amd64"],
+                "barrier_image": "docker.io/library/alpine",
+                "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG}},
+            },
+        )
+
+        with pytest.raises(
+            ValidationError, match=r"barrier_image: 'docker\.io/library/alpine' must carry a tag or a digest"
+        ):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
+    def test_a_gateway_owns_the_edge_pin_and_overrides_ship_theirs(self, tmp_path: Path) -> None:
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "project_name": "example",
+                "platforms": ["linux/amd64"],
+                "gateway": 8080,
+                "edge_image": "docker.io/library/caddy:2.9.0",
+                "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG}},
+            },
+        )
+
+        config = ConfigFile.load(tmp_path / "boatyard.yml")
+
+        assert config is not None
+        assert config.owned_images == {"CADDY_IMAGE": "docker.io/library/caddy:2.9.0"}
+
+    def test_a_routeless_gateway_loads(self, tmp_path: Path) -> None:
+        write_lock(tmp_path, bundles=bundle_entries("livekit"))
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "project_name": "example",
+                "platforms": ["linux/amd64"],
                 "gateway": 8080,
                 "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG}},
             },
@@ -1079,7 +1421,6 @@ class TestGatewayKey:
                 "requires": ">=0.1",
                 "project_name": "example",
                 "gateway": 8443,
-                "base_images": EDGE_BASE_IMAGES,
                 "platforms": EDGE_PLATFORMS,
                 "services": {
                     "livekit": {
@@ -1108,7 +1449,7 @@ class TestGatewayKey:
             },
         )
 
-        with pytest.raises(ValidationError, match="env slot; a literal port is an int"):
+        with pytest.raises(ValueError, match=r"boatyard\.yml carries no \$\{\.\.\.\} spelling"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
 
@@ -1119,7 +1460,6 @@ class TestPorts:
             "repository": "ghcr.io/org/repo",
             "project_name": "example",
             "gateway": 8080,
-            "base_images": EDGE_BASE_IMAGES,
             "platforms": EDGE_PLATFORMS,
             "services": services,
         }
@@ -1132,7 +1472,7 @@ class TestPorts:
                     "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
                     "routes": [{"path": "/*", "upstream": "livekit:8000"}],
                     "ports": [
-                        {"service": "livekit", "published": "${PORT:?err}", "target": 6178},
+                        {"service": "livekit", "published": 6178, "target": 6178},
                         {"service": "livekit", "published": 6179, "target": 6179, "protocol": "udp"},
                     ],
                 }
@@ -1145,7 +1485,7 @@ class TestPorts:
         livekit = config.services["livekit"]
         assert isinstance(livekit, ServiceEntry)
         assert [(port.service, port.published, port.target, port.protocol) for port in livekit.ports] == [
-            ("livekit", "${PORT:?err}", 6178, "tcp"),
+            ("livekit", 6178, 6178, "tcp"),
             ("livekit", 6179, 6179, "udp"),
         ]
 
@@ -1216,6 +1556,7 @@ class TestPorts:
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_the_mapping_form_spells_the_owning_service_and_host_ip(self, tmp_path: Path) -> None:
+        write_workload(tmp_path, "api.yaml")
         write_config(
             tmp_path,
             self._ports_config({
@@ -1225,7 +1566,7 @@ class TestPorts:
                         {
                             "service": "api",
                             "host_ip": "127.0.0.1",
-                            "published": "${API_DEBUG_PORT:-5679}",
+                            "published": 5679,
                             "target": 5678,
                         }
                     ],
@@ -1241,7 +1582,7 @@ class TestPorts:
 
         assert config is not None
 
-    def test_a_non_port_non_slot_field_refuses(self, tmp_path: Path) -> None:
+    def test_a_non_integer_port_refuses(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,
             self._ports_config({
@@ -1253,7 +1594,7 @@ class TestPorts:
             }),
         )
 
-        with pytest.raises(ValidationError, match="env slot; a literal port is an int"):
+        with pytest.raises(ValidationError, match="Input should be a valid integer"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_a_digit_string_port_refuses(self, tmp_path: Path) -> None:
@@ -1268,7 +1609,7 @@ class TestPorts:
             }),
         )
 
-        with pytest.raises(ValidationError, match="env slot; a literal port is an int"):
+        with pytest.raises(ValidationError, match="Input should be a valid integer"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
 
@@ -1285,16 +1626,18 @@ class TestRepository:
         with pytest.raises(ValidationError, match="trailing slash"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
-    def test_repository_without_service_builds_loads(self, tmp_path: Path) -> None:
+    def test_repository_without_derived_images_loads(self, tmp_path: Path) -> None:
         # The publish shape for a repo whose whole runtime is its own workload set: no
-        # Dockerfile service builds, repository naming the artifact registry.
+        # Dockerfile image builds, repository naming the artifact registry.
+        write_workload(tmp_path, "rathole-client.yaml")
         write_config(
             tmp_path,
             {
                 "requires": ">=0.1",
                 "repository": "ghcr.io/org/repo",
                 "project_name": "example",
-                "services": {"rathole-client": {"workloads": ["rathole-client.yaml"]}},
+                "platforms": ["linux/amd64"],
+                "services": {"rathole-client": {"options": {"client": {"workloads": ["rathole-client.yaml"]}}}},
             },
         )
         write_lock(tmp_path)
@@ -1302,7 +1645,7 @@ class TestRepository:
         config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None and config.repository == "ghcr.io/org/repo"
-        assert config.service_builds == {}
+        assert config.images == {}
 
 
 class TestPlatforms:
@@ -1391,13 +1734,15 @@ class TestLockPairing:
 
         assert [name for name, _declared, _entry in config.remote_declared_entries()] == ["livekit"]
 
-    def test_no_declarations_need_no_lock(self, tmp_path: Path) -> None:
+    def test_a_local_repo_loads_without_a_lock_file(self, tmp_path: Path) -> None:
+        write_workload(tmp_path, "api.yaml")
         write_config(
             tmp_path,
             {
                 "requires": ">=0.1",
                 "repository": "ghcr.io/org/repo",
-                "services": {"core": {"workloads": ["api.yaml"]}},
+                "platforms": ["linux/amd64"],
+                "services": {"core": {"options": {"main": {"workloads": ["api.yaml"]}}}},
                 "project_name": "example",
             },
         )
@@ -1405,22 +1750,143 @@ class TestLockPairing:
         assert ConfigFile.load(tmp_path / "boatyard.yml") is not None
 
 
-class TestServiceDerivation:
-    def test_repository_required_when_services_exist(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "api", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n")
-        write_config(tmp_path, {"requires": ">=0.1"})
+class TestImageDerivation:
+    def test_repository_required_when_images_exist(self, tmp_path: Path) -> None:
+        write_dockerfile_workload(tmp_path, "api.yaml")
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "k8s": {"workloads": ["api.yaml"]},
+                "platforms": ["linux/amd64"],
+                "base_images": {"TOOLS_IMAGE": "docker.io/library/tools:1"},
+            },
+        )
 
         with pytest.raises(ValueError, match="repository is required"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
-    def test_derived_services_attach_to_the_loaded_config(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "api", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n")
-        write_config(tmp_path, {"requires": ">=0.1", "repository": "ghcr.io/org/repo"})
+    def test_derived_images_attach_to_the_loaded_config(self, tmp_path: Path) -> None:
+        write_dockerfile_workload(tmp_path, "api.yaml")
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "repository": "ghcr.io/org/repo",
+                "k8s": {"workloads": ["api.yaml"]},
+                "platforms": ["linux/amd64"],
+                "base_images": {"TOOLS_IMAGE": "docker.io/library/tools:1"},
+            },
+        )
 
         config = ConfigFile.load(tmp_path / "boatyard.yml")
 
         assert config is not None
-        assert sorted(config.service_builds) == ["api"]
+        assert sorted(config.images) == ["api"]
+
+    def test_a_lock_annotation_naming_no_remote_base_images_key_refuses(self, tmp_path: Path) -> None:
+        score = tmp_path / "stack" / "score"
+        score.mkdir(parents=True, exist_ok=True)
+        (score / "keycloak.yaml").write_text(
+            "metadata:\n"
+            "  name: keycloak\n"
+            "  annotations:\n"
+            "    outernet.internal/lock: keycloak=KEYCLOAK_IMAGE\n"
+            "containers:\n"
+            "  keycloak: {}\n",
+            encoding="utf-8",
+        )
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "repository": "ghcr.io/org/repo",
+                "platforms": ["linux/amd64"],
+                "base_images": {
+                    "TOOLS_IMAGE": "docker.io/library/tools:1",
+                    "NEURAL_NETWORKS_BASE": {"dockerfile": "workloads/does-not-exist/Dockerfile"},
+                },
+                "services": {"identity": {"workloads": ["keycloak.yaml"]}},
+            },
+        )
+
+        with pytest.raises(
+            ValueError, match=r"keycloak\.yaml container 'keycloak': 'KEYCLOAK_IMAGE' names no remote base_images"
+        ):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
+    def test_a_lock_annotation_naming_a_built_entry_refuses(self, tmp_path: Path) -> None:
+        write_dockerfile(tmp_path, "neural-networks-base", "ARG TOOLS_IMAGE\nARG TORCH_DEVICE\nFROM ${TOOLS_IMAGE}\n")
+        score = tmp_path / "stack" / "score"
+        score.mkdir(parents=True, exist_ok=True)
+        (score / "gpu.yaml").write_text(
+            "metadata:\n"
+            "  name: gpu\n"
+            "  annotations:\n"
+            "    outernet.internal/lock: gpu=NEURAL_NETWORKS_BASE\n"
+            "containers:\n"
+            "  gpu: {}\n",
+            encoding="utf-8",
+        )
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "repository": "ghcr.io/org/repo",
+                "platforms": ["linux/amd64"],
+                "base_images": {
+                    "TOOLS_IMAGE": "docker.io/library/tools:1",
+                    "NEURAL_NETWORKS_BASE": {
+                        "dockerfile": "workloads/neural-networks-base/Dockerfile",
+                        "axis": {"TORCH_DEVICE": ["cuda"]},
+                    },
+                },
+                "services": {"core": {"workloads": ["gpu.yaml"]}},
+            },
+        )
+        write_dockerfile(tmp_path, "localizer", "ARG NEURAL_NETWORKS_BASE\nFROM ${NEURAL_NETWORKS_BASE}\n")
+
+        with pytest.raises(
+            ValueError, match=r"gpu\.yaml container 'gpu': 'NEURAL_NETWORKS_BASE' names no remote base_images"
+        ):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
+
+class TestBareServiceNameClaims:
+    def _local_config(self, tmp_path: Path, workloads: list[str]) -> None:
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "repository": "ghcr.io/org/repo",
+                "platforms": ["linux/amd64"],
+                "services": {"core": {"workloads": workloads}},
+            },
+        )
+
+    def test_a_missing_workload_file_refuses(self, tmp_path: Path) -> None:
+        self._local_config(tmp_path, ["api.yaml"])
+
+        with pytest.raises(ValueError, match="the workload file is required"):
+            ConfigFile.load(tmp_path / "boatyard.yml")
+
+    def test_the_same_container_name_across_entries_loads(self, tmp_path: Path) -> None:
+        write_workload(tmp_path, "alpha.yaml")
+        write_workload(tmp_path, "beta.yaml")
+        write_config(
+            tmp_path,
+            {
+                "requires": ">=0.1",
+                "repository": "ghcr.io/org/repo",
+                "platforms": ["linux/amd64"],
+                "services": {
+                    "one": {"options": {"alpha": {"workloads": ["alpha.yaml"]}}},
+                    "two": {"options": {"beta": {"workloads": ["beta.yaml"]}}},
+                },
+            },
+        )
+
+        assert ConfigFile.load(tmp_path / "boatyard.yml") is not None
 
 
 def test_direct_model_construction_is_valid_for_tests(tmp_path: Path) -> None:
@@ -1429,17 +1895,20 @@ def test_direct_model_construction_is_valid_for_tests(tmp_path: Path) -> None:
         "repository": "ghcr.io/org/repo",
         "project_name": "example",
         "gateway": 8080,
-        "services": {"core": {"workloads": ["api.yaml"]}},
+        "platforms": ["linux/amd64"],
+        "services": {"core": {"options": {"main": {"workloads": ["api.yaml"]}}}},
     })
     config.root = tmp_path
 
-    core = config.services["core"]
-    assert isinstance(core, ServiceEntry)
-    assert not core.remote
-    assert core.workloads == ["api.yaml"]
+    group = config.services["core"]
+    assert isinstance(group, ServiceGroup)
+    assert not group.options["main"].remote
+    assert group.options["main"].workloads == ["api.yaml"]
 
 
 def test_local_service_entries_flatten_in_declaration_order_skipping_refs(tmp_path: Path) -> None:
+    write_workload(tmp_path, "api.yaml")
+    write_workload(tmp_path, "solo.yaml")
     write_lock(tmp_path, bundles=bundle_entries("identity-keycloak", "livekit"))
     write_config(
         tmp_path,
@@ -1447,6 +1916,7 @@ def test_local_service_entries_flatten_in_declaration_order_skipping_refs(tmp_pa
             "requires": ">=0.1",
             "repository": "ghcr.io/org/repo",
             "project_name": "example",
+            "platforms": ["linux/amd64"],
             "services": {
                 "identity": {"options": {"keycloak": {"ref": "oci://ghcr.io/org/repo/keycloak:0.3.1"}}},
                 "placeframe": {
@@ -1456,7 +1926,7 @@ def test_local_service_entries_flatten_in_declaration_order_skipping_refs(tmp_pa
                     },
                 },
                 "livekit": {"ref": "oci://ghcr.io/org/repo/livekit:" + SHA_TAG},
-                "solo": {"workloads": ["solo.yaml"]},
+                "solo": {"options": {"main": {"workloads": ["solo.yaml"]}}},
             },
         },
     )
@@ -1467,7 +1937,7 @@ def test_local_service_entries_flatten_in_declaration_order_skipping_refs(tmp_pa
     assert [(name, entry.workloads) for name, entry in config.local_service_entries()] == [
         ("placeframe-cuda", ["api.yaml"]),
         ("placeframe-rocm", ["api.yaml"]),
-        ("solo", ["solo.yaml"]),
+        ("solo-main", ["solo.yaml"]),
     ]
 
 
@@ -1581,5 +2051,5 @@ class TestConfigLockParse:
     def test_require_refuses_naming_the_lock_verb(self, tmp_path: Path) -> None:
         lock = LockFile.model_validate({})
 
-        with pytest.raises(ValueError, match=r"lacks the CADDY_IMAGE entry.*run boatyard lock"):
+        with pytest.raises(ValueError, match=r"routes are declared: boatyard\.lock\.yml lacks the CADDY_IMAGE entry"):
             lock.require("CADDY_IMAGE", "routes are declared")

@@ -1,6 +1,6 @@
 packages:
   boatyard:
     path: .
-    major_minor: "0.6"
+    major_minor: "0.7"
     registry: pypi
     identity: boatyard

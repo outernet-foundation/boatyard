@@ -9,12 +9,11 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from boatyard.cli import app
-from boatyard.config import config as config_module
-from boatyard.config.config import PortOrSlot
+from boatyard.models import config_file as config_file_module
 from boatyard import lock as lock_module
-from boatyard import dockerfiles as dockerfiles_module
 from boatyard.verbs.up import render_env_entries
-from boatyard.config.lock import LOCK_PATH, LockFile
+from boatyard.models.lock_file import LOCK_PATH, LockFile
+from boatyard.models.image import Image
 
 DIGEST_A = "sha256:" + "a" * 64
 DIGEST_B = "sha256:" + "b" * 64
@@ -32,8 +31,8 @@ LOCK_BASE_IMAGES = {
 runner = CliRunner()
 
 
-def _no_service_shas(_root: Path, _service_builds: object) -> dict[str, str]:
-    return {}
+def _refuse_the_tree_walk(_self: Image, _root: Path) -> str:
+    raise AssertionError("the lock verb never walks the source tree")
 
 
 class DigestRecorder:
@@ -58,7 +57,7 @@ class IndexRegistry:
 
 
 class BundleRegistry:
-    # Answers `crane manifest` with an artifact whose compose files ride as inline base64 layers.
+    # Answers `crane manifest` with an artifact whose compose files land as inline base64 layers.
     def __init__(self, compose_texts: list[str]) -> None:
         self.inspected: list[str] = []
         self.compose_texts = compose_texts
@@ -112,16 +111,23 @@ def _structured_entry(reference: str, *, index_digest: str, platforms: dict[str,
     }
 
 
+BARRIER_MIRROR_BASE = f"{MIRROR_PREFIX}/docker.io/library/alpine:3.20"
+
+
+def _barrier_entry(platforms: list[str]) -> dict[str, object]:
+    return _structured_entry(BARRIER_MIRROR_BASE, index_digest=DIGEST_A, platforms=dict.fromkeys(platforms, DIGEST_B))
+
+
 def _write_repo(
     root: Path,
     *,
-    base_images: dict[str, str] | None = None,
+    base_images: dict[str, Any] | None = None,
     charts: dict[str, str] | None = None,
     platforms: list[str] | None = None,
     ref_services: dict[str, Any] | None = None,
-    gateway: PortOrSlot | None = None,
+    gateway: int | None = None,
 ) -> None:
-    payload: dict[str, Any] = {"requires": ">=0", "project_name": "demo"}
+    payload: dict[str, Any] = {"requires": ">=0", "project_name": "demo", "repository": "ghcr.io/org/demo"}
     if gateway is not None:
         payload["gateway"] = gateway
     if base_images:
@@ -133,11 +139,20 @@ def _write_repo(
             values = root / "stack" / "score" / "k8s" / "values" / f"{chart}.yaml"
             values.parent.mkdir(parents=True, exist_ok=True)
             values.write_text("chart: {}\n", encoding="utf-8")
+    caller_refs = ref_services is not None and bool(ref_services)
+    if ref_services is None:
+        ref_services = {"core": {"options": {"main": {"workloads": ["api.yaml"]}}}}
+        payload["platforms"] = platforms or ["linux/amd64"]
+    elif platforms:
+        payload["platforms"] = platforms
     if ref_services:
         payload["project_name"] = "demo"
         payload["services"] = ref_services
+        score = root / "stack" / "score"
+        score.mkdir(parents=True, exist_ok=True)
+        (score / "api.yaml").write_text("metadata:\n  name: api\ncontainers: {}\n", encoding="utf-8")
     (root / "boatyard.yml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-    if (base_images or charts or ref_services) and not (root / LOCK_PATH).exists():
+    if (base_images or charts or caller_refs) and not (root / LOCK_PATH).exists():
         (root / LOCK_PATH).write_text("", encoding="utf-8")
 
 
@@ -150,16 +165,23 @@ def _invoke(
     tmp_path: Path,
     arguments: list[str],
     *,
-    base_images: dict[str, str] | None = None,
+    base_images: dict[str, Any] | None = None,
     charts: dict[str, str] | None = None,
     platforms: list[str] | None = None,
+    ref_services: dict[str, Any] | None = None,
 ) -> Any:
     monkeypatch.setattr(lock_module, "bash_output", IndexRegistry().bash_output)
     monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
     monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
-    monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+    monkeypatch.setattr(Image, "compute_sha", _refuse_the_tree_walk)
     monkeypatch.chdir(tmp_path)
-    _write_repo(tmp_path, base_images=base_images, charts=charts, platforms=platforms)
+    _write_repo(
+        tmp_path,
+        base_images=base_images,
+        charts=charts,
+        platforms=platforms,
+        ref_services=ref_services,
+    )
     return runner.invoke(app, ["lock", *arguments])
 
 
@@ -174,28 +196,96 @@ class TestSelfSkip:
         assert not (tmp_path / LOCK_PATH).exists()
 
     def test_skips_without_declarations(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(Image, "compute_sha", _refuse_the_tree_walk)
+        monkeypatch.setattr(lock_module, "bash_output", IndexRegistry().bash_output)
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
+        monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path)
 
         result = runner.invoke(app, ["lock"])
 
         assert result.exit_code == 0, result.output
-        assert "nothing to relock" in result.output
-        assert not (tmp_path / LOCK_PATH).exists()
+        barrier = f"{MIRROR_PREFIX}/docker.io/library/alpine:3.20"
+        assert _read_lock(tmp_path)["images"]["ALPINE_IMAGE"] == {
+            "index": f"{barrier}@{DIGEST_A}",
+            "platforms": {"linux/amd64": f"{barrier}@{DIGEST_B}"},
+        }
 
-    def test_check_self_skips_where_no_declarations_exist(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
-        monkeypatch.chdir(tmp_path)
-        _write_repo(tmp_path)
+        rechecked = runner.invoke(app, ["lock", "--check"])
 
-        result = runner.invoke(app, ["lock", "--check"])
+        assert rechecked.exit_code == 0, rechecked.output
 
-        assert result.exit_code == 0, result.output
-        assert "nothing to relock" in result.output
+
+def _write_built_images(root: Path) -> None:
+    for name, text in {
+        "neural-networks-base": "ARG UV_IMAGE\nFROM ${UV_IMAGE}\n",
+        "localizer": "ARG NEURAL_NETWORKS_BASE\nFROM ${NEURAL_NETWORKS_BASE}\n",
+    }.items():
+        directory = root / "workloads" / name
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "Dockerfile").write_text(text, encoding="utf-8")
+    score = root / "stack" / "score"
+    score.mkdir(parents=True, exist_ok=True)
+    (score / "localizer.yaml").write_text(
+        "metadata:\n"
+        "  name: localizer\n"
+        "  annotations:\n"
+        "    outernet.internal/dockerfile: localizer=workloads/localizer/Dockerfile\n"
+        "containers:\n"
+        "  localizer: {}\n",
+        encoding="utf-8",
+    )
+
+
+BUILT_BASE_IMAGES: dict[str, Any] = {
+    "UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15",
+    "NEURAL_NETWORKS_BASE": {"dockerfile": "workloads/neural-networks-base/Dockerfile"},
+}
 
 
 class TestImageRecording:
+    def test_built_entries_are_never_recorded(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _write_built_images(tmp_path)
+
+        result = _invoke(
+            monkeypatch,
+            tmp_path,
+            [],
+            base_images=BUILT_BASE_IMAGES,
+            ref_services={"core": {"options": {"main": {"workloads": ["localizer.yaml"]}}}},
+        )
+
+        assert result.exit_code == 0, result.output
+        assert set(_read_lock(tmp_path)["images"]) == {"ALPINE_IMAGE", "UV_IMAGE"}
+
+    def test_a_committed_built_entry_refuses_relock(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _write_built_images(tmp_path)
+        (tmp_path / LOCK_PATH).write_text(
+            yaml.safe_dump({
+                "platforms": ["linux/amd64"],
+                "images": {
+                    "NEURAL_NETWORKS_BASE": _structured_entry(
+                        f"{MIRROR_PREFIX}/ghcr.io/org/demo/neural-networks-base:1",
+                        index_digest=DIGEST_A,
+                        platforms={"linux/amd64": DIGEST_A},
+                    )
+                },
+            }),
+            encoding="utf-8",
+        )
+
+        result = _invoke(
+            monkeypatch,
+            tmp_path,
+            [],
+            base_images=BUILT_BASE_IMAGES,
+            ref_services={"core": {"options": {"main": {"workloads": ["localizer.yaml"]}}}},
+        )
+
+        assert result.exit_code != 0
+        assert "records the local entries ['NEURAL_NETWORKS_BASE']" in str(result.exception)
+
     def test_records_the_index_and_one_manifest_per_declared_platform(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
@@ -215,7 +305,8 @@ class TestImageRecording:
                 "LOKI_IMAGE": {
                     "index": f"{base}@{DIGEST_A}",
                     "platforms": {"linux/amd64": f"{base}@{DIGEST_B}", "linux/arm64": f"{base}@{DIGEST_B}"},
-                }
+                },
+                "ALPINE_IMAGE": _barrier_entry(["linux/amd64", "linux/arm64"]),
             },
         }
 
@@ -226,7 +317,7 @@ class TestImageRecording:
         monkeypatch.setattr(lock_module, "bash_output", registry.bash_output)
         monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
         monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(Image, "compute_sha", _refuse_the_tree_walk)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, base_images=LOCK_BASE_IMAGES)
 
@@ -236,6 +327,7 @@ class TestImageRecording:
         assert registry.inspected == [
             "ghcr.io/astral-sh/uv:0.12.15",
             "ghcr.io/outernet-foundation/placeframe/api:1.2.3",
+            "docker.io/library/alpine:3.20",
         ]
         assert _read_lock(tmp_path) == {
             "platforms": ["linux/amd64"],
@@ -250,6 +342,7 @@ class TestImageRecording:
                     index_digest=DIGEST_A,
                     platforms={"linux/amd64": DIGEST_B},
                 ),
+                "ALPINE_IMAGE": _barrier_entry(["linux/amd64"]),
             },
         }
 
@@ -264,15 +357,18 @@ class TestImageRecording:
         assert (tmp_path / LOCK_PATH).read_text(encoding="utf-8") == first
 
     def test_digest_pinned_declarations_pass_through_prefixed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        base = f"{MIRROR_PREFIX}/docker.io/library/alpine@{DIGEST_A}"
+        base = f"{MIRROR_PREFIX}/docker.io/library/neural@{DIGEST_A}"
         result = _invoke(
-            monkeypatch, tmp_path, [], base_images={"ALPINE_IMAGE": f"docker.io/library/alpine@{DIGEST_A}"}
+            monkeypatch, tmp_path, [], base_images={"NEURAL_IMAGE": f"docker.io/library/neural@{DIGEST_A}"}
         )
 
         assert result.exit_code == 0, result.output
         assert _read_lock(tmp_path) == {
             "platforms": ["linux/amd64"],
-            "images": {"ALPINE_IMAGE": {"index": base, "platforms": {"linux/amd64": base}}},
+            "images": {
+                "NEURAL_IMAGE": {"index": base, "platforms": {"linux/amd64": base}},
+                "ALPINE_IMAGE": _barrier_entry(["linux/amd64"]),
+            },
         }
 
     def test_an_unchanged_declaration_freezes_the_whole_structured_entry(
@@ -282,7 +378,8 @@ class TestImageRecording:
         (tmp_path / LOCK_PATH).write_text(
             yaml.safe_dump({
                 "images": {
-                    "UV_IMAGE": _structured_entry(base, index_digest=DIGEST_B, platforms={"linux/amd64": DIGEST_A})
+                    "UV_IMAGE": _structured_entry(base, index_digest=DIGEST_B, platforms={"linux/amd64": DIGEST_A}),
+                    "ALPINE_IMAGE": _barrier_entry(["linux/amd64"]),
                 }
             }),
             encoding="utf-8",
@@ -292,7 +389,7 @@ class TestImageRecording:
         monkeypatch.setattr(lock_module, "bash_output", registry.bash_output)
         monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
         monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(Image, "compute_sha", _refuse_the_tree_walk)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
 
@@ -311,7 +408,8 @@ class TestImageRecording:
         (tmp_path / LOCK_PATH).write_text(
             yaml.safe_dump({
                 "images": {
-                    "UV_IMAGE": _structured_entry(base, index_digest=DIGEST_B, platforms={"linux/amd64": DIGEST_A})
+                    "UV_IMAGE": _structured_entry(base, index_digest=DIGEST_B, platforms={"linux/amd64": DIGEST_A}),
+                    "ALPINE_IMAGE": _barrier_entry(["linux/amd64"]),
                 }
             }),
             encoding="utf-8",
@@ -321,7 +419,7 @@ class TestImageRecording:
         monkeypatch.setattr(lock_module, "bash_output", registry.bash_output)
         monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
         monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(Image, "compute_sha", _refuse_the_tree_walk)
         monkeypatch.chdir(tmp_path)
         _write_repo(
             tmp_path,
@@ -332,7 +430,7 @@ class TestImageRecording:
         result = runner.invoke(app, ["lock"])
 
         assert result.exit_code == 0, result.output
-        assert registry.inspected == ["ghcr.io/astral-sh/uv:0.12.15"]
+        assert registry.inspected == ["ghcr.io/astral-sh/uv:0.12.15", "docker.io/library/alpine:3.20"]
         assert _read_lock(tmp_path)["images"]["UV_IMAGE"] == _structured_entry(
             base,
             index_digest=DIGEST_A,
@@ -353,6 +451,7 @@ class TestImageRecording:
                         index_digest=DIGEST_A,
                         platforms={"linux/amd64": DIGEST_B},
                     ),
+                    "ALPINE_IMAGE": _barrier_entry(["linux/amd64"]),
                 }
             }),
             encoding="utf-8",
@@ -369,6 +468,7 @@ class TestImageRecording:
         assert registry.inspected == [
             "ghcr.io/astral-sh/uv:0.12.15",
             "ghcr.io/outernet-foundation/placeframe/api:1.2.3",
+            "docker.io/library/alpine:3.20",
         ]
 
     def test_a_tag_bump_breaks_the_freeze_and_re_resolves(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -425,7 +525,8 @@ class TestImageRecording:
                     f"{MIRROR_PREFIX}/docker.io/x/rathole:0.11.0",
                     index_digest=DIGEST_B,
                     platforms={"linux/amd64": DIGEST_B},
-                )
+                ),
+                "ALPINE_IMAGE": _barrier_entry(["linux/amd64"]),
             },
         }
 
@@ -439,9 +540,9 @@ def _lock_against_index(
     monkeypatch.setattr(lock_module, "bash_output", ManifestOutput(json.dumps({"manifests": manifests})))
     monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
     monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
-    monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+    monkeypatch.setattr(Image, "compute_sha", _refuse_the_tree_walk)
     monkeypatch.chdir(tmp_path)
-    _write_repo(tmp_path, base_images={"ALPINE_IMAGE": "docker.io/library/alpine:3.20"}, platforms=platforms)
+    _write_repo(tmp_path, platforms=platforms)
     return runner.invoke(app, ["lock"])
 
 
@@ -545,37 +646,59 @@ class TestChartRecording:
         result = _invoke(monkeypatch, tmp_path, [], charts={"loki": f"oci://{LOKI_UPSTREAM}:7.3.0"})
 
         assert result.exit_code == 0, result.output
-        assert _read_lock(tmp_path) == {"charts": {"LOKI_CHART": f"{MIRROR_PREFIX}/{LOKI_UPSTREAM}:7.3.0@{DIGEST_A}"}}
+        assert _read_lock(tmp_path) == {
+            "platforms": ["linux/amd64"],
+            "images": {"ALPINE_IMAGE": _barrier_entry(["linux/amd64"])},
+            "charts": {"LOKI_CHART": f"{MIRROR_PREFIX}/{LOKI_UPSTREAM}:7.3.0@{DIGEST_A}"},
+        }
 
     def test_digest_declared_chart_passes_through_unresolved(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         result = _invoke(monkeypatch, tmp_path, [], charts={"loki": f"oci://{LOKI_UPSTREAM}@{DIGEST_B}"})
 
         assert result.exit_code == 0, result.output
-        assert _read_lock(tmp_path) == {"charts": {"LOKI_CHART": f"{MIRROR_PREFIX}/{LOKI_UPSTREAM}@{DIGEST_B}"}}
+        assert _read_lock(tmp_path) == {
+            "platforms": ["linux/amd64"],
+            "images": {"ALPINE_IMAGE": _barrier_entry(["linux/amd64"])},
+            "charts": {"LOKI_CHART": f"{MIRROR_PREFIX}/{LOKI_UPSTREAM}@{DIGEST_B}"},
+        }
 
     def test_unchanged_chart_declaration_copies_its_frozen_digest_forward(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         (tmp_path / LOCK_PATH).write_text(
-            yaml.safe_dump({"charts": {"LOKI_CHART": f"{MIRROR_PREFIX}/{LOKI_UPSTREAM}:7.3.0@{DIGEST_B}"}}),
+            yaml.safe_dump({
+                "images": {"ALPINE_IMAGE": _barrier_entry(["linux/amd64"])},
+                "charts": {"LOKI_CHART": f"{MIRROR_PREFIX}/{LOKI_UPSTREAM}:7.3.0@{DIGEST_B}"},
+            }),
             encoding="utf-8",
         )
 
         result = _invoke(monkeypatch, tmp_path, [], charts={"loki": f"oci://{LOKI_UPSTREAM}:7.3.0"})
 
         assert result.exit_code == 0, result.output
-        assert _read_lock(tmp_path) == {"charts": {"LOKI_CHART": f"{MIRROR_PREFIX}/{LOKI_UPSTREAM}:7.3.0@{DIGEST_B}"}}
+        assert _read_lock(tmp_path) == {
+            "platforms": ["linux/amd64"],
+            "images": {"ALPINE_IMAGE": _barrier_entry(["linux/amd64"])},
+            "charts": {"LOKI_CHART": f"{MIRROR_PREFIX}/{LOKI_UPSTREAM}:7.3.0@{DIGEST_B}"},
+        }
 
     def test_chart_tag_bump_re_resolves(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         (tmp_path / LOCK_PATH).write_text(
-            yaml.safe_dump({"charts": {"LOKI_CHART": f"{MIRROR_PREFIX}/{LOKI_UPSTREAM}:7.3.0@{DIGEST_B}"}}),
+            yaml.safe_dump({
+                "images": {"ALPINE_IMAGE": _barrier_entry(["linux/amd64"])},
+                "charts": {"LOKI_CHART": f"{MIRROR_PREFIX}/{LOKI_UPSTREAM}:7.3.0@{DIGEST_B}"},
+            }),
             encoding="utf-8",
         )
 
         result = _invoke(monkeypatch, tmp_path, [], charts={"loki": f"oci://{LOKI_UPSTREAM}:7.3.1"})
 
         assert result.exit_code == 0, result.output
-        assert _read_lock(tmp_path) == {"charts": {"LOKI_CHART": f"{MIRROR_PREFIX}/{LOKI_UPSTREAM}:7.3.1@{DIGEST_A}"}}
+        assert _read_lock(tmp_path) == {
+            "platforms": ["linux/amd64"],
+            "images": {"ALPINE_IMAGE": _barrier_entry(["linux/amd64"])},
+            "charts": {"LOKI_CHART": f"{MIRROR_PREFIX}/{LOKI_UPSTREAM}:7.3.1@{DIGEST_A}"},
+        }
 
 
 class TestBundleRecording:
@@ -598,7 +721,7 @@ class TestBundleRecording:
         monkeypatch.setattr(lock_module, "resolve_remote_digest", recorder.resolve)
         monkeypatch.setattr(lock_module, "bash_output", registry.bash_output)
         monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(Image, "compute_sha", _refuse_the_tree_walk)
         monkeypatch.chdir(tmp_path)
         services = ref_services or {"tunnel": {"options": {"rathole": {"ref": self.TUNNEL_RATHOLE}}}}
         if declares_routes:
@@ -608,7 +731,6 @@ class TestBundleRecording:
                 tmp_path,
                 gateway=8080,
                 platforms=["linux/amd64"],
-                base_images={"CADDY_IMAGE": caddy_declaration},
                 ref_services=services,
             )
             if not committed:
@@ -653,12 +775,12 @@ class TestBundleRecording:
         assert entry["reference"].startswith("ghcr.io/org/repo/")
         assert not entry["reference"].startswith(MIRROR_PREFIX)
 
-    def test_required_slots_record_sorted_under_the_bundle_key(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_slot_demands_record_under_the_bundle_key(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         bundle_text = (
             "services:\n  rathole:\n    image: busybox:1.36\n"
             "    environment:\n"
             "      Z_VAR: ${Z_REQUIRED}\n"
-            "      A_VAR: ${A_REQUIRED}\n"
+            "      A_VAR: ${A_REQUIRED:?err}\n"
             "      O_VAR: ${OPTIONAL:-x}\n"
             "      E_VAR: $$ESCAPED\n"
             "    configs:\n"
@@ -670,7 +792,21 @@ class TestBundleRecording:
 
         assert result.exit_code == 0, result.output
         [entry] = _read_lock(tmp_path)["bundles"].values()
-        assert entry["requires"] == ["A_REQUIRED", "Z_REQUIRED"]
+        assert entry["slots"] == {
+            "Z_REQUIRED": {},
+            "A_REQUIRED": {},
+            "OPTIONAL": {"required": False},
+        }
+
+    def test_a_bundle_defining_the_reserved_edge_service_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        bundle_text = (
+            "services:\n  tunnel-rathole-rathole:\n    image: busybox:1.36\n  edge:\n    image: busybox:1.36\n"
+        )
+
+        result, _, _ = self._invoke(monkeypatch, tmp_path, [], bundle_text=bundle_text)
+
+        assert result.exit_code != 0
+        assert "the included bundle defines the reserved service 'edge'" in str(result.exception)
 
     def test_an_unresolved_route_upstream_refuses_naming_the_declaration(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -844,7 +980,7 @@ class TestResolveRemoteDigest:
 
 class TestLockCheck:
     def _prepare(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(Image, "compute_sha", _refuse_the_tree_walk)
         monkeypatch.setattr(lock_module, "bash_output", IndexRegistry().bash_output)
         monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
         monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
@@ -961,7 +1097,8 @@ class TestPlatformSelectionLaw:
 
     def test_a_multi_platform_lock_without_a_selection_refuses_listing_recorded(self) -> None:
         with pytest.raises(
-            ValueError, match=r"platforms \['linux/amd64', 'linux/arm64'\] are recorded.*platform: must be named"
+            ValueError,
+            match=r"platform must be named in boatyard\.values\.yaml \(the lock records \['linux/amd64', 'linux/arm64'\]\)",
         ):
             _selection_lock().manifest_references(None)
 
@@ -983,8 +1120,8 @@ class TestPlatformSelectionLaw:
 
 
 class TestPairedLoad:
-    def _config(self, tmp_path: Path) -> config_module.ConfigFile:
-        return config_module.ConfigFile.load(tmp_path / "boatyard.yml")
+    def _config(self, tmp_path: Path) -> config_file_module.ConfigFile:
+        return config_file_module.ConfigFile.load(tmp_path / "boatyard.yml")
 
     def _write_committed(self, tmp_path: Path, document: dict[str, Any]) -> None:
         (tmp_path / LOCK_PATH).write_text(yaml.safe_dump(document), encoding="utf-8")
@@ -1005,7 +1142,8 @@ class TestPairedLoad:
         )
 
         with pytest.raises(
-            ValidationError, match=r"records platforms \['linux/amd64', 'linux/arm64'\].*run boatyard lock"
+            ValueError,
+            match=r"records platforms \['linux/amd64', 'linux/arm64'\] but boatyard\.yml declares \['linux/amd64'\]",
         ):
             LockFile.load(tmp_path / LOCK_PATH, self._config(tmp_path))
 
@@ -1024,7 +1162,11 @@ class TestPairedLoad:
             },
         )
 
-        with pytest.raises(ValidationError, match=r"image entry UV_IMAGE records platforms.*run boatyard lock"):
+        with pytest.raises(
+            ValueError,
+            match=r"image entry UV_IMAGE records platforms \['linux/amd64', 'linux/arm64'\] but the lock records "
+            r"\['linux/amd64'\]",
+        ):
             LockFile.load(tmp_path / LOCK_PATH, self._config(tmp_path))
 
     def test_a_missing_declared_entry_refuses_as_coverage(self, tmp_path: Path) -> None:
@@ -1043,7 +1185,7 @@ class TestPairedLoad:
             },
         )
 
-        with pytest.raises(ValidationError, match=r"lacks the \['UV_IMAGE'\] entries base_images declares"):
+        with pytest.raises(ValueError, match=r"lacks the \['ALPINE_IMAGE', 'UV_IMAGE'\] image entries"):
             LockFile.load(tmp_path / LOCK_PATH, self._config(tmp_path))
 
     def test_an_orphan_entry_refuses_naming_the_lock_verb(self, tmp_path: Path) -> None:
@@ -1055,6 +1197,7 @@ class TestPairedLoad:
                 "platforms": ["linux/amd64"],
                 "images": {
                     "UV_IMAGE": _structured_entry(base, index_digest=DIGEST_A, platforms={"linux/amd64": DIGEST_A}),
+                    "ALPINE_IMAGE": _barrier_entry(["linux/amd64"]),
                     "GHOST_IMAGE": _structured_entry(
                         f"{MIRROR_PREFIX}/docker.io/x/ghost:1.0",
                         index_digest=DIGEST_A,
@@ -1064,8 +1207,55 @@ class TestPairedLoad:
             },
         )
 
-        with pytest.raises(ValidationError, match=r"no longer declares \(\['GHOST_IMAGE'\]\); run boatyard lock"):
+        with pytest.raises(ValueError, match=r"no longer declares \(\['GHOST_IMAGE'\]\)"):
             LockFile.load(tmp_path / LOCK_PATH, self._config(tmp_path))
+
+    def test_a_built_entry_in_the_committed_lock_refuses(self, tmp_path: Path) -> None:
+        _write_repo(
+            tmp_path,
+            base_images=BUILT_BASE_IMAGES,
+            ref_services={"core": {"options": {"main": {"workloads": ["localizer.yaml"]}}}},
+        )
+        _write_built_images(tmp_path)
+        self._write_committed(
+            tmp_path,
+            {
+                "platforms": ["linux/amd64"],
+                "images": {
+                    "NEURAL_NETWORKS_BASE": _structured_entry(
+                        f"{MIRROR_PREFIX}/ghcr.io/org/demo/neural-networks-base:1",
+                        index_digest=DIGEST_A,
+                        platforms={"linux/amd64": DIGEST_A},
+                    )
+                },
+            },
+        )
+
+        with pytest.raises(ValueError, match=r"records the local entries \['NEURAL_NETWORKS_BASE'\]"):
+            LockFile.load(tmp_path / LOCK_PATH, self._config(tmp_path))
+
+    def test_pairing_demands_only_the_remote_entries(self, tmp_path: Path) -> None:
+        _write_repo(
+            tmp_path,
+            base_images=BUILT_BASE_IMAGES,
+            ref_services={"core": {"options": {"main": {"workloads": ["localizer.yaml"]}}}},
+        )
+        _write_built_images(tmp_path)
+        base = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15"
+        self._write_committed(
+            tmp_path,
+            {
+                "platforms": ["linux/amd64"],
+                "images": {
+                    "UV_IMAGE": _structured_entry(base, index_digest=DIGEST_A, platforms={"linux/amd64": DIGEST_A}),
+                    "ALPINE_IMAGE": _barrier_entry(["linux/amd64"]),
+                },
+            },
+        )
+
+        lock = LockFile.load(tmp_path / LOCK_PATH, self._config(tmp_path))
+
+        assert set(lock.images) == {"ALPINE_IMAGE", "UV_IMAGE"}
 
     def test_a_missing_lock_in_a_platforms_repo_refuses_as_stale(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1090,7 +1280,7 @@ class TestPairedLoad:
             },
         )
 
-        with pytest.raises(ValidationError, match=r"records platforms \[\] but boatyard.yml declares"):
+        with pytest.raises(ValueError, match=r"records platforms \[\] but boatyard.yml declares"):
             LockFile.load(tmp_path / LOCK_PATH, self._config(tmp_path))
 
     def test_a_missing_lock_in_a_bundles_only_repo_reads_as_empty(
@@ -1128,7 +1318,7 @@ class TestPairedLoad:
         monkeypatch.setattr(lock_module, "bash_output", IndexRegistry().bash_output)
         monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
         monkeypatch.setattr(lock_module, "install_crane", _skip_crane_install)
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(Image, "compute_sha", _refuse_the_tree_walk)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["lock"])
@@ -1136,5 +1326,8 @@ class TestPairedLoad:
         assert result.exit_code == 0, result.output
         assert _read_lock(tmp_path) == {
             "platforms": ["linux/amd64"],
-            "images": {"UV_IMAGE": _structured_entry(base, index_digest=DIGEST_A, platforms={"linux/amd64": DIGEST_A})},
+            "images": {
+                "UV_IMAGE": _structured_entry(base, index_digest=DIGEST_A, platforms={"linux/amd64": DIGEST_A}),
+                "ALPINE_IMAGE": _barrier_entry(["linux/amd64"]),
+            },
         }

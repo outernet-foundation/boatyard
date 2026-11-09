@@ -9,26 +9,26 @@ import yaml
 from bashrun.bash import bash_output
 from pydantic import BaseModel, ConfigDict, Field
 
-from boatyard.config.config import (
+from boatyard.models.config_file import (
+    EDGE_SERVICE_NAME,
     OCI_REFERENCE_PREFIX,
     ConfigFile,
-    Yaml,
+    artifact_slots,
     bundle_lock_key,
     chart_lock_key,
-    is_list,
-    is_mapping,
     mirrored_ref,
-    scan_bundle_texts,
+    refuse_unresolved_references,
 )
 from boatyard.crane import install_crane
-from boatyard.config.lock import (
+from boatyard.models.lock_file import (
     LOCK_PATH,
     LockFile,
     ConfigLockBundle,
     ConfigLockEntry,
+    refuse_local_lock_entries,
 )
 from boatyard.temp import SHA256_DIGEST_REGEX
-from boatyard.yaml import load_yaml_model
+from boatyard.yaml import Yaml, is_list, is_mapping, load_yaml_model
 
 DIGEST_TAIL_PATTERN = re.compile(rf"@{SHA256_DIGEST_REGEX}$")
 COMPOSE_FILE_MEDIA_TYPE = "application/vnd.docker.compose.file+yaml"
@@ -96,7 +96,8 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
     committed_path = config.root / LOCK_PATH
     committed = load_yaml_model(LockFile, committed_path) if committed_path.is_file() else LockFile()
 
-    # Resolve first-party bundles direct, recomputing requires from the pinned content and validating declared references against it.
+    # Resolve first-party bundles direct, recording the slot demands from the pinned content and
+    # validating declared references against it.
     bundles: dict[str, ConfigLockBundle] = {}
     for name, reference, entry in config.remote_declared_entries():
         key = bundle_lock_key(name)
@@ -109,16 +110,16 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
             else f"{reference}@{resolve_remote_digest(reference)}"
         )
 
-        # Record the pinned reference with its required slots.
-        bundles[key] = ConfigLockBundle(
-            reference=pinned,
-            requires=scan_bundle_texts(
-                name, entry.routes, entry.ports, OciArtifactManifest.fetch_compose_texts(pinned)
-            ).requires,
-        )
+        # Record the pinned reference with the bundle's slot demands.
+        texts = OciArtifactManifest.fetch_compose_texts(pinned)
+        service_names = refuse_unresolved_references(name, entry.routes, entry.ports, texts, prefix=f"{name}-")
+        if EDGE_SERVICE_NAME in service_names:
+            raise ValueError(f"{pinned}: the included bundle defines the reserved service {EDGE_SERVICE_NAME!r}")
+        bundles[key] = ConfigLockBundle(reference=pinned, slots=artifact_slots(texts))
 
     images: dict[str, ConfigLockEntry] = {}
-    for name, reference in config.base_images.items():
+    refuse_local_lock_entries(committed, config, committed_path.as_posix())
+    for name, reference in {**config.remote_base_images, **config.owned_images}.items():
         base = mirrored_ref(reference, prefix)
         committed_entry = committed.images.get(name)
 
@@ -164,12 +165,12 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
         for platform in config.platforms:
             if len(matches[platform]) != 1:
                 raise ValueError(
-                    f"base_images entry {name}: platform {platform} "
+                    f"image pin {name}: platform {platform} "
                     f"matches {len(matches[platform])} upstream manifests, expected exactly one"
                 )
             child = matches[platform][0]
             if not child.digest.startswith("sha256:"):
-                raise ValueError(f"base_images entry {name}: upstream index child must carry a digest ({child!r})")
+                raise ValueError(f"image pin {name}: upstream index child must carry a digest ({child!r})")
             selected[platform] = child.digest
 
         # Record the mirror-prefixed index and one reference per platform.

@@ -9,12 +9,12 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from boatyard.cli import app
-from boatyard import dockerfiles as dockerfiles_module
+from boatyard.models.image import Image
 from boatyard import crane
 from boatyard import publish as publish_compose
 from boatyard.verbs import publish as publish_verb
-from boatyard.config.config import ConfigFile
-from boatyard.config.lock import LOCK_PATH
+from boatyard.models.config_file import ConfigFile
+from boatyard.models.lock_file import LOCK_PATH
 
 REPOSITORY = "ghcr.io/outernet-foundation/lbe-toolkit"
 FAKE_SHA = "a" * 40
@@ -28,6 +28,7 @@ def _write_config(root: Path, sections: dict[str, Any] | None = None) -> None:
     payload: dict[str, Any] = {"requires": ">=0.0", "project_name": "demo"}
     if sections is not None:
         payload.update(sections)
+    payload.setdefault("services", {"ext": {"ref": "oci://ghcr.io/org/ext:0.1.0"}})
     (root / "boatyard.yml").write_text(
         yaml.safe_dump(payload, default_flow_style=False, sort_keys=False), encoding="utf-8"
     )
@@ -64,19 +65,22 @@ class DigestResolver:
         return FAKE_DIGEST
 
 
-def _service_shas(root: Path, bake: object) -> dict[str, str]:
-    return {"LIVEKIT_TOKEN_SHA": "tree-abc"}
+def _livekit_tree_sha(_self: Image, _root: Path) -> str:
+    return "tree-abc"
 
 
 def _invoke_publishing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> PublishingRecorder:
     recorder = PublishingRecorder()
     monkeypatch.chdir(tmp_path)
+    livekit = tmp_path / "workloads" / "livekit-token"
+    livekit.mkdir(parents=True, exist_ok=True)
+    (livekit / "Dockerfile").write_text("ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n", encoding="utf-8")
     monkeypatch.setenv("REGISTRY_USERNAME", "publisher")
     monkeypatch.setenv("REGISTRY_TOKEN", "secret")
     monkeypatch.setattr(publish_verb, "bash", recorder.run)
     monkeypatch.setattr(crane, "bash", recorder.run)
     monkeypatch.setattr(publish_verb, "bash_output", _command_output)
-    monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _service_shas)
+    monkeypatch.setattr(Image, "compute_sha", _livekit_tree_sha)
     monkeypatch.setattr(publish_compose, "resolve_remote_digest", DigestResolver().resolve)
     return recorder
 
@@ -93,9 +97,13 @@ ROOT_BUNDLE_SECTION = {
     "repository": REPOSITORY,
     "project_name": "example",
     "services": {
-        "core-cuda": {"workloads": ["api.yaml"], "vars": {"GPU_VARIANT": "cuda"}},
-        "core-rocm": {"workloads": ["api.yaml"], "vars": {"GPU_VARIANT": "rocm"}},
-        "gateway-open": {"workloads": ["gateway.yaml"]},
+        "core": {
+            "options": {
+                "cuda": {"workloads": ["api.yaml"], "vars": {"TORCH_DEVICE": "cuda"}},
+                "rocm": {"workloads": ["api.yaml"], "vars": {"TORCH_DEVICE": "rocm"}},
+            }
+        },
+        "gateway": {"options": {"open": {"workloads": ["gateway.yaml"]}}},
     },
 }
 
@@ -176,7 +184,7 @@ class TestFinalizeBaked:
         assert document["configs"]["caddyfile"] == {"content": "reverse_proxy {$$UPSTREAM}\n"}
         assert resolver.calls == [f"{REPOSITORY}/livekit-token:tree-abc"]
 
-    def test_authored_content_configs_ride_through_verbatim(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_authored_content_configs_pass_through_verbatim(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         baked = tmp_path / "compose.yml"
         baked.write_text(
             "services:\n"
@@ -218,15 +226,32 @@ class TestPublishComposeVerb:
                 "repository": REPOSITORY,
                 "project_name": "livekit-tier",
                 "platforms": ["linux/amd64"],
-                "base_images": {"CADDY_IMAGE": "docker.io/library/caddy:2.8.4-alpine"},
-                "services": {"livekit-tier": {"workloads": ["livekit-token.yaml"]}},
+                "gateway": 18443,
+                "services": {"livekit": {"options": {"tier": {"workloads": ["livekit-token.yaml"]}}}},
             },
         )
-        (tmp_path / "workloads").mkdir()
+        (tmp_path / "workloads" / "livekit-token").mkdir(parents=True)
+        (tmp_path / "workloads" / "livekit-token" / "Dockerfile").write_text(
+            "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n", encoding="utf-8"
+        )
+        score = tmp_path / "stack" / "score"
+        score.mkdir(parents=True)
+        (score / "livekit-token.yaml").write_text(
+            "metadata:\n"
+            "  name: livekit-token\n"
+            "  annotations:\n"
+            "    outernet.internal/dockerfile: livekit-token=workloads/livekit-token/Dockerfile\n"
+            "containers:\n"
+            "  livekit-token: {}\n",
+            encoding="utf-8",
+        )
         (tmp_path / LOCK_PATH).write_text(
             yaml.safe_dump({
                 "platforms": ["linux/amd64"],
-                "images": {"CADDY_IMAGE": {"index": CADDY_LOCK_REF, "platforms": {"linux/amd64": CADDY_LOCK_REF}}},
+                "images": {
+                    "CADDY_IMAGE": {"index": CADDY_LOCK_REF, "platforms": {"linux/amd64": CADDY_LOCK_REF}},
+                    "ALPINE_IMAGE": {"index": CADDY_LOCK_REF, "platforms": {"linux/amd64": CADDY_LOCK_REF}},
+                },
             }),
             encoding="utf-8",
         )
@@ -236,11 +261,11 @@ class TestPublishComposeVerb:
         artifact.write_text(
             "services:\n"
             "  livekit-token:\n"
-            f"    image: {REPOSITORY}/livekit-token:${{LIVEKIT_TOKEN_SHA:?err}}\n"
+            f"    image: {REPOSITORY}/livekit-token:${{LIVEKIT_TIER__BOATYARD_TREE__LIVEKIT_TOKEN_SHA:?err}}\n"
             "    environment:\n"
             '      LIVEKIT_API_KEY: "${LIVEKIT_API_KEY:?err}"\n'
             "  ingress:\n"
-            '    image: "${LIVEKIT_TIER__LOCK__CADDY_IMAGE:?err}"\n'
+            '    image: "${LIVEKIT_TIER__BOATYARD_LOCK__CADDY_IMAGE:?err}"\n'
             "    configs:\n"
             "      - source: caddyfile\n"
             "        target: /etc/caddy/Caddyfile\n"
@@ -321,10 +346,12 @@ class TestBundleMode:
         merged: dict[str, Any] = {
             **(sections or ROOT_BUNDLE_SECTION),
             "platforms": ["linux/amd64"],
-            "base_images": {"ALPINE_IMAGE": "alpine:3.20"},
         }
         _write_config(tmp_path, merged)
-        (tmp_path / "workloads").mkdir()
+        score = tmp_path / "stack" / "score"
+        score.mkdir(parents=True)
+        (score / "api.yaml").write_text("metadata:\n  name: api\ncontainers: {}\n", encoding="utf-8")
+        (score / "gateway.yaml").write_text("metadata:\n  name: gateway\ncontainers: {}\n", encoding="utf-8")
         alpine = "alpine:3.20@sha256:" + "a" * 64
         (tmp_path / LOCK_PATH).write_text(
             yaml.safe_dump({
