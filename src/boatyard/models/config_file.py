@@ -161,6 +161,11 @@ class ConfigFile(BaseModel):
         return owned
 
     @property
+    def mirrored_base_images(self) -> dict[str, str]:
+        # Authored remote bases plus boatyard-owned keys; everything resolved through the mirror prefix
+        return {**self.remote_base_images, **self.owned_images}
+
+    @property
     def variant_axes(self) -> dict[str, list[str]]:
         # The declared axes over the image set; equal axis names carry equal value sets by the
         # axis-equality law at load

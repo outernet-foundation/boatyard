@@ -325,6 +325,28 @@ class TestMirrorVerb:
         assert not [command for command in recorder.commands if command.startswith("crane copy")]
         assert "Mirrored references: 0 copied, 1 already present" in result.stdout
 
+    def test_a_gateway_only_consumer_mirrors_the_owned_edge_image(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _write_config(
+            tmp_path,
+            {"mirror_prefix": MIRROR_PREFIX, "platforms": ["linux/amd64"], "gateway": 8443},
+        )
+        _write_lock(
+            tmp_path,
+            {"CADDY_IMAGE": f"{MIRROR_PREFIX}/docker.io/library/caddy:2.8.4-alpine@{FAKE_DIGEST}"},
+        )
+        recorder = CommandRecorder()
+
+        result = self._invoke(tmp_path, monkeypatch, recorder)
+
+        assert result.exit_code == 0
+        upstream_edge = "docker.io/library/caddy:2.8.4-alpine"
+        assert [command for command in recorder.commands if command.startswith("crane copy")] == [
+            f"crane copy {upstream_edge} {MIRROR_PREFIX}/{upstream_edge}",
+        ]
+        assert "Mirrored references: 1 copied, 0 already present" in result.stdout
+
     def test_errors_without_a_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.chdir(tmp_path)
 
