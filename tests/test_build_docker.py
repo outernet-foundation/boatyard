@@ -13,9 +13,9 @@ from typer.testing import CliRunner
 from boatyard.cli import app
 from boatyard.verbs import build
 from boatyard import build as build_module
-from boatyard import dockerfiles as dockerfiles_module
 from boatyard import lock as lock_module
-from boatyard.config.lock import LOCK_PATH
+from boatyard.models.lock_file import LOCK_PATH
+from boatyard.models.image import Image
 
 DIGEST_A = "sha256:" + "a" * 64
 HEAD_SHA = "1111111111111111111111111111111111111111"
@@ -31,24 +31,47 @@ def _write_repo(
     root: Path,
     *,
     dockerfiles: dict[str, str] | None = None,
-    base_images: dict[str, str] | None = None,
+    base_images: dict[str, Any] | None = None,
     charts: dict[str, str] | None = None,
     platforms: list[str] | None = None,
     repository: str = REPOSITORY,
-    variants: dict[str, list[str]] | None = None,
+    axes: dict[str, list[str]] | None = None,
 ) -> None:
     for service, text in (dockerfiles or {}).items():
         directory = root / "workloads" / service
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "Dockerfile").write_text(text, encoding="utf-8")
-    payload: dict[str, Any] = {"requires": ">=0", "repository": repository, "project_name": "demo"}
+    score = root / "stack" / "score"
+    score.mkdir(parents=True, exist_ok=True)
+    for service in dockerfiles or {}:
+        (score / f"{service}.yaml").write_text(
+            "metadata:\n"
+            f"  name: {service}\n"
+            "  annotations:\n"
+            f"    outernet.internal/dockerfile: {service}=workloads/{service}/Dockerfile\n"
+            "containers:\n"
+            f"  {service}: {{}}\n",
+            encoding="utf-8",
+        )
+    if not dockerfiles:
+        (score / "api.yaml").write_text("metadata:\n  name: api\ncontainers: {}\n", encoding="utf-8")
+    workload_names = [f"{service}.yaml" for service in sorted(dockerfiles or {})] or ["api.yaml"]
+    payload: dict[str, Any] = {
+        "requires": ">=0",
+        "repository": repository,
+        "project_name": "demo",
+        "platforms": platforms or ["linux/amd64"],
+        "services": {
+            "core": ({"workloads": workload_names} if axes else {"options": {"main": {"workloads": workload_names}}})
+        },
+    }
     if base_images:
-        payload["platforms"] = platforms or ["linux/amd64"]
         payload["base_images"] = base_images
-    elif platforms:
-        payload["platforms"] = platforms
-    if variants:
-        payload["variants"] = variants
+    if axes is not None:
+        payload["base_images"] = {
+            **payload.get("base_images", {}),
+            "NEURAL_NETWORKS_BASE": {"dockerfile": "workloads/neural-networks-base/Dockerfile", "axis": axes},
+        }
     if charts:
         payload["k8s"] = {"charts": charts}
         for chart in charts:
@@ -60,9 +83,9 @@ def _write_repo(
         (root / LOCK_PATH).write_text("", encoding="utf-8")
 
 
-EXTERNAL = "ARG PY_IMAGE\nFROM ${PY_IMAGE}\n"
-FANNED = "ARG PY_IMAGE\nARG TORCH_DEVICE\nFROM ${PY_IMAGE}\n"
-DEPENDENT = "FROM neural-networks-base\n"
+EXTERNAL = "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n"
+FANNED = "ARG ALPINE_IMAGE\nARG TORCH_DEVICE\nFROM ${ALPINE_IMAGE}\n"
+DEPENDENT = "ARG NEURAL_NETWORKS_BASE\nFROM ${NEURAL_NETWORKS_BASE}\n"
 
 DEFAULT_DOCKERFILES: dict[str, str] = {
     "api": EXTERNAL,
@@ -89,8 +112,8 @@ def _tagged_entry() -> dict[str, str]:
     return {"image.name": "registry/api:tree-abc", "containerimage.digest": DIGEST_A}
 
 
-def _no_service_shas(root: Path, config: object) -> dict[str, str]:
-    return {}
+def _fixed_tree_sha(_self: Image, _root: Path) -> str:
+    return "tree-none"
 
 
 def _no_gc_limits() -> None:
@@ -110,7 +133,13 @@ def _fixed_index(command: str) -> str:
                 "digest": DIGEST_A,
                 "size": 1234,
                 "platform": {"os": "linux", "architecture": "amd64"},
-            }
+            },
+            {
+                "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                "digest": DIGEST_A,
+                "size": 1234,
+                "platform": {"os": "linux", "architecture": "arm64"},
+            },
         ]
     })
 
@@ -155,8 +184,13 @@ def _head_sha(command: str) -> str:
 
 
 class BakeRunner:
-    def __init__(self, entries: dict[str, dict[str, str]] | None = None) -> None:
+    def __init__(
+        self,
+        entries: dict[str, dict[str, str]] | None = None,
+        extras: dict[str, dict[str, str]] | None = None,
+    ) -> None:
         self.entries = entries or {}
+        self.extras = extras or {}
         self.commands: list[str] = []
         self.rendered = ""
         self.shelve = ShelveRecorder()
@@ -169,6 +203,7 @@ class BakeRunner:
             self.rendered = bake_file.read_text(encoding="utf-8")
             targets = _bake_targets([command])
             entries = {target: self.entries.get(target, _tagged_entry()) for target in targets}
+            entries.update(self.extras)
             Path("metadata.json").write_text(json.dumps(entries), encoding="utf-8")
 
 
@@ -197,16 +232,18 @@ def _prepare(
     arguments: list[str],
     *,
     dockerfiles: dict[str, str] | None = None,
-    base_images: dict[str, str] | None = None,
+    base_images: dict[str, Any] | None = None,
     platforms: list[str] | None = None,
-    variants: dict[str, list[str]] | None = None,
+    axes: dict[str, list[str]] | None = None,
 ) -> BakeRunner:
     recorder = BakeRunner()
     monkeypatch.setattr(build_module, "bash", recorder.run)
-    monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+    monkeypatch.setattr(Image, "compute_sha", _fixed_tree_sha)
     monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
     monkeypatch.setattr(build_module, "host_platform", _amd64_host)
     monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
+    monkeypatch.setattr(lock_module, "bash_output", _fixed_index)
+    monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
     monkeypatch.setattr(build_module, "push_build", recorder.shelve)
     monkeypatch.setattr(build_module, "install_oras", lambda: None)
     monkeypatch.setattr(build_module, "bash_output", _head_sha)
@@ -217,7 +254,7 @@ def _prepare(
         dockerfiles=dockerfiles or DEFAULT_DOCKERFILES,
         base_images=base_images,
         platforms=platforms,
-        variants=variants,
+        axes=axes,
     )
 
     result = runner.invoke(app, ["build", *arguments])
@@ -228,7 +265,7 @@ def _prepare(
 
 class TestDefaultTargets:
     def test_defaults_are_every_service_default_variant(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        recorder = _prepare(monkeypatch, tmp_path, [], variants=TORCH_AXIS)
+        recorder = _prepare(monkeypatch, tmp_path, [], axes=TORCH_AXIS)
 
         assert _bake_targets(recorder.commands) == [
             "api",
@@ -240,7 +277,7 @@ class TestDefaultTargets:
         ]
 
     def test_an_undeclared_axis_arg_leaves_plain_targets(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        recorder = _prepare(monkeypatch, tmp_path, [])
+        recorder = _prepare(monkeypatch, tmp_path, [], axes={})
 
         assert _bake_targets(recorder.commands) == [
             "api",
@@ -253,10 +290,12 @@ class TestDefaultTargets:
 
     def test_foreign_arch_repo_refuses_bare_build(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(build_module, "bash", BakeRunner().run)
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(Image, "compute_sha", _fixed_tree_sha)
         monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
+        monkeypatch.setattr(lock_module, "bash_output", _fixed_index)
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL}, platforms=["linux/arm64"])
 
@@ -312,7 +351,7 @@ class TestVariantSelection:
             tmp_path,
             arguments,
             dockerfiles={"neural-networks-base": FANNED, "localizer": DEPENDENT, "postgres": EXTERNAL},
-            variants=TORCH_AXIS,
+            axes=TORCH_AXIS,
         )
         return _bake_targets(recorder.commands)
 
@@ -333,7 +372,7 @@ class TestVariantSelection:
 
         assert "Unknown target 'localizer-rocm'" in result.output
 
-    def test_repeated_addresses_ride_through(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_repeated_addresses_pass_through(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         assert self._invoke(monkeypatch, tmp_path, ["--targets", "postgres postgres"]) == ["postgres", "postgres"]
 
     def test_an_unknown_variant_refuses_listing_the_declared_values(
@@ -344,7 +383,7 @@ class TestVariantSelection:
         assert "Unknown variant 'tpu' for localizer" in result.output
         assert "['cuda', 'rocm']" in result.output
 
-    def test_a_variant_on_an_unfanned_service_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_a_variant_on_a_service_with_no_axis_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         result = self._refuse(monkeypatch, tmp_path, ["--targets", "postgres/cuda"])
 
         assert "postgres declares no variants" in result.output
@@ -358,15 +397,17 @@ class TestVariantSelection:
 
     def _refuse(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, arguments: list[str]) -> Any:
         monkeypatch.setattr(build_module, "bash", BakeRunner().run)
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(Image, "compute_sha", _fixed_tree_sha)
         monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
+        monkeypatch.setattr(lock_module, "bash_output", _fixed_index)
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
         monkeypatch.chdir(tmp_path)
         _write_repo(
             tmp_path,
             dockerfiles={"neural-networks-base": FANNED, "localizer": DEPENDENT, "postgres": EXTERNAL},
-            variants=TORCH_AXIS,
+            axes=TORCH_AXIS,
         )
 
         result = runner.invoke(app, ["build", *arguments])
@@ -376,8 +417,8 @@ class TestVariantSelection:
 
 
 class TestBuildKeysGuard:
-    def test_build_without_derived_services_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+    def test_build_without_derived_images_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(Image, "compute_sha", _fixed_tree_sha)
         monkeypatch.chdir(tmp_path)
         _write_repo(
             tmp_path,
@@ -390,7 +431,7 @@ class TestBuildKeysGuard:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "no Dockerfile service derives" in str(result.exception)
+        assert "no Dockerfile image derives" in str(result.exception)
 
 
 class TestBakeFailure:
@@ -399,10 +440,14 @@ class TestBakeFailure:
             raise CalledProcessError(returncode=1, cmd=command)
 
         monkeypatch.setattr(build_module, "bash", _fail)
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(Image, "compute_sha", _fixed_tree_sha)
         monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
+        monkeypatch.setattr(lock_module, "bash_output", _fixed_index)
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
+        monkeypatch.setattr(lock_module, "bash_output", _fixed_index)
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"api": EXTERNAL})
 
@@ -459,10 +504,12 @@ class TestPushDestination:
 
     def test_a_target_with_no_tagged_references_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(build_module, "bash", BakeRunner(_baked("zed-capture", refs="", digest=DIGEST_A)).run)
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(Image, "compute_sha", _fixed_tree_sha)
         monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
+        monkeypatch.setattr(lock_module, "bash_output", _fixed_index)
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL})
 
@@ -470,13 +517,38 @@ class TestPushDestination:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
+        assert "must produce tagged image references" in str(result.exception)
 
-    def test_bake_output_not_covering_the_targets_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(build_module, "bash", MissingTargetRunner().run)
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+    def test_an_untagged_dependency_only_entry_passes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        recorder = BakeRunner(
+            extras={"neural-networks-base-cuda": {"image.name": "", "containerimage.digest": DIGEST_A}}
+        )
+        monkeypatch.setattr(build_module, "bash", recorder.run)
+        monkeypatch.setattr(Image, "compute_sha", _fixed_tree_sha)
         monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
+        monkeypatch.setattr(lock_module, "bash_output", _fixed_index)
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
+        monkeypatch.chdir(tmp_path)
+        _write_repo(
+            tmp_path,
+            dockerfiles={"neural-networks-base": FANNED, "localizer": DEPENDENT},
+            axes=TORCH_AXIS,
+        )
+
+        result = runner.invoke(app, ["build", "--targets", "localizer/cuda"])
+
+        assert result.exit_code == 0
+
+    def test_bake_output_not_covering_the_targets_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(build_module, "bash", MissingTargetRunner().run)
+        monkeypatch.setattr(Image, "compute_sha", _fixed_tree_sha)
+        monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
+        monkeypatch.setattr(build_module, "host_platform", _amd64_host)
+        monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
+        monkeypatch.setattr(lock_module, "bash_output", _fixed_index)
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL})
 
@@ -497,10 +569,12 @@ class TestPushDestination:
 
     def _refuse_address(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, arguments: list[str]) -> None:
         monkeypatch.setattr(build_module, "bash", BakeRunner().run)
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(Image, "compute_sha", _fixed_tree_sha)
         monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
+        monkeypatch.setattr(lock_module, "bash_output", _fixed_index)
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL})
 
@@ -541,10 +615,12 @@ class TestDigestShelving:
 
     def test_a_repository_push_without_registry_env_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(build_module, "bash", BakeRunner().run)
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(Image, "compute_sha", _fixed_tree_sha)
         monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         monkeypatch.setattr(lock_module, "install_crane", _no_gc_limits)
+        monkeypatch.setattr(lock_module, "bash_output", _fixed_index)
+        monkeypatch.setattr(lock_module, "resolve_remote_digest", _fixed_digest)
         monkeypatch.delenv("REGISTRY", raising=False)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles={"zed-capture": EXTERNAL})
@@ -593,7 +669,7 @@ class TestBakeSeesLockValues:
         monkeypatch.setattr(build_module, "check_gc_limits", _no_gc_limits)
         monkeypatch.setattr(build_module, "host_platform", _amd64_host)
         _fixed_registry(monkeypatch)
-        monkeypatch.setattr(dockerfiles_module, "compute_service_shas", _no_service_shas)
+        monkeypatch.setattr(Image, "compute_sha", _fixed_tree_sha)
         monkeypatch.chdir(tmp_path)
         _write_repo(tmp_path, dockerfiles=LOCK_DOCKERFILES, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
 
@@ -615,21 +691,21 @@ class TestRenderBakeDeterminism:
             tmp_path,
             [],
             base_images={"UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"},
-            variants=TORCH_AXIS,
+            axes=TORCH_AXIS,
         )
         second = _prepare(
             monkeypatch,
             tmp_path,
             [],
             base_images={"UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"},
-            variants=TORCH_AXIS,
+            axes=TORCH_AXIS,
         )
 
         assert first.rendered == second.rendered
 
 
 class TestRenderBakeTagDerivation:
-    def test_unfanned_service_carries_one_target_with_latest_and_sha_tags(
+    def test_a_service_with_no_axis_carries_one_target_with_latest_and_sha_tags(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         recorder = _prepare(monkeypatch, tmp_path, [], dockerfiles={"api": EXTERNAL})
@@ -645,11 +721,22 @@ class TestRenderBakeTagDerivation:
     def test_variant_axes_derive_per_variant_targets_sharing_one_sha_env(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        recorder = _prepare(monkeypatch, tmp_path, [], dockerfiles={"localizer": FANNED}, variants=TORCH_AXIS)
+        recorder = _prepare(
+            monkeypatch,
+            tmp_path,
+            [],
+            dockerfiles={"neural-networks-base": FANNED, "localizer": DEPENDENT},
+            axes=TORCH_AXIS,
+        )
 
         services = _rendered_services(recorder.rendered)
 
-        assert list(services) == ["localizer-cuda", "localizer-rocm"]
+        assert list(services) == [
+            "localizer-cuda",
+            "localizer-rocm",
+            "neural-networks-base-cuda",
+            "neural-networks-base-rocm",
+        ]
         assert services["localizer-cuda"]["build"]["tags"] == [
             f"{REPOSITORY}/localizer-cuda:latest",
             f"{REPOSITORY}/localizer-cuda:${{LOCALIZER_SHA}}",
@@ -668,14 +755,14 @@ class TestRenderBakeArgs:
             tmp_path,
             [],
             dockerfiles={"api": EXTERNAL},
-            base_images={"UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:0.12.15", "ALPINE_IMAGE": "alpine:3.20"},
+            base_images={"UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:0.12.15", "EXTRA_IMAGE": "alpine:3.20"},
         )
 
         services = _rendered_services(recorder.rendered)
 
         assert services["api"]["build"]["args"] == {
             "UV_BASE_IMAGE": "${UV_BASE_IMAGE:-}",
-            "ALPINE_IMAGE": "${ALPINE_IMAGE:-}",
+            "EXTRA_IMAGE": "${EXTRA_IMAGE:-}",
         }
 
     def test_sha_args_render_only_for_declaring_dockerfiles(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -685,7 +772,7 @@ class TestRenderBakeArgs:
             [],
             dockerfiles={
                 "api": EXTERNAL,
-                "localizer": "ARG PY_IMAGE\nARG LOCALIZER_SHA\nFROM ${PY_IMAGE}\n",
+                "localizer": "ARG ALPINE_IMAGE\nARG LOCALIZER_SHA\nFROM ${ALPINE_IMAGE}\n",
             },
         )
 
@@ -695,7 +782,13 @@ class TestRenderBakeArgs:
         assert services["localizer"]["build"]["args"] == {"LOCALIZER_SHA": "${LOCALIZER_SHA:?err}"}
 
     def test_declared_values_reach_the_rendered_axis_arg(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        recorder = _prepare(monkeypatch, tmp_path, [], dockerfiles={"localizer": FANNED}, variants=TORCH_AXIS)
+        recorder = _prepare(
+            monkeypatch,
+            tmp_path,
+            [],
+            dockerfiles={"neural-networks-base": FANNED, "localizer": DEPENDENT},
+            axes=TORCH_AXIS,
+        )
 
         services = _rendered_services(recorder.rendered)
 
@@ -710,7 +803,7 @@ class TestRenderBakeContexts:
             tmp_path,
             [],
             dockerfiles={"neural-networks-base": FANNED, "localizer": DEPENDENT},
-            variants=TORCH_AXIS,
+            axes=TORCH_AXIS,
         )
 
         services = _rendered_services(recorder.rendered)
@@ -722,17 +815,19 @@ class TestRenderBakeContexts:
             "neural-networks-base": "target:neural-networks-base-rocm"
         }
 
-    def test_unfanned_context_references_the_bare_target(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_a_context_with_no_axis_references_the_bare_target(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         recorder = _prepare(
             monkeypatch,
             tmp_path,
             [],
-            dockerfiles={"app": "FROM base\n", "base": EXTERNAL},
+            dockerfiles={"app": "ARG BASE_IMAGE\nFROM ${BASE_IMAGE}\n", "base": EXTERNAL},
+            base_images={"BASE_IMAGE": {"dockerfile": "workloads/base/Dockerfile"}},
         )
 
         services = _rendered_services(recorder.rendered)
 
         assert services["app"]["build"]["additional_contexts"] == {"base": "target:base"}
+        assert services["app"]["build"]["args"] == {"BASE_IMAGE": "base"}
 
 
 class TestRenderBakeCache:
@@ -741,8 +836,8 @@ class TestRenderBakeCache:
             monkeypatch,
             tmp_path,
             ["--push"],
-            dockerfiles={"localizer": FANNED},
-            variants={"TORCH_DEVICE": ["cuda"]},
+            dockerfiles={"neural-networks-base": FANNED, "localizer": DEPENDENT},
+            axes={"TORCH_DEVICE": ["cuda"]},
         )
 
         services = _rendered_services(recorder.rendered)
@@ -762,8 +857,8 @@ class TestRenderBakeCache:
             monkeypatch,
             tmp_path,
             ["--push-to", LOCAL_REGISTRY],
-            dockerfiles={"localizer": FANNED},
-            variants={"TORCH_DEVICE": ["cuda"]},
+            dockerfiles={"neural-networks-base": FANNED, "localizer": DEPENDENT},
+            axes={"TORCH_DEVICE": ["cuda"]},
         )
 
         services = _rendered_services(recorder.rendered)
@@ -801,7 +896,7 @@ class TestRenderBakePlatforms:
 
         assert services["api"]["build"]["platforms"] == ["linux/amd64"]
 
-    def test_multi_arch_declaration_rides_through_in_push_mode(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_multi_arch_declaration_passes_through_in_push_mode(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         recorder = _prepare(
             monkeypatch,
             tmp_path,
@@ -814,7 +909,9 @@ class TestRenderBakePlatforms:
 
         assert services["api"]["build"]["platforms"] == ["linux/amd64", "linux/arm64"]
 
-    def test_single_declared_platform_rides_through_in_load_mode(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_single_declared_platform_passes_through_in_load_mode(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         recorder = _prepare(
             monkeypatch,
             tmp_path,
@@ -827,13 +924,6 @@ class TestRenderBakePlatforms:
 
         assert services["zed-capture"]["build"]["platforms"] == ["linux/arm64"]
 
-    def test_undeclared_platforms_render_no_key(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        recorder = _prepare(monkeypatch, tmp_path, [], dockerfiles={"api": EXTERNAL})
-
-        services = _rendered_services(recorder.rendered)
-
-        assert "platforms" not in services["api"]["build"]
-
 
 def test_render_bake_carries_only_bake_read_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     _fixed_registry(monkeypatch)
@@ -841,8 +931,11 @@ def test_render_bake_carries_only_bake_read_keys(tmp_path: Path, monkeypatch: py
         monkeypatch,
         tmp_path,
         [],
-        dockerfiles={"api": "FROM base\nARG API_SHA\n", "base": EXTERNAL},
-        base_images={"UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"},
+        dockerfiles={"api": "ARG BASE_IMAGE\nFROM ${BASE_IMAGE}\nARG API_SHA\n", "base": EXTERNAL},
+        base_images={
+            "UV_BASE_IMAGE": "ghcr.io/astral-sh/uv:0.12.15",
+            "BASE_IMAGE": {"dockerfile": "workloads/base/Dockerfile"},
+        },
     )
 
     document = yaml.safe_load(recorder.rendered)
@@ -881,10 +974,7 @@ class TestHostPlatform:
 
 class TestPushFlags:
     def _parse(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, arguments: list[str]) -> tuple[bool, str | None]:
-        (tmp_path / "boatyard.yml").write_text(
-            yaml.safe_dump({"requires": ">=0.0", "project_name": "demo", "repository": "ghcr.io/org/demo"}),
-            encoding="utf-8",
-        )
+        _write_repo(tmp_path)
         monkeypatch.chdir(tmp_path)
         recorded: list[tuple[bool, str | None]] = []
 
@@ -911,10 +1001,7 @@ class TestPushFlags:
         assert self._parse(tmp_path, monkeypatch, [f"--push-to={LOCAL_REGISTRY}"]) == (False, LOCAL_REGISTRY)
 
     def test_push_and_push_to_refuse_together(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        (tmp_path / "boatyard.yml").write_text(
-            yaml.safe_dump({"requires": ">=0.0", "project_name": "demo", "repository": "ghcr.io/org/demo"}),
-            encoding="utf-8",
-        )
+        _write_repo(tmp_path)
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(build, "run_build", _record_failure)
 

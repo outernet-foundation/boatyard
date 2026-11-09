@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import os
 import re
 import shlex
@@ -8,7 +9,6 @@ from hashlib import sha256
 from importlib.resources import as_file, files
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Literal, NamedTuple, Self
 
 import yaml
 from bashrun.bash import bash
@@ -16,69 +16,25 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    RootModel,
     ValidationInfo,
     field_validator,
-    model_validator,
 )
 
-from boatyard.config.config import (
-    ENV_NAME_PATTERN,
+from boatyard.models.config_file import (
     PLACEHOLDER,
-    Yaml,
-    is_list,
-    is_mapping,
+    Substrate,
     ConfigFile,
-    WorkloadDocument,
 )
-from boatyard.yaml import load_yaml_model
-from boatyard.markers import MarkerContext, resolve_markers
+from boatyard.models.image import dockerfile_stem
+from boatyard.models.workload import LoadedWorkload, select_provisioner_files
+from boatyard.yaml import Yaml, is_mapping, load_yaml_model
+from boatyard.markers import MarkerContext, compose_image_reference, resolve_markers
 
 PATCH_TEMPLATES_DIR = "score_patch_templates"
 
-SECRETS_FILE = Path("stack/secrets.yaml")
 SECRETS_OUTPUT = Path("stack/generated/secrets.txt")
 
 STRING_FORM_FIELDS = ("state", "outputs", "volumes", "services", "manifests")
-
-Substrate = Literal["compose", "k8s"]
-
-
-class SecretsDeclaration(RootModel[dict[str, "SecretKey"]]):
-    @model_validator(mode="before")
-    @classmethod
-    def _coerce_string_specs(cls, value: Yaml) -> Yaml:
-        if value is None:
-            value = {}
-        if not is_mapping(value):
-            raise ValueError("must be a KEY: description mapping")
-        return {name: ({"description": spec} if isinstance(spec, str) else spec) for name, spec in value.items()}
-
-    @model_validator(mode="after")
-    def _require_all_caps_keys(self) -> Self:
-        for name in self.root:
-            if not ENV_NAME_PATTERN.match(name):
-                raise ValueError(f"{name!r} must be an ALL_CAPS key")
-        return self
-
-    def validate_consumed(self, consumed: set[str], rendering: Substrate, source: str) -> None:
-        undeclared = sorted(consumed - self.root.keys())
-        if undeclared:
-            raise ValueError(f"{source}: the {rendering} rendering consumes undeclared keys: " + ", ".join(undeclared))
-
-
-class SecretKey(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    description: str
-    mint: bool = False
-
-    @field_validator("description")
-    @classmethod
-    def _require_description(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("description must be non-empty")
-        return value
 
 
 class AuthoredProvisioner(BaseModel):
@@ -107,12 +63,6 @@ class LiteralBlockDumper(yaml.SafeDumper):
     pass
 
 
-class LoadedWorkload(NamedTuple):
-    file_name: str
-    raw: Yaml
-    document: WorkloadDocument
-
-
 class ToolState(BaseModel):
     # Type only the workloads shape of the tool-owned state file
     model_config = ConfigDict(extra="allow")
@@ -131,11 +81,10 @@ def render_score(
     config: ConfigFile,
     substrate: Substrate,
     workloads: list[LoadedWorkload],
-    rendering_vars: dict[str, str],
+    variable_values: dict[str, str],
+    images: dict[str, str],
     templates: list[str],
     output: Path,
-    images: dict[str, str],
-    service_shas: dict[str, str],
 ) -> None:
     # Derive the per-substrate names and create the output parent
     root = config.root
@@ -147,35 +96,27 @@ def render_score(
     project_name = None if substrate == "k8s" else config.project_name
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    # List the variable sources lowest-priority first so later ones overwrite earlier ones
-    variable_values = {
-        variable: value
-        for source in (images, service_shas, rendering_vars)
-        for variable, value in source.items()
-        if value
-    }
+    # The lock images join as bindings underneath the caller's values
+    variable_values = {**images, **variable_values}
 
     with (
         as_file(files("boatyard") / PATCH_TEMPLATES_DIR) as builtin_templates,
         ExitStack() as stack,
     ):
-        # Collect the resource types the workloads reference
-        referenced = {resource.type for workload in workloads for resource in workload.document.resources.values()}
-
         # Select the rendering's provisioner files that declare a referenced type
-        selected: list[tuple[str, list[Yaml]]] = []
-        rendering_dir = score_dir / rendering
-        if rendering_dir.is_dir():
-            for path in sorted(rendering_dir.glob("*.yaml")):
-                entries = yaml.safe_load(path.read_text(encoding="utf-8"))
-                if is_list(entries) and any(is_mapping(entry) and entry.get("type") in referenced for entry in entries):
-                    selected.append((f"{rendering}/{path.name}", entries))
+        selected = select_provisioner_files(score_dir, rendering, workloads)
 
         # Compile the selected provisioners into a per-run tempdir under score_dir
         paths: list[Path] = []
         directory = Path(stack.enter_context(TemporaryDirectory(prefix="compiled-provisioners-", dir=score_dir)))
         for name, entries in selected:
-            context = MarkerContext(root=root, images=images, source=name)
+            context = MarkerContext(
+                root=root,
+                images=images,
+                source=name,
+                repository=config.repository,
+                builds=config.images,
+            )
             compiled_entries: list[Yaml] = []
             for entry in entries:
                 resolved = resolve_markers(entry, context)
@@ -220,7 +161,7 @@ def render_score(
         copies_directory = Path(stack.enter_context(TemporaryDirectory()))
 
         for workload in workloads:
-            expanded = dump_yaml(workload.raw)
+            expanded = dump_yaml(injected_workload(config, workload, variable_values))
             for variable, value in variable_values.items():
                 expanded = expanded.replace(f"${{{variable}}}", value)
 
@@ -239,12 +180,51 @@ def render_score(
         bash(f"{tool} generate {rendered} --output {output.as_posix()}", cwd=working_dir, env=variable_values)
 
 
-def load_workloads(score_dir: Path, names: list[str], lens: type[WorkloadDocument]) -> list[LoadedWorkload]:
-    loaded: list[LoadedWorkload] = []
-    for name in names:
-        raw = yaml.safe_load((score_dir / name).read_text(encoding="utf-8"))
-        loaded.append(LoadedWorkload(name, raw, lens.parse(raw, name)))
-    return loaded
+def injected_workload(config: ConfigFile, workload: LoadedWorkload, variable_values: dict[str, str]) -> Yaml:
+    # The image reference is composed from the container's declared source and injected
+    # before score sees the document; it is never authored in the workload file.
+    sources = workload.document.container_sources()
+    if not sources:
+        return workload.raw
+    document = copy.deepcopy(workload.raw)
+    containers = document["containers"]
+    if not is_mapping(containers):
+        raise ValueError(f"{workload.file_name}: containers must be a mapping")
+    for container, (kind, value) in sources.items():
+        if kind == "lock":
+            reference = variable_values.get(value)
+            if reference is None:
+                raise ValueError(f"{workload.file_name}: containers.{container}: {value} names no lock entry")
+        else:
+            stem = dockerfile_stem(value)
+            image = config.images.get(stem)
+            if image is None:
+                raise ValueError(
+                    f"{workload.file_name}: containers.{container}: the dockerfile {value!r} names no image in the build set"
+                )
+            if config.repository is None:
+                raise ValueError(
+                    f"{workload.file_name}: containers.{container}: repository is required by the build set"
+                )
+            variant = None
+            if image.axis is not None:
+                variant = variable_values.get(image.axis)
+                if variant is None:
+                    raise ValueError(
+                        f"{workload.file_name}: containers.{container}: {image.name} carries the axis "
+                        f"{image.axis}, which this rendering selects no value for"
+                    )
+            tag = variable_values.get(image.sha_env)
+            if tag is None:
+                raise ValueError(
+                    f"{workload.file_name}: containers.{container}: {image.sha_env} names no tree tag in this rendering"
+                )
+            reference = compose_image_reference(config.repository, image, tag, variant)
+        entry = containers[container]
+        if not is_mapping(entry):
+            raise ValueError(f"{workload.file_name}: containers.{container} must be a mapping")
+        entry["image"] = reference
+    return document
 
 
 def dump_yaml(value: Yaml) -> str:

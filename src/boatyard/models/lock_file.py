@@ -6,8 +6,7 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 
-from boatyard.config.config import ConfigFile, bundle_lock_key, chart_lock_key
-from boatyard.config.values import PLATFORM_KEY
+from boatyard.models.config_file import PLATFORM_KEY, ConfigFile, Slot, bundle_lock_key, chart_lock_key
 from boatyard.paths import LOCK_PATH, VALUES_FILE
 from boatyard.temp import PLATFORM_PATTERN, SHA256_DIGEST_REGEX
 from boatyard.yaml import load_yaml_model
@@ -23,8 +22,7 @@ class LockFile(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self, info: ValidationInfo) -> Self:
-        context: dict[str, object] = info.context or {}
-        source = str(context.get("path", "the image lock"))
+        source = _source(info)
         for name, reference in self.charts.items():
             if not _digest_pinned(reference):
                 raise ValueError(f"{source}: chart {name} is not digest-pinned ({reference!r})")
@@ -35,48 +33,43 @@ class LockFile(BaseModel):
         )
         if shared:
             raise ValueError(f"{source}: names {shared} must appear under at most one of images, charts, bundles")
-        config = context.get("config")
-        if isinstance(config, ConfigFile):
-            self._require_paired(config, source)
         return self
-
-    def _require_paired(self, config: ConfigFile, source: str) -> None:
-        recorded = sorted(self.platforms)
-        declared = sorted(config.platforms)
-        if recorded != declared:
-            raise ValueError(
-                f"{source}: records platforms {recorded} but boatyard.yml declares {declared} (run boatyard lock)"
-            )
-        for name, entry in self.images.items():
-            if sorted(entry.platforms) != recorded:
-                raise ValueError(
-                    f"{source}: image entry {name} records platforms {sorted(entry.platforms)} "
-                    f"but the lock records {recorded} (run boatyard lock)"
-                )
-        missing_images = sorted(set(config.base_images) - self.images.keys())
-        if missing_images:
-            raise ValueError(f"{source}: lacks the {missing_images} entries base_images declares (run boatyard lock)")
-        missing_charts = sorted({chart_lock_key(chart) for chart in config.declared_charts} - self.charts.keys())
-        if missing_charts:
-            raise ValueError(f"{source}: lacks the {missing_charts} entries k8s.charts declares (run boatyard lock)")
-        declared_names = (
-            set(config.base_images)
-            | {chart_lock_key(chart) for chart in config.declared_charts}
-            | {bundle_lock_key(name) for name, _reference, _entry in config.remote_declared_entries()}
-        )
-        orphans = sorted((self.images.keys() | self.charts.keys() | self.bundles.keys()) - declared_names)
-        if orphans:
-            raise ValueError(
-                f"{source}: records entries boatyard.yml no longer declares ({orphans}); run boatyard lock"
-            )
 
     @classmethod
     def load(cls, path: Path, config: ConfigFile) -> LockFile:
-        context: dict[str, object] = {"path": path.as_posix(), "config": config}
-        if not path.is_file():
-            # Every consumer reads a missing lock as the empty lock paired against the config.
-            return cls.model_validate({}, context=context)
-        return load_yaml_model(cls, path, context)
+        # Every consumer reads a missing lock as the empty lock paired against the config.
+        context: dict[str, object] = {"path": path.as_posix()}
+        lock = load_yaml_model(cls, path, context) if path.is_file() else cls.model_validate({}, context=context)
+
+        # Pair the lock against the config: platform sets, entry coverage, and orphans refuse.
+        source = path.as_posix()
+        recorded = sorted(lock.platforms)
+        declared = sorted(config.platforms)
+        if recorded != declared:
+            raise ValueError(f"{source}: records platforms {recorded} but boatyard.yml declares {declared}")
+        for name, entry in lock.images.items():
+            if sorted(entry.platforms) != recorded:
+                raise ValueError(
+                    f"{source}: image entry {name} records platforms {sorted(entry.platforms)} "
+                    f"but the lock records {recorded}"
+                )
+        refuse_local_lock_entries(lock, config, source)
+        effective_images = set(config.remote_base_images) | set(config.owned_images)
+        missing_images = sorted(effective_images - lock.images.keys())
+        if missing_images:
+            raise ValueError(f"{source}: lacks the {missing_images} image entries")
+        missing_charts = sorted({chart_lock_key(chart) for chart in config.declared_charts} - lock.charts.keys())
+        if missing_charts:
+            raise ValueError(f"{source}: lacks the {missing_charts} entries k8s.charts declares")
+        declared_names = (
+            effective_images
+            | {chart_lock_key(chart) for chart in config.declared_charts}
+            | {bundle_lock_key(name) for name, _reference, _entry in config.remote_declared_entries()}
+        )
+        orphans = sorted((lock.images.keys() | lock.charts.keys() | lock.bundles.keys()) - declared_names)
+        if orphans:
+            raise ValueError(f"{source}: records entries boatyard.yml no longer declares ({orphans})")
+        return lock
 
     def require(self, name: str, subject: str) -> str:
         if name in self.images:
@@ -84,8 +77,13 @@ class LockFile(BaseModel):
         if name in self.charts:
             return self.charts[name]
         if name in self.bundles:
-            return self.bundles[name].reference
-        raise ValueError(f"{subject}: {LOCK_PATH.as_posix()} lacks the {name} entry (run boatyard lock)")
+            return self.require_bundle(name, subject).reference
+        raise ValueError(f"{subject}: {LOCK_PATH.as_posix()} lacks the {name} entry")
+
+    def require_bundle(self, name: str, subject: str) -> ConfigLockBundle:
+        if name in self.bundles:
+            return self.bundles[name]
+        raise ValueError(f"{subject}: {LOCK_PATH.as_posix()} lacks the {name} entry")
 
     def index_references(self) -> dict[str, str]:
         return {**{name: entry.index for name, entry in self.images.items()}, **self.charts}
@@ -99,7 +97,7 @@ class LockFile(BaseModel):
                 resolved = self.platforms[0]
             else:
                 raise ValueError(
-                    f"platforms {self.platforms} are recorded; {PLATFORM_KEY}: must be named in {VALUES_FILE.name}"
+                    f"{PLATFORM_KEY} must be named in {VALUES_FILE.name} (the lock records {self.platforms})"
                 )
         elif self.platforms and platform not in self.platforms:
             raise ValueError(f"{PLATFORM_KEY}: {platform!r} must be one of the recorded platforms {self.platforms}")
@@ -107,6 +105,9 @@ class LockFile(BaseModel):
             resolved = platform
         if resolved is None:
             return self.index_references()
+        missing = [name for name, entry in self.images.items() if resolved not in entry.platforms]
+        if missing:
+            raise ValueError(f"image entry {missing[0]} lacks the {resolved} manifest")
         return {**{name: entry.platforms[resolved] for name, entry in self.images.items()}, **self.charts}
 
 
@@ -118,8 +119,7 @@ class ConfigLockEntry(BaseModel):
 
     @model_validator(mode="after")
     def _require_digest_pins(self, info: ValidationInfo) -> Self:
-        context: dict[str, object] = info.context or {}
-        source = str(context.get("path", "the image lock"))
+        source = _source(info)
         for site, reference in [("index", self.index), *self.platforms.items()]:
             if not _digest_pinned(reference):
                 raise ValueError(f"{source}: entry field {site} is not digest-pinned ({reference!r})")
@@ -137,15 +137,27 @@ class ConfigLockBundle(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     reference: str
-    requires: list[str] = Field(default_factory=list)
+    slots: dict[str, Slot] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _require_digest_pin(self, info: ValidationInfo) -> Self:
-        context: dict[str, object] = info.context or {}
-        source = str(context.get("path", "the image lock"))
         if not _digest_pinned(self.reference):
-            raise ValueError(f"{source}: bundle entry is not digest-pinned ({self.reference!r})")
+            raise ValueError(f"{_source(info)}: bundle entry is not digest-pinned ({self.reference!r})")
         return self
+
+
+def refuse_local_lock_entries(lock: LockFile, config: ConfigFile, source: str) -> None:
+    local_bases = sorted(set(config.base_images) - set(config.remote_base_images))
+    stale_local = sorted(set(local_bases) & lock.images.keys())
+    if stale_local:
+        raise ValueError(
+            f"{source}: records the local entries {stale_local}; the lock pairs remote base_images entries only"
+        )
+
+
+def _source(info: ValidationInfo) -> str:
+    context: dict[str, object] = info.context or {}
+    return str(context.get("path", "the image lock"))
 
 
 def _digest_pinned(reference: str) -> bool:
