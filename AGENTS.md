@@ -39,7 +39,7 @@ Design intent and silent-failure traps, one fact per bullet.
   demand is its rendered bundle artifact's own `${NAME}` slots.
 - A service group derives its option set from one declared variant axis (`axes:` plus
   group-level `workloads:`) or authors it (`options:`); the axis name is the one spelling
-  across the Dockerfile ARG, the workload slot, and the k8s selection — never re-described by hand.
+  across the Dockerfile ARG and the k8s selection — never re-described by hand.
 - Plain score-compose silently drops `httpGet` probes; boatyard's lens makes the omission loud
   instead via the workload's `outernet.internal/probe-adapter` annotation.
 - Substrate needs live in workload files as `outernet.internal/*` annotations — `boatyard.yml`
@@ -58,7 +58,8 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
 - `extra="forbid"` everywhere in pydantic models; per-field shape in `field_validator`s,
   cross-field shape in one `model_validator(mode="after")` per model.
 - Every `load()` takes a full path. YAML kinds go through `load_yaml_model` (`yaml.py` strict load);
-  `load_images(root, base_images, owned_images)` derives the image set from the Dockerfile tree;
+  `load_images(root, base_images, owned_images, declared)` derives the image set from the declared
+  dockerfile edges (workload source annotations, provisioner markers, built entries);
   `LockFile.load(path, config)` reads a missing lock as the empty lock.
 - Every pydantic-modeled file kind owns exactly one module in `models/` (boatyard.yml, the lock,
   values, pins, workloads, the pyproject lens). Each module's types run root down, root
@@ -67,8 +68,10 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
   `image`/`workload`/`pyproject` ← `config_file` ← `lock_file` ← `lock`.
 - Nothing is caught only to be re-raised as a different exception; guards and third-party
   exceptions surface raw with full traceback; `typer.BadParameter` owns the CLI-flag layer.
-- The build set is derived from the Dockerfile tree inside `ConfigFile` load, never authored in
-  config.
+- The build set is the closure over declared edges — workload source annotations, provisioner
+  `dockerfile:` markers, built `base_images` entries — computed inside `ConfigFile` load, never
+  authored in config and never walked from the tree; a Dockerfile nothing declares is silently
+  not built, like an unlisted score file.
 - Authored provisioner files carry real YAML mappings and lists; the string form is generated. A
   field already in string form is a validation error.
 
