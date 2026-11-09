@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping, Set as AbstractSet
 from pathlib import Path
 from typing import NamedTuple
@@ -43,40 +42,33 @@ class AssemblyPlan(NamedTuple):
 
 
 def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyPlan:
-    # One deterministic, offline fold of the three files into the plan `up` renders: selection,
-    # the per-entry facts, the values refusals, and the interpolation.
+    # Fold the three files into the plan `up` renders
     source = values.source
     hand = values.flattened
     minted = _minted(config, values)
     consumer_manifests = lock.manifest_references(values.platform)
     members = config.members
 
-    # Every values-file name belongs to its computed vocabulary; an override names a ref entry.
     if values.gateway is not None and config.gateway is None:
-        raise ValueError(f"{source}: gateway: is set but boatyard.yml declares no gateway")
+        raise ValueError(f"{source}: gateway is set but boatyard.yml declares no gateway")
+
+    # Refuse values-file names outside their computed vocabularies
     selectable = {row.name: (row.root, row.option) for row in members if row.option is not None}
-    bare = [row.root for row in members if row.option is None]
     local_names = {row.name for row in members if not row.entry.remote}
     remote_names = {row.name for row in members if row.entry.remote}
     port_vocabulary = {row.name for row in members if row.effective_ports}
-    for site, names, vocabulary, noun, note in (
-        (
-            "bundles",
-            values.bundles,
-            sorted(selectable),
-            "selectable options",
-            f" (bare entries, always included: {bare})" if bare else "",
-        ),
-        ("ports", values.ports, sorted(port_vocabulary), "port-declaring entries", ""),
-        ("path_overrides", values.path_overrides, sorted(remote_names), "ref entries", ""),
-        ("values.images", values.values.images, sorted(local_names), "local entries", ""),
-        ("values.bundles", values.values.bundles, sorted(remote_names), "ref entries", ""),
+    for site, names, vocabulary, noun in (
+        ("bundles", values.bundles, set(selectable), "selectable options"),
+        ("ports", values.ports, port_vocabulary, "port-declaring entries"),
+        ("path_overrides", values.path_overrides, remote_names, "ref entries"),
+        ("values.images", values.values.images, local_names, "local entries"),
+        ("values.bundles", values.values.bundles, remote_names, "ref entries"),
     ):
-        unknown = sorted(set(names) - set(vocabulary))
+        unknown = sorted(set(names) - vocabulary)
         if unknown:
-            raise ValueError(f"{source}: {site}: names {unknown} are not among the {noun} {vocabulary}{note}")
+            raise ValueError(f"{source}: {site}: names {unknown} are not among the {noun}")
 
-    # Selection: one option per group; bare entries ride unconditionally.
+    # Select one option per group and ride the bare entries
     choices: dict[str, str] = {}
     for name in values.bundles:
         group, option_name = selectable[name]
@@ -100,7 +92,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
     selected = {service.name: service for service in services}
     participating = set(selected)
 
-    # The per-entry facts: one walk answers every unit's surface, include, lock fan, and tree fan.
+    # Derive every entry's surface, include, and fans in one walk
     root = config.root
     includes: list[str] = []
     lock_entries: dict[str, str] = {}
@@ -112,19 +104,20 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
         service = selected.get(name)
 
         if row.entry.ref is not None:
-            # A pinned ref contributes its lock-recorded surface; an override replaces it below
+            # Take a remote ref's surface from its lock record
             lock_key = bundle_lock_key(name)
             record = lock.bundles.get(lock_key)
             if record is not None:
                 slots_by_unit[name] = dict(record.slots)
             if name not in values.path_overrides:
                 if service is not None:
+                    # Include a pinned ref by its lock digest
                     pinned = lock.require(lock_key, f"bundle {name!r}")
                     includes.append(f"{OCI_REFERENCE_PREFIX}{pinned}")
                 continue
             if service is None:
                 continue
-            # An overridden ref includes through its local path inside the producer repo
+            # Include an overridden ref through its producer repo
             bundle_path = _override_bundle_path(values, name, root).resolve()
             producer_root = bundle_path.parents[3]
             if not (producer_root / DEFAULT_CONFIG_PATH).is_file():
@@ -136,12 +129,10 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
             lock_references = producer_lock.manifest_references(values.platform)
             tree_root, tree_images = producer_root, producer_config.images
         else:
-            # A local entry contributes its rendered bundle artifact's own surface
+            # Include a local entry through its rendered bundle artifact
             bundle_path = compose_bundle_output_path(root, name).resolve()
             if not bundle_path.is_file():
-                raise ValueError(
-                    f"services entry {name!r} lacks its bundle output {bundle_path.as_posix()} (run generate-score)"
-                )
+                raise ValueError(f"services entry {name!r} lacks its bundle output {bundle_path.as_posix()}")
             lock_references = consumer_manifests
             tree_root, tree_images = root, config.images
 
@@ -149,7 +140,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
         slots_by_unit[name] = artifact_slots([text])
         if service is None:
             continue
-        # Refuse reserved services and unresolved route/port references against the bundle text
+        # Refuse reserved services and unresolved route/port references
         service_names = refuse_unresolved_references(name, service.routes, service.ports, [text], prefix=f"{name}-")
         if EDGE_SERVICE_NAME in service_names:
             raise ValueError(
@@ -161,19 +152,16 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
             shas_by_root[tree_root] = {image.sha_env: image.compute_sha(tree_root) for image in tree_images.values()}
         tree_entries.update({env_tree_slot(name, sha): value for sha, value in shas_by_root[tree_root].items()})
 
-    # Values sections: every key sits in its consuming unit's section; shared keys are shared.
+    # Refuse values keys consumed by no surface or beyond their unit
     consumers: dict[str, set[str]] = {}
     for unit, slots in slots_by_unit.items():
         for name in slots:
             consumers.setdefault(name, set()).add(unit)
     for site, entries in (("values.images", values.values.images), ("values.bundles", values.values.bundles)):
         for name in sorted(entries):
-            surface = sorted(slots_by_unit.get(name, {}))
             for key in sorted(entries[name]):
                 if key not in slots_by_unit.get(name, {}):
-                    raise ValueError(
-                        f"{source}: {site}.{name}: {key} is consumed by no surface of {name} (the surface is {surface})"
-                    )
+                    raise ValueError(f"{source}: {site}.{name}: {key} is consumed by no surface of {name}")
                 if consumers[key] - {name}:
                     raise ValueError(
                         f"{source}: {site}.{name}: {key} is consumed by {', '.join(sorted(consumers[key]))}, "
@@ -186,7 +174,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
             [home] = consumers[name]
             raise ValueError(f"{source}: values.shared: {name} is consumed by {home} only")
 
-    # The interpolation grammar: bare references only, roots resolvable, no cycles.
+    # Refuse non-bare references, unresolvable roots, and cycles
     sections: dict[str, Mapping[str, str]] = {"values.shared": values.values.shared}
     sections.update((f"values.images.{unit}", section) for unit, section in values.values.images.items())
     sections.update((f"values.bundles.{unit}", section) for unit, section in values.values.bundles.items())
@@ -195,10 +183,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
     for site, section in sorted(sections.items()):
         for name, value in section.items():
             if "${" in PLACEHOLDER.sub("", value):
-                raise ValueError(
-                    f"{source}: {site}: {name}: only bare ${{NAME}} references are legal — "
-                    f"no defaults, operators, filters, or nesting"
-                )
+                raise ValueError(f"{source}: {site}: {name}: only bare ${{NAME}} references are legal")
             for reference in PLACEHOLDER.findall(value):
                 if any(marker in reference for marker in RESERVED_SLOT_MARKERS):
                     raise ValueError(f"{source}: {site}: {name}: ${{{reference}}} must not carry a reserved marker")
@@ -208,10 +193,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
     unresolvable = sorted({reference for referenced in references.values() for reference in referenced} - roots)
     if unresolvable:
         name = min(name for name, referenced in references.items() if referenced & set(unresolvable))
-        raise ValueError(
-            f"{source}: {sites[name]}: {name}: ${{{unresolvable[0]}}} resolves to no root "
-            f"(the roots are {sorted(roots)})"
-        )
+        raise ValueError(f"{source}: {sites[name]}: {name}: ${{{unresolvable[0]}}} resolves to no root")
     hand_references = {
         name: {reference for reference in PLACEHOLDER.findall(value) if reference in hand}
         for name, value in hand.items()
@@ -219,7 +201,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
     order, blocked = _peel_references(hand_references)
     if blocked:
         cycle_nodes = {name: hand_references[name] & set(blocked) for name in blocked}
-        # Every blocked name keeps a blocked successor, so the walk repeats a node exactly on the cycle
+        # Follow blocked successors until a node repeats
         seen: dict[str, int] = {}
         chain: list[str] = []
         node = min(cycle_nodes)
@@ -230,7 +212,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
         cycle = chain[seen[node] :]
         raise ValueError(f"{source}: reference cycle: {' -> '.join([*cycle, cycle[0]])}")
 
-    # Every required slot is filled by some declared source.
+    # Refuse required slots no declared source fills
     filled = set(hand) | set(minted)
     missing: dict[str, list[str]] = {}
     for unit in sorted(participating):
@@ -241,10 +223,8 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
             missing[unit] = unfilled
     if missing:
         unit, absent = min(missing.items())
-        ignored = sorted(shell_name for shell_name in absent if os.environ.get(shell_name))
-        note = f" ({', '.join(ignored)} are set in the shell and ignored)" if ignored else ""
         home = "images" if unit in local_names else "bundles"
-        raise ValueError(f"{source}: values.{home}.{unit} requires {absent}, which no declared source fills{note}")
+        raise ValueError(f"{source}: values.{home}.{unit} requires {absent}, which no declared source fills")
 
     consumed = sorted({name for unit in participating for name in slots_by_unit.get(unit, {})})
     resolved_values = dict(minted)
@@ -283,8 +263,7 @@ def _minted(config: ConfigFile, values: ValuesFile) -> dict[str, str]:
 
 
 def _peel_references(references: Mapping[str, AbstractSet[str]]) -> tuple[list[str], list[str]]:
-    # Answer the peel order (a name peels only after every name it references peels) and
-    # the names a cycle leaves blocked
+    # Answer the peel order and the cycle-blocked names
     blocked: dict[str, set[str]] = {name: set(targets) for name, targets in references.items()}
     order: list[str] = []
     ready = sorted(name for name, targets in blocked.items() if not targets)

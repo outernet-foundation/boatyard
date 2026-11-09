@@ -530,16 +530,14 @@ class TestSelectionLaw:
         assert document["services"]["edge"]["ports"] == [{"target": 8443, "published": 8080, "protocol": "tcp"}]
         assert document["configs"]["devkit-edge-caddyfile"]["content"] == ":8443 {\n}\n"
 
-    def test_unknown_name_refuses_listing_the_vocabulary(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_unknown_bundle_name_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._invoke_up(tmp_path, monkeypatch, bundles="placeframe-cuda,ghost")
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        message = str(result.exception)
-        assert "ghost" in message
-        assert "placeframe-cuda" in message and "auth-keycloak" in message and "livekit" in message
+        assert "names ['ghost'] are not among the selectable options" in str(result.exception)
 
     def test_a_bare_entry_name_is_not_selectable(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._invoke_up(tmp_path, monkeypatch, bundles="livekit")
@@ -890,18 +888,6 @@ class TestUpValidation:
         result = self._invoke_up(tmp_path, monkeypatch)
 
         assert result.exit_code == 0, result.output
-
-    def test_an_unfilled_requirement_set_in_the_shell_is_named_as_ignored(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        _write_consumer_tree(tmp_path, api_environment={"TOKEN": "${API_TOKEN:?err}"})
-        monkeypatch.setenv("API_TOKEN", "shell-value")
-
-        result = self._invoke_up(tmp_path, monkeypatch)
-
-        assert result.exit_code != 0
-        assert isinstance(result.exception, ValueError)
-        assert "API_TOKEN are set in the shell and ignored" in str(result.exception)
 
 
 class TestSharedNames:
@@ -1474,9 +1460,7 @@ class TestBundleOverrides:
         assert isinstance(result.exception, ValueError)
         assert "must be a filesystem path, not a URL" in str(result.exception)
 
-    def test_an_unknown_override_name_refuses_listing_the_vocabulary(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_an_unknown_override_name_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         consumer = tmp_path / "consumer"
         consumer.mkdir()
         _write_override_consumer(
@@ -1488,9 +1472,7 @@ class TestBundleOverrides:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        message = str(result.exception)
-        assert "path_overrides: names ['ghost']" in message
-        assert "placeframe-cuda" in message
+        assert "path_overrides: names ['ghost'] are not among the ref entries" in str(result.exception)
 
     def test_an_override_naming_a_local_entry_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         consumer = tmp_path / "consumer"
@@ -1511,7 +1493,6 @@ class TestBundleOverrides:
         message = str(result.exception)
         assert "path_overrides: names [\x27extra-main\x27]" in message
         assert "are not among the ref entries" in message
-        assert "placeframe-cuda" in message
 
     def test_an_unselected_override_is_inert(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         consumer = tmp_path / "consumer"

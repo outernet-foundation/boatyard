@@ -256,12 +256,12 @@ def test_the_minted_edge_base_url_key_refuses_without_a_gateway(tmp_path: Path) 
     assert "EDGE_BASE_URL is not hand-settable (minted from the gateway declaration)" in message
 
 
-def test_an_unknown_ports_override_refuses_listing_the_vocabulary(tmp_path: Path) -> None:
+def test_an_unknown_ports_override_refuses(tmp_path: Path) -> None:
     values = _filled_values({"ports": {"ghost": 1234}})
 
     message = _refusal(tmp_path, values, ports=[{"service": "api", "published": 5678, "target": 5678}])
 
-    assert "ports: names ['ghost'] are not among the port-declaring entries ['core-main']" in message
+    assert "ports: names ['ghost'] are not among the port-declaring entries" in message
 
 
 def test_a_gateway_override_without_a_declared_gateway_refuses(tmp_path: Path) -> None:
@@ -269,7 +269,7 @@ def test_a_gateway_override_without_a_declared_gateway_refuses(tmp_path: Path) -
 
     message = _refusal(tmp_path, values)
 
-    assert "gateway: is set but boatyard.yml declares no gateway" in message
+    assert "gateway is set but boatyard.yml declares no gateway" in message
 
 
 def test_typed_port_and_gateway_overrides_load(tmp_path: Path) -> None:
@@ -387,16 +387,6 @@ def test_an_override_demands_from_its_artifact_text(tmp_path: Path) -> None:
     assert "values.bundles.monitor requires ['OVR_TOKEN']" in message
 
 
-def test_a_fill_refusal_names_shell_set_values_as_ignored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    values = _filled_values()
-    del values["values"]["images"]["core-main"]["API_TOKEN"]  # type: ignore[index]
-    monkeypatch.setenv("API_TOKEN", "shell-value")
-
-    message = _refusal(tmp_path, values)
-
-    assert "API_TOKEN are set in the shell and ignored" in message
-
-
 def test_a_reference_to_a_sibling_key_resolves_at_render(tmp_path: Path) -> None:
     values = _filled_values()
     values["values"]["images"]["core-main"] = _core_values(API_TOKEN="${PROV_TOKEN}-token")  # type: ignore[index]
@@ -477,14 +467,13 @@ def test_the_minted_edge_base_url_is_no_root_when_no_gateway_is_declared(tmp_pat
     assert "${EDGE_BASE_URL} resolves to no root" in message
 
 
-def test_an_unresolvable_reference_refuses_listing_the_roots(tmp_path: Path) -> None:
+def test_an_unresolvable_reference_refuses(tmp_path: Path) -> None:
     values = _filled_values()
     values["values"]["images"]["core-main"] = _core_values(API_TOKEN="${GHOST}")  # type: ignore[index]
 
     message = _refusal(tmp_path, values)
 
     assert "${GHOST} resolves to no root" in message
-    assert "the roots are ['API_TOKEN', 'BIND_TOKEN', 'MON_TOKEN', 'PROV_TOKEN']" in message
 
 
 def test_a_default_spelling_refuses(tmp_path: Path) -> None:
