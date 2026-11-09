@@ -54,7 +54,8 @@ def _derive(
         "services": {"ext": {"ref": "oci://ghcr.io/org/ext:0.1.0"}},
     }
     if local:
-        payload["services"] = {"core": {"workloads": [f"{name}.yaml" for name in names]}}
+        workload_names = [f"{name}.yaml" for name in names]
+        payload["services"] = {"core": {"options": {"main": {"workloads": workload_names}}}}
     elif names:
         payload["k8s"] = {"workloads": [f"{name}.yaml" for name in names]}
     (tmp_path / "boatyard.yml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")

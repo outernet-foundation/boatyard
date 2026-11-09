@@ -97,8 +97,13 @@ ROOT_BUNDLE_SECTION = {
     "repository": REPOSITORY,
     "project_name": "example",
     "services": {
-        "core": {"axes": {"TORCH_DEVICE": ["cuda", "rocm"]}, "workloads": ["api.yaml"]},
-        "gateway-open": {"workloads": ["gateway.yaml"]},
+        "core": {
+            "options": {
+                "cuda": {"workloads": ["api.yaml"], "vars": {"TORCH_DEVICE": "cuda"}},
+                "rocm": {"workloads": ["api.yaml"], "vars": {"TORCH_DEVICE": "rocm"}},
+            }
+        },
+        "gateway": {"options": {"open": {"workloads": ["gateway.yaml"]}}},
     },
 }
 
@@ -222,7 +227,7 @@ class TestPublishComposeVerb:
                 "project_name": "livekit-tier",
                 "platforms": ["linux/amd64"],
                 "gateway": 18443,
-                "services": {"livekit-tier": {"workloads": ["livekit-token.yaml"]}},
+                "services": {"livekit": {"options": {"tier": {"workloads": ["livekit-token.yaml"]}}}},
             },
         )
         (tmp_path / "workloads" / "livekit-token").mkdir(parents=True)

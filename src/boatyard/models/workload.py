@@ -125,21 +125,6 @@ def _parse_source_annotation(annotations: dict[str, str], name: str) -> dict[str
     return sources
 
 
-class ComposeWorkloadDocument(WorkloadDocument):
-    @model_validator(mode="after")
-    def _require_probe_adapter_for_http_get(self) -> Self:
-        if self.metadata.annotations.get(PROBE_ADAPTER_ANNOTATION) is not None:
-            return self
-        for container in self.containers.values():
-            for probe, block in (
-                ("readinessProbe", container.readiness_probe),
-                ("livenessProbe", container.liveness_probe),
-            ):
-                if block is not None and block.http_get is not None:
-                    raise ValueError(f"a {probe} httpGet requires {PROBE_ADAPTER_ANNOTATION}")
-        return self
-
-
 class WorkloadMetadata(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -185,13 +170,31 @@ class LoadedWorkload(NamedTuple):
     document: WorkloadDocument
 
 
-def load_workload(score_dir: Path, file_name: str, lens: type[WorkloadDocument]) -> LoadedWorkload:
+def load_workload(score_dir: Path, file_name: str) -> LoadedWorkload:
     workload_path = score_dir / file_name
     if not workload_path.is_file():
         raise ValueError(f"{workload_path.as_posix()}: the workload file is required")
     text = workload_path.read_text(encoding="utf-8")
     raw = yaml.safe_load(text)
-    return LoadedWorkload(file_name, text, raw, lens.parse(raw, file_name))
+    return LoadedWorkload(file_name, text, raw, WorkloadDocument.parse(raw, file_name))
+
+
+def require_compose_probe_adapters(workloads: list[LoadedWorkload]) -> None:
+    # Plain score-compose silently drops httpGet probes; this check makes the omission loud
+    # before the compose rendering runs (the k8s rendering renders probes natively).
+    for workload in workloads:
+        if workload.document.metadata.annotations.get(PROBE_ADAPTER_ANNOTATION) is not None:
+            continue
+        for container in workload.document.containers.values():
+            for probe, block in (
+                ("readinessProbe", container.readiness_probe),
+                ("livenessProbe", container.liveness_probe),
+            ):
+                if block is not None and block.http_get is not None:
+                    raise ValueError(
+                        f"{workload.file_name}: a {probe} httpGet requires {PROBE_ADAPTER_ANNOTATION} "
+                        "(the compose rendering)"
+                    )
 
 
 def select_provisioner_files(

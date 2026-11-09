@@ -48,7 +48,7 @@ PROVISIONER = """\
 # under the entry marker, and consumer-interpolated content lands un-doubled.
 BUNDLE = (
     "services:\n"
-    "  core-api:\n"
+    "  core-main-api:\n"
     f"    image: ghcr.io/org/loki:3.0@{FAKE_DIGEST}\n"
     "    environment:\n"
     "      TOKEN: ${API_TOKEN:?err}\n"
@@ -57,7 +57,7 @@ BUNDLE = (
     "    environment:\n"
     "      PROV_TOKEN: ${PROV_TOKEN:?err}\n"
     "configs:\n"
-    "  core-client.toml:\n"
+    "  core-main-client.toml:\n"
     "    content: |\n"
     '      remote_addr = "${BIND_TOKEN:?err}"\n'
 )
@@ -86,11 +86,11 @@ def _write_repo(
     (score / "api.yaml").write_text(WORKLOAD, encoding="utf-8")
     (score / "compose").mkdir()
     (score / "compose" / "services.yaml").write_text(PROVISIONER, encoding="utf-8")
-    bundle_output = root / "stack" / "generated" / "compose" / "compose.core.yaml"
+    bundle_output = root / "stack" / "generated" / "compose" / "compose.core-main.yaml"
     bundle_output.parent.mkdir(parents=True)
     bundle_output.write_text(bundle, encoding="utf-8")
     base_images: dict[str, str] = {"LOKI_IMAGE": "docker.io/grafana/loki:3.0"}
-    core_entry: dict[str, object] = {"workloads": ["api.yaml"]}
+    core_entry: dict[str, object] = {"options": {"main": {"workloads": ["api.yaml"]}}}
     if ports is not None:
         core_entry["ports"] = ports
     config: dict[str, object] = {
@@ -136,10 +136,11 @@ def _write_repo(
 
 def _filled_values(extra: dict[str, object] | None = None) -> dict[str, object]:
     values: dict[str, object] = {
+        "bundles": ["core-main"],
         "values": {
-            "images": {"core": {"API_TOKEN": "one", "BIND_TOKEN": "two", "PROV_TOKEN": "three"}},
+            "images": {"core-main": {"API_TOKEN": "one", "BIND_TOKEN": "two", "PROV_TOKEN": "three"}},
             "bundles": {"monitor": {"MON_TOKEN": "four"}},
-        }
+        },
     }
     if extra is not None:
         values.update(extra)
@@ -187,16 +188,16 @@ def test_a_filled_surface_loads_and_flattens(tmp_path: Path) -> None:
         "PROV_TOKEN": "three",
         "MON_TOKEN": "four",
     }
-    assert [service.name for service in _resolve(root).services] == ["core", "monitor"]
+    assert [service.name for service in _resolve(root).services] == ["core-main", "monitor"]
 
 
 def test_an_orphan_key_refuses_naming_the_section(tmp_path: Path) -> None:
     values = _filled_values()
-    values["values"]["images"]["core"]["GHOST"] = "x"  # type: ignore[index]
+    values["values"]["images"]["core-main"]["GHOST"] = "x"  # type: ignore[index]
 
     message = _refusal(tmp_path, values)
 
-    assert "values.images.core: GHOST is consumed by no surface of core" in message
+    assert "values.images.core-main: GHOST is consumed by no surface of core-main" in message
 
 
 def test_a_key_consumed_by_two_units_refuses_naming_shared(tmp_path: Path) -> None:
@@ -205,17 +206,17 @@ def test_a_key_consumed_by_two_units_refuses_naming_shared(tmp_path: Path) -> No
 
     message = _refusal(tmp_path, values, slots={"API_TOKEN": {"required": False}, "MON_TOKEN": {"required": True}})
 
-    assert "values.images.core: API_TOKEN is consumed by core, monitor, not core alone" in message
+    assert "values.images.core-main: API_TOKEN is consumed by core-main, monitor, not core-main alone" in message
 
 
 def test_a_shared_key_consumed_by_one_unit_refuses_naming_its_home(tmp_path: Path) -> None:
     values = _filled_values()
-    del values["values"]["images"]["core"]["PROV_TOKEN"]  # type: ignore[index]
+    del values["values"]["images"]["core-main"]["PROV_TOKEN"]  # type: ignore[index]
     values["values"]["shared"] = {"PROV_TOKEN": "three"}  # type: ignore[index]
 
     message = _refusal(tmp_path, values)
 
-    assert "values.shared: PROV_TOKEN is consumed by core only" in message
+    assert "values.shared: PROV_TOKEN is consumed by core-main only" in message
 
 
 def test_a_shared_key_consumed_by_nothing_refuses(tmp_path: Path) -> None:
@@ -260,7 +261,7 @@ def test_an_unknown_ports_override_refuses_listing_the_vocabulary(tmp_path: Path
 
     message = _refusal(tmp_path, values, ports=[{"service": "api", "published": 5678, "target": 5678}])
 
-    assert "ports: names ['ghost'] are not among the port-declaring entries ['core']" in message
+    assert "ports: names ['ghost'] are not among the port-declaring entries ['core-main']" in message
 
 
 def test_a_gateway_override_without_a_declared_gateway_refuses(tmp_path: Path) -> None:
@@ -272,7 +273,7 @@ def test_a_gateway_override_without_a_declared_gateway_refuses(tmp_path: Path) -
 
 
 def test_typed_port_and_gateway_overrides_load(tmp_path: Path) -> None:
-    values = _filled_values({"gateway": 9000, "ports": {"core": 1234}})
+    values = _filled_values({"gateway": 9000, "ports": {"core-main": 1234}})
 
     parsed = _load(
         _write_repo(
@@ -284,7 +285,7 @@ def test_typed_port_and_gateway_overrides_load(tmp_path: Path) -> None:
     )
 
     assert parsed.gateway == 9000
-    assert parsed.ports == {"core": 1234}
+    assert parsed.ports == {"core-main": 1234}
 
 
 def test_an_optional_slot_rides_unfilled(tmp_path: Path) -> None:
@@ -307,31 +308,31 @@ def test_an_optional_slot_rides_unfilled(tmp_path: Path) -> None:
 
 def test_consumer_interpolated_content_demands(tmp_path: Path) -> None:
     values = _filled_values()
-    del values["values"]["images"]["core"]["BIND_TOKEN"]  # type: ignore[index]
+    del values["values"]["images"]["core-main"]["BIND_TOKEN"]  # type: ignore[index]
 
     message = _refusal(tmp_path, values)
 
-    assert "values.images.core requires ['BIND_TOKEN']" in message
+    assert "values.images.core-main requires ['BIND_TOKEN']" in message
 
 
 def test_provisioner_services_text_demands(tmp_path: Path) -> None:
     values = _filled_values()
-    del values["values"]["images"]["core"]["PROV_TOKEN"]  # type: ignore[index]
+    del values["values"]["images"]["core-main"]["PROV_TOKEN"]  # type: ignore[index]
 
     message = _refusal(tmp_path, values)
 
-    assert "values.images.core requires ['PROV_TOKEN']" in message
+    assert "values.images.core-main requires ['PROV_TOKEN']" in message
 
 
 def test_a_marker_lock_key_spelling_leaves_the_surface(tmp_path: Path) -> None:
     bundle = BUNDLE.replace(
-        f"image: ghcr.io/org/loki:3.0@{FAKE_DIGEST}", "image: ${CORE__BOATYARD_LOCK__LOKI_IMAGE:?err}"
+        f"image: ghcr.io/org/loki:3.0@{FAKE_DIGEST}", "image: ${CORE_MAIN__BOATYARD_LOCK__LOKI_IMAGE:?err}"
     )
     values = _filled_values()
     root = _write_repo(tmp_path, values, bundle=bundle)
 
     assert "LOKI_IMAGE" not in _load(root).flattened
-    assert [service.name for service in _resolve(root).services] == ["core", "monitor"]
+    assert [service.name for service in _resolve(root).services] == ["core-main", "monitor"]
 
 
 def test_an_unselected_options_section_still_orphan_refuses(tmp_path: Path) -> None:
@@ -380,7 +381,7 @@ def test_an_override_demands_from_its_artifact_text(tmp_path: Path) -> None:
 
 def test_a_fill_refusal_names_shell_set_values_as_ignored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     values = _filled_values()
-    del values["values"]["images"]["core"]["API_TOKEN"]  # type: ignore[index]
+    del values["values"]["images"]["core-main"]["API_TOKEN"]  # type: ignore[index]
     monkeypatch.setenv("API_TOKEN", "shell-value")
 
     message = _refusal(tmp_path, values)
@@ -390,7 +391,7 @@ def test_a_fill_refusal_names_shell_set_values_as_ignored(tmp_path: Path, monkey
 
 def test_a_reference_to_a_sibling_key_resolves_at_render(tmp_path: Path) -> None:
     values = _filled_values()
-    values["values"]["images"]["core"] = _core_values(API_TOKEN="${PROV_TOKEN}-token")  # type: ignore[index]
+    values["values"]["images"]["core-main"] = _core_values(API_TOKEN="${PROV_TOKEN}-token")  # type: ignore[index]
     root = _write_repo(tmp_path, values)
 
     assert _load(root).flattened == {
@@ -409,7 +410,7 @@ def test_a_reference_to_a_sibling_key_resolves_at_render(tmp_path: Path) -> None
 
 def test_a_reference_chains_through_another_reference(tmp_path: Path) -> None:
     values = _filled_values()
-    values["values"]["images"]["core"] = _core_values(  # type: ignore[index]
+    values["values"]["images"]["core-main"] = _core_values(  # type: ignore[index]
         API_TOKEN="u${BIND_TOKEN}", BIND_TOKEN="${PROV_TOKEN}b"
     )
     root = _write_repo(tmp_path, values)
@@ -424,7 +425,7 @@ def test_a_reference_chains_through_another_reference(tmp_path: Path) -> None:
 
 def test_the_minted_public_url_is_a_reference_root(tmp_path: Path) -> None:
     values = _filled_values({"public_url": "https://example.dev"})
-    values["values"]["images"]["core"] = _core_values(API_TOKEN="${PUBLIC_URL}/token")  # type: ignore[index]
+    values["values"]["images"]["core-main"] = _core_values(API_TOKEN="${PUBLIC_URL}/token")  # type: ignore[index]
     root = _write_repo(tmp_path, values)
 
     assert _resolve(root).values == {
@@ -438,7 +439,7 @@ def test_the_minted_public_url_is_a_reference_root(tmp_path: Path) -> None:
 
 def test_the_minted_public_url_is_no_root_when_public_url_is_absent(tmp_path: Path) -> None:
     values = _filled_values()
-    values["values"]["images"]["core"] = _core_values(API_TOKEN="${PUBLIC_URL}/token")  # type: ignore[index]
+    values["values"]["images"]["core-main"] = _core_values(API_TOKEN="${PUBLIC_URL}/token")  # type: ignore[index]
 
     message = _refusal(tmp_path, values)
 
@@ -447,7 +448,7 @@ def test_the_minted_public_url_is_no_root_when_public_url_is_absent(tmp_path: Pa
 
 def test_the_minted_edge_base_url_is_a_reference_root(tmp_path: Path) -> None:
     values = _filled_values()
-    values["values"]["images"]["core"] = _core_values(API_TOKEN="${EDGE_BASE_URL}/jwks")  # type: ignore[index]
+    values["values"]["images"]["core-main"] = _core_values(API_TOKEN="${EDGE_BASE_URL}/jwks")  # type: ignore[index]
     root = _write_repo(tmp_path, values, gateway=9443)
 
     assert _resolve(root).values == {
@@ -461,7 +462,7 @@ def test_the_minted_edge_base_url_is_a_reference_root(tmp_path: Path) -> None:
 
 def test_the_minted_edge_base_url_is_no_root_when_no_gateway_is_declared(tmp_path: Path) -> None:
     values = _filled_values()
-    values["values"]["images"]["core"] = _core_values(API_TOKEN="${EDGE_BASE_URL}/jwks")  # type: ignore[index]
+    values["values"]["images"]["core-main"] = _core_values(API_TOKEN="${EDGE_BASE_URL}/jwks")  # type: ignore[index]
 
     message = _refusal(tmp_path, values)
 
@@ -470,7 +471,7 @@ def test_the_minted_edge_base_url_is_no_root_when_no_gateway_is_declared(tmp_pat
 
 def test_an_unresolvable_reference_refuses_listing_the_roots(tmp_path: Path) -> None:
     values = _filled_values()
-    values["values"]["images"]["core"] = _core_values(API_TOKEN="${GHOST}")  # type: ignore[index]
+    values["values"]["images"]["core-main"] = _core_values(API_TOKEN="${GHOST}")  # type: ignore[index]
 
     message = _refusal(tmp_path, values)
 
@@ -480,7 +481,7 @@ def test_an_unresolvable_reference_refuses_listing_the_roots(tmp_path: Path) -> 
 
 def test_a_default_spelling_refuses(tmp_path: Path) -> None:
     values = _filled_values()
-    values["values"]["images"]["core"] = _core_values(API_TOKEN="${PROV_TOKEN:-three}")  # type: ignore[index]
+    values["values"]["images"]["core-main"] = _core_values(API_TOKEN="${PROV_TOKEN:-three}")  # type: ignore[index]
 
     message = _refusal(tmp_path, values)
 
@@ -489,7 +490,7 @@ def test_a_default_spelling_refuses(tmp_path: Path) -> None:
 
 def test_a_lowercase_reference_refuses(tmp_path: Path) -> None:
     values = _filled_values()
-    values["values"]["images"]["core"] = _core_values(API_TOKEN="${public_url}/token")  # type: ignore[index]
+    values["values"]["images"]["core-main"] = _core_values(API_TOKEN="${public_url}/token")  # type: ignore[index]
 
     message = _refusal(tmp_path, values)
 
@@ -498,7 +499,7 @@ def test_a_lowercase_reference_refuses(tmp_path: Path) -> None:
 
 def test_a_nested_reference_refuses(tmp_path: Path) -> None:
     values = _filled_values()
-    values["values"]["images"]["core"] = _core_values(API_TOKEN="${${PROV_TOKEN}}")  # type: ignore[index]
+    values["values"]["images"]["core-main"] = _core_values(API_TOKEN="${${PROV_TOKEN}}")  # type: ignore[index]
 
     message = _refusal(tmp_path, values)
 
@@ -507,18 +508,18 @@ def test_a_nested_reference_refuses(tmp_path: Path) -> None:
 
 def test_a_marker_reference_refuses(tmp_path: Path) -> None:
     values = _filled_values()
-    values["values"]["images"]["core"] = _core_values(  # type: ignore[index]
-        API_TOKEN="${CORE__BOATYARD_LOCK__PROV_TOKEN}"
+    values["values"]["images"]["core-main"] = _core_values(  # type: ignore[index]
+        API_TOKEN="${CORE_MAIN__BOATYARD_LOCK__PROV_TOKEN}"
     )
 
     message = _refusal(tmp_path, values)
 
-    assert "${CORE__BOATYARD_LOCK__PROV_TOKEN} must not carry a reserved marker" in message
+    assert "${CORE_MAIN__BOATYARD_LOCK__PROV_TOKEN} must not carry a reserved marker" in message
 
 
 def test_a_reference_cycle_refuses(tmp_path: Path) -> None:
     values = _filled_values()
-    values["values"]["images"]["core"] = _core_values(  # type: ignore[index]
+    values["values"]["images"]["core-main"] = _core_values(  # type: ignore[index]
         API_TOKEN="x${BIND_TOKEN}", BIND_TOKEN="y${API_TOKEN}"
     )
 
@@ -529,7 +530,7 @@ def test_a_reference_cycle_refuses(tmp_path: Path) -> None:
 
 def test_a_self_reference_refuses(tmp_path: Path) -> None:
     values = _filled_values()
-    values["values"]["images"]["core"] = _core_values(API_TOKEN="x${API_TOKEN}")  # type: ignore[index]
+    values["values"]["images"]["core-main"] = _core_values(API_TOKEN="x${API_TOKEN}")  # type: ignore[index]
 
     message = _refusal(tmp_path, values)
 
@@ -538,7 +539,7 @@ def test_a_self_reference_refuses(tmp_path: Path) -> None:
 
 def test_assembly_renders_resolved_values_with_the_minted_slot(tmp_path: Path) -> None:
     values = _filled_values({"public_url": "https://example.dev"})
-    values["values"]["images"]["core"] = _core_values(API_TOKEN="${PUBLIC_URL}/token")  # type: ignore[index]
+    values["values"]["images"]["core-main"] = _core_values(API_TOKEN="${PUBLIC_URL}/token")  # type: ignore[index]
     root = _write_repo(tmp_path, values)
 
     plan = _resolve(root)
@@ -554,7 +555,7 @@ def test_assembly_renders_resolved_values_with_the_minted_slot(tmp_path: Path) -
 
 def test_assembly_fills_the_minted_edge_base_url(tmp_path: Path) -> None:
     values = _filled_values()
-    values["values"]["images"]["core"] = _core_values(API_TOKEN="${EDGE_BASE_URL}/jwks")  # type: ignore[index]
+    values["values"]["images"]["core-main"] = _core_values(API_TOKEN="${EDGE_BASE_URL}/jwks")  # type: ignore[index]
     root = _write_repo(tmp_path, values, gateway=9443)
 
     plan = _resolve(root)

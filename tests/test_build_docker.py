@@ -55,13 +55,14 @@ def _write_repo(
         )
     if not dockerfiles:
         (score / "api.yaml").write_text("metadata:\n  name: api\ncontainers: {}\n", encoding="utf-8")
+    workload_names = [f"{service}.yaml" for service in sorted(dockerfiles or {})] or ["api.yaml"]
     payload: dict[str, Any] = {
         "requires": ">=0",
         "repository": repository,
         "project_name": "demo",
         "platforms": platforms or ["linux/amd64"],
         "services": {
-            "core": {"workloads": [f"{service}.yaml" for service in sorted(dockerfiles or {})] or ["api.yaml"]}
+            "core": ({"workloads": workload_names} if axes else {"options": {"main": {"workloads": workload_names}}})
         },
     }
     if base_images:

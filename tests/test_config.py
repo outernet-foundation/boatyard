@@ -224,26 +224,60 @@ class TestWorkloadReferences:
 
 
 class TestVariants:
-    def _write_services_config(
-        self, tmp_path: Path, services: dict[str, Any], *, extra: dict[str, Any] | None = None
-    ) -> None:
+    def _write_fanned_gpu_tree(self, tmp_path: Path, *, fan: bool = True) -> None:
+        # gpu FROMs the built neural-networks-base (which declares the TORCH_DEVICE fan)
+        # when fan is on, and a pulled base directly when off
+        write_dockerfile(
+            tmp_path,
+            "gpu",
+            "ARG NEURAL_NETWORKS_BASE\nFROM ${NEURAL_NETWORKS_BASE}\n"
+            if fan
+            else "ARG TOOLS_IMAGE\nFROM ${TOOLS_IMAGE}\n",
+        )
+        if fan:
+            write_dockerfile(
+                tmp_path, "neural-networks-base", "ARG TOOLS_IMAGE\nARG TORCH_DEVICE\nFROM ${TOOLS_IMAGE}\n"
+            )
         score = tmp_path / "stack" / "score"
         score.mkdir(parents=True, exist_ok=True)
-        (score / "gpu.yaml").write_text("metadata:\n  name: gpu\ncontainers: {}\n", encoding="utf-8")
+        (score / "gpu.yaml").write_text(
+            "metadata:\n"
+            "  name: gpu\n"
+            "  annotations:\n"
+            "    outernet.internal/dockerfile: gpu=workloads/gpu/Dockerfile\n"
+            "containers:\n"
+            "  gpu: {}\n",
+            encoding="utf-8",
+        )
+
+    def _write_fanned_config(
+        self,
+        tmp_path: Path,
+        services: dict[str, Any],
+        *,
+        built_base: dict[str, Any] | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        self._write_fanned_gpu_tree(tmp_path)
         payload: dict[str, Any] = {
             "requires": ">=0.1",
             "repository": "ghcr.io/example/repo",
             "platforms": ["linux/amd64"],
+            "base_images": {
+                "TOOLS_IMAGE": "docker.io/library/tools:1",
+                "NEURAL_NETWORKS_BASE": built_base
+                or {
+                    "dockerfile": "workloads/neural-networks-base/Dockerfile",
+                    "axis": {"TORCH_DEVICE": ["cuda", "rocm"]},
+                },
+            },
             "services": services,
         }
         payload.update(extra or {})
         write_config(tmp_path, payload)
 
-    def _gpu_group(self, axes: dict[str, list[str]]) -> dict[str, Any]:
-        return {"axes": axes, "workloads": ["gpu.yaml"]}
-
-    def test_declared_variants_expand_into_options(self, tmp_path: Path) -> None:
-        self._write_services_config(tmp_path, {"gpu": self._gpu_group({"TORCH_DEVICE": ["cuda", "rocm"]})})
+    def test_a_fan_group_derives_its_options_from_the_image_closure(self, tmp_path: Path) -> None:
+        self._write_fanned_config(tmp_path, {"gpu": {"workloads": ["gpu.yaml"]}})
 
         config = ConfigFile.load(tmp_path / "boatyard.yml")
 
@@ -255,97 +289,112 @@ class TestVariants:
             "rocm": {"TORCH_DEVICE": "rocm"},
         }
         assert all(option.workloads == ["gpu.yaml"] for option in group.options.values())
+        assert config.variant_axes == {"TORCH_DEVICE": ["cuda", "rocm"]}
 
-    def test_lowercase_axis_name_rejected(self, tmp_path: Path) -> None:
-        self._write_services_config(tmp_path, {"gpu": self._gpu_group({"torch_device": ["cuda"]})})
-
-        with pytest.raises(ValidationError, match="ALL_CAPS env name"):
-            ConfigFile.load(tmp_path / "boatyard.yml")
-
-    def test_two_axes_on_one_group_rejected(self, tmp_path: Path) -> None:
-        self._write_services_config(
-            tmp_path, {"gpu": self._gpu_group({"TORCH_DEVICE": ["cuda"], "ACCEL_FPGA": ["fpga"]})}
-        )
-
-        with pytest.raises(ValidationError, match="exactly one axis"):
-            ConfigFile.load(tmp_path / "boatyard.yml")
-
-    def test_options_and_axes_on_one_group_rejected(self, tmp_path: Path) -> None:
-        self._write_services_config(
+    def test_a_fan_group_whose_closure_fans_nothing_refuses(self, tmp_path: Path) -> None:
+        self._write_fanned_gpu_tree(tmp_path, fan=False)
+        write_config(
             tmp_path,
             {
-                "gpu": {
-                    "axes": {"TORCH_DEVICE": ["cuda"]},
-                    "options": {"cuda": {"workloads": ["gpu.yaml"]}},
-                    "workloads": ["gpu.yaml"],
-                }
+                "requires": ">=0.1",
+                "repository": "ghcr.io/example/repo",
+                "platforms": ["linux/amd64"],
+                "base_images": {"TOOLS_IMAGE": "docker.io/library/tools:1"},
+                "services": {"gpu": {"workloads": ["gpu.yaml"]}},
             },
         )
 
-        with pytest.raises(ValidationError, match="exactly one of options: or axes:"):
+        with pytest.raises(ValueError, match=r"services\.gpu: the image closure.*fans nothing"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
-    def test_axes_without_group_workloads_rejected(self, tmp_path: Path) -> None:
-        self._write_services_config(tmp_path, {"gpu": {"axes": {"TORCH_DEVICE": ["cuda"]}}})
-
-        with pytest.raises(ValidationError, match="carries its workloads at the group level"):
-            ConfigFile.load(tmp_path / "boatyard.yml")
-
-    def test_group_workloads_without_axes_rejected(self, tmp_path: Path) -> None:
-        self._write_services_config(
-            tmp_path, {"gpu": {"options": {"cuda": {"workloads": ["gpu.yaml"]}}, "workloads": ["gpu.yaml"]}}
-        )
-
-        with pytest.raises(ValidationError, match="ride only with axes:"):
-            ConfigFile.load(tmp_path / "boatyard.yml")
-
-    def test_an_axis_declared_by_two_groups_rejected(self, tmp_path: Path) -> None:
-        self._write_services_config(
+    def test_a_fan_group_fanning_two_axes_refuses(self, tmp_path: Path) -> None:
+        write_dockerfile(tmp_path, "gpu", "ARG NEURAL_NETWORKS_BASE\nFROM ${NEURAL_NETWORKS_BASE}\n")
+        write_dockerfile(tmp_path, "neural-networks-base", "ARG TOOLS_IMAGE\nARG TORCH_DEVICE\nFROM ${TOOLS_IMAGE}\n")
+        write_dockerfile(tmp_path, "accel", "ARG ACCEL_BASE\nFROM ${ACCEL_BASE}\n")
+        write_dockerfile(tmp_path, "accel-base", "ARG TOOLS_IMAGE\nARG ACCEL_TYPE\nFROM ${TOOLS_IMAGE}\n")
+        score = tmp_path / "stack" / "score"
+        score.mkdir(parents=True, exist_ok=True)
+        for stem in ("gpu", "accel"):
+            (score / f"{stem}.yaml").write_text(
+                "metadata:\n"
+                f"  name: {stem}\n"
+                "  annotations:\n"
+                f"    outernet.internal/dockerfile: {stem}=workloads/{stem}/Dockerfile\n"
+                "containers:\n"
+                f"  {stem}: {{}}\n",
+                encoding="utf-8",
+            )
+        write_config(
             tmp_path,
             {
-                "gpu": self._gpu_group({"TORCH_DEVICE": ["cuda"]}),
-                "gpu2": self._gpu_group({"TORCH_DEVICE": ["rocm"]}),
+                "requires": ">=0.1",
+                "repository": "ghcr.io/example/repo",
+                "platforms": ["linux/amd64"],
+                "base_images": {
+                    "TOOLS_IMAGE": "docker.io/library/tools:1",
+                    "NEURAL_NETWORKS_BASE": {
+                        "dockerfile": "workloads/neural-networks-base/Dockerfile",
+                        "axis": {"TORCH_DEVICE": ["cuda", "rocm"]},
+                    },
+                    "ACCEL_BASE": {
+                        "dockerfile": "workloads/accel-base/Dockerfile",
+                        "axis": {"ACCEL_TYPE": ["fpga"]},
+                    },
+                },
+                "services": {"gpu": {"workloads": ["gpu.yaml", "accel.yaml"]}},
             },
         )
 
-        with pytest.raises(ValidationError, match=r"TORCH_DEVICE is already declared at services\.gpu"):
+        with pytest.raises(ValueError, match=r"services\.gpu: the image closure.*more than one axis"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
-    def test_duplicate_values_rejected(self, tmp_path: Path) -> None:
-        self._write_services_config(tmp_path, {"gpu": self._gpu_group({"TORCH_DEVICE": ["cuda", "cuda"]})})
+    def test_a_fan_group_and_an_authored_group_declared_together_refuse(self, tmp_path: Path) -> None:
+        self._write_fanned_config(
+            tmp_path,
+            {"gpu": {"options": {"cuda": {"workloads": ["gpu.yaml"]}}, "workloads": ["gpu.yaml"]}},
+        )
 
-        with pytest.raises(ValidationError, match="declared twice"):
+        with pytest.raises(ValidationError, match="a group declares exactly one of options: or workloads:"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
-    def test_uppercase_value_rejected(self, tmp_path: Path) -> None:
-        self._write_services_config(tmp_path, {"gpu": self._gpu_group({"TORCH_DEVICE": ["CUDA"]})})
+    def test_a_derived_option_name_colliding_with_a_member_refuses(self, tmp_path: Path) -> None:
+        self._write_fanned_config(
+            tmp_path,
+            {
+                "gpu": {"workloads": ["gpu.yaml"]},
+                "gpu-cuda": {"ref": "oci://ghcr.io/org/repo/gpu-cuda:0.1.0"},
+            },
+        )
 
-        with pytest.raises(ValidationError, match="bare lowercase spelling"):
+        with pytest.raises(
+            ValueError,
+            match=r"services\.gpu-cuda: gpu-cuda is already claimed at services\.gpu\.options\.cuda",
+        ):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_an_option_var_naming_an_undeclared_variant_refuses(self, tmp_path: Path) -> None:
-        self._write_services_config(
+        self._write_fanned_config(
             tmp_path,
             {
-                "gpu": self._gpu_group({"TORCH_DEVICE": ["cuda", "rocm"]}),
+                "gpu": {"workloads": ["gpu.yaml"]},
                 "edge": {"options": {"fast": {"workloads": ["gpu.yaml"], "vars": {"TORCH_DEVICE": "metal"}}}},
             },
         )
 
         with pytest.raises(
-            ValidationError,
+            ValueError,
             match=r"services\.edge\.options\.fast: vars: TORCH_DEVICE='metal' names no declared variant",
         ):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_k8s_vars_naming_an_undeclared_variant_refuses(self, tmp_path: Path) -> None:
-        self._write_services_config(
+        self._write_fanned_config(
             tmp_path,
-            {"gpu": self._gpu_group({"TORCH_DEVICE": ["cuda", "rocm"]})},
+            {"gpu": {"workloads": ["gpu.yaml"]}},
             extra={"k8s": {"workloads": ["gpu.yaml"], "vars": {"TORCH_DEVICE": "metal"}}},
         )
 
-        with pytest.raises(ValidationError, match=r"k8s\.vars: TORCH_DEVICE='metal' names no declared variant"):
+        with pytest.raises(ValueError, match=r"k8s\.vars: TORCH_DEVICE='metal' names no declared variant"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_declared_axes_reach_the_derived_images(self, tmp_path: Path) -> None:
@@ -750,7 +799,7 @@ class TestServices:
             {
                 "requires": ">=0.1",
                 "project_name": "example",
-                "services": {"core": {"workloads": ["api.yaml"], "vars": {"FOO": ""}}},
+                "services": {"core": {"options": {"main": {"workloads": ["api.yaml"], "vars": {"FOO": ""}}}}},
             },
         )
 
@@ -819,8 +868,12 @@ class TestServices:
                 "project_name": "example",
                 "services": {
                     "both": {
-                        "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
-                        "workloads": ["api.yaml"],
+                        "options": {
+                            "mixed": {
+                                "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
+                                "workloads": ["api.yaml"],
+                            }
+                        }
                     }
                 },
             },
@@ -963,7 +1016,7 @@ class TestServices:
         assert config is not None
 
     def test_an_empty_workloads_list_refuses(self) -> None:
-        with pytest.raises(ValidationError, match="ref: or workloads: is required"):
+        with pytest.raises(ValidationError, match="a group declares exactly one of options: or workloads:"):
             ConfigFile.model_validate({
                 "requires": ">=0.1",
                 "repository": "ghcr.io/org/repo",
@@ -1518,7 +1571,7 @@ class TestRepository:
                 "repository": "ghcr.io/org/repo",
                 "project_name": "example",
                 "platforms": ["linux/amd64"],
-                "services": {"rathole-client": {"workloads": ["rathole-client.yaml"]}},
+                "services": {"rathole-client": {"options": {"client": {"workloads": ["rathole-client.yaml"]}}}},
             },
         )
         write_lock(tmp_path)
@@ -1623,7 +1676,7 @@ class TestLockPairing:
                 "requires": ">=0.1",
                 "repository": "ghcr.io/org/repo",
                 "platforms": ["linux/amd64"],
-                "services": {"core": {"workloads": ["api.yaml"]}},
+                "services": {"core": {"options": {"main": {"workloads": ["api.yaml"]}}}},
                 "project_name": "example",
             },
         )
@@ -1761,8 +1814,8 @@ class TestBareServiceNameClaims:
                 "repository": "ghcr.io/org/repo",
                 "platforms": ["linux/amd64"],
                 "services": {
-                    "one": {"workloads": ["alpha.yaml"]},
-                    "two": {"workloads": ["beta.yaml"]},
+                    "one": {"options": {"alpha": {"workloads": ["alpha.yaml"]}}},
+                    "two": {"options": {"beta": {"workloads": ["beta.yaml"]}}},
                 },
             },
         )
@@ -1777,14 +1830,14 @@ def test_direct_model_construction_is_valid_for_tests(tmp_path: Path) -> None:
         "project_name": "example",
         "gateway": 8080,
         "platforms": ["linux/amd64"],
-        "services": {"core": {"workloads": ["api.yaml"]}},
+        "services": {"core": {"options": {"main": {"workloads": ["api.yaml"]}}}},
     })
     config.root = tmp_path
 
-    core = config.services["core"]
-    assert isinstance(core, ServiceEntry)
-    assert not core.remote
-    assert core.workloads == ["api.yaml"]
+    group = config.services["core"]
+    assert isinstance(group, ServiceGroup)
+    assert not group.options["main"].remote
+    assert group.options["main"].workloads == ["api.yaml"]
 
 
 def test_local_service_entries_flatten_in_declaration_order_skipping_refs(tmp_path: Path) -> None:
@@ -1807,7 +1860,7 @@ def test_local_service_entries_flatten_in_declaration_order_skipping_refs(tmp_pa
                     },
                 },
                 "livekit": {"ref": "oci://ghcr.io/org/repo/livekit:" + SHA_TAG},
-                "solo": {"workloads": ["solo.yaml"]},
+                "solo": {"options": {"main": {"workloads": ["solo.yaml"]}}},
             },
         },
     )
@@ -1818,7 +1871,7 @@ def test_local_service_entries_flatten_in_declaration_order_skipping_refs(tmp_pa
     assert [(name, entry.workloads) for name, entry in config.local_service_entries()] == [
         ("placeframe-cuda", ["api.yaml"]),
         ("placeframe-rocm", ["api.yaml"]),
-        ("solo", ["solo.yaml"]),
+        ("solo-main", ["solo.yaml"]),
     ]
 
 

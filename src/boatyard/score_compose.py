@@ -23,12 +23,11 @@ from boatyard.models.config_file import (
     double_dollars,
     env_lock_slot,
     env_tree_slot,
-    variant_axes,
     ConfigFile,
 )
 from boatyard.models.lock_file import LockFile
 from boatyard.models.values_file import ValuesFile
-from boatyard.models.workload import ComposeWorkloadDocument, LoadedWorkload, load_workload
+from boatyard.models.workload import LoadedWorkload, require_compose_probe_adapters
 from boatyard.paths import VALUES_FILE
 from boatyard.yaml import Yaml, load_yaml_model
 from boatyard.score import (
@@ -128,7 +127,6 @@ class ComposeConfig(BaseModel):
 
 
 def generate_compose(config: ConfigFile, lock: LockFile) -> list[Path]:
-    score_dir = config.root / config.score_dir
     state_prefix = f".{TOOL}/"
     values_path = config.root / VALUES_FILE
     # The values file answers only its platform here; the full validation is up's
@@ -138,12 +136,16 @@ def generate_compose(config: ConfigFile, lock: LockFile) -> list[Path]:
     # The build-set slot supply mints the barrier; a workload ${X_SHA} naming no build
     # refuses at render_score's leftover check.
     sentinels = config.tree_sentinels
-    axes = variant_axes(config.services)
+    axes = config.variant_axes
+    rendered_workload_names = {
+        workload_name for _name, entry in config.local_service_entries() for workload_name in entry.workloads
+    }
+    require_compose_probe_adapters([
+        config.workloads[workload_name] for workload_name in sorted(rendered_workload_names)
+    ])
     outputs: list[Path] = []
     for name, entry in config.local_service_entries():
-        workloads = [
-            load_workload(score_dir, workload_name, ComposeWorkloadDocument) for workload_name in entry.workloads
-        ]
+        workloads = [config.workloads[workload_name] for workload_name in entry.workloads]
         _refuse_colliding_spellings(name, workloads)
 
         output_path = compose_bundle_output_path(config.root, name)

@@ -141,7 +141,7 @@ def _write_repo(
             values.write_text("chart: {}\n", encoding="utf-8")
     caller_refs = ref_services is not None and bool(ref_services)
     if ref_services is None:
-        ref_services = {"core": {"workloads": ["api.yaml"]}}
+        ref_services = {"core": {"options": {"main": {"workloads": ["api.yaml"]}}}}
         payload["platforms"] = platforms or ["linux/amd64"]
     elif platforms:
         payload["platforms"] = platforms
@@ -253,7 +253,7 @@ class TestImageRecording:
             tmp_path,
             [],
             base_images=BUILT_BASE_IMAGES,
-            ref_services={"core": {"workloads": ["localizer.yaml"]}},
+            ref_services={"core": {"options": {"main": {"workloads": ["localizer.yaml"]}}}},
         )
 
         assert result.exit_code == 0, result.output
@@ -280,7 +280,7 @@ class TestImageRecording:
             tmp_path,
             [],
             base_images=BUILT_BASE_IMAGES,
-            ref_services={"core": {"workloads": ["localizer.yaml"]}},
+            ref_services={"core": {"options": {"main": {"workloads": ["localizer.yaml"]}}}},
         )
 
         assert result.exit_code != 0
@@ -1204,7 +1204,7 @@ class TestPairedLoad:
         _write_repo(
             tmp_path,
             base_images=BUILT_BASE_IMAGES,
-            ref_services={"core": {"workloads": ["localizer.yaml"]}},
+            ref_services={"core": {"options": {"main": {"workloads": ["localizer.yaml"]}}}},
         )
         _write_built_images(tmp_path)
         self._write_committed(
@@ -1228,7 +1228,7 @@ class TestPairedLoad:
         _write_repo(
             tmp_path,
             base_images=BUILT_BASE_IMAGES,
-            ref_services={"core": {"workloads": ["localizer.yaml"]}},
+            ref_services={"core": {"options": {"main": {"workloads": ["localizer.yaml"]}}}},
         )
         _write_built_images(tmp_path)
         base = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15"

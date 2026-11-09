@@ -193,7 +193,7 @@ def _write_producer(
                 "requires": ">=0.0",
                 "project_name": "producer",
                 "repository": "ghcr.io/org/producer",
-                "services": {"core": {"workloads": referenced or ["api.yaml"]}},
+                "services": {"core": {"options": {"main": {"workloads": referenced or ["api.yaml"]}}}},
                 "base_images": {
                     "LOKI_IMAGE": "docker.io/grafana/loki:3.0",
                 },
@@ -368,8 +368,10 @@ def _write_consumer_tree(
                     },
                 },
                 "placeframe": {
-                    "axes": {"TORCH_DEVICE": ["cuda", "rocm"]},
-                    "workloads": ["api.yaml"],
+                    "options": {
+                        "cuda": {"workloads": ["api.yaml"], "vars": {"TORCH_DEVICE": "cuda"}},
+                        "rocm": {"workloads": ["api.yaml"], "vars": {"TORCH_DEVICE": "rocm"}},
+                    },
                     "routes": [
                         {"path": "/grafana/*", "upstream": "grafana:3000"},
                         {"path": "/*", "upstream": "api:8000"},
@@ -1495,8 +1497,8 @@ class TestBundleOverrides:
         consumer.mkdir()
         _write_override_consumer(
             consumer,
-            {"path_overrides": {"extra": "../producer/stack/generated/compose/compose.extra.yaml"}},
-            services_extra={"extra": {"workloads": ["extra.yaml"]}},
+            {"path_overrides": {"extra-main": "../producer/stack/generated/compose/compose.extra.yaml"}},
+            services_extra={"extra": {"options": {"main": {"workloads": ["extra.yaml"]}}}},
             owned_barrier=True,
         )
         _write_workload(consumer, "extra.yaml", "extra")
@@ -1507,7 +1509,7 @@ class TestBundleOverrides:
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
         message = str(result.exception)
-        assert "path_overrides: names [\x27extra\x27]" in message
+        assert "path_overrides: names [\x27extra-main\x27]" in message
         assert "are not ref entries" in message
         assert "placeframe-cuda" in message
 
@@ -1616,12 +1618,15 @@ class TestBundleOverrides:
         _write_producer(tmp_path, ["api", "grafana"], _producer_lock(["linux/amd64"]))
         _write_override_consumer(
             consumer,
-            {"path_overrides": {"placeframe-cuda": OVERRIDE_PATH}},
-            services_extra={"extra": {"workloads": ["grafana.yaml"]}},
+            {
+                "path_overrides": {"placeframe-cuda": OVERRIDE_PATH},
+                "bundles": ["placeframe-cuda", "extra-main"],
+            },
+            services_extra={"extra": {"options": {"main": {"workloads": ["grafana.yaml"]}}}},
             owned_barrier=True,
         )
         _write_workload(consumer, "grafana.yaml", "grafana")
-        _write_bundle_output(consumer, "extra", ["api"])
+        _write_bundle_output(consumer, "extra-main", ["api"])
         recorder = self._invoke_up(monkeypatch, consumer)
 
         result = runner.invoke(app, ["up"])
@@ -1632,7 +1637,7 @@ class TestBundleOverrides:
             (tmp_path / "producer" / "stack" / "generated" / "compose" / "compose.placeframe-cuda.yaml")
             .resolve()
             .as_posix(),
-            (consumer / "stack" / "generated" / "compose" / "compose.extra.yaml").resolve().as_posix(),
+            (consumer / "stack" / "generated" / "compose" / "compose.extra-main.yaml").resolve().as_posix(),
         ])
 
 

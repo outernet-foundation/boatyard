@@ -19,7 +19,6 @@ from boatyard.models.config_file import (
 )
 from boatyard.models.k8s_pins import load_pins
 from boatyard.models.lock_file import LockFile
-from boatyard.models.workload import WorkloadDocument, load_workload
 from boatyard.markers import MarkerContext, resolve_markers
 from boatyard.paths import K8S_PINS_PATH
 from boatyard.yaml import Yaml, is_list, is_mapping
@@ -58,9 +57,8 @@ def generate_k8s(
     lock: LockFile,
     local: bool,
 ) -> tuple[Path, set[str]]:
-    score_dir = config.root / config.score_dir
     index_images = lock.index_references()
-    workloads = [load_workload(score_dir, name, WorkloadDocument) for name in k8s.workloads]
+    workloads = [config.workloads[name] for name in k8s.workloads]
 
     # The pins demand is the declared dockerfile closure of the k8s rendering's workloads
     demanded = {

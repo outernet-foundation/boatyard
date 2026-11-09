@@ -5,7 +5,7 @@ import re
 import tomllib
 from collections.abc import Mapping
 from functools import partial
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal, NamedTuple, Self
 
 from packaging.specifiers import SpecifierSet
@@ -24,7 +24,7 @@ import yaml
 
 from boatyard.models.pyproject import PYPROJECT_PATH, PyprojectToml
 from boatyard.models.image import BuiltBaseEntry, Image, load_images
-from boatyard.models.workload import WorkloadDocument, load_workload, select_provisioner_files
+from boatyard.models.workload import LoadedWorkload, load_workload, select_provisioner_files
 from boatyard.markers import declared_dockerfile_paths
 from boatyard.temp import PLATFORM_PATTERN, SHA256_DIGEST_REGEX
 from boatyard.yaml import Yaml, is_mapping, load_yaml_model
@@ -104,6 +104,7 @@ class ConfigFile(BaseModel):
     helm_version: str = "3.22.1"
 
     images: dict[str, Image] = Field(default_factory=dict, exclude=True)
+    workloads: dict[str, LoadedWorkload] = Field(default_factory=dict, exclude=True)
     root: Path = Field(default_factory=Path.cwd, exclude=True)
 
     @classmethod
@@ -121,6 +122,18 @@ class ConfigFile(BaseModel):
     def local_service_entries(self) -> list[tuple[str, ServiceEntry]]:
         return [(row.name, row.entry) for row in flatten_service_members(self.services) if not row.entry.remote]
 
+    def local_workload_names(self) -> list[str]:
+        # The lexical local set: options' workloads, fan groups' group-level workloads, and
+        # bare entries' workloads — complete before the fan derivation populates options
+        names: list[str] = []
+        for member in self.services.values():
+            if isinstance(member, ServiceGroup):
+                names.extend(name for option in member.options.values() for name in option.workloads)
+                names.extend(member.workloads)
+            elif not member.remote:
+                names.extend(member.workloads)
+        return names
+
     def remote_declared_entries(self) -> list[tuple[str, str, ServiceEntry]]:
         return [
             (row.name, row.entry.ref.removeprefix(OCI_REFERENCE_PREFIX), row.entry)
@@ -134,13 +147,19 @@ class ConfigFile(BaseModel):
 
     @property
     def owned_images(self) -> dict[str, str]:
-        # Boatyard-emitted service pins: the barrier rides local entries, the edge a gateway
+        # Boatyard-emitted service pins: the barrier rides local workloads, the edge a gateway
         owned: dict[str, str] = {}
-        if self.local_service_entries():
+        if self.local_workload_names():
             owned[ALPINE_IMAGE] = self.barrier_image
         if self.gateway is not None:
             owned[CADDY_IMAGE] = self.edge_image
         return owned
+
+    @property
+    def variant_axes(self) -> dict[str, list[str]]:
+        # The fanned axes over the image set; equal axis names carry equal value sets by
+        # load_images' one-spelling law
+        return {image.axis: list(image.variants) for image in self.images.values() if image.axis is not None}
 
     @property
     def tree_sentinels(self) -> dict[str, str]:
@@ -251,26 +270,13 @@ class ConfigFile(BaseModel):
         # Compose is unconditional; k8s is the optional substrate.
         if not self.services:
             raise ValueError("services is required")
-        any_local = any(not row.entry.remote for row in flatten_service_members(self.services))
+        any_local = bool(self.local_workload_names())
         if any_local and not self.repository:
             raise ValueError("repository is required by the local entries (workloads:)")
         if (self.base_images or self.owned_images) and not self.platforms:
             raise ValueError(
                 "platforms is required when images are declared (an amd64-only repo declares [linux/amd64])"
             )
-
-        # A var naming a declared axis carries a declared variant of it.
-        axes = variant_axes(self.services)
-        for row in flatten_service_members(self.services):
-            for name, value in row.entry.vars.items():
-                if name in axes and value not in axes[name]:
-                    raise ValueError(
-                        f"{row.site}: vars: {name}={value!r} names no declared variant of {name} ({axes[name]})"
-                    )
-        if self.k8s is not None:
-            for name, value in self.k8s.vars.items():
-                if name in axes and value not in axes[name]:
-                    raise ValueError(f"k8s.vars: {name}={value!r} names no declared variant of {name} ({axes[name]})")
         return self
 
 
@@ -306,41 +312,18 @@ class ServiceGroup(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     options: dict[str, ServiceEntry] = Field(default_factory=dict)
-    axes: dict[AllCapsName, list[str]] = Field(default_factory=dict)
     workloads: list[str] = Field(default_factory=list)
     routes: list[RouteConfig] = Field(default_factory=list)
     ports: list[PortDeclaration] = Field(default_factory=list)
 
-    @field_validator("axes")
-    @classmethod
-    def _validate_axes(cls, value: dict[AllCapsName, list[str]]) -> dict[AllCapsName, list[str]]:
-        if len(value) != 1:
-            raise ValueError("axes: declares exactly one axis (a cross-product of axes is refused)")
-        for axis, values in value.items():
-            if not values:
-                raise ValueError(f"axes.{axis}: must declare at least one value")
-            seen: set[str] = set()
-            for variant in values:
-                if re.fullmatch(r"[a-z0-9][a-z0-9_-]*", variant) is None:
-                    raise ValueError(f"axes.{axis}: value {variant!r} must be a bare lowercase spelling like cuda")
-                if variant in seen:
-                    raise ValueError(f"axes.{axis}: value {variant!r} is declared twice")
-                seen.add(variant)
-        return value
-
     @model_validator(mode="after")
-    def _expand_variant_options(self) -> Self:
-        if bool(self.options) == bool(self.axes):
-            raise ValueError("a group declares exactly one of options: or axes:")
-        if self.axes:
-            if not self.workloads:
-                raise ValueError("an axes group carries its workloads at the group level")
-            [axis, values] = next(iter(self.axes.items()))
-            self.options = {
-                variant: ServiceEntry(workloads=list(self.workloads), vars={axis: variant}) for variant in values
-            }
-        elif self.workloads:
-            raise ValueError("group-level workloads: ride only with axes:")
+    def _require_one_spelling(self) -> Self:
+        # options: spells an authored group; group-level workloads: spells a fan group whose
+        # options the load-time derivation publishes from the image closure
+        if bool(self.options) == bool(self.workloads):
+            raise ValueError("a group declares exactly one of options: or workloads:")
+        for name in self.workloads:
+            require_workload_reference(name)
         return self
 
 
@@ -384,7 +367,7 @@ class ServiceEntry(BaseModel):
 
 
 def _service_member_kind(value: Yaml) -> str:
-    return "group" if is_mapping(value) and ("options" in value or "axes" in value) else "entry"
+    return "group" if is_mapping(value) and ("options" in value or "workloads" in value) else "entry"
 
 
 ServiceMember = Annotated[
@@ -472,8 +455,8 @@ class ResolvedService(NamedTuple):
 
 
 def _derive(config: ConfigFile, root: Path) -> None:
-    # The load-time derivation over the parsed file: toolchain templates, the Dockerfile build
-    # set, the file-reference checks, and the per-entry consumer surfaces.
+    # The load-time derivation over the parsed file: toolchain templates, the one workload
+    # pass, the Dockerfile build set, the derived group fan, and the file-reference checks.
     installed = importlib.metadata.version("boatyard")
     if installed != DEV_SENTINEL and not SpecifierSet(config.requires).contains(installed, prereleases=True):
         raise ValueError(f"boatyard {installed} does not satisfy requires={config.requires!r}")
@@ -511,16 +494,14 @@ def _derive(config: ConfigFile, root: Path) -> None:
         for name, reference in config.base_images.items()
     }
 
-    # Derive the image build set from the declared edges: workload source annotations and
-    # provisioner markers beside the built base_images entries.
+    # Every workload file loads once here — the one lens serves the declared edges, the
+    # derived fan, and both renderings; no later pass reloads a workload.
     score_dir = root / config.score_dir
-    local_names = {
-        name for row in flatten_service_members(config.services) if not row.entry.remote for name in row.entry.workloads
-    }
+    local_names = set(config.local_workload_names())
     k8s_names = set(config.k8s.workloads) if config.k8s is not None else set()
-    workloads = [load_workload(score_dir, name, WorkloadDocument) for name in sorted(local_names | k8s_names)]
+    config.workloads = {name: load_workload(score_dir, name) for name in sorted(local_names | k8s_names)}
     declared: list[str] = []
-    for workload in workloads:
+    for workload in config.workloads.values():
         for container, (kind, value) in workload.document.container_sources().items():
             if kind == "dockerfile":
                 declared.append(value)
@@ -531,7 +512,7 @@ def _derive(config: ConfigFile, root: Path) -> None:
                 )
 
     selections = (
-        (rendering, [workload for workload in workloads if workload.file_name in names])
+        (rendering, [workload for workload in config.workloads.values() if workload.file_name in names])
         for rendering, names in (("compose", local_names), ("k8s", k8s_names))
     )
     for rendering, selected_workloads in selections:
@@ -543,6 +524,53 @@ def _derive(config: ConfigFile, root: Path) -> None:
         listed = ", ".join(sorted(images))
         raise ValueError(f"repository is required by the declared Dockerfile images {listed}")
     config.images = images
+
+    # The derived fan: a fan group publishes one option per value of the single axis its
+    # workloads' image closure fans (the variants' declared home is the built base entry).
+    for name, member in config.services.items():
+        if not (isinstance(member, ServiceGroup) and member.workloads):
+            continue
+        fans: dict[str, list[str]] = {}
+        for workload_name in member.workloads:
+            for kind, value in config.workloads[workload_name].document.container_sources().values():
+                if kind != "dockerfile":
+                    continue
+                image = config.images.get(PurePosixPath(value).parent.name)
+                if image is not None and image.axis is not None:
+                    fans.setdefault(image.axis, list(image.variants))
+        if not fans:
+            raise ValueError(
+                f"services.{name}: the image closure of the group's workloads fans nothing "
+                "(a non-fanning local set spells one authored option)"
+            )
+        if len(fans) > 1:
+            raise ValueError(
+                f"services.{name}: the image closure of the group's workloads fans more than one axis {sorted(fans)}"
+            )
+        [(axis, variants)] = fans.items()
+        member.options = {
+            variant: ServiceEntry(workloads=list(member.workloads), vars={axis: variant}) for variant in variants
+        }
+
+    # The derived option names join the selection vocabulary with no collision.
+    vocabulary: dict[str, str] = {}
+    for row in flatten_service_members(config.services):
+        if row.name in vocabulary:
+            raise ValueError(f"{row.site}: {row.name} is already claimed at {vocabulary[row.name]}")
+        vocabulary[row.name] = row.site
+
+    # A var naming a fanned axis carries a declared variant of it.
+    axes = config.variant_axes
+    for row in flatten_service_members(config.services):
+        for name, value in row.entry.vars.items():
+            if name in axes and value not in axes[name]:
+                raise ValueError(
+                    f"{row.site}: vars: {name}={value!r} names no declared variant of {name} ({axes[name]})"
+                )
+    if config.k8s is not None:
+        for name, value in config.k8s.vars.items():
+            if name in axes and value not in axes[name]:
+                raise ValueError(f"k8s.vars: {name}={value!r} names no declared variant of {name} ({axes[name]})")
 
     # Enforce the lock pairing laws.
     declared_charts = config.declared_charts
@@ -556,23 +584,6 @@ def _derive(config: ConfigFile, root: Path) -> None:
         values = root / config.score_dir / "k8s" / "values" / f"{chart}.yaml"
         if not values.is_file():
             raise ValueError(f"{values.as_posix()}: the chart's values file is required")
-
-
-def variant_axes(services: dict[str, ServiceGroup | ServiceEntry]) -> dict[str, list[str]]:
-    # The declared variant axes: one declaring group each, values from its axes map
-    axes: dict[str, list[str]] = {}
-    sites: dict[str, str] = {}
-    for name, member in services.items():
-        if not isinstance(member, ServiceGroup) or not member.axes:
-            continue
-        axis, values = next(iter(member.axes.items()))
-        if axis in axes:
-            raise ValueError(
-                f"services.{name}.axes: {axis} is already declared at {sites[axis]} (one selection point per axis)"
-            )
-        axes[axis] = list(values)
-        sites[axis] = f"services.{name}.axes"
-    return axes
 
 
 def flatten_service_members(services: dict[str, ServiceGroup | ServiceEntry]) -> list[FlattenedServiceEntry]:
