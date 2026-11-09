@@ -20,7 +20,8 @@ from boatyard.models.config_file import (
 from boatyard.models.image import dockerfile_stem
 from boatyard.models.k8s_pins import load_pins
 from boatyard.models.lock_file import LockFile
-from boatyard.markers import MarkerContext, resolve_markers
+from boatyard.models.workload import select_provisioner_files
+from boatyard.markers import MarkerContext, resolve_markers, declared_dockerfile_paths
 from boatyard.paths import K8S_PINS_PATH
 from boatyard.yaml import Yaml, is_list, is_mapping
 from boatyard.score import (
@@ -61,12 +62,19 @@ def generate_k8s(
     index_images = lock.index_references()
     workloads = [config.workloads[name] for name in k8s.workloads]
 
-    # The pins demand is the declared dockerfile closure of the k8s rendering's workloads
+    # The pins demand is the k8s rendering's whole dockerfile closure: the workloads'
+    # container sources plus the selected k8s provisioners' dockerfile markers
     demanded = {
         config.images[dockerfile_stem(value)].sha_env
         for workload in workloads
         for kind, value in workload.document.container_sources().values()
         if kind == "dockerfile"
+    } | {
+        config.images[dockerfile_stem(path)].sha_env
+        for _name, entries in select_provisioner_files(config.root / config.score_dir, "k8s", workloads)
+        for entry in entries
+        if is_mapping(entry)
+        for path in declared_dockerfile_paths(entry)
     }
 
     output_path = config.root / (config.k8s_local_output if local else config.k8s_output)

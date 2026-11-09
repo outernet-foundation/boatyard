@@ -10,9 +10,10 @@ Design intent and silent-failure traps, one fact per bullet.
 
 - Three classes of fact: authored in the config, registry-resolved in the lock, tree-derived
   (`tree-<hash>`) computed on demand. Nothing derived is committed except
-  `boatyard.k8s-pins.yml`, written only by the `bump` verb (rollback = `git revert`, never
-  hand-edit). The lock is written only by the `lock` verb and `build`'s incremental freeze —
-  never hand-authored.
+  `boatyard.k8s-pins.yml`, written only by the `bump` verb — or seeded once with placeholder
+  pins by operator ruling where a pre-merge gate needs the k8s leg; the first bump overwrites
+  the file wholesale (rollback = `git revert`, never hand-edit). The lock is written only by
+  the `lock` verb and `build`'s incremental freeze — never hand-authored.
 - Fresh-repo assumption: no code handles an obsolete format. An obsolete artifact gets a plain
   parse failure, never a migration path.
 - github-actions-toolkit owns the consumer workflow contract and is never a project dependency.
