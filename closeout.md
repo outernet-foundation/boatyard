@@ -252,6 +252,23 @@ separate commits.
   lands lbe-toolkit PR #6, and Make-it-Sing's Integrate runs green (the
   Work-4 verify's "consumer CI green end-to-end" leg; the rest of that
   checklist is verified across the swept repos).
+- The image-declaration line closed (2026-11-08, `refactor-redux.md` deleted — the
+  plan file held the rulings; this entry is the record). Three increments: the
+  base registry (dual-shape `base_images`, one `FROM ${KEY}` grammar, one-hop
+  fan inheritance, pulled-only lock pairing), the walk death (source
+  annotations and `dockerfile:`/`lock:` markers author every image edge,
+  `image:` never authored, the build set the closure over declared edges), and
+  the closing session (lexical member grammar — `ref:` entry, `options:`
+  authored group, group-level `workloads:` fan group; the group fan derived
+  from the single axis the group's image closure fans, the `axes:` block and
+  its parse-time expansion dead; one workload pass per `ConfigFile.load`, the
+  per-entry reload dead, the compose-only probe-adapter check moved to
+  `require_compose_probe_adapters` at the compose rendering). Placeframe
+  transitioned with the core `axes:` block deleted; the regenerated artifacts
+  are byte-identical (the k8s regen reconstructed the absent
+  `boatyard.k8s-pins.yml` from the committed manifest's tags — extraction
+  must include digit-bearing stems, `s3-initializer` — verified byte-identity,
+  removed the file again). Boatyard battery 612 green at the closing commit.
 - The values-file session (2026-11-04, battery green) landed atop Work 1 and
   rewrote the consumer surface: `.env` is dead — `boatyard.values.yaml`
   (gitignored, typed; `ConfigValues` in `values_file.py`) is the only
