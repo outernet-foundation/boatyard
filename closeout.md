@@ -163,7 +163,7 @@ separate commits.
   `generate-score --check`, matrix `livekit-token`, plan `livekit`). Sandbox
   note: the `==0.12.15` uv lives at `/home/code/.local/bin/uv` (PATH resolves
   `0.11.14` first); `preflight-python` needs `PATH=/home/code/.local/bin:$PATH`
-  because it invokes bare `uv`. NEXT SESSION OPENS HERE: Make-it-Sing (`git
+   because it invokes bare `uv`. The Make-it-Sing sweep followed (`git
   switch compose-bundles` first — its checkout sits on
   `feature/clickable-buildings-room-join`). Session-open archaeology
   re-verified: `docker-devkit.yaml` carries digest-pinned `ref:`s
@@ -207,14 +207,68 @@ separate commits.
   `lock_key_prefix` (`ENTRY_KEY`) for its substitution keys instead of
   `env_lock_slot` (`ENTRY__LOCK__KEY`) — the compose text's lock-key
   slots never matched and shipped unsubstituted, making every published
-  bundle's image slots unresolvable by consumers. Both fixed (full
-  preflight green, 517 tests); release as 0.6.6 pending. BLOCKER: the
-  producers (placeframe, infra-rathole, lbe-toolkit) must re-publish
-  their bundles with the fixed `publish-compose` before Make-it-Sing's
-  `up` can assemble — the current bundles carry unsubstituted
-  `${ENTRY}__LOCK__IMAGE:?err}` slots. After the republish: re-lock
-  Make-it-Sing, repin to 0.6.6, re-run the `up` path-override verify
-  (the `TUNNEL_*_ADDR` watch item).
+  bundle's image slots unresolvable by consumers.   Both fixed (full preflight green, 517 tests), merged to `main` (PR
+  #29), and released as stable `0.6.6` — the wave's pin target and
+  `requires:` floor are `0.6.6` from here. The stale-bundle resolution
+  is in flight (2026-11-06, operator pushed): the producers repinned
+  onto 0.6.6 — placeframe `repin-boatyard-0.6.6` (`cdc88fde` off dev),
+  infra-rathole `repin-boatyard-0.6.6` (`f26cf5b`, its `==0.6.1` pin and
+  `>=0.6.0` floor jumped), lbe-toolkit `compose-bundles` (`558c1de`, its
+  fourth commit); each repin's `boatyard lock` was a
+  declaration-incremental no-op, so the commits carry only pin + floor +
+  `uv.lock`. As those land, CI's `publish-compose` re-publishes the
+  bundles at the new commit SHAs with the lock-key slots actually baked.
+  NEXT SESSION OPENS HERE: close the loop in Make-it-Sing — LIFTED; closed
+  2026-11-06 (commit `3ea2c0c` on its `compose-bundles`, local — operator
+  pushes; SSH remotes, the App token cannot write). The producers landed:
+  placeframe PR #153 (`cdc88fde`, merge `1de85ade`), infra-rathole PR #2
+  (`f26cf5b`, merge `7324533`); lbe-toolkit's repin (`558c1de`) is pushed as
+  PR #6 but NOT merged — its livekit publish rode the branch push (the
+  operator lands the PR; the sha tag is content-keyed and stays valid). All
+  five refs flipped onto the 0.6.6-baked republishes, crane-verified before
+  editing: the fresh sha tags (`cdc88fde…` ×3, `f26cf5bc…`, `558c1de0…`)
+  match their branch-alias digests and their compose layers carry zero
+  `${…__LOCK__…}` slots (the old tags: 6/1/1); the relock dropped every
+  lock-key require. Repin `==0.6.6` + floor `>=0.6.6`. The `up` verify
+  surfaced two more corrections: (a) the consumer entry name must equal the
+  producer's for the edge's `{entry}-net` attachment to find the bundle's
+  network (the `core` precedent again) — group `tunnel`/`rathole` renamed to
+  `rathole`/`client` (qualified `rathole-client`; edge-on-`rathole-client-net`
+  in `up.py` composes the name, the bundle defines it); (b) the rathole
+  defaults (`gateway:8443`, `livekit:6178`, `livekit:5957`) reference names
+  on the livekit bundle's private network where the tunnel client cannot
+  resolve them — explicit `TUNNEL_SIGNALING_ADDR`/`TUNNEL_RTC_ADDR` at the
+  host's published ports join `TUNNEL_GATEWAY_ADDR: edge:8443` in the values
+  file and both samples; the relay control channels verified established for
+  all three forwards. The verify ran end-to-end: full stack healthy through
+  the `core-cuda` path override against the sibling placeframe checkout, edge
+  routes answering (`/` 302). Compose v5.1.3 observation, not a boatyard
+  defect: an edge container created during a failed port-bind convergence
+  kept a partial network set when the next `up` merely started it —
+  `--force-recreate` (or a clean `down`/`up`, verified) reconciles. Battery
+  green (ruff, format, basedpyright 0, `lock --check`, `generate-score
+  --check` self-skip, matrix `[]`, plan `[]`, lint-workflows); zero boatyard
+  imports. Remaining before this file deletes: operator pushes `3ea2c0c`,
+  lands lbe-toolkit PR #6, and Make-it-Sing's Integrate runs green (the
+  Work-4 verify's "consumer CI green end-to-end" leg; the rest of that
+  checklist is verified across the swept repos).
+- The image-declaration line closed (2026-11-08, `refactor-redux.md` deleted — the
+  plan file held the rulings; this entry is the record). Three increments: the
+  base registry (dual-shape `base_images`, one `FROM ${KEY}` grammar, one-hop
+  fan inheritance, pulled-only lock pairing), the walk death (source
+  annotations and `dockerfile:`/`lock:` markers author every image edge,
+  `image:` never authored, the build set the closure over declared edges), and
+  the closing session (lexical member grammar — `ref:` entry, `options:`
+  authored group, group-level `workloads:` fan group; the group fan derived
+  from the single axis the group's image closure fans, the `axes:` block and
+  its parse-time expansion dead; one workload pass per `ConfigFile.load`, the
+  per-entry reload dead, the compose-only probe-adapter check moved to
+  `require_compose_probe_adapters` at the compose rendering). Placeframe
+  transitioned with the core `axes:` block deleted; the regenerated artifacts
+  are byte-identical (the k8s regen reconstructed the absent
+  `boatyard.k8s-pins.yml` from the committed manifest's tags — extraction
+  must include digit-bearing stems, `s3-initializer` — verified byte-identity,
+  removed the file again). Boatyard battery 612 green at the closing commit.
 - The values-file session (2026-11-04, battery green) landed atop Work 1 and
   rewrote the consumer surface: `.env` is dead — `boatyard.values.yaml`
   (gitignored, typed; `ConfigValues` in `values_file.py`) is the only
@@ -703,11 +757,11 @@ its `up` assembly (the path-override verify) surfaces whether the
 
 Common to all five, order within a repo code → lockfiles → prose:
 
-1. Dependency: `docker-devkit…` → `boatyard==0.6.5` (or `>=`); `uv lock
-   --upgrade-package boatyard`. `requires:` floor → `>=0.6.5` (0.6.4
-   carries the git-visible hashing flip, 0.6.5 restores the digest-shard
-   shelving; placeframe landed at 0.6.5 via its repin; infra-rathole's
-   older floor bumps in passing when next touched).
+1. Dependency: `docker-devkit…` → `boatyard==0.6.6` (or `>=`); `uv lock
+   --upgrade-package boatyard`. `requires:` floor → `>=0.6.6` (0.6.6
+   carries the publish bake + up fill-check fixes atop the earlier
+   hashing/shelving fixes; every producer rode the 0.6.6 repin branches;
+   Make-it-Sing's close-the-loop repin rides its ref flip).
 2. `git mv docker-devkit.yaml boatyard.yml`; `git mv docker-devkit.lock
    boatyard.lock.yml`, then truncate the lock to the empty file before the
    relock — the old env format never parses at relock's committed

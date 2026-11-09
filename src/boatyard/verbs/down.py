@@ -10,7 +10,7 @@ import yaml
 from bashrun.bash import bash_handoff
 
 from boatyard.compose import compose_command
-from boatyard.config.config import ConfigFile
+from boatyard.models.config_file import ConfigFile
 from boatyard.paths import DEFAULT_CONFIG_PATH
 
 app = typer.Typer()

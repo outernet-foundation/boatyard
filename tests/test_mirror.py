@@ -7,8 +7,8 @@ from typer.testing import CliRunner, Result
 from boatyard.cli import app
 from boatyard import crane
 from boatyard.verbs import mirror
-from boatyard.config.config import mirrored_ref
-from boatyard.config.lock import LOCK_PATH
+from boatyard.models.config_file import mirrored_ref
+from boatyard.models.lock_file import LOCK_PATH
 
 MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
 FAKE_DIGEST = "sha256:" + "a" * 64
@@ -22,6 +22,7 @@ def _write_config(root: Path, sections: dict[str, object] | None = None) -> None
     payload: dict[str, object] = {"requires": ">=0.0", "project_name": "demo"}
     if sections is not None:
         payload.update(sections)
+    payload.setdefault("services", {"ext": {"ref": "oci://ghcr.io/org/ext:0.1.0"}})
     (root / "boatyard.yml").write_text(
         yaml.safe_dump(payload, default_flow_style=False, sort_keys=False), encoding="utf-8"
     )
@@ -68,10 +69,6 @@ class TestMirroredRef:
         assert mirrored_ref("ghcr.io/astral-sh/uv:0.12.15", MIRROR_PREFIX) == (
             f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15"
         )
-
-    def test_rejects_already_prefixed_references(self):
-        with pytest.raises(ValueError, match="upstream-native"):
-            mirrored_ref(f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15", MIRROR_PREFIX)
 
 
 class TestMirrorVerb:

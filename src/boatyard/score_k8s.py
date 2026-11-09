@@ -12,22 +12,19 @@ from pydantic import (
     Field,
 )
 
-from boatyard.config.config import (
+from boatyard.models.config_file import (
     K8sConfig,
-    WorkloadDocument,
-    Yaml,
     ConfigFile,
     chart_lock_key,
-    is_list,
-    is_mapping,
 )
-from boatyard.config.lock import LockFile
+from boatyard.models.image import dockerfile_stem
+from boatyard.models.k8s_pins import load_pins
+from boatyard.models.lock_file import LockFile
 from boatyard.markers import MarkerContext, resolve_markers
+from boatyard.paths import K8S_PINS_PATH
+from boatyard.yaml import Yaml, is_list, is_mapping
 from boatyard.score import (
-    SECRETS_FILE,
-    SecretsDeclaration,
     dump_yaml,
-    load_workloads,
     render_score,
     split_documents,
     write_file,
@@ -59,26 +56,37 @@ def generate_k8s(
     config: ConfigFile,
     k8s: K8sConfig,
     lock: LockFile,
-    service_shas: dict[str, str],
     local: bool,
-    secrets: SecretsDeclaration,
-) -> Path:
-    score_dir = config.root / config.score_dir
-    images = lock.index_references()
-    workloads = load_workloads(score_dir, k8s.workloads, WorkloadDocument)
+) -> tuple[Path, set[str]]:
+    index_images = lock.index_references()
+    workloads = [config.workloads[name] for name in k8s.workloads]
+
+    # The pins demand is the declared dockerfile closure of the k8s rendering's workloads
+    demanded = {
+        config.images[dockerfile_stem(value)].sha_env
+        for workload in workloads
+        for kind, value in workload.document.container_sources().values()
+        if kind == "dockerfile"
+    }
 
     output_path = config.root / (config.k8s_local_output if local else config.k8s_output)
-    tool_state = output_path.parent / ".score-k8s"
 
     render_score(
         config,
         substrate="k8s",
         workloads=workloads,
-        rendering_vars={**k8s.vars, STORAGE_CLASS_VAR: LOCAL_STORAGE_CLASS if local else CLOUD_STORAGE_CLASS},
+        variable_values={
+            STORAGE_CLASS_VAR: LOCAL_STORAGE_CLASS if local else CLOUD_STORAGE_CLASS,
+            **k8s.vars,
+            **(
+                {image.sha_env: image.compute_sha(config.root) for image in config.images.values()}
+                if local
+                else load_pins(config.root / K8S_PINS_PATH, demanded)
+            ),
+        },
         templates=[GPU_POD_TEMPLATE, SCALE_TO_ZERO_TEMPLATE],
         output=output_path,
-        images=images,
-        service_shas=service_shas,
+        images=index_images,
     )
 
     # Render the charts through helm template.
@@ -86,7 +94,7 @@ def generate_k8s(
     with TemporaryDirectory(prefix="resolved-values-") as values_directory:
         values_dir = Path(values_directory)
         for chart_name in k8s.charts:
-            # Every values file rides through marker resolution, so the literal-image guard is universal.
+            # Every values file passes through marker resolution, so the literal-image guard is universal.
             path = config.root / config.score_dir / "k8s" / "values" / f"{chart_name}.yaml"
             values_path = values_dir / path.relative_to(config.root)
             values_path.parent.mkdir(parents=True, exist_ok=True)
@@ -95,7 +103,7 @@ def generate_k8s(
                 dump_yaml(
                     resolve_markers(
                         yaml.safe_load(path.read_text(encoding="utf-8")),
-                        MarkerContext(config.root, images, path.as_posix()),
+                        MarkerContext(config.root, index_images, path.as_posix()),
                     )
                 ),
             )
@@ -125,28 +133,32 @@ def generate_k8s(
     decorated.sort()
     write_file(output_path, "".join(f"---\n{block}" for *_, block in decorated))
 
-    shutil.rmtree(tool_state, ignore_errors=True)
+    shutil.rmtree(output_path.parent / ".score-k8s", ignore_errors=True)
 
-    # Validate the consumed secrets against the declaration.
-    consumed: set[str] = set()
-    for block in split_documents(output_path.read_text(encoding="utf-8")):
-        collect_secret_keys(yaml.safe_load(block), f"{config.project_name}-secrets", consumed)
-    secrets.validate_consumed(consumed, "k8s", SECRETS_FILE.as_posix())
+    # The mint set is the rendering's consumed secret refs, walked from the output.
+    secret_name = f"{config.project_name}-secrets"
+    consumed = {
+        key
+        for block in split_documents(output_path.read_text(encoding="utf-8"))
+        for key in collect_secret_keys(yaml.safe_load(block), secret_name)
+    }
 
-    return output_path
+    return output_path, consumed
 
 
-def collect_secret_keys(node: Yaml, secret_name: str, consumed: set[str]) -> None:
+def collect_secret_keys(node: Yaml, secret_name: str) -> set[str]:
+    keys: set[str] = set()
     if is_mapping(node):
         reference = node.get("secretKeyRef")
         if is_mapping(reference) and reference.get("name") == secret_name:
             key = reference.get("key")
             if isinstance(key, str):
-                consumed.add(key)
+                keys.add(key)
 
         for value in node.values():
-            collect_secret_keys(value, secret_name, consumed)
+            keys |= collect_secret_keys(value, secret_name)
 
     elif is_list(node):
         for item in node:
-            collect_secret_keys(item, secret_name, consumed)
+            keys |= collect_secret_keys(item, secret_name)
+    return keys

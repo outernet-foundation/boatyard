@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import re
 import shutil
+from functools import partial
 from pathlib import Path
 from typing import Literal, Self
 
@@ -12,32 +14,31 @@ from pydantic import (
     model_validator,
 )
 
-from boatyard.config.config import (
+from boatyard.models.config_file import (
+    ALPINE_IMAGE,
+    BARRIER_SERVICE,
     COMPOSE_SLOT,
-    ComposeWorkloadDocument,
-    WorkloadDocument,
-    Yaml,
+    TREE_SENTINEL_PATTERN,
     compose_bundle_output_path,
     double_dollars,
     env_lock_slot,
+    env_tree_slot,
     ConfigFile,
 )
-from boatyard.config.lock import LOCK_PATH, LockFile
-from boatyard.yaml import load_yaml_model
+from boatyard.models.lock_file import LockFile
+from boatyard.models.values_file import ValuesFile
+from boatyard.models.workload import LoadedWorkload, require_compose_probe_adapters
+from boatyard.paths import VALUES_FILE
+from boatyard.yaml import Yaml, load_yaml_model
 from boatyard.score import (
-    SECRETS_FILE,
-    SecretsDeclaration,
     dump_yaml,
-    load_workloads,
     render_score,
     write_file,
 )
-from boatyard.config.values import ValuesFile
-from boatyard.paths import VALUES_FILE
 
 TOOL = "score-compose"
 
-BARRIER_SERVICE = "wait-for-resources"
+
 HEALTHCHECK_TEMPLATE = "probe-adapter-healthchecks.tpl"
 RESTART_TEMPLATE = "restart.tpl"
 GPU_COMPOSE_TEMPLATES = {"cuda": "gpu-cuda.tpl", "rocm": "gpu-rocm.tpl"}
@@ -125,22 +126,27 @@ class ComposeConfig(BaseModel):
     content: str | None = None
 
 
-def generate_compose(
-    config: ConfigFile, lock: LockFile, service_shas: dict[str, str], secrets: SecretsDeclaration
-) -> list[Path]:
-    score_dir = config.root / config.score_dir
+def generate_compose(config: ConfigFile, lock: LockFile) -> list[Path]:
     state_prefix = f".{TOOL}/"
     values_path = config.root / VALUES_FILE
-    platform = ValuesFile.load(values_path, config).platform if values_path.is_file() else None
+    # The values file answers only its platform here; the full validation is up's
+    platform = ValuesFile.load(values_path).platform if values_path.is_file() else None
     images = lock.manifest_references(platform)
 
-    if "ALPINE_IMAGE" not in images:
-        raise ValueError(f"{LOCK_PATH.as_posix()}: the image lock must carry the ALPINE_IMAGE entry")
-
+    # The build-set slot supply mints the barrier; a workload ${X_SHA} naming no build
+    # refuses at render_score's leftover check.
+    sentinels = config.tree_sentinels
+    axes = config.variant_axes
+    rendered_workload_names = {
+        workload_name for _name, entry in config.local_service_entries() for workload_name in entry.workloads
+    }
+    require_compose_probe_adapters([
+        config.workloads[workload_name] for workload_name in sorted(rendered_workload_names)
+    ])
     outputs: list[Path] = []
-    consumed: set[str] = set()
     for name, entry in config.local_service_entries():
-        workloads = load_workloads(score_dir, entry.workloads, ComposeWorkloadDocument)
+        workloads = [config.workloads[workload_name] for workload_name in entry.workloads]
+        _refuse_colliding_spellings(name, workloads)
 
         output_path = compose_bundle_output_path(config.root, name)
         tool_state = output_path.parent / f".{TOOL}"
@@ -151,29 +157,28 @@ def generate_compose(
             config,
             substrate="compose",
             workloads=workloads,
-            rendering_vars=entry.vars,
+            variable_values={**sentinels, **entry.vars},
             templates=[
                 HEALTHCHECK_TEMPLATE,
                 RESTART_TEMPLATE,
                 *(
-                    template
-                    for variant, template in GPU_COMPOSE_TEMPLATES.items()
-                    if variant == entry.vars.get("GPU_VARIANT", "")
+                    GPU_COMPOSE_TEMPLATES[value]
+                    for variable, value in entry.vars.items()
+                    if variable in axes and value in GPU_COMPOSE_TEMPLATES
                 ),
             ],
             output=output_path,
             images=images,
-            service_shas=service_shas,
         )
 
         # Parse the rendering into the typed document
         document = load_yaml_model(ComposeDocument, output_path)
 
         # Attribute rendered container services to their owning workloads
-        services_map: dict[str, tuple[ComposeService, WorkloadDocument | None, str]] = {
+        services_map: dict[str, tuple[ComposeService, LoadedWorkload | None, str]] = {
             (service_name := f"{Path(workload.file_name).stem}-{container_name}"): (
                 document.services[service_name],
-                workload.document,
+                workload,
                 container_name,
             )
             for workload in workloads
@@ -188,24 +193,33 @@ def generate_compose(
             # Pin the barrier image to the lock slot
             if service_name == BARRIER_SERVICE:
                 barrier_service = document.services[BARRIER_SERVICE]
-                barrier_service.image = "${ALPINE_IMAGE:?err}"
+                barrier_service.image = f"${{{ALPINE_IMAGE}:?err}}"
                 services_map[BARRIER_SERVICE] = (barrier_service, None, BARRIER_SERVICE)
                 continue
 
             services_map[service_name] = (service, None, service_name)
 
-        # Refuse a collapsed name claimed twice
-        collapsed_names = [collapsed_name for _service, _workload, collapsed_name in services_map.values()]
-        if len(collapsed_names) != len(set(collapsed_names)):
-            duplicates = sorted({collapsed for collapsed in collapsed_names if collapsed_names.count(collapsed) > 1})
-            raise ValueError(f"the service names {duplicates} are each claimed by more than one rendered service")
-
-        # Namespace every service under the entry with its bare name as a network alias
+        # Namespace every service under the entry with its bare name as a network alias; a
+        # bundle's bare service names are its compose identity, so one name claims one service.
         network = f"{name}-net"
-        collapsed = set(collapsed_names)
+        collapsed = {collapsed_name for _service, _workload, collapsed_name in services_map.values()}
+        claim_sites: dict[str, str] = {}
         document.services = {}
         document.networks = {network: {}}
         for service, workload, collapsed_name in services_map.values():
+            site = (
+                f"{workload.file_name}: containers.{collapsed_name}"
+                if workload is not None
+                else (
+                    "the reserved barrier name" if collapsed_name == BARRIER_SERVICE else "the rendered services text"
+                )
+            )
+            if collapsed_name in claim_sites:
+                raise ValueError(
+                    f"services entry {name!r}: the service name {collapsed_name!r} is claimed at "
+                    f"{claim_sites[collapsed_name]} and {site}"
+                )
+            claim_sites[collapsed_name] = site
             document.services[f"{name}-{collapsed_name}"] = service
             service.networks = {network: {"aliases": [collapsed_name]}}
 
@@ -242,33 +256,48 @@ def generate_compose(
 
                 # Double every $ except on targets the workload declared consumer-interpolated
                 text = path.read_text(encoding="utf-8")
-                if workload and bind_volume.target not in workload.consumer_interpolated_targets:
+                if workload and bind_volume.target not in workload.document.consumer_interpolated_targets:
                     text = double_dollars(text)
 
                 document.configs[f"{name}-{path.name}"] = ComposeConfig(content=text)
                 service.configs.append(ComposeConfigReference(source=f"{name}-{path.name}", target=bind_volume.target))
 
-        # Scan consumed secrets and namespace the lock-key slots in one pass
+        # Rewrite the sha sentinels and namespace the lock-key slots
         text = dump_yaml(document.dump())
-        namespaced: list[str] = []
-        cursor = 0
-        for match in COMPOSE_SLOT.finditer(text):
-            namespaced.append(text[cursor : match.start()])
-            cursor = match.end()
-            if len(match.group(1)) % 2 == 1:
-                slot = match.group(2)
-                if slot in images:
-                    namespaced.append(f"{match.group(1)}{{{env_lock_slot(name, slot)}{match.group(3) or ''}}}")
-                    continue
-                consumed.add(slot)
-            namespaced.append(match.group(0))
-        namespaced.append(text[cursor:])
-        write_file(output_path, "".join(namespaced))
+        text = TREE_SENTINEL_PATTERN.sub(partial(_rewrite_sentinel, name), text)
+        text = COMPOSE_SLOT.sub(partial(_namespace_slot, name, images), text)
+        write_file(output_path, text)
         outputs.append(output_path)
 
         # Remove the entry's compose state dir
         shutil.rmtree(tool_state, ignore_errors=True)
 
-    secrets.validate_consumed(consumed, "compose", SECRETS_FILE.as_posix())
-
     return outputs
+
+
+def _refuse_colliding_spellings(entry_name: str, workloads: list[LoadedWorkload]) -> None:
+    # One workload claims each rendered spelling; score-compose keys its output services by them.
+    spellings: dict[str, str] = {}
+    for workload in workloads:
+        for container_name in workload.document.containers:
+            site = f"{workload.file_name}: containers.{container_name}"
+            spelling = f"{Path(workload.file_name).stem}-{container_name}"
+            if spelling in spellings:
+                raise ValueError(
+                    f"services entry {entry_name!r}: the rendered spelling {spelling!r} "
+                    f"is claimed at {spellings[spelling]} and {site}"
+                )
+            spellings[spelling] = site
+
+
+def _rewrite_sentinel(entry_name: str, match: re.Match[str]) -> str:
+    return "${" + env_tree_slot(entry_name, match.group(1)) + "}"
+
+
+def _namespace_slot(entry_name: str, images: dict[str, str], match: re.Match[str]) -> str:
+    # Odd $-parity is interpolation: lock keys rename under the entry, tree slots pass through unchanged
+    if len(match.group(1)) % 2 == 1:
+        slot = match.group(2)
+        if slot in images:
+            return f"{match.group(1)}{{{env_lock_slot(entry_name, slot)}{match.group(3) or ''}}}"
+    return match.group(0)

@@ -6,7 +6,7 @@ from typing import Annotated
 import typer
 
 from boatyard.build import run_build
-from boatyard.config.config import ConfigFile
+from boatyard.models.config_file import ConfigFile
 from boatyard.paths import DEFAULT_CONFIG_PATH
 
 app = typer.Typer()
@@ -26,7 +26,7 @@ def build(
         typer.Option(
             "--targets",
             "-t",
-            help="Build these targets: bare name for an axis-less service, name/variant when it declares variants.",
+            help="Build these targets: bare name for a variant-less service, name/variant when it declares variants.",
         ),
     ] = None,
     no_cache: Annotated[bool, typer.Option("--no-cache", help="Force rebuild by disabling cache usage.")] = False,

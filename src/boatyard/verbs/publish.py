@@ -10,10 +10,9 @@ from typing import Annotated
 import typer
 from bashrun.bash import bash, bash_output
 
-from boatyard import dockerfiles
-from boatyard.config.config import ConfigFile, compose_bundle_output_path, env_lock_slot
+from boatyard.models.config_file import ConfigFile, compose_bundle_output_path, env_lock_slot, env_tree_slot
 from boatyard.crane import install_crane
-from boatyard.config.lock import LOCK_PATH, LockFile
+from boatyard.models.lock_file import LOCK_PATH, LockFile
 from boatyard.paths import DEFAULT_CONFIG_PATH
 from boatyard.publish import (
     STUB_VALUE,
@@ -84,7 +83,7 @@ def publish_compose(
     sha = bash_output("git rev-parse HEAD").strip()
     branch_tag = (branch or bash_output("git rev-parse --abbrev-ref HEAD").strip()).replace("/", "-")
 
-    service_shas = dockerfiles.compute_service_shas(config.root, config.service_builds)
+    image_shas = {image.sha_env: image.compute_sha(config.root) for image in config.images.values()}
     lock_entries = LockFile.load(root / LOCK_PATH, config).index_references()
 
     published: list[PublishedEntry] = []
@@ -93,11 +92,11 @@ def publish_compose(
             continue
         with TemporaryDirectory(prefix="compose-bundle-") as baked_directory_string:
             baked_directory = Path(baked_directory_string)
-            # Fan the lock keys under the bundle prefix
+            # Fan the lock keys and tree slots under the bundle prefix
             substitutions = {
-                **service_shas,
                 **lock_entries,
                 **{env_lock_slot(bundle_name, key): value for key, value in lock_entries.items()},
+                **{env_tree_slot(bundle_name, sha): value for sha, value in image_shas.items()},
             }
             baked_path = bake_sources(baked_directory, output.as_posix(), substitutions)
 

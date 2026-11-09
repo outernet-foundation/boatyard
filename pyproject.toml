@@ -1,6 +1,6 @@
 [project]
 name = "boatyard"
-version = "0.6.0"
+version = "0.0.0.dev0"
 description = "Deploy-files definition language and compiler, plus a runtime for the compose target"
 requires-python = ">=3.13"
 dependencies = [
