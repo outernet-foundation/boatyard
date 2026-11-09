@@ -1,12 +1,13 @@
 # Closeout: the 0.6.0 critical path
 
-This file is the critical path only — the work that must ship imminently, in
-one release and one consumer sweep: the iteration unit (disk-state service
-hashes, qualified bundle grammar, path-form overrides), the 0.6.0 release,
-the toolkit cutover, the consumer sweep. Bang through it; when the four
-units land, delete this file. Future initiatives live in `design/` (one
-initiative per file, indexed by `design/AGENTS.md`); the six consolidated
-plan files this record absorbed live in git history. `AGENTS.md` is the
+This file is the critical path only — the work that must ship imminently:
+the 0.6.0 arc (iteration unit, release, toolkit cutover, consumer sweep),
+then the 0.7 comportment wave (Work 5) — one release and one consumer sweep
+each. Bang through it; when the units land, delete this file. Future
+initiatives live in `design/` (one initiative per file, indexed by
+`design/AGENTS.md`); every plan, compaction, and WIP doc this record
+absorbed lives in git history where it landed.
+`AGENTS.md` is the
 present-truth operations manual for the shipped surface. Every decision
 below is closed — do not re-litigate without its recorded flip condition. If
 this file and the code disagree, reconcile this file before touching code
@@ -14,7 +15,7 @@ this file and the code disagree, reconcile this file before touching code
 verify with the target repo's battery; commit as you go, prose and code in
 separate commits.
 
-## Snapshot (verified 2026-11-06)
+## Snapshot (verified 2026-11-09)
 
 - Work 1 landed: the `refactor` branch was squashed to a four-commit structure
   on `dev` (AGENTS.md prose; code; docs/design prose; closeout.md), pushed as
@@ -299,6 +300,30 @@ correct base in all five repos (the wave's commits land there and ride its
 merge to `dev`); the toolkit on `dev`. Re-verify with grep at session open
 before editing — the import inventory maps each site to a dissolution below.
 
+- The repo consolidated (2026-11-09): the `refactor-redux` span — the
+  image-declaration line, the 0.7 slot/pins/values moves, the resolve
+  rework — collapses onto `dev` as three commits (AGENTS.md prose; one code
+  commit; this closeout fold); this record carries the 0.7 line's remains as
+  Work 5.   `refactor.md` and both compaction docs were branch-only and never
+  land on `dev`. The landing went up as `origin/more-refactor` (tip
+  `c89116a`, the same three commits; the local `image-declaration-new`
+  name is dead); the PR is the operator's, still unopened.
+- The path-pin comportment wave is in flight (opened 2026-11-09): Move 9 is
+  dead by operator ruling (Work 5); the landing branch sets `version
+  = "0.7.0"` and `publish.yml` `major_minor: "0.7"` first, so a
+  `0.7.0`-requiring pin resolves against the local tree. All five
+  consumers go onto the working-tree boatyard through uncommitted
+  `[tool.uv.sources] boatyard = { path = "…" }` pins plus `uv lock`, every
+  constraint and floor set straight to `0.7.0` (`==0.7.0`, `requires
+  >=0.7.0` — never loosened); the landing branch sets `version = "0.7.0"`
+  and `publish.yml` `major_minor: "0.7"` first, so a `0.7.0`-requiring pin
+  resolves against the local tree. Each repo's grammar flip and values/pins
+  transition per Work 5's order, each battery green against the local
+  checkout; nothing pin-shaped commits until the release exists. The
+  operator instruction (2026-11-09): the consumers update on their
+  currently checked out branches — no branch switches, Make-it-Sing's
+  diverged feature checkout included.
+
 ## Standing constraints
 
 These rulings bind every work unit below.
@@ -363,6 +388,8 @@ These rulings bind every work unit below.
 3  toolkit     cutover onto boatyard spellings; the SHA the wave bumps to
 4  sweep       all five consumers repin once, relock, rename, drop imports,
                adopt the iteration unit
+5  comport     the 0.7 wave: Move 9 (or its recorded death), the release,
+               the grammar flips validated on path pins, the final repins
 ```
 
 Order within a unit is strict; unit order is fixed. 1 precedes 2 deliberately:
@@ -881,3 +908,285 @@ manifests; every toolkit `uses:` ref
 carries one SHA and every `--lock-only`/`--gpu` mention is gone from consumer
 docs and workflows; Make-it-Sing's `up` assembles through the path override
 against a sibling placeframe checkout.
+
+## Work 5 — the 0.7 comportment wave
+
+The `refactor.md` line's record, folded here; the file itself never lands
+on `dev`. Its
+code (moves 1–12: the slot/pins/values model, the `bump` verb, tree-slot
+rendering) landed inside the span's single code commit; what remains is
+below. One churn event carries it all.
+
+- Move 9, the tree vocabulary rename — the `__BOATYARD_TREE__` marker (→
+  `__BOATYARD_{NAME}__`), the `tree-<oid>` tag spelling, the `tree-tags`
+  verb, `compute_service_shas`, and the docs' "tree-derived" vocabulary,
+  one stroke — is dead by operator ruling (2026-11-09), killed deliberately
+  before the PR: the existing vocabulary ships as-is, and nothing renames.
+  The name-bar musing (`SOURCE` rejected) dies with it.
+- Consumer order per repo: `bump` first (creates the pins file at the
+  current head; the k8s manifest stays byte-stable if its baked tags were
+  fresh, heals if stale) → `generate-score` (compose artifacts slot-ify; the
+  secrets section migrates) → per-machine values reshuffle (sections; drop
+  `PUBLIC_URL`/port spellings; AUTH block → interpolation lines) → drop
+  `ALPINE_IMAGE`/`CADDY_IMAGE` from `base_images` → sample rewrite,
+  `stack/secrets.yaml` deletion, committed-artifact test updates (compose
+  assertions gain slot spellings; k8s unchanged). The grammar flips
+  (declared edges, lexical member grammar, dual-shape `base_images`,
+  `FROM ${KEY}`) ride the same wave; placeframe's `axes:` deletion is the
+  template (artifacts regenerated byte-identical).
+- Validation without the publish round trip: each consumer pins the local
+  boatyard checkout through a `[tool.uv.sources] boatyard = { path = … }`
+  plus `uv lock` — adopted as COMMITTED local-branch state (the placeframe
+  template, `995f0f1e`; the plan's earlier "uncommitted hunk" shape died with
+  it), every constraint and floor at `>=0.7`, the release repin dropping the
+  source entry landing only after `0.7.0` exists. Every consumer is CLI-only
+  — zero `boatyard` imports anywhere.
+- Toolkit: the getter's `generate-score --check` step command is unchanged;
+  its rationale line rewrites (structural freshness, not tag freshness);
+  bump-step integration depends on the D1 ruling; toolkit AGENTS.md line ~60
+  updates.
+- Design docs: `precision-attribution.md` and `semver-image-bundle-lines.md`
+  "Release and regeneration" sections assume committed tree tags — amend to
+  the slots/pins/bump model.
+- Placeframe-side (not boatyard work): sample + live `AUTH_JWKS_URL` fix
+  (literal edge spelling → `${EDGE_BASE_URL}`); API JWKS probe as
+  /health-reflects-JWKS (backoff beats restart storms; wait-for-resources
+  may need to gate api on keycloak under the auth option); `loki_query.py`
+  hardcoded container name; the Loki label-gap investigation (possible OTLP
+  plumbing dropped in the bundles cutover — investigate early).
+- Release channel (ruled 2026-11-09): the wave cuts `0.7.0` — the operator's
+  call, re-opening the patch-flow law for this one. `publish.yml`'s
+  `major_minor` bumps to `"0.7"`, and the landing branch's `version` sets
+  `0.7.0` so consumer pins against the path source resolve.
+
+Rulings carried from the 0.7 line:
+
+- D1 — the operator always cuts the k8s pin bump commit: post-merge, on a
+  clean checkout of `dev` HEAD, then push; merge-gate absorption stays ruled
+  out (the unity library cache promotion needs the merge tree to equal the
+  PR head tree).
+- D2 — a pin is writable only for content CI built and pushed at exactly
+  that head: enumerate the shelf's `sha-{HEAD}*` shards, merge the
+  `{target: {ref, digest, tags}}` manifests, and every computed tree tag
+  must appear in the union's `tags[]`. The enumerate-and-merge shape stays
+  inline until a third consumer appears. Ad-hoc `--push-to` builds are
+  unpinnable by design.
+- No pin bootstrap: first k8s generation without a pins file fails naming
+  the bump verb, always. The bump verb writes the whole certified head's
+  tag set — no per-service partial bumps; unchanged services are no-ops by
+  identity.
+- No filters, functions, or operators in the interpolation grammar, ever —
+  bare references only. `NGROK_DOMAIN` stays hand-set (host-of-URL is a
+  decision, not a derivation); same for `GATEWAY_PORT` vs `public_url`.
+  Reserved names (`PUBLIC_URL`, `EDGE_BASE_URL`) refuse hand-setting and are
+  minted when their declaration exists. Routes get no override surface,
+  ever.
+- `--local` k8s generation reads no pins: fresh working-tree tags, dirt is
+  content. Unused values keys stay legal (unselected bundles still declare
+  them). Interpolation roots are hand variables + minted slots only.
+- Four files at root — `boatyard.yml`, `boatyard.lock.yml`,
+  `boatyard.values.yaml`, `boatyard.k8s-pins.yml`; any other location is a
+  raise, and the producer-root hunt is `parents[3]` plus a raise.
+
+Verify: consumer batteries green on the path pins; the release published;
+the wave's repins landed; Move 9 recorded dead (2026-11-09).
+
+- Wave progress (2026-11-09 session, all five on their currently checked out
+  branches per operator instruction; batteries green against the local
+  path-pinned boatyard): infra-rathole (`repin-boatyard-0.6.6`, four commits:
+  grammar flip, `Run generate-score`, repin, docs), lbe-toolkit
+  (`compose-bundles`, three), Make-it-Sing (`compose-bundles`, three),
+  placeframe-capture-tool (`compose-bundles`, four), placeframe (validated;
+  one sample commit). The lexical-grammar ruling that shaped them: a bare
+  local entry is unrepresentable (any `workloads:` mapping is a group), so
+  every local producer restructures into group+option — infra-rathole group
+  `rathole`/option `client` (qualified name unchanged), lbe group
+  `livekit`/option `tier` (the published bundle RENAMES `livekit` →
+  `livekit-tier` at CI push; Make-it-Sing's ref flip onto the new spelling
+  is a follow-up after that republish — its current ref stays valid, the
+  0.6.6-baked digest is locked). capture-tool gained its score tier (three
+  workload files declaring the box Dockerfiles; groups `zed`/`aoa`), the
+  `CADDY_IMAGE` base key became `AOA_GATEWAY_IMAGE` (the reserved owned
+  name), and its CI will publish three NEW bundles (`zed-capture`,
+  `aoa-bridge`, `aoa-gateway`) through the embedded publish-compose leg — a
+  new surface the operator should expect. Make-it-Sing's lock was truncated
+  and relocked from nothing (the 0.6 `requires:` fields on bundle records
+  refuse under the 0.7 lock schema; digests carried forward identically,
+  `slots:` walked from the published artifacts). Values reshuffles: the
+  samples and live files onto sections (`gateway:`, `values:`), AUTH_* →
+  `${PUBLIC_URL}` interpolation lines, `PUBLIC_URL`/`GATEWAY_PORT` hand-keys
+  dead (minted/section), lbe's machine ports standardized onto the config
+  literals (the values `ports:` override moves published only — target is
+  config-owned). placeframe: ruff/format/pytest green (basedpyright carries
+  only the recorded torch gaps), `lock --check` green, compose artifacts
+  byte-fresh under regeneration, the sample+live `AUTH_JWKS_URL` fix landed
+  (`${EDGE_BASE_URL}/auth/…`, commit `4cbeec29`); its full `generate-score
+  --check` waits on the pins file (D1, post-merge) — and `--check --target
+  compose` self-contaminates `secrets.txt` (the mint list is k8s-leg-sourced
+  and the compose-only run writes it empty), a check-mode quirk left as-is.
+  Toolkit rationale line rewritten (its `dev`, `bf811f1`); the two design
+  docs' release sections amended to slots/pins/bump. Remaining: operator
+  pushes (all branches local — Make-it-Sing's remotes are SSH), CI
+  republishes, the `livekit-tier` ref flip in Make-it-Sing, the `0.7.0`
+  release cut, the real repins (drop the path sources, pin PyPI), and
+  placeframe's D1 bump; placeframe-side follow-ups unchanged (API JWKS
+  probe, `loki_query.py` container name, Loki label-gap investigation).
+- NEXT SESSION OPENS HERE: the override-loop verification — LIFTED;
+  closed 2026-11-09, all six legs passed (evidence in the bullets below;
+  two diagnoses surfaced: the pure-base
+  `BakeMetadata` coverage refusal, and the compose `configs.content`
+  recreate gap with its iteration-unit consequence — artifact-side edits
+  need the down/up cycle, image-side edits converge in place. The first
+  is FIXED on `more-refactor` (`ff56f03`, battery green 614): the tag
+  check moved out of the `BakeMetadata` model validator into
+  `run_build`, scoped to the requested targets — dependency-only fan
+  bases (built via `target:` contexts, legitimately untagged in bake's
+  metadata) pass through, a requested target without tags still refuses
+  (regression test locks both sides; verified live — the battery's exact
+  refusing command exits 0 with identical tags). The compose gap stays
+  open (upstream-shaped; workaround: down/up after config-side edits).
+  One wave-relevant gotcha the fix verified: uv serves path sources from
+  cache keyed by version — after editing boatyard, each consumer needs
+  `uv sync --reinstall-package boatyard` before `uv run` sees the
+  change. Wave
+  remainder unchanged: operator pushes, CI republishes, the
+  `livekit-tier` ref flip, the `0.7.0` release cut, the real repins,
+  placeframe's D1 bump). The iteration
+  unit's end-to-end proof on the live consumer (edit in placeframe, see it
+  in Make-it-Sing, with no push, no CI, no digest copy), doubling as the
+  wave's missing end-to-end `up` leg under 0.7 (values sections, minted
+  slots, tree-slot fill from the producer's working tree, producer-lock
+  attachment, ports rendering, edge assembly). Make-it-Sing's live values
+  already carry the override (`path_overrides: {core-cuda:
+  ../placeframe/stack/generated/compose/compose.core-cuda.yaml}`); the box
+  has GPU passthrough and ran the full stack during the close-the-loop
+  session — invoke `up --quiet-pull` with long timeouts, `boatyard down`
+  between legs, leave the stack down at the end, and record each leg's
+  evidence here as it passes. The battery is a runbook, not a committed
+  script (no ephemeral artifacts; a durable harness is a deliberate later
+  decision). Legs:
+  1. Baseline bring-up: `uv run boatyard up` in Make-it-Sing through the
+     path override against the sibling placeframe checkout; the stack
+     healthy, edge routes answering (`/` 302, the api surface reachable),
+     and the core services running fresh working-tree tags — assert the
+     rendered assembly's `tree-` refs equal placeframe's live
+     `boatyard tree-tags` output.
+  2. Artifact-side round: one observable artifact-side edit in placeframe
+     (a workload `files:` or provisioner surface the running stack serves
+     or logs), then placeframe `generate-score` — assert the tree tags did
+     NOT move (image content untouched) — then Make-it-Sing `up`; the edit
+     observable in the running stack.
+  3. Image-side round: one observable source edit inside a built placeframe
+     image, then placeframe `boatyard build` (fresh `tree-` tag in the
+     local daemon) + `generate-score` — assert the tag moved — then
+     Make-it-Sing `up` (compose's `--pull missing` serves the local-only
+     tag); the edit observable in the running stack. Rounds 2 and 3 each
+     run twice with different edits in one session — the loop must iterate,
+     not one-shot.
+  4. Producer-lock attachment: the core bundle's third-party image pins
+     (postgres, loki, seaweed, …) resolve from placeframe's
+     `boatyard.lock.yml`, not Make-it-Sing's — assert the running
+     containers' image digests against placeframe's lock.
+  5. Override edge teeth, live: a values file whose override names an
+     unselected entry loads clean (the inert override rides with
+     selection), and an override pointing at a missing file refuses
+     loudly.
+  6. Reconciliation: any leg that dies mid-convergence reconciles through
+     `--force-recreate` or a clean `down`/`up` (the recorded compose-v5
+     edge-container partial-network case).
+  Failures surface and diagnose only — fix on direction, per the standing
+  communication law; the diagnosis rides this record either way.
+- Override-loop evidence (2026-11-09 session, in flight): leg 1 PASSED —
+  `up --quiet-pull` in Make-it-Sing converged through the path override
+  (all healthchecked services healthy; edge `/` 302→`/schema`, `/health`
+  200; rathole control channels established ×3), and all nine running
+  first-party image refs equal placeframe's live `tree-tags` basis exactly
+  (api f2bb1314…, seaweedfs b4e300b9…, postgres 74446d020…, lease-server
+  4f8324da…, database-manager 069b630d…, database-migrator 16dbc3a8…,
+  s3-initializer cf3cf0a8…, localizer-cuda 514ae004…, reconstructor-cuda
+  ddf5136b…). Preconditions the runbook didn't carry: (a) placeframe's own
+  dev stack held host port 58080 — downed first via `boatyard down` in
+  placeframe (its own project, distinct from the makeitsing assembly); (b)
+  the fresh localizer/reconstructor tags were never built on this daemon
+  and ghcr rightly refuses PR-channel tree tags, so the producer half ran
+  first — `boatyard build --targets "localizer/cuda reconstructor/cuda"`
+  re-minted both committed tags deterministically from the clean tree. One
+  defect surfaced there, diagnosed, NOT fixed (fix on direction): build's
+  post-bake `BakeMetadata` coverage check refuses pure-base targets —
+  `neural-networks-base-cuda` "must produce tagged image references" —
+  because a dual-shape base consumed by the one-hop fan bakes untagged
+  (the daemon carries zero neural-networks-base tags, ever). The check
+  predates the image-declaration grammar; CI has not yet fired on it (all
+  0.7 branches local), so every producer `build`/`build --push` under the
+  new grammar refuses post-bake despite minting correctly. Also noted: uv
+  `==0.12.15` PATH applies to both repos here (`/home/code/.local/bin/uv`).
+  Leg 2 PASSED, ×2 rounds, with one compose finding: round A (grafana
+  datasources rename → served name through the edge) after a full down/up;
+  round B (loki `http_server_read_timeout: 45s` → served by loki's
+  `/config` in-container) — both rounds' regens left every tree tag
+  byte-identical to the basis (the artifact-side files hash into no
+  service's closure; asserted live both rounds). The finding: compose
+  v5.1.3 does NOT recreate a service when a top-level
+  `configs.<name>.content` changes — reproduced minimally outside the
+  project (content flip → "Running", not "Recreate") — so an artifact-side
+  producer edit silently no-ops on a running consumer stack: round B's
+  first `up` printed `core-cuda-loki Running` and the container kept the
+  old config; the clean `down`/`up` reconciled (up exposes no
+  `--force-recreate`). Consequence for the iteration unit: image-side
+  edits converge in place (tag change recreates); artifact-side edits
+  need the down/up cycle. Round A's observation rode the leg-boundary
+  down, which is why it converged at all. Both rounds' probe edits
+  reverted, artifacts regenerated back to committed bytes, placeframe
+  tree CLEAN.
+  Leg 3 PASSED, ×2 rounds (the loop iterates, not one-shots): probe
+  surface = an inert `loop_probe` field on the api's `/server-info`
+  (`workloads/api/src/routers/server_info.py`). Round A: field default
+  `loop-a` → `build --targets api` minted `tree-e202092a…` (basis
+  `tree-f2bb1314…` — tag moved), the compose artifacts stayed
+  byte-identical (the 0.7 tree-slot model — `up` resolves working-tree
+  tags per run, so no regen diff), and Make-it-Sing's `up` RECREATED api
+  in place — no down — pulling nothing (the local-only tag served from
+  the daemon); `{"loop_probe":"loop-a"}` served through the edge. Round
+  B: default flipped to `loop-b` → third distinct tag
+  `tree-55d4322b…`, same in-place recreate, `"loop_b"` observed. The
+  image-side/image-slot contrast against leg 2's finding is the battery's
+  sharpest result: image-tag changes recreate (compose hashes the image
+  ref), `configs.content` changes do not — the iteration unit's
+  image-side loop is fully no-down; its artifact-side loop needs the
+  down/up. Probe reverted, tree CLEAN (both probe images remain in the
+  daemon, inert).
+  Leg 4 PASSED: the path form's producer-lock attachment verified live.
+  The artifact's one runtime lock slot (`CORE_CUDA__BOATYARD_LOCK__ALPINE_IMAGE`,
+  wait-for-resources) resolved to `alpine:3.20@sha256:c64c687c…` —
+  exactly placeframe's lock `ALPINE_IMAGE` `linux/amd64` platform digest;
+  every third-party literal baked at generation (fluent-bit `71cda445…`,
+  alloy `0eae1eb9…`, grafana `b739cda4…`, loki `2cbddd6e…`) equals its
+  placeframe lock entry; and the counterfactual holds — Make-it-Sing's
+  own 91-line lock carries none of `ALPINE_IMAGE`/`LOKI_IMAGE`/
+  `GRAFANA_IMAGE`, so the producer's lock is the only source. First-party
+  postgres/seaweed ride working-tree tags (leg 1's basis assertion).
+  Down/up boundary after leg 3 reconverged api onto the committed
+  `tree-f2bb1314…` from the daemon with no rebuild.
+  Leg 5 PASSED, both teeth live: (a) a values file whose `path_overrides`
+  names the unselected `core-rocm` (a real sibling artifact) loads clean
+  — `up` exit 0, normal convergence, zero core-rocm containers (the
+  override rides inert with selection); (b) repointing the selected
+  `core-cuda` override at a nonexistent path refuses loudly before any
+  compose action — exit 1, `ValueError: path_overrides.core-cuda:
+  …/compose.gone.yaml does not exist` — and the running stack is
+  untouched. The live values file restored byte-identical afterward.
+  Leg 6 PASSED (the recorded compose-v5 case reproduced faithfully):
+  squatted host 58080 with a scratch container, `up` died mid-convergence
+  at the edge's port bind (exit 1, "port is already allocated") leaving a
+  `created` edge with a PARTIAL network set (core-cuda-net + livekit-net,
+  rathole-client-net never attached); after freeing the port, the next
+  `up` merely STARTED the edge — networks still partial, no recreate; the
+  clean `down`/`up` reconciled (all three networks, `/` 302, full stack
+  healthy). Stack left DOWN at battery end; placeframe and Make-it-Sing
+  trees clean; probe images (`tree-e202092a…`, `tree-55d4322b…`) remain
+  in the daemon, inert.
+- The wave remainder after the battery: operator pushes (boatyard's
+  `more-refactor` landing branch and every consumer branch are local;
+  Make-it-Sing's remotes are SSH), CI republishes, the `livekit-tier`
+  ref flip in Make-it-Sing, the `0.7.0` release cut, the real repins
+  (drop the path sources, pin PyPI), placeframe's D1 bump.

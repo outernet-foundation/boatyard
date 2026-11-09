@@ -3,7 +3,10 @@
 Pre-implementation design. Prerequisite: precision attribution has landed —
 the change gate below compares tree tags, and tags are a trustworthy change
 signal only once they are source-precise. One release; consumer adoption
-lives in the adoption-wave design.
+lives in the adoption-wave design. Compose artifacts carry tree slots (not
+literal tags), so bundle source-diff detection rides structure and lock
+baking, never image re-keys; the k8s side's certified tag set is the pins
+file the `bump` verb writes.
 
 Version space: per-unit semver lines with tag-everything — every release
 aliases the full image set (changed images at their new version, unchanged at

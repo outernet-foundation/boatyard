@@ -76,15 +76,20 @@ boatyard ships one patch release carrying the two phases above (pre-1.0;
 breaking rides the patch flow). The image-building consumers — placeframe,
 placeframe-capture-tool, Make-it-Sing — repin onto it before the semver change
 detection ever runs: the toolkit compares tree tags recorded by consumer CI
-builds, so those builds must compute precise tags at the certified head. The
-repin is a `uv.lock` bump — no declaration changes, no lock rewrite. placeframe
-runs one deliberate `stack/generated/**` regeneration cycle after the re-key
-(every image gets a fresh `tree-` tag at its next build; same two-commit shape
-as the sweep's cycle). Old `tree-` tags freeze in place — CI never re-pushes
+builds (the shelf manifests carry them in each entry's `tags[]`; the k8s side
+records the certified head's set in `boatyard.k8s-pins.yml`, written only by
+`boatyard bump`), so those builds must compute precise tags at the certified
+head. The repin is a `uv.lock` bump — no declaration changes, no lock rewrite.
+No regeneration cycle follows the re-key: compose artifacts carry
+`{entry}__BOATYARD_TREE__…` slots, not literal tags, so image-content changes
+leave them byte-stable (only structural source changes move them); the k8s
+manifest bakes the pins file's certified tags, and `bump` — the operator's
+post-merge run on a clean checkout of the certified head — is the one
+deliberate cycle. Old `tree-` tags freeze in place — CI never re-pushes
 them, so existing pins convert from movable to actually-immutable; infra's
 three `tree-` pins keep resolving to frozen digests, re-pointed at leisure or
 at the semver version tags. Calibration-corpus rows keep their old
 `pipeline_version` values (the existing re-key hard-fail on redeploy stands).
 
-Verify: consumer CI green end-to-end; the regeneration diff committed and
+Verify: consumer CI green end-to-end; the pins-file bump committed and
 reviewed; a rebuild of an unchanged tree keeps its tag.
