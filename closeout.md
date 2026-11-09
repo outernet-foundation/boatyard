@@ -1206,9 +1206,10 @@ the wave's repins landed; Move 9 recorded dead (2026-11-09).
   ruff/format/pytest 17/basedpyright 0 (the cpu sync cleared the torch
   gaps)/lock-check/matrix ×3/plan ×4; capture-tool: preflight-python,
   lock-check, matrix one partition three targets, plan three bundles —
-  the wave's new zed/aoa surface). lbe-toolkit and Make-it-Sing stay on
-  their path pins by operator instruction for now. capture-tool's tree
-  carried two unrelated Unity `.asset.meta` edits, left uncommitted.
+   the wave's new zed/aoa surface). lbe-toolkit and Make-it-Sing followed
+   onto PyPI 0.7.1 later the same day (the closing entries below).
+   capture-tool's tree
+   carried two unrelated Unity `.asset.meta` edits, left uncommitted.
 - The repin branches rewritten for review (2026-11-09, tree-identical
   rebuilds; obviated intermediate states — path-pin commits, the axes
   round-trip, duplicate regens and lock churn — expunged; each branch
@@ -1293,12 +1294,45 @@ the wave's repins landed; Move 9 recorded dead (2026-11-09).
    args (`[*remote_base_images, *owned_images]` in `build.py`), a
    regression test asserts the owned arg rides a target, and three
    existing args-shape tests updated to the new contract. Battery 617,
-   full preflight green. Release set to `0.7.2` by operator instruction
-   (0.7.1 skipped; no 0.7.1 exists on PyPI): `pyproject.toml` version
-   bumped, `uv.lock` refreshed. `publish.yml`'s `major_minor` stays
-   `"0.7"` — the toolkit schema pins that field to exactly two
-   components (`^\d+\.\d+$`), and the release number rides the
-   pyproject version (the 0.7.0 precedent). PR-channel prereleases
-   become `0.7.2.dev{N}`. placeframe's CPU leg needs this release once
-   cut (or the placeframe-side fallback of declaring its own alpine
-   key in `base_images`).
+    full preflight green. Release set to `0.7.2` by operator instruction:
+    `pyproject.toml` version bumped, `uv.lock` refreshed. The plan minted
+    `0.7.1` anyway — released numbers derive from `major_minor` plus the tag
+    ledger (`next_version` in the toolkit's plan), never from pyproject, whose
+    version only serves local path-pin resolution — and `0.7.1` is what
+    shipped carrying these fixes (sdist verified to contain both).
+    `publish.yml`'s `major_minor` stays
+    `"0.7"` — the toolkit schema pins that field to exactly two
+    components (`^\d+\.\d+$`). PR-channel prereleases
+    become `0.7.2.dev{N}`. placeframe's CPU leg needs this release once
+    cut (or the placeframe-side fallback of declaring its own alpine
+    key in `base_images`).
+- lbe-toolkit and Make-it-Sing repinned onto PyPI 0.7.1 (2026-11-09, each on
+  its `compose-bundles`): path source dropped, floor `boatyard>=0.7.1`,
+  relock resolved 0.7.1 from the registry, the change squashed into each
+  branch's prior path-source repin commit (now "Repin boatyard onto PyPI at
+  0.7.1", `--fixup` + autosquash + a detach/amend reword; both branches were
+  on origin, so the operator force-pushed). lbe's battery: lock --check,
+  generate-score --check byte-fresh under the package; Make-it-Sing's:
+  lock --check, generate-score self-skip. lbe's Integrate green end-to-end
+  after the push (its livekit-tier republish rode it); Make-it-Sing's died
+  at `mirror` — the gap below.
+- The mirror enumeration gap (2026-11-09, Make-it-Sing Integrate 42690842741:
+  "nothing is declared to mirror (base_images and k8s.charts are empty)").
+  A boatyard 0.7 defect: `lock` resolves `remote_base_images ∪ owned_images`
+  through the mirror prefix (a gateway consumer's lock carries CADDY_IMAGE as
+  a mirror ref), but `mirror` enumerated only `remote_base_images` — under 0.7
+  no repo declares the owned keys in base_images, so nothing copied them
+  anywhere, and a gateway-only consumer's set was empty enough to trip the
+  zero-target refusal (the mirror-namespace caddy copy is a 0.6-era leftover;
+  a caddy bump would have broken relock fleet-wide). Fixed on branch `0.7.2`
+  (off dev; battery 618 green, full preflight): one `mirrored_base_images`
+  set on ConfigFile feeds lock's resolution, mirror's enumeration, lock
+  validation's effective set, and build's env-resolved bake args; the
+  refusal names owned images; the regression test is the gateway-only
+  consumer. Dropping the mirror step from consumer CI was considered and
+  rejected: the edge's caddy rides the consumer's own lock, so the copy
+  stays each gateway repo's job and the toolkit stays shape-blind (the
+  0.6.1 precedent). Rides the next release — the plan mints `0.7.2`
+  (last released 0.7.1, `major_minor: "0.7"` unchanged). After it
+  publishes: every consumer `uv lock --upgrade-package boatyard` (floors
+  already admit it), and Make-it-Sing's Integrate goes green.
