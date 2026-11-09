@@ -37,9 +37,10 @@ Design intent and silent-failure traps, one fact per bullet.
   list (`secrets.txt`) is the k8s rendering's consumed secret refs (no secret vocabulary is
   authored anywhere; a compose-only rendering mints an empty list), and a local entry's values
   demand is its rendered bundle artifact's own `${NAME}` slots.
-- A service group derives its option set from one declared variant axis (`axes:` plus
-  group-level `workloads:`) or authors it (`options:`); the axis name is the one spelling
-  across the Dockerfile ARG and the k8s selection — never re-described by hand.
+- A service group derives its option set from the single axis its workloads' image closure
+  fans (group-level `workloads:`; a closure fanning nothing or two axes refuses) or authors
+  it (`options:`); the axis lives on the built `base_images` entry — the one spelling across
+  the Dockerfile ARG and the k8s selection, never re-described by hand.
 - Plain score-compose silently drops `httpGet` probes; boatyard's lens makes the omission loud
   instead via the workload's `outernet.internal/probe-adapter` annotation.
 - Substrate needs live in workload files as `outernet.internal/*` annotations — `boatyard.yml`
@@ -71,7 +72,10 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
 - The build set is the closure over declared edges — workload source annotations, provisioner
   `dockerfile:` markers, built `base_images` entries — computed inside `ConfigFile` load, never
   authored in config and never walked from the tree; a Dockerfile nothing declares is silently
-  not built, like an unlisted score file.
+  not built, like an unlisted score file. Every workload file loads exactly once per
+  `ConfigFile.load` — one lens serves the declared edges, the derived fan, and both renderings;
+  the per-entry reload is dead, and the compose-only probe-adapter check runs at the compose
+  rendering over the once-loaded documents.
 - Authored provisioner files carry real YAML mappings and lists; the string form is generated. A
   field already in string form is a validation error.
 
@@ -83,8 +87,8 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
 - `models/values_file.py` — the values file schema: sections, typed overrides, the section key grammar.
 - `models/k8s_pins.py` — pins parsing.
 - `models/pyproject.py` — the toolchain-pin lens over the consumer repo's pyproject.toml.
-- `models/workload.py` — the workload-file lens (`WorkloadDocument`, the compose variant) plus
-  the workload loader and provisioner-file selection.
+- `models/workload.py` — the workload-file lens (`WorkloadDocument`), the workload loader and
+  the compose-surface probe-adapter check, plus provisioner-file selection.
 - `models/image.py` — the image-set loader `load_images` and the tree-tag sha machinery.
 - `resolve.py` — the `resolve(config, lock, values)` fold answering the assembly plan `up` renders.
 - `lock.py` — relock engine + crane resolution.
