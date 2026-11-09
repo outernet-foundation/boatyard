@@ -1566,6 +1566,65 @@ def test_k8s_generation_refuses_a_workload_sha_slot_no_pin_covers(
         generate_k8s(config, config.k8s, LockFile.model_validate({}), local=False)
 
 
+ISSUER_PROVISIONER = (
+    "- uri: template://example/issuer\n"
+    "  type: example-issuer\n"
+    "  manifests:\n"
+    "    - name: configurator\n"
+    "      image: {dockerfile: workloads/initializer/Dockerfile}\n"
+)
+
+WORKLOAD_WITH_ISSUER = (
+    "metadata:\n"
+    "  name: api\n"
+    "  annotations:\n"
+    "    outernet.internal/dockerfile: api=workloads/api/Dockerfile\n"
+    "resources:\n"
+    "  issuer:\n"
+    "    type: example-issuer\n"
+    "containers:\n"
+    "  api: {}\n"
+)
+
+
+def _issuer_config(tmp_path: Path) -> tuple[ConfigFile, K8sConfig]:
+    config = _generated_config(tmp_path, ["api.yaml"], repository="ghcr.io/org/repo", k8s={"workloads": ["api.yaml"]})
+    config.images = {
+        "api": Image(name="api", dockerfile="workloads/api/Dockerfile"),
+        "initializer": Image(name="initializer", dockerfile="workloads/initializer/Dockerfile"),
+    }
+    assert config.k8s is not None
+    return config, config.k8s
+
+
+def test_k8s_generation_refuses_a_provisioner_sha_slot_no_pin_covers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_pins(tmp_path, {"API_SHA": PINNED_TAG})
+    _pins_k8s_recorder(monkeypatch, tmp_path, WORKLOAD_WITH_ISSUER)
+    (tmp_path / "stack" / "score" / "k8s").mkdir()
+    (tmp_path / "stack" / "score" / "k8s" / "issuer.yaml").write_text(ISSUER_PROVISIONER, encoding="utf-8")
+    config, k8s = _issuer_config(tmp_path)
+
+    with pytest.raises(ValueError, match=r"boatyard\.k8s-pins\.yml: lacks pins for INITIALIZER_SHA"):
+        generate_k8s(config, k8s, LockFile.model_validate({}), local=False)
+
+
+def test_k8s_generation_passes_provisioner_pins_into_the_generate_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_pins(tmp_path, {"API_SHA": PINNED_TAG, "INITIALIZER_SHA": PINNED_TAG})
+    recorder = _pins_k8s_recorder(monkeypatch, tmp_path, WORKLOAD_WITH_ISSUER)
+    (tmp_path / "stack" / "score" / "k8s").mkdir()
+    (tmp_path / "stack" / "score" / "k8s" / "issuer.yaml").write_text(ISSUER_PROVISIONER, encoding="utf-8")
+    config, k8s = _issuer_config(tmp_path)
+
+    generate_k8s(config, k8s, LockFile.model_validate({}), local=False)
+
+    assert recorder.command_envs["generate"] is not None
+    assert recorder.command_envs["generate"]["INITIALIZER_SHA"] == PINNED_TAG
+
+
 def test_local_k8s_generation_derives_working_tree_tags_without_pins(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

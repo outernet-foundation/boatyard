@@ -325,6 +325,13 @@ class TestDefaultTargets:
         assert _bake_targets(recorder.commands) == ["api"]
         assert yaml.safe_load(recorder.rendered)["services"]["api"]["build"]["platforms"] == ["linux/amd64"]
 
+    def test_owned_base_keys_ride_the_bake_args(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        recorder = _prepare(monkeypatch, tmp_path, [], dockerfiles={"api": EXTERNAL})
+
+        args = yaml.safe_load(recorder.rendered)["services"]["api"]["build"]["args"]
+
+        assert args["ALPINE_IMAGE"] == "${ALPINE_IMAGE:-}"
+
     def test_bake_invokes_the_rendered_temp_file_without_set_strings(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
@@ -763,6 +770,7 @@ class TestRenderBakeArgs:
         assert services["api"]["build"]["args"] == {
             "UV_BASE_IMAGE": "${UV_BASE_IMAGE:-}",
             "EXTRA_IMAGE": "${EXTRA_IMAGE:-}",
+            "ALPINE_IMAGE": "${ALPINE_IMAGE:-}",
         }
 
     def test_sha_args_render_only_for_declaring_dockerfiles(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -779,7 +787,10 @@ class TestRenderBakeArgs:
         services = _rendered_services(recorder.rendered)
 
         assert "LOCALIZER_SHA" not in services["api"]["build"]["args"]
-        assert services["localizer"]["build"]["args"] == {"LOCALIZER_SHA": "${LOCALIZER_SHA:?err}"}
+        assert services["localizer"]["build"]["args"] == {
+            "LOCALIZER_SHA": "${LOCALIZER_SHA:?err}",
+            "ALPINE_IMAGE": "${ALPINE_IMAGE:-}",
+        }
 
     def test_declared_values_reach_the_rendered_axis_arg(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         recorder = _prepare(
@@ -827,7 +838,7 @@ class TestRenderBakeContexts:
         services = _rendered_services(recorder.rendered)
 
         assert services["app"]["build"]["additional_contexts"] == {"base": "target:base"}
-        assert services["app"]["build"]["args"] == {"BASE_IMAGE": "base"}
+        assert services["app"]["build"]["args"] == {"BASE_IMAGE": "base", "ALPINE_IMAGE": "${ALPINE_IMAGE:-}"}
 
 
 class TestRenderBakeCache:
