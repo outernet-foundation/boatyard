@@ -16,11 +16,31 @@ pairing with built keys refused, bake's base wiring re-keyed on declared names (
 context key = directory stem; the `additional_contexts` redirect unchanged), and the
 placeframe transition for all of that. The increment cost +107 net in src/ — the price of
 `BuiltBaseEntry`'s validators and the refusal blocks; the moves below carry their state.
-compaction.md's "Current state" section predates this baseline and is superseded by this
-paragraph. Sandbox gaps this baseline hit: placeframe's venv holds a stale non-editable
+
+Second increment (boatyard `528b15f`/`e0da2dd`, placeframe `1fbea896`/`36771f75`/`7497ac97`):
+the walk death. Service-image edges are authored at the consuming document — workload
+containers carry `outernet.internal/dockerfile: container=path` or `outernet.internal/lock:
+container=KEY` annotations (comma pairs, the dev-toggles spelling); provisioner manifests
+carry `dockerfile:` markers beside the existing `lock:`; `image:` is never authored (the
+lens refuses it); the render pass injects the composed reference at the per-run copy
+through one composer (repository + stem + variant + tag). The build set is the closure over
+declared edges inside `ConfigFile` load — the directory walk, the one-top-dir rule, and the
+stem surgery in compose generation are dead; an undeclared Dockerfile is silently not
+built. The k8s pins demand derives from the workload annotations instead of text slots.
+Placeframe's transition is complete (workload annotations, both renderings' markers, image
+lines deleted; artifacts regenerated — the image refs reproduced byte-identically, the only
+artifact diffs being the lock slots baking per-platform manifests per the substrate-split
+treaty and the annotations riding into rendered metadata). Not yet done from the rulings:
+the per-entry workload reload still stands (compose/k8s renders reload their lenses; only
+the config-time load is shared), and move 4's lexical member grammar waits.
+
+Sandbox gaps this baseline hit: placeframe's venv holds a stale non-editable
 boatyard copy (verify through boatyard's own project env until placeframe runs `uv sync`),
 and `scripts/preflight.py` shells to a `preflight-python` entry point absent here (pytest +
-ruff are the runnable gate).
+ruff are the runnable gate). A regen of the k8s artifact needs a `boatyard.k8s-pins.yml`
+the repo does not carry (the operator's bump-time record is absent from the tree); this
+session reconstructed it from the committed manifest's own tags, verified byte-identity,
+and removed it again.
 
 ## The problem
 
@@ -94,24 +114,26 @@ groups. The repository prefix was hand-spelled inside every ref (17 sites in pla
 
 Each move carries its landed state; unmarked moves are not started.
 
-1. `markers.py`: the reference composer and the `dockerfile:` marker arm (provisioner
-   manifests only).
-2. `models/workload.py` + `score.py`: source annotations, `image:` rejected, injection at
-   the per-run copy pass.
-3. `models/image.py`: PARTIALLY LANDED — FROM resolution against `base_images`, the
-   declared one-hop fan, and the ARG-sniffing deaths (`own_axes`, `_effective_axis`) are
-   in; the build set still derives from the directory walk, whose replacement needs the
-   declared edges of moves 1–2.
-4. `models/config_file.py`: PARTIALLY LANDED — dual-shape `base_images` and
-   `pulled_base_images` are in; the lexical member grammar and the closure-walking
-   `_derive` wait (group `axes:` blocks still expand options).
-5. `build.py` and the verbs (`tree-tags`, `matrix`, `publish`, `bump`): PARTIALLY LANDED —
-   the per-variant base wiring is re-keyed on declared names; the verbs still consume the
-   walk-derived set until move 4's closure replaces it.
+1. `markers.py`: LANDED — the reference composer (`compose_image_reference`, env-slot
+   spellings for markers, direct values for the workload injection) and the `dockerfile:`
+   marker arm (provisioner manifests only; chart-value contexts refuse it).
+2. `models/workload.py` + `score.py`: LANDED — source annotations (container-name →
+   source maps on metadata), `image:` refused, injection at the per-run copy pass. The
+   per-entry workload reload survives (see the increment note above).
+3. `models/image.py`: LANDED — FROM resolution against `base_images`, the declared
+   one-hop fan, and the build set as the closure over declared edges (the directory walk
+   and the one-top-dir rule are dead).
+4. `models/config_file.py`: PARTIALLY LANDED — dual-shape `base_images`,
+   `pulled_base_images`, the config-time workload lens load, and the declared-edge
+   closure are in; the lexical member grammar and the closure-walking `_derive` wait
+   (group `axes:` blocks still expand options).
+5. `build.py` and the verbs (`tree-tags`, `matrix`, `publish`, `bump`): LANDED — the
+   per-variant base wiring is re-keyed on declared names and the verbs consume the
+   closure-derived set.
 6. `models/lock_file.py` + `lock.py`: LANDED — pairing skips built entries; built entries
    in the lock refuse (both at `LockFile.load` and at relock).
-7. Tests: ONGOING — the landed increment carries its own (the image-grammar and
-   built-entry refusal suites, the reworked fan/matrix/build fixtures).
+7. Tests: ONGOING — both increments carry their own (the image-grammar and built-entry
+   refusal suites, the annotation/marker grammar suites, the reworked fixtures).
 
 ## Placeframe transition
 
@@ -129,22 +151,25 @@ Each move carries its landed state; unmarked moves are not started.
 - LANDED — Dockerfiles: reconstructor and localizer carry `ARG NEURAL_NETWORKS_BASE` and
   `FROM ${NEURAL_NETWORKS_BASE}`. neural-networks-base is unchanged — its `ARG
   TORCH_DEVICE` stays as the mechanism the declared fan is checked against.
-- Workloads: api, lease-server, reconstructor, localizer gain
-  `outernet.internal/dockerfile` annotations; keycloak and ngrok gain
+- LANDED — Workloads: api, lease-server, reconstructor, localizer carry
+  `outernet.internal/dockerfile` annotations; keycloak and ngrok carry
   `outernet.internal/lock` annotations. The image lines are deleted.
-- Provisioners: postgres, seaweedfs, oidc-issuer manifests (both renderings) replace
-  `{{ env "X_SHA" }}` image lines with `dockerfile:` markers; compose observability
-  replaces `${X_IMAGE:?err}` slots with `lock:` markers (the k8s side already locks).
-- Values files, bundle names, and consumer `ref:`s: no change (core-cuda/core-rocm now
-  derive from the fan).
+- LANDED — Provisioners: postgres, seaweedfs, oidc-issuer manifests (both renderings)
+  carry `dockerfile:` markers; compose observability carries `lock:` markers for
+  loki/alloy/grafana and seaweedfs's audit relay locks `SEAWEEDFS_AUDIT_IMAGE` (the k8s
+  side already locked). The `{{ env "X_SHA" }}` image lines are gone from sources; the
+  compiled provisioners still carry the env spelling the markers compose.
+- LANDED — Artifacts regenerated (`36771f75`): image refs byte-identical (compose tree
+  slots and k8s pins reproduce); the lock-slot sites now bake per-platform manifests.
+  Values files, bundle names, and consumer `ref:`s: no change.
 
 ## What dies
 
-Dead so far: the ARG-sniffing fan derivation, and the bare-name FROM grammar with its
-stem resolution. Still to die: the directory walk and the one-top-dir rule, the stem
-surgery in `_refuse_unknown_axis_refs`, group `axes:` blocks, hand-composed image refs,
-`{{ env "X_SHA" }}` image lines, the slot-in-image grammar, the repository prefix inside
-score files, and the per-entry workload reload.
+Dead so far: the ARG-sniffing fan derivation, the bare-name FROM grammar with its stem
+resolution, the directory walk and the one-top-dir rule, the stem surgery in compose
+generation, hand-composed image refs in workload files, `{{ env "X_SHA" }}` image lines in
+authored provisioners, the slot-in-image grammar, and the repository prefix inside score
+files. Still to die: group `axes:` blocks and the per-entry workload reload.
 
 ## This file
 
