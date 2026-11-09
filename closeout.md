@@ -1,12 +1,13 @@
 # Closeout: the 0.6.0 critical path
 
-This file is the critical path only — the work that must ship imminently, in
-one release and one consumer sweep: the iteration unit (disk-state service
-hashes, qualified bundle grammar, path-form overrides), the 0.6.0 release,
-the toolkit cutover, the consumer sweep. Bang through it; when the four
-units land, delete this file. Future initiatives live in `design/` (one
-initiative per file, indexed by `design/AGENTS.md`); the six consolidated
-plan files this record absorbed live in git history. `AGENTS.md` is the
+This file is the critical path only — the work that must ship imminently:
+the 0.6.0 arc (iteration unit, release, toolkit cutover, consumer sweep),
+then the 0.7 comportment wave (Work 5) — one release and one consumer sweep
+each. Bang through it; when the units land, delete this file. Future
+initiatives live in `design/` (one initiative per file, indexed by
+`design/AGENTS.md`); every plan, compaction, and WIP doc this record
+absorbed is expunged from history — this record is their only trace.
+`AGENTS.md` is the
 present-truth operations manual for the shipped surface. Every decision
 below is closed — do not re-litigate without its recorded flip condition. If
 this file and the code disagree, reconcile this file before touching code
@@ -14,7 +15,7 @@ this file and the code disagree, reconcile this file before touching code
 verify with the target repo's battery; commit as you go, prose and code in
 separate commits.
 
-## Snapshot (verified 2026-11-06)
+## Snapshot (verified 2026-11-09)
 
 - Work 1 landed: the `refactor` branch was squashed to a four-commit structure
   on `dev` (AGENTS.md prose; code; docs/design prose; closeout.md), pushed as
@@ -299,6 +300,18 @@ correct base in all five repos (the wave's commits land there and ride its
 merge to `dev`); the toolkit on `dev`. Re-verify with grep at session open
 before editing — the import inventory maps each site to a dissolution below.
 
+- The repo consolidated (2026-11-09): the `refactor-redux` span — the
+  image-declaration line, the 0.7 slot/pins/values moves, the resolve
+  rework — collapsed onto `dev` as three commits (AGENTS.md prose; one code
+  commit; this closeout fold), and every plan, compaction, and WIP doc
+  (26 files, `refactor.md` and both compaction docs included) is expunged
+  from all history — this record carries the 0.7 line's remains as Work 5.
+  The branch zoo and stale `rt/*` remote refs are deleted; the 76 tags are
+  rewritten; `main` resets onto `dev` (its three unpushed release-pin
+  commits absorb into the code commit). The push is the operator's:
+  force-push `main`, `dev`, and the tags; delete the stale remote branches;
+  push the landing branch and open the PR.
+
 ## Standing constraints
 
 These rulings bind every work unit below.
@@ -363,6 +376,8 @@ These rulings bind every work unit below.
 3  toolkit     cutover onto boatyard spellings; the SHA the wave bumps to
 4  sweep       all five consumers repin once, relock, rename, drop imports,
                adopt the iteration unit
+5  comport     the 0.7 wave: Move 9 (or its recorded death), the release,
+               the grammar flips validated on path pins, the final repins
 ```
 
 Order within a unit is strict; unit order is fixed. 1 precedes 2 deliberately:
@@ -881,3 +896,85 @@ manifests; every toolkit `uses:` ref
 carries one SHA and every `--lock-only`/`--gpu` mention is gone from consumer
 docs and workflows; Make-it-Sing's `up` assembles through the path override
 against a sibling placeframe checkout.
+
+## Work 5 — the 0.7 comportment wave
+
+The `refactor.md` line's record, folded here at that file's deletion. Its
+code (moves 1–12: the slot/pins/values model, the `bump` verb, tree-slot
+rendering) landed inside the span's single code commit; what remains is
+below. One churn event carries it all.
+
+- Open decision, the operator's: Move 9, the tree vocabulary rename — the
+  `__BOATYARD_TREE__` marker (→ `__BOATYARD_{NAME}__`), the `tree-<oid>` tag
+  spelling, the `tree-tags` verb, `compute_service_shas`, and the docs'
+  "tree-derived" vocabulary, one stroke. Name bar: a cold reader of
+  `{ENTRY}__BOATYARD_{NAME}__{SERVICE}_SHA` knows what it names without
+  git-internals knowledge (`SOURCE` was rejected). It was designed to ship
+  with this wave's churn event (bump-as-sole-writer: consumers re-pin in one
+  bump run); kill it deliberately, or land it on the landing branch and
+  fixup into the code commit before the PR.
+- Consumer order per repo: `bump` first (creates the pins file at the
+  current head; the k8s manifest stays byte-stable if its baked tags were
+  fresh, heals if stale) → `generate-score` (compose artifacts slot-ify; the
+  secrets section migrates) → per-machine values reshuffle (sections; drop
+  `PUBLIC_URL`/port spellings; AUTH block → interpolation lines) → drop
+  `ALPINE_IMAGE`/`CADDY_IMAGE` from `base_images` → sample rewrite,
+  `stack/secrets.yaml` deletion, committed-artifact test updates (compose
+  assertions gain slot spellings; k8s unchanged). The grammar flips
+  (declared edges, lexical member grammar, dual-shape `base_images`,
+  `FROM ${KEY}`) ride the same wave; placeframe's `axes:` deletion is the
+  template (artifacts regenerated byte-identical).
+- Validation without the publish round trip: each consumer pins the local
+  boatyard checkout through an uncommitted
+  `tool.uv.sources.boatyard = { path = … }` plus `uv lock`, runs its
+  battery, then drops the hunk; the real repin and `requires:` floor land
+  after the release. Every consumer is CLI-only — zero `boatyard` imports
+  anywhere.
+- Toolkit: the getter's `generate-score --check` step command is unchanged;
+  its rationale line rewrites (structural freshness, not tag freshness);
+  bump-step integration depends on the D1 ruling; toolkit AGENTS.md line ~60
+  updates.
+- Design docs: `precision-attribution.md` and `semver-image-bundle-lines.md`
+  "Release and regeneration" sections assume committed tree tags — amend to
+  the slots/pins/bump model.
+- Placeframe-side (not boatyard work): sample + live `AUTH_JWKS_URL` fix
+  (literal edge spelling → `${EDGE_BASE_URL}`); API JWKS probe as
+  /health-reflects-JWKS (backoff beats restart storms; wait-for-resources
+  may need to gate api on keycloak under the auth option); `loki_query.py`
+  hardcoded container name; the Loki label-gap investigation (possible OTLP
+  plumbing dropped in the bundles cutover — investigate early).
+- Release channel: the standing patch-flow law lands the wave as `0.6.7`;
+  cutting `0.7.0` instead re-opens that law and bumps `publish.yml`'s
+  `major_minor` — the operator's call.
+
+Rulings carried from the 0.7 line:
+
+- D1 — the operator always cuts the k8s pin bump commit: post-merge, on a
+  clean checkout of `dev` HEAD, then push; merge-gate absorption stays ruled
+  out (the unity library cache promotion needs the merge tree to equal the
+  PR head tree).
+- D2 — a pin is writable only for content CI built and pushed at exactly
+  that head: enumerate the shelf's `sha-{HEAD}*` shards, merge the
+  `{target: {ref, digest, tags}}` manifests, and every computed tree tag
+  must appear in the union's `tags[]`. The enumerate-and-merge shape stays
+  inline until a third consumer appears. Ad-hoc `--push-to` builds are
+  unpinnable by design.
+- No pin bootstrap: first k8s generation without a pins file fails naming
+  the bump verb, always. The bump verb writes the whole certified head's
+  tag set — no per-service partial bumps; unchanged services are no-ops by
+  identity.
+- No filters, functions, or operators in the interpolation grammar, ever —
+  bare references only. `NGROK_DOMAIN` stays hand-set (host-of-URL is a
+  decision, not a derivation); same for `GATEWAY_PORT` vs `public_url`.
+  Reserved names (`PUBLIC_URL`, `EDGE_BASE_URL`) refuse hand-setting and are
+  minted when their declaration exists. Routes get no override surface,
+  ever.
+- `--local` k8s generation reads no pins: fresh working-tree tags, dirt is
+  content. Unused values keys stay legal (unselected bundles still declare
+  them). Interpolation roots are hand variables + minted slots only.
+- Four files at root — `boatyard.yml`, `boatyard.lock.yml`,
+  `boatyard.values.yaml`, `boatyard.k8s-pins.yml`; any other location is a
+  raise, and the producer-root hunt is `parents[3]` plus a raise.
+
+Verify: consumer batteries green on the path pins; the release published;
+the wave's repins landed; Move 9 either landed or recorded dead.
