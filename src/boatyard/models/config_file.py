@@ -23,7 +23,7 @@ from pydantic import (
 import yaml
 
 from boatyard.models.pyproject import PYPROJECT_PATH, PyprojectToml
-from boatyard.models.image import BuiltBaseEntry, Image, load_images
+from boatyard.models.image import DOCKERFILE_NAME, BuiltBaseEntry, Image, parse_dockerfile
 from boatyard.models.workload import LoadedWorkload, load_workload, select_provisioner_files
 from boatyard.markers import declared_dockerfile_paths
 from boatyard.temp import PLATFORM_PATTERN, SHA256_DIGEST_REGEX
@@ -119,8 +119,13 @@ class ConfigFile(BaseModel):
     def declared_charts(self) -> dict[str, str]:
         return self.k8s.charts if self.k8s is not None else {}
 
+    @property
+    def members(self) -> list[FlattenedServiceEntry]:
+        # The flattened selection vocabulary; fan-derived options ride after the load-time derivation
+        return flatten_service_members(self.services)
+
     def local_service_entries(self) -> list[tuple[str, ServiceEntry]]:
-        return [(row.name, row.entry) for row in flatten_service_members(self.services) if not row.entry.remote]
+        return [(row.name, row.entry) for row in self.members if not row.entry.remote]
 
     def local_workload_names(self) -> list[str]:
         # The lexical local set: options' workloads, fan groups' group-level workloads, and
@@ -137,7 +142,7 @@ class ConfigFile(BaseModel):
     def remote_declared_entries(self) -> list[tuple[str, str, ServiceEntry]]:
         return [
             (row.name, row.entry.ref.removeprefix(OCI_REFERENCE_PREFIX), row.entry)
-            for row in flatten_service_members(self.services)
+            for row in self.members
             if row.entry.ref is not None
         ]
 
@@ -157,8 +162,8 @@ class ConfigFile(BaseModel):
 
     @property
     def variant_axes(self) -> dict[str, list[str]]:
-        # The fanned axes over the image set; equal axis names carry equal value sets by
-        # load_images' one-spelling law
+        # The fanned axes over the image set; equal axis names carry equal value sets by the
+        # axis-equality law at load
         return {image.axis: list(image.variants) for image in self.images.values() if image.axis is not None}
 
     @property
@@ -444,6 +449,8 @@ class FlattenedServiceEntry(NamedTuple):
     name: str
     site: str
     entry: ServiceEntry
+    effective_routes: list[RouteConfig]
+    effective_ports: list[PortDeclaration]
 
 
 class ResolvedService(NamedTuple):
@@ -519,7 +526,109 @@ def _derive(config: ConfigFile, root: Path) -> None:
         for _name, entries in select_provisioner_files(score_dir, rendering, selected_workloads):
             declared.extend(path for entry in entries if is_mapping(entry) for path in declared_dockerfile_paths(entry))
 
-    images = load_images(root, config.base_images, config.owned_images, declared)
+    # The build set is the closure over declared edges: built entries, workload source
+    # annotations, and provisioner markers. Nothing walks the directory tree.
+    built: dict[str, str] = {}
+    for name, entry in config.base_images.items():
+        if not isinstance(entry, BuiltBaseEntry):
+            continue
+        path = root / entry.dockerfile
+        if not path.is_file():
+            raise ValueError(f"base_images.{name}: {entry.dockerfile} does not exist")
+        built[name] = PurePosixPath(entry.dockerfile).parent.name
+
+    declared_paths = sorted(
+        set(declared) | {entry.dockerfile for entry in config.base_images.values() if isinstance(entry, BuiltBaseEntry)}
+    )
+    directories: dict[str, Path] = {}
+    sites: dict[str, str] = {}
+    for dockerfile in declared_paths:
+        if dockerfile.startswith("/") or ".." in PurePosixPath(dockerfile).parts:
+            raise ValueError(f"{dockerfile}: a declared dockerfile path must be repo-relative")
+        directory = (root / dockerfile).parent
+        stem = PurePosixPath(dockerfile).parent.name
+        if stem not in directories:
+            directories[stem] = directory
+            sites[stem] = dockerfile
+        elif directories[stem] != directory:
+            raise ValueError(f"{dockerfile}: the image stem {stem!r} is already claimed at {sites[stem]}")
+    for stem, directory in directories.items():
+        if not (directory / DOCKERFILE_NAME).is_file():
+            raise ValueError(f"{sites[stem]}: the declared dockerfile does not exist")
+
+    facts = {name: parse_dockerfile(directory, root) for name, directory in sorted(directories.items())}
+
+    # Every FROM key resolves against the declared vocabulary; built keys become base edges.
+    resolvable = set(config.base_images) | set(config.owned_images) | set(built)
+    bases: dict[str, dict[str, str]] = {}
+    for name, fact in facts.items():
+        bases[name] = {}
+        for key in fact.base_keys:
+            if key not in resolvable:
+                raise ValueError(f"{fact.dockerfile}: FROM ${{{key}}} names no base_images key")
+            if key in built:
+                bases[name][key] = built[key]
+
+    # One-hop grammar: a built base FROMs pulled entries only; a Dockerfile FROMs at most one built base.
+    for name, fact in facts.items():
+        own_bases = set(bases[name].values())
+        if name in built.values() and own_bases:
+            raise ValueError(f"{fact.dockerfile}: a built base must not FROM the built base {min(own_bases)!r}")
+        if len(own_bases) > 1:
+            raise ValueError(f"{fact.dockerfile}: FROMs more than one built base {sorted(own_bases)}")
+
+    # A declared entry no Dockerfile consumes is dead.
+    consumed = {stem for own_bases in bases.values() for stem in own_bases.values()}
+    for name, stem in sorted(built.items()):
+        if stem not in consumed:
+            raise ValueError(f"base_images.{name}: no Dockerfile FROMs ${{{name}}} (dead declaration)")
+
+    # The declared fan: the axis names an ARG in the built base's own Dockerfile; equal axis
+    # names carry equal value sets across entries.
+    axis_values: dict[str, list[str]] = {}
+    axis_sites: dict[str, str] = {}
+    entry_axes: dict[str, tuple[str, list[str]]] = {}
+    for name, entry in config.base_images.items():
+        if not isinstance(entry, BuiltBaseEntry):
+            continue
+        stem = built[name]
+        for axis, values in entry.axis.items():
+            if axis not in facts[stem].args:
+                raise ValueError(f"base_images.{name}: axis {axis} names no ARG in {entry.dockerfile}")
+            if axis in axis_values and axis_values[axis] != values:
+                raise ValueError(
+                    f"base_images.{name}: axis {axis} declares {values}; "
+                    f"{axis_sites[axis]} already declares {axis_values[axis]}"
+                )
+            axis_values[axis] = values
+            axis_sites[axis] = name
+            entry_axes[stem] = (axis, list(values))
+
+    images: dict[str, Image] = {}
+    for name, fact in facts.items():
+        axis: str | None = None
+        variants: list[str] = []
+        if name in entry_axes:
+            axis, variants = entry_axes[name][0], list(entry_axes[name][1])
+        else:
+            [stem, *_] = [*bases[name].values(), None]
+            if stem is not None and stem in entry_axes:
+                axis, variants = entry_axes[stem][0], list(entry_axes[stem][1])
+        images[name] = Image(
+            name=fact.name,
+            dockerfile=fact.dockerfile,
+            bases=bases[name],
+            axis=axis,
+            variants=variants,
+            sha_args=sorted({argument for argument in fact.args if argument.endswith("_SHA")}),
+        )
+
+    computable = {image.sha_env for image in images.values()}
+    for image in images.values():
+        unknown = [argument for argument in image.sha_args if argument not in computable]
+        if unknown:
+            raise ValueError(f"{image.dockerfile}: ARG {', '.join(unknown)} names no image directory")
+
     if images and config.repository is None:
         listed = ", ".join(sorted(images))
         raise ValueError(f"repository is required by the declared Dockerfile images {listed}")
@@ -554,14 +663,14 @@ def _derive(config: ConfigFile, root: Path) -> None:
 
     # The derived option names join the selection vocabulary with no collision.
     vocabulary: dict[str, str] = {}
-    for row in flatten_service_members(config.services):
+    for row in config.members:
         if row.name in vocabulary:
             raise ValueError(f"{row.site}: {row.name} is already claimed at {vocabulary[row.name]}")
         vocabulary[row.name] = row.site
 
     # A var naming a fanned axis carries a declared variant of it.
     axes = config.variant_axes
-    for row in flatten_service_members(config.services):
+    for row in config.members:
         for name, value in row.entry.vars.items():
             if name in axes and value not in axes[name]:
                 raise ValueError(
@@ -587,7 +696,8 @@ def _derive(config: ConfigFile, root: Path) -> None:
 
 
 def flatten_service_members(services: dict[str, ServiceGroup | ServiceEntry]) -> list[FlattenedServiceEntry]:
-    # Options ride under their qualified name; bare entries are their own root.
+    # Options ride under their qualified name; bare entries are their own root. The effective
+    # surface is the entry's own declarations beside its group's.
     flattened: list[FlattenedServiceEntry] = []
     for root_name, member in services.items():
         if isinstance(member, ServiceGroup):
@@ -598,13 +708,21 @@ def flatten_service_members(services: dict[str, ServiceGroup | ServiceEntry]) ->
                     name=qualified_option_name(root_name, option_name),
                     site=f"services.{root_name}.options.{option_name}",
                     entry=option,
+                    effective_routes=option.routes + member.routes,
+                    effective_ports=option.ports + member.ports,
                 )
                 for option_name, option in member.options.items()
             )
         else:
             flattened.append(
                 FlattenedServiceEntry(
-                    root=root_name, option=None, name=root_name, site=f"services.{root_name}", entry=member
+                    root=root_name,
+                    option=None,
+                    name=root_name,
+                    site=f"services.{root_name}",
+                    entry=member,
+                    effective_routes=member.routes,
+                    effective_ports=member.ports,
                 )
             )
     return flattened

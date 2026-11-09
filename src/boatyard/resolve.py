@@ -14,14 +14,12 @@ from boatyard.models.config_file import (
     RESERVED_SLOT_MARKERS,
     ConfigFile,
     ResolvedService,
-    ServiceGroup,
     Slot,
     artifact_slots,
     bundle_lock_key,
     compose_bundle_output_path,
     env_lock_slot,
     env_tree_slot,
-    flatten_service_members,
     qualified_option_name,
     refuse_unresolved_references,
 )
@@ -46,141 +44,141 @@ class AssemblyPlan(NamedTuple):
 
 def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyPlan:
     # One deterministic, offline fold of the three files into the plan `up` renders: selection,
-    # demand tables, the values refusals, the per-entry walk, and the platform manifest table.
+    # the per-entry facts, the values refusals, and the interpolation.
     source = values.source
+    hand = values.flattened
+    minted = _minted(config, values)
+    consumer_manifests = lock.manifest_references(values.platform)
+    members = config.members
 
-    # Selection: qualified options one-per-group; bare entries ride unconditionally.
-    members = flatten_service_members(config.services)
+    # Every values-file name belongs to its computed vocabulary; an override names a ref entry.
+    if values.gateway is not None and config.gateway is None:
+        raise ValueError(f"{source}: gateway: is set but boatyard.yml declares no gateway")
     selectable = {row.name: (row.root, row.option) for row in members if row.option is not None}
     bare = [row.root for row in members if row.option is None]
-    unknown_bundles = [name for name in values.bundles if name not in selectable]
-    if unknown_bundles:
-        message = f"bundles: names {unknown_bundles} are not among the selectable options {sorted(selectable)}"
-        if bare:
-            message += f" (bare entries, always included: {bare})"
-        raise ValueError(message)
+    local_names = {row.name for row in members if not row.entry.remote}
+    remote_names = {row.name for row in members if row.entry.remote}
+    port_vocabulary = {row.name for row in members if row.effective_ports}
+    for site, names, vocabulary, noun, note in (
+        (
+            "bundles",
+            values.bundles,
+            sorted(selectable),
+            "selectable options",
+            f" (bare entries, always included: {bare})" if bare else "",
+        ),
+        ("ports", values.ports, sorted(port_vocabulary), "port-declaring entries", ""),
+        ("path_overrides", values.path_overrides, sorted(remote_names), "ref entries", ""),
+        ("values.images", values.values.images, sorted(local_names), "local entries", ""),
+        ("values.bundles", values.values.bundles, sorted(remote_names), "ref entries", ""),
+    ):
+        unknown = sorted(set(names) - set(vocabulary))
+        if unknown:
+            raise ValueError(f"{source}: {site}: names {unknown} are not among the {noun} {vocabulary}{note}")
+
+    # Selection: one option per group; bare entries ride unconditionally.
     choices: dict[str, str] = {}
     for name in values.bundles:
         group, option_name = selectable[name]
         if group in choices:
             raise ValueError(
-                f"bundles: {name} and {qualified_option_name(group, choices[group])} "
+                f"{source}: bundles: {name} and {qualified_option_name(group, choices[group])} "
                 f"are two options of one group ({group})"
             )
         choices[group] = option_name
-
-    services: list[ResolvedService] = []
-    for name, member in config.services.items():
-        if isinstance(member, ServiceGroup):
-            option_name = choices.get(name)
-            if option_name is None:
-                continue
-            option = member.options[option_name]
-            services.append(
-                ResolvedService(
-                    name=qualified_option_name(name, option_name),
-                    entry=option,
-                    routes=option.routes + member.routes,
-                    ports=option.ports + member.ports,
-                    auth=name == AUTH_GROUP_NAME,
-                )
-            )
-        else:
-            services.append(ResolvedService(name=name, entry=member, routes=member.routes, ports=member.ports))
-    participating = {service.name for service in services}
-
-    # Typed overrides name port-declaring entries; options inherit their group's declarations.
-    port_vocabulary: list[str] = []
-    for row in members:
-        group_member = config.services[row.root]
-        group_ports = group_member.ports if isinstance(group_member, ServiceGroup) else []
-        if row.entry.ports or group_ports:
-            port_vocabulary.append(row.name)
-    unknown_ports = sorted(set(values.ports) - set(port_vocabulary))
-    if unknown_ports:
-        raise ValueError(
-            f"{source}: ports: names {unknown_ports} are not among the port-declaring entries {sorted(port_vocabulary)}"
+    services = [
+        ResolvedService(
+            name=row.name,
+            entry=row.entry,
+            routes=row.effective_routes,
+            ports=row.effective_ports,
+            auth=row.root == AUTH_GROUP_NAME,
         )
-    if values.gateway is not None and config.gateway is None:
-        raise ValueError(f"{source}: gateway: is set but boatyard.yml declares no gateway")
+        for row in members
+        if row.option is None or row.option == choices.get(row.root)
+    ]
+    selected = {service.name: service for service in services}
+    participating = set(selected)
 
-    # path_overrides name vocabulary members; only ref entries are overridable.
-    remote_names = {name for name, _reference, _entry in config.remote_declared_entries()}
-    bundle_vocabulary = {row.name for row in members}
-    unknown_overrides: list[str] = []
-    local_override_names: list[str] = []
-    for name in values.path_overrides:
-        if name not in bundle_vocabulary:
-            unknown_overrides.append(name)
-        elif name not in remote_names:
-            local_override_names.append(name)
-    if unknown_overrides:
-        raise ValueError(
-            f"path_overrides: names {sorted(unknown_overrides)} "
-            f"are not in the bundle vocabulary {sorted(bundle_vocabulary)}"
-        )
-    if local_override_names:
-        raise ValueError(
-            f"path_overrides: names {sorted(local_override_names)} are not ref entries "
-            f"(the ref entries are {sorted(remote_names)})"
-        )
-
-    # Demand tables: a local entry's consumer surface is its rendered bundle's artifact text,
-    # beside lock-recorded bundle slots and override texts.
+    # The per-entry facts: one walk answers every unit's surface, include, lock fan, and tree fan.
     root = config.root
+    includes: list[str] = []
+    lock_entries: dict[str, str] = {}
+    tree_entries: dict[str, str] = {}
     slots_by_unit: dict[str, dict[str, Slot]] = {}
-    homes: dict[str, str] = {}
-    bundle_texts: dict[str, str] = {}
-    for entry_name, _entry in config.local_service_entries():
-        homes[entry_name] = "images"
-        bundle_path = compose_bundle_output_path(root, entry_name)
-        if not bundle_path.is_file():
-            raise ValueError(
-                f"services entry {entry_name!r} lacks its bundle output {bundle_path.as_posix()} (run generate-score)"
-            )
-        bundle_texts[entry_name] = bundle_path.read_text(encoding="utf-8")
-        slots_by_unit[entry_name] = artifact_slots([bundle_texts[entry_name]])
-    for name in remote_names:
-        homes[name] = "bundles"
-        record = lock.bundles.get(bundle_lock_key(name))
-        if record is not None:
-            slots_by_unit[name] = dict(record.slots)
-    for name in sorted(participating):
-        if name not in values.path_overrides or name not in remote_names:
+    shas_by_root: dict[Path, dict[str, str]] = {}
+    for row in members:
+        name = row.name
+        service = selected.get(name)
+
+        if row.entry.ref is not None:
+            # A pinned ref contributes its lock-recorded surface; an override replaces it below
+            lock_key = bundle_lock_key(name)
+            record = lock.bundles.get(lock_key)
+            if record is not None:
+                slots_by_unit[name] = dict(record.slots)
+            if name not in values.path_overrides:
+                if service is not None:
+                    pinned = lock.require(lock_key, f"bundle {name!r}")
+                    includes.append(f"{OCI_REFERENCE_PREFIX}{pinned}")
+                continue
+            if service is None:
+                continue
+            # An overridden ref includes through its local path inside the producer repo
+            bundle_path = _override_bundle_path(values, name, root).resolve()
+            producer_root = bundle_path.parents[3]
+            if not (producer_root / DEFAULT_CONFIG_PATH).is_file():
+                raise ValueError(
+                    f"{bundle_path.as_posix()}: no boatyard.yml-bearing repo root above the bundle override"
+                )
+            producer_config = ConfigFile.load(producer_root / DEFAULT_CONFIG_PATH)
+            producer_lock = LockFile.load(producer_root / LOCK_PATH, producer_config)
+            lock_references = producer_lock.manifest_references(values.platform)
+            tree_root, tree_images = producer_root, producer_config.images
+        else:
+            # A local entry contributes its rendered bundle artifact's own surface
+            bundle_path = compose_bundle_output_path(root, name).resolve()
+            if not bundle_path.is_file():
+                raise ValueError(
+                    f"services entry {name!r} lacks its bundle output {bundle_path.as_posix()} (run generate-score)"
+                )
+            lock_references = consumer_manifests
+            tree_root, tree_images = root, config.images
+
+        text = bundle_path.read_text(encoding="utf-8")
+        slots_by_unit[name] = artifact_slots([text])
+        if service is None:
             continue
-        slots_by_unit[name] = artifact_slots([
-            _override_bundle_path(values, name, config.root).read_text(encoding="utf-8")
-        ])
+        # Refuse reserved services and unresolved route/port references against the bundle text
+        service_names = refuse_unresolved_references(name, service.routes, service.ports, [text], prefix=f"{name}-")
+        if EDGE_SERVICE_NAME in service_names:
+            raise ValueError(
+                f"{bundle_path.as_posix()}: the included bundle defines the reserved service {EDGE_SERVICE_NAME!r}"
+            )
+        includes.append(bundle_path.as_posix())
+        lock_entries.update({env_lock_slot(name, key): value for key, value in lock_references.items()})
+        if tree_root not in shas_by_root:
+            shas_by_root[tree_root] = {image.sha_env: image.compute_sha(tree_root) for image in tree_images.values()}
+        tree_entries.update({env_tree_slot(name, sha): value for sha, value in shas_by_root[tree_root].items()})
 
     # Values sections: every key sits in its consuming unit's section; shared keys are shared.
-    local_names = sorted(name for name, home in homes.items() if home == "images")
-    sorted_remote_names = sorted(name for name, home in homes.items() if home == "bundles")
     consumers: dict[str, set[str]] = {}
     for unit, slots in slots_by_unit.items():
         for name in slots:
             consumers.setdefault(name, set()).add(unit)
-
-    for section_name, expected_home, noun, other_names in (
-        ("images", "images", "local", local_names),
-        ("bundles", "bundles", "ref", sorted_remote_names),
-    ):
-        entries = values.values.images if section_name == "images" else values.values.bundles
+    for site, entries in (("values.images", values.values.images), ("values.bundles", values.values.bundles)):
         for name in sorted(entries):
-            if homes.get(name) != expected_home:
-                raise ValueError(
-                    f"{source}: values.{section_name}.{name} is not a {noun} entry "
-                    f"(the {noun} entries are {other_names})"
-                )
-            site = f"values.{section_name}.{name}"
             surface = sorted(slots_by_unit.get(name, {}))
             for key in sorted(entries[name]):
                 if key not in slots_by_unit.get(name, {}):
-                    raise ValueError(f"{site}: {key} is consumed by no surface of {name} (the surface is {surface})")
+                    raise ValueError(
+                        f"{source}: {site}.{name}: {key} is consumed by no surface of {name} (the surface is {surface})"
+                    )
                 if consumers[key] - {name}:
                     raise ValueError(
-                        f"{site}: {key} is consumed by {', '.join(sorted(consumers[key]))}, not {name} alone"
+                        f"{source}: {site}.{name}: {key} is consumed by {', '.join(sorted(consumers[key]))}, "
+                        f"not {name} alone"
                     )
-
     for name in sorted(values.values.shared):
         if name not in consumers:
             raise ValueError(f"{source}: values.shared: {name} is consumed by no surface")
@@ -206,7 +204,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
                     raise ValueError(f"{source}: {site}: {name}: ${{{reference}}} must not carry a reserved marker")
                 references.setdefault(name, set()).add(reference)
                 sites[name] = site
-    roots = set(values.flattened) | set(_minted(config, values))
+    roots = set(hand) | set(minted)
     unresolvable = sorted({reference for referenced in references.values() for reference in referenced} - roots)
     if unresolvable:
         name = min(name for name, referenced in references.items() if referenced & set(unresolvable))
@@ -214,13 +212,13 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
             f"{source}: {sites[name]}: {name}: ${{{unresolvable[0]}}} resolves to no root "
             f"(the roots are {sorted(roots)})"
         )
-    hand_edges = {
-        name: {reference for reference in PLACEHOLDER.findall(value) if reference in values.flattened}
-        for name, value in values.flattened.items()
+    hand_references = {
+        name: {reference for reference in PLACEHOLDER.findall(value) if reference in hand}
+        for name, value in hand.items()
     }
-    _order, blocked = _peel_references(hand_edges)
+    order, blocked = _peel_references(hand_references)
     if blocked:
-        cycle_nodes = {name: hand_edges[name] & set(blocked) for name in blocked}
+        cycle_nodes = {name: hand_references[name] & set(blocked) for name in blocked}
         # Every blocked name keeps a blocked successor, so the walk repeats a node exactly on the cycle
         seen: dict[str, int] = {}
         chain: list[str] = []
@@ -233,16 +231,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
         raise ValueError(f"{source}: reference cycle: {' -> '.join([*cycle, cycle[0]])}")
 
     # Every required slot is filled by some declared source.
-    filled = set(values.values.shared)
-    for name, home_section in homes.items():
-        if home_section == "images" and name in values.values.images:
-            filled.update(values.values.images[name])
-        elif name in values.values.bundles:
-            filled.update(values.values.bundles[name])
-    if values.public_url is not None:
-        filled.add(PUBLIC_URL_SLOT)
-    if config.gateway is not None:
-        filled.add(EDGE_BASE_URL_SLOT)
+    filled = set(hand) | set(minted)
     missing: dict[str, list[str]] = {}
     for unit in sorted(participating):
         unfilled = sorted(
@@ -254,70 +243,11 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
         unit, absent = min(missing.items())
         ignored = sorted(shell_name for shell_name in absent if os.environ.get(shell_name))
         note = f" ({', '.join(ignored)} are set in the shell and ignored)" if ignored else ""
-        raise ValueError(
-            f"{source}: values.{homes[unit]}.{unit} requires {absent}, which no declared source fills{note}"
-        )
-
-    # The per-entry walk: includes, lock fans, tree fans.
-    lock_entries: dict[str, str] = {}
-    tree_entries: dict[str, str] = {}
-    shas_by_root: dict[Path, dict[str, str]] = {}
-    includes: list[str] = []
-
-    for service in services:
-        name = service.name
-
-        # Include a remote ref as its lock-pinned digest
-        if service.entry.ref is not None and name not in values.path_overrides:
-            pinned = lock.require(bundle_lock_key(name), f"bundle {name!r}")
-            includes.append(f"{OCI_REFERENCE_PREFIX}{pinned}")
-            continue
-
-        if service.entry.ref is None:
-            bundle_compose_path = compose_bundle_output_path(root, name)
-            text = bundle_texts[name]
-            lock_references = lock.manifest_references(values.platform)
-            tree_root, tree_images = root, config.images
-        else:
-            # Include an overridden ref through its local path
-            bundle_compose_path = _override_bundle_path(values, name, root).resolve()
-            # The producer root sits four levels above a stack/generated/compose/ output
-            producer_root = bundle_compose_path.parents[3]
-            if not (producer_root / DEFAULT_CONFIG_PATH).is_file():
-                raise ValueError(
-                    f"{bundle_compose_path.as_posix()}: no boatyard.yml-bearing repo root above the bundle override"
-                )
-            # Project the producer lock's manifest references under the consumer's platform
-            producer_config = ConfigFile.load(producer_root / DEFAULT_CONFIG_PATH)
-            producer_lock = LockFile.load(producer_root / LOCK_PATH, producer_config)
-            lock_references = producer_lock.manifest_references(values.platform)
-            tree_root, tree_images = producer_root, producer_config.images
-            text = bundle_compose_path.read_text(encoding="utf-8")
-
-        # Refuse reserved services and unresolved route/port references against the bundle text
-        service_names = refuse_unresolved_references(name, service.routes, service.ports, [text], prefix=f"{name}-")
-        if EDGE_SERVICE_NAME in service_names:
-            raise ValueError(
-                f"{bundle_compose_path.as_posix()}: "
-                f"the included bundle defines the reserved service {EDGE_SERVICE_NAME!r}"
-            )
-
-        # Include the file by absolute path and fan its lock keys under the marker
-        includes.append(bundle_compose_path.resolve().as_posix())
-        lock_entries.update({env_lock_slot(name, key): value for key, value in lock_references.items()})
-
-        # Fan the source tree's content tags under the entry beside the lock fans
-        if tree_root not in shas_by_root:
-            shas_by_root[tree_root] = {image.sha_env: image.compute_sha(tree_root) for image in tree_images.values()}
-        tree_entries.update({env_tree_slot(name, sha): value for sha, value in shas_by_root[tree_root].items()})
+        home = "images" if unit in local_names else "bundles"
+        raise ValueError(f"{source}: values.{home}.{unit} requires {absent}, which no declared source fills{note}")
 
     consumed = sorted({name for unit in participating for name in slots_by_unit.get(unit, {})})
-
-    # Interpolation: minted slots first, then peeled hand values over bare references.
-    hand = values.flattened
-    hand_references = {name: set(PLACEHOLDER.findall(value)) & hand.keys() for name, value in hand.items()}
-    order, _blocked = _peel_references(hand_references)
-    resolved_values = dict(_minted(config, values))
+    resolved_values = dict(minted)
     for name in order:
         parts = PLACEHOLDER.split(hand[name])
         resolved_values[name] = "".join(
@@ -331,7 +261,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
         lock_entries=lock_entries,
         tree_entries=tree_entries,
         consumed=consumed,
-        consumer_entries=lock.manifest_references(values.platform),
+        consumer_entries=consumer_manifests,
     )
 
 

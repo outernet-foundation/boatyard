@@ -364,6 +364,14 @@ def test_an_override_demands_from_its_artifact_text(tmp_path: Path) -> None:
     values = _filled_values({"path_overrides": {"monitor": "../producer/stack/generated/compose/compose.monitor.yaml"}})
     override = tmp_path / "producer" / "stack" / "generated" / "compose" / "compose.monitor.yaml"
     override.parent.mkdir(parents=True)
+    (tmp_path / "producer" / "boatyard.yml").write_text(
+        yaml.safe_dump({
+            "requires": ">=0",
+            "project_name": "producer",
+            "services": {"stub": {"ref": "oci://ghcr.io/org/stub:0.0.1"}},
+        }),
+        encoding="utf-8",
+    )
     override.write_text(
         "services:\n"
         "  monitor-monitor:\n"

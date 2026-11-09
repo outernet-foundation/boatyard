@@ -1510,7 +1510,7 @@ class TestBundleOverrides:
         assert isinstance(result.exception, ValueError)
         message = str(result.exception)
         assert "path_overrides: names [\x27extra-main\x27]" in message
-        assert "are not ref entries" in message
+        assert "are not among the ref entries" in message
         assert "placeframe-cuda" in message
 
     def test_an_unselected_override_is_inert(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
