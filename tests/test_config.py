@@ -15,6 +15,7 @@ from boatyard.models.config_file import (
     bundle_lock_key,
 )
 from boatyard.models.lock_file import LOCK_PATH, LockFile
+from boatyard.models.workload import WorkloadDocument
 from boatyard.yaml import load_yaml_model
 
 EDGE_PLATFORMS = ["linux/amd64"]
@@ -1221,6 +1222,69 @@ class TestAuthGroup:
 
         with pytest.raises(ValidationError, match=r"services\.auth must be a group \(the name is reserved\)"):
             ConfigFile.load(tmp_path / "boatyard.yml")
+
+
+class TestWorkloadLensAnnotations:
+    def _document(self, annotations: dict[str, str]) -> WorkloadDocument:
+        return WorkloadDocument.parse({"metadata": {"name": "api", "annotations": annotations}, "containers": {}}, "api.yaml")
+
+    def test_multiple_routes_parse_in_order(self) -> None:
+        document = self._document({"outernet.internal/route": "/grafana/*=grafana:3000,/*=api:8000"})
+
+        assert document.routes == [
+            ("/grafana/*", "grafana:3000", False),
+            ("/*", "api:8000", False),
+        ]
+
+    def test_strip_attaches_to_the_preceding_route(self) -> None:
+        document = self._document({"outernet.internal/route": "/auth/*=keycloak:8080,strip"})
+
+        assert document.routes == [("/auth/*", "keycloak:8080", True)]
+
+    def test_a_bad_protocol_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"protocol 'sctp' must be one of"):
+            self._document({"outernet.internal/publish": "6178:6178/sctp"})
+
+    def test_an_out_of_range_port_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"port '65536' outside 1-65535"):
+            self._document({"outernet.internal/publish": "6178:65536"})
+
+    def test_strip_without_a_wildcard_path_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"strip requires the path to end in /\*"):
+            self._document({"outernet.internal/route": "/auth=keycloak:8080,strip"})
+
+    def test_strip_as_the_first_token_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"'strip' attaches to no preceding route"):
+            self._document({"outernet.internal/route": "strip"})
+
+    def test_padded_and_empty_entries_refuse(self) -> None:
+        for value in ("", " /x/*=x:1", "/x/*=x:1,"):
+            with pytest.raises(ValidationError, match="non-empty and unpadded"):
+                self._document({"outernet.internal/route": value})
+
+    def test_inner_padding_refuses_on_the_grammar(self) -> None:
+        with pytest.raises(ValidationError, match=r"must be a service name and a literal port"):
+            self._document({"outernet.internal/route": "/x/*= x:1"})
+
+    def test_a_malformed_route_path_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"must be a /-rooted segment chain"):
+            self._document({"outernet.internal/route": "grafana/*=grafana:3000"})
+
+    def test_a_malformed_route_upstream_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"must be a service name and a literal port"):
+            self._document({"outernet.internal/route": "/*=grafana:three"})
+
+    def test_publishes_parse_with_defaults_and_protocols(self) -> None:
+        document = self._document({"outernet.internal/publish": "6178:6178,5957:5957/udp"})
+
+        assert document.publishes == [
+            (6178, 6178, "tcp"),
+            (5957, 5957, "udp"),
+        ]
+
+    def test_a_pairless_publish_entry_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"must be a published:target pair"):
+            self._document({"outernet.internal/publish": "6178"})
 
 
 class TestRoutes:

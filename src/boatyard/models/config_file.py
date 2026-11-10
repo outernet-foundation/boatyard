@@ -25,7 +25,11 @@ import yaml
 
 from boatyard.models.pyproject import PYPROJECT_PATH, PyprojectToml
 from boatyard.models.image import Image, LocalBaseEntry, dockerfile_stem, parse_dockerfile
-from boatyard.models.workload import LoadedWorkload
+from boatyard.models.workload import (
+    ROUTE_PATH_PATTERN,
+    ROUTE_UPSTREAM_PATTERN,
+    LoadedWorkload,
+)
 from boatyard.temp import PLATFORM_PATTERN, SHA256_DIGEST_REGEX
 from boatyard.yaml import Yaml, is_mapping, load_yaml_model
 
@@ -431,9 +435,9 @@ class RouteConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> Self:
-        if re.fullmatch(r"(?:/\*|/(?:[^/\s*]+(?:/[^/\s*]+)*)?(?:/\*)?)", self.path) is None:
+        if ROUTE_PATH_PATTERN.fullmatch(self.path) is None:
             raise ValueError(f"route path {self.path!r} must be a /-rooted segment chain, optionally wildcarded as …/*")
-        if re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*:[0-9]+", self.upstream) is None:
+        if ROUTE_UPSTREAM_PATTERN.fullmatch(self.upstream) is None:
             raise ValueError(
                 f"route upstream {self.upstream!r} must be a service name and a literal port (grafana:3000)"
             )

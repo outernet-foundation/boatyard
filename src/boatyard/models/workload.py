@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import NamedTuple, Self
 
@@ -17,6 +18,14 @@ COMPOSE_RESTART_POLICIES = ("no", "always", "on-failure", "unless-stopped")
 CONSUMER_INTERPOLATED_ANNOTATION = "outernet.internal/consumer-interpolated"
 DOCKERFILE_ANNOTATION = "outernet.internal/dockerfile"
 LOCK_ANNOTATION = "outernet.internal/lock"
+ROUTE_ANNOTATION = "outernet.internal/route"
+PUBLISH_ANNOTATION = "outernet.internal/publish"
+
+ROUTE_PATH_PATTERN = re.compile(r"(?:/\*|/(?:[^/\s*]+(?:/[^/\s*]+)*)?(?:/\*)?)")
+
+ROUTE_UPSTREAM_PATTERN = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*:[0-9]+")
+
+PUBLISH_PROTOCOLS = ("tcp", "udp")
 
 
 def _default_metadata() -> WorkloadMetadata:
@@ -50,6 +59,14 @@ class WorkloadDocument(BaseModel):
             raise ValueError(
                 f"{PROBE_ADAPTER_ANNOTATION} must be one of the supported adapters {list(PROBE_ADAPTERS)}, not {adapter!r}"
             )
+
+        route = annotations.get(ROUTE_ANNOTATION)
+        if route is not None:
+            parse_route_annotation(route)
+
+        publish = annotations.get(PUBLISH_ANNOTATION)
+        if publish is not None:
+            parse_publish_annotation(publish)
 
         restart = annotations.get(RESTART_ANNOTATION)
         if restart is not None and restart not in COMPOSE_RESTART_POLICIES:
@@ -101,6 +118,16 @@ class WorkloadDocument(BaseModel):
     def consumer_interpolated_targets(self) -> list[str]:
         annotation = self.metadata.annotations.get(CONSUMER_INTERPOLATED_ANNOTATION)
         return annotation.split(",") if annotation is not None else []
+
+    @property
+    def routes(self) -> list[WorkloadRoute]:
+        annotation = self.metadata.annotations.get(ROUTE_ANNOTATION)
+        return parse_route_annotation(annotation) if annotation is not None else []
+
+    @property
+    def publishes(self) -> list[WorkloadPublish]:
+        annotation = self.metadata.annotations.get(PUBLISH_ANNOTATION)
+        return parse_publish_annotation(annotation) if annotation is not None else []
 
     def container_sources(self) -> dict[str, tuple[str, str]]:
         dockerfiles = _parse_source_annotation(self.metadata.annotations, DOCKERFILE_ANNOTATION)
@@ -217,6 +244,18 @@ class LoadedWorkload(NamedTuple):
         return cls(path.name, text, raw, document)
 
 
+class WorkloadRoute(NamedTuple):
+    path: str
+    upstream: str
+    strip_prefix: bool = False
+
+
+class WorkloadPublish(NamedTuple):
+    published: int
+    target: int
+    protocol: str = "tcp"
+
+
 def require_compose_probe_adapters(workloads: list[LoadedWorkload]) -> None:
     # Plain score-compose silently drops httpGet probes; this check makes the omission loud
     # before the compose rendering runs (the k8s rendering renders probes natively).
@@ -246,3 +285,55 @@ def select_provisioner_files(
         for name, entries in workload.document.provisioners(score_dir, rendering):
             selected.setdefault(name, entries)
     return [(name, selected[name]) for name in sorted(selected)]
+
+
+def parse_route_annotation(value: str) -> list[WorkloadRoute]:
+    routes: list[WorkloadRoute] = []
+    for entry in value.split(","):
+        if not entry or entry != entry.strip():
+            raise ValueError(f"{ROUTE_ANNOTATION} entry {entry!r} must be non-empty and unpadded")
+        if entry == "strip":
+            if not routes:
+                raise ValueError(f"{ROUTE_ANNOTATION} entry 'strip' attaches to no preceding route")
+            if not routes[-1].path.endswith("/*"):
+                raise ValueError(f"{ROUTE_ANNOTATION}: strip requires the path to end in /* ({routes[-1].path})")
+            routes[-1] = routes[-1]._replace(strip_prefix=True)
+            continue
+        path, separator, upstream = entry.partition("=")
+        if not separator:
+            raise ValueError(f"{ROUTE_ANNOTATION} entry {entry!r} must be a path=host:port pair")
+        if ROUTE_PATH_PATTERN.fullmatch(path) is None:
+            raise ValueError(f"{ROUTE_ANNOTATION} path {path!r} must be a /-rooted segment chain, optionally wildcarded")
+        if ROUTE_UPSTREAM_PATTERN.fullmatch(upstream) is None:
+            raise ValueError(f"{ROUTE_ANNOTATION} upstream {upstream!r} must be a service name and a literal port")
+        routes.append(WorkloadRoute(path=path, upstream=upstream))
+    return routes
+
+
+def parse_publish_annotation(value: str) -> list[WorkloadPublish]:
+    publishes: list[WorkloadPublish] = []
+    for entry in value.split(","):
+        if not entry or entry != entry.strip():
+            raise ValueError(f"{PUBLISH_ANNOTATION} entry {entry!r} must be non-empty and unpadded")
+        ports, separator, protocol = entry.partition("/")
+        if not separator:
+            protocol = "tcp"
+        if protocol not in PUBLISH_PROTOCOLS:
+            raise ValueError(f"{PUBLISH_ANNOTATION} protocol {protocol!r} must be one of {list(PUBLISH_PROTOCOLS)}")
+        published, port_separator, target = ports.partition(":")
+        if not port_separator:
+            raise ValueError(f"{PUBLISH_ANNOTATION} entry {entry!r} must be a published:target pair")
+        publishes.append(
+            WorkloadPublish(
+                published=_publish_port(entry, published),
+                target=_publish_port(entry, target),
+                protocol=protocol,
+            )
+        )
+    return publishes
+
+
+def _publish_port(entry: str, value: str) -> int:
+    if value.isdigit() and 1 <= int(value) <= 65535:
+        return int(value)
+    raise ValueError(f"{PUBLISH_ANNOTATION} entry {entry!r} carries the port {value!r} outside 1-65535")
