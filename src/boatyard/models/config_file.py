@@ -279,9 +279,11 @@ class ConfigFile(BaseModel):
             if not isinstance(auth, ServiceGroup):
                 raise ValueError(f"services.{AUTH_GROUP_NAME} must be a group (the name is reserved)")
             for option_name, option in auth.options.items():
-                if len(option.routes) != 1:
+                if len(option.routes) > 1:
                     raise ValueError(
-                        f"services.{AUTH_GROUP_NAME}.options.{option_name}: an auth option declares exactly one route"
+                        f"services.{AUTH_GROUP_NAME}.options.{option_name}: an auth option declares "
+                        "at most one route; the exactly-one effective-route check runs at resolve "
+                        "over authored plus adopted routes"
                     )
         return services
 

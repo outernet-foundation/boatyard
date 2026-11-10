@@ -1191,14 +1191,13 @@ class TestAuthGroup:
 
         assert ConfigFile.load(tmp_path / "boatyard.yml") is not None
 
-    def test_an_auth_option_without_a_route_refuses(self, tmp_path: Path) -> None:
+    def test_an_auth_option_without_an_authored_route_loads(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,
             self._auth_config({"keycloak": {"ref": "oci://ghcr.io/org/repo/keycloak:0.3.1"}}),
         )
 
-        with pytest.raises(ValidationError, match="auth option declares exactly one route"):
-            ConfigFile.load(tmp_path / "boatyard.yml")
+        assert ConfigFile.load(tmp_path / "boatyard.yml") is not None
 
     def test_an_auth_option_with_two_routes_refuses(self, tmp_path: Path) -> None:
         write_config(
@@ -1214,7 +1213,7 @@ class TestAuthGroup:
             }),
         )
 
-        with pytest.raises(ValidationError, match="exactly one route"):
+        with pytest.raises(ValidationError, match="at most one route"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_a_bare_entry_named_auth_refuses(self, tmp_path: Path) -> None:
