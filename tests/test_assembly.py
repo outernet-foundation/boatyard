@@ -11,7 +11,7 @@ from boatyard.cli import app
 from boatyard.models import values_file
 from boatyard.models.config_file import ConfigFile
 from boatyard.models.lock_file import LOCK_PATH, LockFile
-from boatyard.verbs import up
+from boatyard.verbs import down, up
 from boatyard.resolve import resolve
 
 FAKE_DIGEST = "sha256:" + "a" * 64
@@ -595,6 +595,41 @@ class TestUpProjects:
         assert result.exit_code == 0, result.output
         assert spy.projects == ["edge-demo"]
         assert _caddyfile(spy) == ":8443 {\n}\n"
+
+
+class TestDownLoop:
+    def _invoke_down(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *arguments: str) -> list[str]:
+        _write_edge_tree(tmp_path, monkeypatch, [], auth=True)
+        commands: list[str] = []
+        monkeypatch.setattr(down, "bash", commands.append)
+        monkeypatch.setattr(down, "bash_check", lambda _command: True)
+
+        result = runner.invoke(app, ["down", *arguments])
+
+        assert result.exit_code == 0, result.output
+        return commands
+
+    def test_the_loop_derives_from_the_configs_full_entry_set(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        commands = self._invoke_down(tmp_path, monkeypatch)
+
+        assert commands == [
+            f"docker compose -p edge-demo-auth-keycloak --project-directory {tmp_path} down --remove-orphans",
+            f"docker compose -p edge-demo-livekit --project-directory {tmp_path} down --remove-orphans",
+            f"docker compose -p edge-demo --project-directory {tmp_path} down --remove-orphans",
+            "docker network rm edge-demo-shared",
+        ]
+
+    def test_the_volumes_flag_rides_every_invocation(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        commands = self._invoke_down(tmp_path, monkeypatch, "--volumes")
+
+        assert all(command.endswith("down --remove-orphans -v") for command in commands[:3])
+        assert commands[-1] == "docker network rm edge-demo-shared"
+
+    def test_the_network_removal_trails_the_loop(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        commands = self._invoke_down(tmp_path, monkeypatch)
+
+        assert commands[-1] == "docker network rm edge-demo-shared"
+        assert all(command.startswith("docker compose") for command in commands[:-1])
 
 
 class TestRenderCaddyfile:
