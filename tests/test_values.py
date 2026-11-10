@@ -47,7 +47,7 @@ PROVISIONER = """\
 # under the entry marker, and consumer-interpolated content lands un-doubled.
 BUNDLE = (
     "services:\n"
-    "  core-main-api:\n"
+    "  api:\n"
     f"    image: ghcr.io/org/loki:3.0@{FAKE_DIGEST}\n"
     "    environment:\n"
     "      TOKEN: ${API_TOKEN:?err}\n"
@@ -56,7 +56,7 @@ BUNDLE = (
     "    environment:\n"
     "      PROV_TOKEN: ${PROV_TOKEN:?err}\n"
     "configs:\n"
-    "  core-main-client.toml:\n"
+    "  client.toml:\n"
     "    content: |\n"
     '      remote_addr = "${BIND_TOKEN:?err}"\n'
 )
@@ -192,7 +192,53 @@ def test_a_filled_values_file_loads_and_resolves(tmp_path: Path) -> None:
         "PROV_TOKEN": "three",
         "MON_TOKEN": "four",
     }
-    assert [service.name for service in _resolve(root).services] == ["core-main", "monitor"]
+    assert [bundle.entry_name for bundle in _resolve(root).bundles] == ["core-main", "monitor"]
+
+
+def test_a_remote_winners_records_come_from_the_lock(tmp_path: Path) -> None:
+    root = _write_repo(tmp_path, _filled_values(), gateway=9443)
+    lock = yaml.safe_load((root / LOCK_PATH).read_text(encoding="utf-8"))
+    assert isinstance(lock, dict)
+    lock["bundles"]["MONITOR_BUNDLE"]["routes"] = [{"path": "/monitor/*", "upstream": "monitor:9000"}]
+    lock["bundles"]["MONITOR_BUNDLE"]["ports"] = [{"service": "monitor", "published": 9000, "target": 9000}]
+    (root / LOCK_PATH).write_text(yaml.safe_dump(lock), encoding="utf-8")
+
+    monitor = next(bundle for bundle in _resolve(root).bundles if bundle.entry_name == "monitor")
+
+    assert monitor.pinned_reference == MONITOR_PINNED
+    assert monitor.bundle_path is None
+    assert monitor.services == ["monitor"]
+    assert [(route.path, route.upstream) for route in monitor.effective_routes] == [("/monitor/*", "monitor:9000")]
+    assert [(port.service, port.published) for port in monitor.effective_ports] == [("monitor", 9000)]
+
+
+def test_authored_declarations_replace_the_adopted_set_wholesale(tmp_path: Path) -> None:
+    adopting = BUNDLE.replace(
+        "      TOKEN: ${API_TOKEN:?err}\n",
+        "      TOKEN: ${API_TOKEN:?err}\n    labels:\n      outernet.internal/publish: 7000:7000\n",
+    )
+    authored = [{"service": "api", "published": 5678, "target": 5678}]
+
+    (tmp_path / "adopted").mkdir()
+    (tmp_path / "authored").mkdir()
+    adopted_root = _write_repo(tmp_path / "adopted", _filled_values(), bundle=adopting)
+    authored_root = _write_repo(tmp_path / "authored", _filled_values(), bundle=adopting, ports=authored)
+
+    adopted = next(bundle for bundle in _resolve(adopted_root).bundles if bundle.entry_name == "core-main")
+    authored_bundle = next(bundle for bundle in _resolve(authored_root).bundles if bundle.entry_name == "core-main")
+
+    assert [(port.service, port.published) for port in adopted.effective_ports] == [("api", 7000)]
+    assert [(port.service, port.published) for port in authored_bundle.effective_ports] == [("api", 5678)]
+
+
+def test_a_public_slot_consumption_without_a_public_face_refuses(tmp_path: Path) -> None:
+    bundle = BUNDLE.replace(
+        "      TOKEN: ${API_TOKEN:?err}\n", "      TOKEN: ${API_TOKEN:?err}\n      HOST: ${PUBLIC_HOST:?err}\n"
+    )
+
+    message = _refusal(tmp_path, _filled_values(), bundle=bundle)
+
+    assert "core-main consumes PUBLIC_HOST, which requires public_host in the values file" in message
 
 
 def test_an_orphan_key_refuses(tmp_path: Path) -> None:
@@ -238,7 +284,22 @@ def test_an_unknown_ports_override_refuses(tmp_path: Path) -> None:
 
     message = _refusal(tmp_path, values, ports=[{"service": "api", "published": 5678, "target": 5678}])
 
-    assert "ports: names ['ghost'] are not among the port-declaring entries" in message
+    assert "ports: names ['ghost'] are services of no selected bundle" in message
+
+
+def test_a_ports_override_on_a_multi_port_service_refuses(tmp_path: Path) -> None:
+    values = _filled_values({"ports": {"api": 1234}})
+
+    message = _refusal(
+        tmp_path,
+        values,
+        ports=[
+            {"service": "api", "published": 5678, "target": 5678},
+            {"service": "api", "published": 5679, "target": 5679, "protocol": "udp"},
+        ],
+    )
+
+    assert "ports: ['api'] carry a count of effective ports a scalar cannot disambiguate" in message
 
 
 def test_a_gateway_override_without_a_declared_gateway_refuses(tmp_path: Path) -> None:
@@ -313,7 +374,7 @@ def test_a_marker_lock_key_spelling_leaves_the_surface(tmp_path: Path) -> None:
     root = _write_repo(tmp_path, values, bundle=bundle)
 
     assert "LOKI_IMAGE" not in _load(root).values
-    assert [service.name for service in _resolve(root).services] == ["core-main", "monitor"]
+    assert [bundle.entry_name for bundle in _resolve(root).bundles] == ["core-main", "monitor"]
 
 
 def test_a_key_parked_on_an_unselected_option_resolves(tmp_path: Path) -> None:
@@ -331,7 +392,7 @@ def test_a_key_parked_on_an_unselected_option_resolves(tmp_path: Path) -> None:
     values["values"]["PF_SETTING"] = "x"
     (root / VALUES_FILE).write_text(yaml.safe_dump(values), encoding="utf-8")
 
-    assert [service.name for service in _resolve(root).services] == ["monitor"]
+    assert [bundle.entry_name for bundle in _resolve(root).bundles] == ["monitor"]
     assert _resolve(root).env["PF_SETTING"] == "x"
 
 

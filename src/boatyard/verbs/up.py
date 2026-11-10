@@ -52,25 +52,26 @@ def up(
     lock = LockFile.load(config.root / LOCK_PATH, config)
     config_values = ValuesFile.load(root / VALUES_FILE)
 
-    # One resolve answers the selected services, the includes, the env table, and the edge image
+    # One resolve answers the bundle projects, the gateway plan, the env table, and the edge image
     plan = resolve(config, lock, config_values)
-    services = plan.services
+    bundles = plan.bundles
+    auth_entries = {row.name for row in config.service_entries if row.auth}
 
     # Group the ports under their namespaced owners into per-service stanzas, the typed
-    # values overrides winning over the config's integer defaults
+    # values overrides winning over the effective declarations
     document_services: dict[str, Yaml] = {
-        f"{service.name}-{owner}": {
+        f"{bundle.entry_name}-{owner}": {
             "ports": [
                 {
                     **port.model_dump(exclude={"service"}, exclude_none=True),
-                    "published": config_values.ports.get(service.name, port.published),
+                    "published": config_values.ports.get(owner, port.published),
                 }
                 for port in owner_ports
             ]
         }
-        for service in services
+        for bundle in bundles
         for owner, owner_ports in groupby(
-            sorted(service.effective_ports, key=lambda port: port.service), key=lambda port: port.service
+            sorted(bundle.effective_ports, key=lambda port: port.service), key=lambda port: port.service
         )
     }
 
@@ -87,9 +88,9 @@ def up(
             "configs": [{"source": EDGE_CONFIG_NAME, "target": "/etc/caddy/Caddyfile"}],
             "ports": [{"target": EDGE_LISTEN_PORT, "published": gateway, "protocol": "tcp"}],
             # Attach the edge to every selected bundle's network
-            "networks": dict.fromkeys(f"{service.name}-net" for service in services),
+            "networks": dict.fromkeys(f"{bundle.entry_name}-net" for bundle in bundles),
         }
-        if any(service.auth for service in services):
+        if any(bundle.entry_name in auth_entries for bundle in bundles):
             if config_values.public_host is None:
                 raise ValueError("an auth option is selected; public_host is required in boatyard.values.yaml")
             edge["environment"] = {
@@ -100,10 +101,10 @@ def up(
 
         # Render one handle block per route in declaration order
         lines = [f":{EDGE_LISTEN_PORT} {{"]
-        for service, index, route in (
-            (service, index, route) for service in services for index, route in enumerate(service.effective_routes)
+        for bundle, index, route in (
+            (bundle, index, route) for bundle in bundles for index, route in enumerate(bundle.effective_routes)
         ):
-            upstream = f"{service.name}-{route.upstream}"
+            upstream = f"{bundle.entry_name}-{route.upstream}"
             opener = (
                 ("\thandle_path" if route.strip_prefix else "\thandle")
                 + ("" if route.path == "/*" else f" {route.path}")
@@ -113,7 +114,7 @@ def up(
                 lines.extend((opener, *["\t\t" + line for line in route.raw.splitlines()], "\t}"))
                 continue
 
-            if service.auth and index == 0:
+            if bundle.entry_name in auth_entries and index == 0:
                 lines.extend((
                     opener,
                     *[
@@ -130,7 +131,10 @@ def up(
         lines.append("}")
         document["configs"] = {EDGE_CONFIG_NAME: {"content": double_dollars("\n".join(lines) + "\n")}}
 
-    includes: list[Yaml] = [include for include in plan.includes]
+    includes: list[Yaml] = [
+        bundle.bundle_path.as_posix() if bundle.bundle_path is not None else f"oci://{bundle.pinned_reference}"
+        for bundle in bundles
+    ]
     if includes:
         document["include"] = includes
     if document_services:

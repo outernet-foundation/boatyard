@@ -346,5 +346,5 @@ class TestValuesLoad:
         lock = LockFile.load(tmp_path / "boatyard.lock.yml", config)
         parsed = values_file.ValuesFile.load(tmp_path / "boatyard.values.yaml")
 
-        assert [service.name for service in resolve(config, lock, parsed).services] == ["core-cuda", "ui-open"]
+        assert [bundle.entry_name for bundle in resolve(config, lock, parsed).bundles] == ["core-cuda", "ui-open"]
         assert parsed.values == {"RELOAD": "true", "GPU_MEM": "512"}

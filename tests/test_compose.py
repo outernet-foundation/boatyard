@@ -30,6 +30,20 @@ KEYCLOAK_PINNED = f"ghcr.io/org/keycloak:0.3.1-dev.42@{FAKE_DIGEST}"
 PLACEFRAME_CUDA_REF = "oci://ghcr.io/org/placeframe:1.2.3"
 PLACEFRAME_ROCM_REF = "oci://ghcr.io/org/placeframe:1.2.3-rocm"
 TUNNEL_BUNDLES = {"TUNNEL_BUNDLE": LIVEKIT_PINNED}
+LIVEKIT_BUNDLE_ENTRY = {
+    "reference": LIVEKIT_PINNED,
+    "services": ["livekit"],
+    "routes": [],
+    "ports": [],
+    "container_names": [],
+}
+AUTH_KEYCLOAK_BUNDLE_ENTRY = {
+    "reference": KEYCLOAK_PINNED,
+    "services": ["keycloak"],
+    "routes": [],
+    "ports": [],
+    "container_names": [],
+}
 ALPINE_OWNED = {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST}
 EDGE_BASE_URL_LINE = "EDGE_BASE_URL=http://boatyard-gateway:8443\n"
 PINNED_COMPOSE_VERSION = "5.6.1"
@@ -400,7 +414,7 @@ def _write_consumer_tree(
     _write_lock(
         root,
         entries=dict(ALPINE_OWNED),
-        bundles={"AUTH_KEYCLOAK_BUNDLE": KEYCLOAK_PINNED, "LIVEKIT_BUNDLE": LIVEKIT_PINNED},
+        bundles={"AUTH_KEYCLOAK_BUNDLE": dict(AUTH_KEYCLOAK_BUNDLE_ENTRY), "LIVEKIT_BUNDLE": dict(LIVEKIT_BUNDLE_ENTRY)},
     )
     rendered_environment = api_environment if bundle_environment is None else bundle_environment
     cuda = _write_bundle_output(root, "placeframe-cuda", ["api", "grafana"], environment=rendered_environment)
@@ -494,7 +508,7 @@ class TestSelectionLaw:
                 },
             },
         )
-        _write_lock(tmp_path, bundles={"LIVEKIT_BUNDLE": LIVEKIT_PINNED})
+        _write_lock(tmp_path, bundles={"LIVEKIT_BUNDLE": dict(LIVEKIT_BUNDLE_ENTRY)})
         _write_values_file(tmp_path, {})
         recorder = AssemblyRecorder()
         monkeypatch.setattr(up, "bash", recorder.run)
@@ -710,7 +724,7 @@ class TestUpMaterialization:
             {"target": 6178, "published": 16178, "protocol": "tcp"}
         ]
 
-    def test_an_unselected_port_overriding_entry_sits_inert(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_an_unselected_port_declaring_entry_sits_inert(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_config(
             tmp_path,
             {
@@ -738,7 +752,7 @@ class TestUpMaterialization:
         _write_workload(tmp_path, "api.yaml", "api")
         _write_values_file(
             tmp_path,
-            {"bundles": ["placeframe-rocm"], "ports": {"placeframe-cuda": 19000, "placeframe-rocm": 19777}},
+            {"bundles": ["placeframe-rocm"], "ports": {"api": 19777}},
         )
         recorder = AssemblyRecorder()
         monkeypatch.setattr(up, "bash", recorder.run)
@@ -889,7 +903,7 @@ class TestUpValidation:
             entries=dict(ALPINE_OWNED),
             bundles={
                 "AUTH_KEYCLOAK_BUNDLE": KEYCLOAK_PINNED,
-                "LIVEKIT_BUNDLE": {"reference": LIVEKIT_PINNED, "slots": {"LIVEKIT_TOKEN": {"required": True}}},
+                "LIVEKIT_BUNDLE": {"reference": LIVEKIT_PINNED, "services": ["livekit"], "slots": {"LIVEKIT_TOKEN": {"required": True}}},
             },
         )
 
@@ -921,7 +935,7 @@ class TestUpValidation:
             entries=dict(ALPINE_OWNED),
             bundles={
                 "AUTH_KEYCLOAK_BUNDLE": KEYCLOAK_PINNED,
-                "LIVEKIT_BUNDLE": {"reference": LIVEKIT_PINNED, "slots": {"LIVEKIT_TOKEN": {"required": True}}},
+                "LIVEKIT_BUNDLE": {"reference": LIVEKIT_PINNED, "services": ["livekit"], "slots": {"LIVEKIT_TOKEN": {"required": True}}},
             },
         )
 
@@ -1705,7 +1719,7 @@ class TestValuesFileLaw:
             entries=dict(ALPINE_OWNED),
             bundles={
                 "AUTH_KEYCLOAK_BUNDLE": KEYCLOAK_PINNED,
-                "LIVEKIT_BUNDLE": {"reference": LIVEKIT_PINNED, "slots": {"LIVEKIT_TOKEN": {"required": True}}},
+                "LIVEKIT_BUNDLE": {"reference": LIVEKIT_PINNED, "services": ["livekit"], "slots": {"LIVEKIT_TOKEN": {"required": True}}},
             },
         )
         recorder = HandoffRecorder()
@@ -1726,7 +1740,7 @@ class TestValuesFileLaw:
             entries=dict(ALPINE_OWNED),
             bundles={
                 "AUTH_KEYCLOAK_BUNDLE": KEYCLOAK_PINNED,
-                "LIVEKIT_BUNDLE": {"reference": LIVEKIT_PINNED, "slots": {"LIVEKIT_TOKEN": {"required": False}}},
+                "LIVEKIT_BUNDLE": {"reference": LIVEKIT_PINNED, "services": ["livekit"], "slots": {"LIVEKIT_TOKEN": {"required": False}}},
             },
         )
         monkeypatch.setenv("LIVEKIT_TOKEN", "shell-value")
