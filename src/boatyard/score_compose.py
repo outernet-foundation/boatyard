@@ -15,7 +15,7 @@ from pydantic import (
 )
 
 from boatyard.models.config_file import (
-    ALPINE_IMAGE,
+    BARRIER_IMAGE_SLOT,
     BARRIER_SERVICE,
     COMPOSE_SLOT,
     TREE_SENTINEL_PATTERN,
@@ -188,10 +188,10 @@ def generate_compose(config: ConfigFile, lock: LockFile) -> list[Path]:
             if service_name in services_map:
                 continue
 
-            # Pin the barrier image to the lock slot
+            # Pin the barrier image to the boatyard-minted slot
             if service_name == BARRIER_SERVICE:
                 barrier_service = document.services[BARRIER_SERVICE]
-                barrier_service.image = f"${{{ALPINE_IMAGE}:?err}}"
+                barrier_service.image = f"${{{BARRIER_IMAGE_SLOT}:?err}}"
                 services_map[BARRIER_SERVICE] = (barrier_service, None, BARRIER_SERVICE)
                 continue
 

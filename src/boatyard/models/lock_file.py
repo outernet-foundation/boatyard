@@ -62,7 +62,7 @@ class LockFile(BaseModel):
                     f"but the lock records {recorded}"
                 )
         refuse_local_lock_entries(lock, config, source)
-        effective_images = set(config.mirrored_base_images)
+        effective_images = set(config.remote_base_images)
         missing_images = sorted(effective_images - lock.images.keys())
         if missing_images:
             raise ValueError(f"{source}: lacks the {missing_images} image entries")

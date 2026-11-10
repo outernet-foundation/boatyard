@@ -20,7 +20,6 @@ LIVEKIT_REF = "oci://ghcr.io/org/livekit:" + LIVEKIT_SHA_TAG
 LIVEKIT_PINNED = f"ghcr.io/org/livekit:{LIVEKIT_SHA_TAG}@{FAKE_DIGEST}"
 KEYCLOAK_REF = "oci://ghcr.io/org/keycloak:0.3.1"
 KEYCLOAK_PINNED = f"ghcr.io/org/keycloak:0.3.1@{FAKE_DIGEST}"
-CADDY_LOCK_ENTRY = "ghcr.io/outernet-foundation/mirror/docker.io/library/caddy:2.8.4-alpine@" + FAKE_DIGEST
 
 LIVEKIT_TEXT = "services:\n  livekit:\n    image: demo/livekit:1\n"
 KEYCLOAK_TEXT = "services:\n  keycloak:\n    image: demo/keycloak:1\n"
@@ -139,12 +138,7 @@ def _write_edge_tree(
     tmp_path.joinpath(*LOCK_PATH.parts).write_text(
         yaml.safe_dump({
             "platforms": ["linux/amd64"],
-            "images": {
-                "CADDY_IMAGE": {
-                    "index": CADDY_LOCK_ENTRY,
-                    "platforms": {"linux/amd64": CADDY_LOCK_ENTRY},
-                }
-            },
+            "images": {},
             "bundles": bundles,
         }),
         encoding="utf-8",
@@ -294,11 +288,6 @@ def _resolve_tree(
     if lock_livekit_slots is not None:
         livekit_bundle["slots"] = lock_livekit_slots
     lock_images: dict[str, object] = {}
-    if gateway_port is not None:
-        lock_images["CADDY_IMAGE"] = {
-            "index": CADDY_LOCK_ENTRY,
-            "platforms": {"linux/amd64": CADDY_LOCK_ENTRY},
-        }
     tmp_path.joinpath(*LOCK_PATH.parts).write_text(
         yaml.safe_dump({
             "platforms": ["linux/amd64"],
@@ -389,7 +378,7 @@ class TestGatewayProject:
         assert document["name"] == "edge-demo"
         assert document["networks"] == {"edge-demo-shared": {"external": True}}
         assert document["services"]["boatyard-gateway"] == {
-            "image": CADDY_LOCK_ENTRY,
+            "image": "docker.io/library/caddy:2.8.4-alpine",
             "configs": [{"source": "devkit-edge-caddyfile", "target": "/etc/caddy/Caddyfile"}],
             "ports": [{"target": 8443, "published": 58080, "protocol": "tcp"}],
             "networks": {"edge-demo-shared": None},
@@ -506,18 +495,20 @@ class TestUpProjects:
 
         [bundle_command, gateway_command] = spy.commands
         assert bundle_command.startswith(
-            "env -u EDGE_BASE_URL -u PUBLIC_HOST -u PUBLIC_PORT -u PUBLIC_SCHEME -u PUBLIC_URL "
-            "-u PUBLIC_URL_PATH docker compose -p edge-demo-livekit -f "
+            "env -u BOATYARD_BARRIER_IMAGE -u EDGE_BASE_URL -u PUBLIC_HOST -u PUBLIC_PORT -u PUBLIC_SCHEME "
+            "-u PUBLIC_URL -u PUBLIC_URL_PATH docker compose -p edge-demo-livekit -f "
         )
         assert "devkit-bundle-" in bundle_command
         assert "devkit-override-" in bundle_command
         assert bundle_command.endswith("up --pull missing -d")
         assert gateway_command.startswith(
-            "env -u EDGE_BASE_URL -u PUBLIC_HOST -u PUBLIC_PORT -u PUBLIC_SCHEME -u PUBLIC_URL "
-            "-u PUBLIC_URL_PATH docker compose -p edge-demo -f "
+            "env -u BOATYARD_BARRIER_IMAGE -u EDGE_BASE_URL -u PUBLIC_HOST -u PUBLIC_PORT -u PUBLIC_SCHEME "
+            "-u PUBLIC_URL -u PUBLIC_URL_PATH docker compose -p edge-demo -f "
         )
         assert "devkit-gateway-" in gateway_command
-        assert spy.env_content is not None and spy.env_content.startswith("EDGE_BASE_URL=")
+        assert spy.env_content is not None and spy.env_content.startswith(
+            "BOATYARD_BARRIER_IMAGE=docker.io/library/alpine:3.20\nEDGE_BASE_URL="
+        )
 
     def test_a_failing_project_stops_the_run_and_reports_the_retained_artifacts(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -546,8 +537,8 @@ class TestUpProjects:
 
         assert spy.projects == ["edge-demo-livekit", "edge-demo"]
         assert spy.commands[-1].startswith(
-            "env -u EDGE_BASE_URL -u PUBLIC_HOST -u PUBLIC_PORT -u PUBLIC_SCHEME -u PUBLIC_URL "
-            "-u PUBLIC_URL_PATH docker compose -p edge-demo -f "
+            "env -u BOATYARD_BARRIER_IMAGE -u EDGE_BASE_URL -u PUBLIC_HOST -u PUBLIC_PORT -u PUBLIC_SCHEME "
+            "-u PUBLIC_URL -u PUBLIC_URL_PATH docker compose -p edge-demo -f "
         )
         assert "-d" not in spy.commands[-1].rsplit(" up ", 1)[1]
 
@@ -576,12 +567,7 @@ class TestUpProjects:
         tmp_path.joinpath(*LOCK_PATH.parts).write_text(
             yaml.safe_dump({
                 "platforms": ["linux/amd64"],
-                "images": {
-                    "CADDY_IMAGE": {
-                        "index": CADDY_LOCK_ENTRY,
-                        "platforms": {"linux/amd64": CADDY_LOCK_ENTRY},
-                    }
-                },
+                "images": {},
                 "bundles": {
                     "CORE_CUDA_BUNDLE": {
                         "reference": LIVEKIT_PINNED,
@@ -772,12 +758,7 @@ def _write_two_claim_tree(tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tree / LOCK_PATH).write_text(
         yaml.safe_dump({
             "platforms": ["linux/amd64"],
-            "images": {
-                "CADDY_IMAGE": {
-                    "index": CADDY_LOCK_ENTRY,
-                    "platforms": {"linux/amd64": CADDY_LOCK_ENTRY},
-                }
-            },
+            "images": {},
             "bundles": {
                 "ONE_BUNDLE": {
                     "reference": LIVEKIT_PINNED,

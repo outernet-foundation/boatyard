@@ -16,6 +16,7 @@ from pydantic import (
 )
 
 from boatyard.models.config_file import (
+    BARRIER_IMAGE_SLOT,
     ENV_NAME_PATTERN,
     PLACEHOLDER,
     PortNumber,
@@ -166,6 +167,8 @@ class ValuesFile(BaseModel):
             )
         if name in PUBLIC_SLOTS or name == EDGE_BASE_URL_SLOT:
             raise ValueError(f"{source}: {name} is not hand-settable (minted from the public face)")
+        if name == BARRIER_IMAGE_SLOT:
+            raise ValueError(f"{source}: {name} is not hand-settable (minted from the boatyard pin)")
 
 
 def _coerce_values(raw: object) -> dict[str, str]:

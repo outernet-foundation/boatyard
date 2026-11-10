@@ -5,7 +5,8 @@ from typing import NamedTuple
 
 from boatyard.lock import extract_bundle_records
 from boatyard.models.config_file import (
-    CADDY_IMAGE,
+    BARRIER_IMAGE,
+    BARRIER_IMAGE_SLOT,
     EDGE_LISTEN_PORT,
     GATEWAY_SERVICE_NAME,
     PLACEHOLDER,
@@ -65,7 +66,6 @@ class AssemblyPlan(NamedTuple):
     bundles: list[BundleProject]
     gateway: GatewayPlan | None
     env: dict[str, str]
-    edge_image: str | None
 
 
 class BundleSources(NamedTuple):
@@ -339,7 +339,6 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
         bundles=bundles,
         gateway=gateway,
         env=env,
-        edge_image=consumer_manifests.get(CADDY_IMAGE),
     )
 
 
@@ -360,7 +359,7 @@ def _public_face(config: ConfigFile, values: ValuesFile) -> PublicFace | None:
 
 
 def _minted(config: ConfigFile, values: ValuesFile) -> dict[str, str]:
-    minted: dict[str, str] = {}
+    minted: dict[str, str] = {BARRIER_IMAGE_SLOT: BARRIER_IMAGE}
     face = _public_face(config, values)
     if face is not None:
         scheme_default = 443 if face.scheme == "https" else 80

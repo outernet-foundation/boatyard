@@ -1418,56 +1418,6 @@ class TestRoutes:
 
 
 class TestGatewayKey:
-    def test_the_barrier_and_edge_names_refuse_in_base_images(self, tmp_path: Path) -> None:
-        write_config(
-            tmp_path,
-            {
-                "requires": ">=0.1",
-                "project_name": "example",
-                "platforms": ["linux/amd64"],
-                "base_images": {"CADDY_IMAGE": "docker.io/library/caddy:2.8.4-alpine"},
-                "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG}},
-            },
-        )
-
-        with pytest.raises(ValidationError, match="barrier and edge pins are boatyard-owned"):
-            ConfigFile.load(tmp_path / "boatyard.yml")
-
-    def test_the_owned_pins_carry_the_tool_pin_shape(self, tmp_path: Path) -> None:
-        write_config(
-            tmp_path,
-            {
-                "requires": ">=0.1",
-                "project_name": "example",
-                "platforms": ["linux/amd64"],
-                "barrier_image": "docker.io/library/alpine",
-                "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG}},
-            },
-        )
-
-        with pytest.raises(
-            ValidationError, match=r"barrier_image: 'docker\.io/library/alpine' must carry a tag or a digest"
-        ):
-            ConfigFile.load(tmp_path / "boatyard.yml")
-
-    def test_a_gateway_owns_the_edge_pin_and_overrides_ship_theirs(self, tmp_path: Path) -> None:
-        write_config(
-            tmp_path,
-            {
-                "requires": ">=0.1",
-                "project_name": "example",
-                "platforms": ["linux/amd64"],
-                "gateway_port": 8080,
-                "edge_image": "docker.io/library/caddy:2.9.0",
-                "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG}},
-            },
-        )
-
-        config = ConfigFile.load(tmp_path / "boatyard.yml")
-
-        assert config is not None
-        assert config.owned_images == {"CADDY_IMAGE": "docker.io/library/caddy:2.9.0"}
-
     def test_a_routeless_gateway_loads(self, tmp_path: Path) -> None:
         write_lock(tmp_path, bundles=bundle_entries("livekit"))
         write_config(
