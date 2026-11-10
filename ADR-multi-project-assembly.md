@@ -60,6 +60,26 @@ Two further defects surfaced during diagnosis:
    `container_name` declarations — all as required fields so a pre-change lock refuses at
    parse (loud-parse treaty), never silently renders a broken assembly.
 
+## Amendment (2026-11-10): boatyard-owned images leave consumer locks
+
+Pre-publication amendment, replacing the 0.7 owned-images design wholesale. The barrier and
+gateway caddy are boatyard machinery: their pins live in boatyard's code as upstream tags
+(`BARRIER_IMAGE`, `EDGE_IMAGE` in `models/config_file.py`), moved by boatyard releases — the
+compatibility contract (rendered Caddyfile, barrier shell) belongs to the boatyard version
+that synthesized it. Consumer locks, mirror enumeration, lock validation, and build bake
+args carry neither (`owned_images` and `mirrored_base_images` are deleted; relock and mirror
+run over `remote_base_images` alone). The barrier rides one global un-namespaced
+`BOATYARD_BARRIER_IMAGE` slot, minted at resolve from the pin and refused as a hand-set
+values key; generated artifacts spell it `${BOATYARD_BARRIER_IMAGE:?err}` at the barrier
+service. The gateway document renders `EDGE_IMAGE` literally, so a gateway-declaring
+consumer's lock may legitimately be image-empty and a pure consumer mirrors nothing
+(Make-it-Sing drops its mirror step; the zero-target mirror refusal stays for misconfigured
+repos). The `barrier_image:`/`edge_image:` config fields die; a producer whose Dockerfiles
+build `FROM ${ALPINE_IMAGE}` declares its own `base_images` entry (placeframe). Accepted
+risk, time-boxed: upstream tag re-points move the bytes at the next up — small for a shell
+loop and a pinned-minor caddy, and retired when boatyard hosts its own mirror namespace for
+both images.
+
 ## The assembly model
 
 ### Projects
@@ -140,7 +160,7 @@ services:
 
 ### The gateway project
 
-- The gateway service is rendered as today (image from the lock's CADDY_IMAGE pin, Caddyfile
+- The gateway service is rendered as today (Caddyfile
   config, published `gateway_port`) with these changes: the service name is
   `boatyard-gateway`; its network is the shared net only (the every-entry-net attach is
   deleted); the `environment:` stanza is gone entirely.

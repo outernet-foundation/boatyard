@@ -20,7 +20,11 @@ Design intent and silent-failure traps, one fact per bullet.
   From 1.0 on, breaking changes ship with a manually bumped `major_minor`.
 - Third-party images and charts are consumed through the org mirror namespace (upstream
   manifests get GC'd). CI is the single writer — engineers never push, and error text never
-  teaches them to.
+  teaches them to. The one exception is boatyard's own machinery: the barrier and gateway
+  caddy pins live in boatyard's code as upstream tags, never in a consumer lock or mirror
+  (the barrier rides the global `BOATYARD_BARRIER_IMAGE` slot, minted at resolve; the
+  gateway document renders its pin literally); boatyard hosting its own mirror retires the
+  exception.
 - Substrate split: compose renderings bake the lock's per-platform manifests (the exact bytes
   one machine runs); k8s renderings bake the index form (kubelet resolves per node).
   `helm template` is a renderer, never a deployer.
