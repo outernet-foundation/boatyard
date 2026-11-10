@@ -4,13 +4,12 @@ from collections.abc import Generator, Mapping
 from contextlib import ExitStack, contextmanager
 from itertools import groupby
 from pathlib import Path
-from shlex import quote
 from tempfile import NamedTemporaryFile
 from typing import Annotated
 
 import typer
 import yaml
-from bashrun.bash import bash, bash_handoff, bash_output
+from bashrun.bash import bash_handoff
 
 from boatyard.build import run_build
 from boatyard.compose import compose_command
@@ -160,41 +159,22 @@ def up(
             run_build(config=config)
 
         # Hand off to docker compose
-        command = compose_command(
-            root,
-            materialized_compose_file,
-            "up",
-            *["--pull", "missing", *(["--quiet-pull"] if quiet_pull else []), *(["-d"] if not attached else [])],
-            env_file=materialized_env_file,
-            slot_names=list(plan.env),
+        bash_handoff(
+            compose_command(
+                root,
+                [materialized_compose_file],
+                "up",
+                *["--pull", "missing", *(["--quiet-pull"] if quiet_pull else []), *(["-d"] if not attached else [])],
+                project_name=config.project_name,
+                env_file=materialized_env_file,
+                slot_names=list(plan.env),
+            )
         )
-        if attached:
-            bash_handoff(command)
-        bash(command)
-        bridge_project_networks(config.project_name)
 
 
 def render_env_entries(entries: Mapping[str, str]) -> str:
     # Render the entries as sorted dotenv lines
     return "".join(f"{name}={reference}\n" for name, reference in sorted(entries.items()))
-
-
-def bridge_project_networks(project: str) -> None:
-    # Every bundle sits on its own network, so a container dialing another bundle's bare
-    # service alias (the tunnel dials livekit) cannot resolve it; attach every running
-    # project container to every project network so the bare aliases resolve assembly-wide.
-    listing = "docker network ls --filter label=com.docker.compose.project=" + project + " --format {{.Name}}"
-    networks = bash_output(listing).split()
-    if not networks:
-        return
-    running = "docker ps --filter label=com.docker.compose.project=" + project + " --format {{.Names}}"
-    containers = bash_output(running).split()
-    for network in networks:
-        members = "docker network inspect " + network + " --format " + quote("{{range .Containers}}{{.Name}} {{end}}")
-        member_names = set(bash_output(members).split())
-        for container in containers:
-            if container not in member_names:
-                bash("docker network connect " + network + " " + container)
 
 
 @contextmanager

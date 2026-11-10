@@ -1017,11 +1017,13 @@ class TestSharedNames:
         result = runner.invoke(app, ["down"])
 
         assert result.exit_code == 0, result.output
-        assert recorder.documents == [{"name": "demo"}]
+        assert recorder.commands == [
+            f"docker compose -p demo --project-directory {tmp_path} down --remove-orphans"
+        ]
 
 
 class TestDownTeardown:
-    def test_down_hands_off_a_name_only_root_with_remove_orphans(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_down_spells_a_file_less_name_only_invocation(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_consumer_tree(tmp_path)
         recorder = AssemblyRecorder()
         monkeypatch.setattr(down, "bash_handoff", recorder.run)
@@ -1032,14 +1034,11 @@ class TestDownTeardown:
         assert result.exit_code == 0, result.output
         assert len(recorder.commands) == 1
         command = recorder.commands[0]
-        assert command.startswith("docker compose -f ")
+        assert command.startswith("docker compose -p demo ")
+        assert " -f " not in command
         assert "--env-file" not in command
         assert command.endswith("down --remove-orphans")
-        match = ASSEMBLY_ARGUMENT_PATTERN.search(command)
-        assert match is not None
-        assert not Path(match.group(1)).exists()
-        [document] = recorder.documents
-        assert document == {"name": "demo"}
+        assert recorder.documents == []
 
     def test_down_is_identical_under_every_selection(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         commands: list[str] = []
@@ -1081,14 +1080,14 @@ class TestDownTeardown:
     def test_down_tears_down_by_name(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_config(tmp_path)
         _write_values_file(tmp_path, {"public_host": "example.dev"})
-        recorder = AssemblyRecorder()
+        recorder = HandoffRecorder()
         monkeypatch.setattr(down, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["down"])
 
         assert result.exit_code == 0, result.output
-        assert recorder.documents == [{"name": "demo"}]
+        assert recorder.commands == [f"docker compose -p demo --project-directory {tmp_path} down --remove-orphans"]
 
 
 class TestLockRequirement:
@@ -1397,7 +1396,7 @@ class TestBundleOverrides:
             (
                 "env -u EDGE_BASE_URL -u PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE "
                 "-u PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE "
-                "docker compose -f ASSEMBLY --project-directory ROOT --env-file LOCKENV up --pull missing -d"
+                "docker compose -p demo -f ASSEMBLY --project-directory ROOT --env-file LOCKENV up --pull missing -d"
             )
         ]
         assert recorder.env_contents == [
