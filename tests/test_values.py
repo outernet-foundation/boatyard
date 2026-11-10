@@ -432,6 +432,51 @@ def test_an_override_demands_from_its_artifact_text(tmp_path: Path) -> None:
     assert "monitor requires ['OVR_TOKEN']" in message
 
 
+def test_an_override_mints_machine_slots_under_the_producer_entry_name(tmp_path: Path) -> None:
+    values = _filled_values({
+        "path_overrides": {"monitor": "../producer/stack/generated/compose/compose.monitor-tier.yaml"}
+    })
+    root = _write_repo(tmp_path, values)
+    producer = tmp_path / "producer"
+    override = producer / "stack" / "generated" / "compose" / "compose.monitor-tier.yaml"
+    override.parent.mkdir(parents=True)
+    (producer / "boatyard.yml").write_text(
+        yaml.safe_dump({
+            "requires": ">=0",
+            "project_name": "producer",
+            "platforms": ["linux/amd64"],
+            "base_images": {"STUB_IMAGE": "docker.io/org/stub:1.0"},
+            "services": {"monitor-tier": {"ref": "oci://ghcr.io/org/stub:0.0.1"}},
+        }),
+        encoding="utf-8",
+    )
+    (producer / "boatyard.lock.yml").write_text(
+        yaml.safe_dump({
+            "platforms": ["linux/amd64"],
+            "images": {
+                "STUB_IMAGE": {
+                    "index": f"docker.io/org/stub:1.0@{FAKE_DIGEST}",
+                    "platforms": {"linux/amd64": f"docker.io/org/stub:1.0@{FAKE_DIGEST}"},
+                }
+            },
+        }),
+        encoding="utf-8",
+    )
+    override.write_text(
+        "services:\n"
+        "  monitor-monitor:\n"
+        "    image: ${MONITOR_TIER__BOATYARD_LOCK__STUB_IMAGE:?err}\n"
+        "    environment:\n"
+        "      TOKEN: ${MON_TOKEN:-}\n",
+        encoding="utf-8",
+    )
+
+    resolved = _resolve(root)
+
+    assert resolved.env["MONITOR_TIER__BOATYARD_LOCK__STUB_IMAGE"] == f"docker.io/org/stub:1.0@{FAKE_DIGEST}"
+    assert "MONITOR__BOATYARD_LOCK__STUB_IMAGE" not in resolved.env
+
+
 def test_a_reference_to_a_sibling_key_resolves_at_render(tmp_path: Path) -> None:
     values = _filled_values()
     values["values"] = _core_values(API_TOKEN="${PROV_TOKEN}-token")

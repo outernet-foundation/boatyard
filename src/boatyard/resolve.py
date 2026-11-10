@@ -212,7 +212,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
                     tree_root=root,
                     images=config.images,
                 )
-                _entry_env(env, shas_by_root, name, sources)
+                _entry_env(env, shas_by_root, sources)
                 continue
 
             # The producer root sits four levels above a stack/generated/compose/ output
@@ -231,7 +231,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
                 tree_root=producer_root,
                 images=producer_config.images,
             )
-            _entry_env(env, shas_by_root, name, sources)
+            _entry_env(env, shas_by_root, sources)
 
     # Raise if a local or override artifact defines the reserved gateway service or an unresolved reference
     for bundle in bundles:
@@ -379,12 +379,14 @@ def _in_assembly(row: FlattenedServiceEntry, choices: dict[str, str]) -> bool:
     return row.option is None or row.option == choices.get(row.root)
 
 
-def _entry_env(
-    env: dict[str, str], shas_by_root: dict[Path, dict[str, str]], name: str, sources: BundleSources
-) -> None:
-    env.update({env_lock_slot(name, key): value for key, value in sources.lock_references.items()})
+def _entry_env(env: dict[str, str], shas_by_root: dict[Path, dict[str, str]], sources: BundleSources) -> None:
+    # Machine slots are spelled after the producer's own entry name — the artifact
+    # file and its slots derive from the same generation — which an override may
+    # name differently from the consumer entry selecting it.
+    entry = sources.bundle_path.stem.removeprefix("compose.")
+    env.update({env_lock_slot(entry, key): value for key, value in sources.lock_references.items()})
     if sources.tree_root not in shas_by_root:
         shas_by_root[sources.tree_root] = {
             image.sha_env: image.compute_sha(sources.tree_root) for image in sources.images.values()
         }
-    env.update({env_tree_slot(name, sha): value for sha, value in shas_by_root[sources.tree_root].items()})
+    env.update({env_tree_slot(entry, sha): value for sha, value in shas_by_root[sources.tree_root].items()})
