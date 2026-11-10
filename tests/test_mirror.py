@@ -330,7 +330,7 @@ class TestMirrorVerb:
     ):
         _write_config(
             tmp_path,
-            {"mirror_prefix": MIRROR_PREFIX, "platforms": ["linux/amd64"], "gateway": 8443},
+            {"mirror_prefix": MIRROR_PREFIX, "platforms": ["linux/amd64"], "gateway_port": 8443},
         )
         _write_lock(
             tmp_path,

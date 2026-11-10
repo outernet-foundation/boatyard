@@ -104,7 +104,7 @@ def _write_repo(
         },
     }
     if gateway is not None:
-        config["gateway"] = gateway
+        config["gateway_port"] = gateway
     (root / "boatyard.yml").write_text(yaml.safe_dump(config), encoding="utf-8")
     lock_images: dict[str, object] = {
         "LOKI_IMAGE": {
@@ -197,28 +197,31 @@ def test_an_orphan_key_refuses(tmp_path: Path) -> None:
     assert "GHOST is consumed by no surface" in message
 
 
-def test_the_minted_public_url_key_refuses(tmp_path: Path) -> None:
-    values = _filled_values({"values": {"PUBLIC_URL": "https://example.dev"}})
+def test_the_minted_public_slots_refuse(tmp_path: Path) -> None:
+    for index, name in enumerate(("PUBLIC_HOST", "PUBLIC_SCHEME", "PUBLIC_PORT", "PUBLIC_URL_PATH", "PUBLIC_URL")):
+        values = _filled_values({"values": {name: "x"}})
+        case = tmp_path / f"case-{index}"
+        case.mkdir()
 
-    message = _refusal(tmp_path, values)
+        message = _refusal(case, values)
 
-    assert "PUBLIC_URL is not hand-settable (minted from public_url)" in message
+        assert f"{name} is not hand-settable (minted from the public face)" in message
 
 
 def test_the_minted_edge_base_url_key_refuses(tmp_path: Path) -> None:
-    values = _filled_values({"values": {"EDGE_BASE_URL": "http://edge:8443"}})
+    values = _filled_values({"values": {"EDGE_BASE_URL": "http://boatyard-gateway:8443"}})
 
     message = _refusal(tmp_path, values, gateway=9443)
 
-    assert "EDGE_BASE_URL is not hand-settable (minted from the gateway declaration)" in message
+    assert "EDGE_BASE_URL is not hand-settable (minted from the public face)" in message
 
 
 def test_the_minted_edge_base_url_key_refuses_without_a_gateway(tmp_path: Path) -> None:
-    values = _filled_values({"values": {"EDGE_BASE_URL": "http://edge:8443"}})
+    values = _filled_values({"values": {"EDGE_BASE_URL": "http://boatyard-gateway:8443"}})
 
     message = _refusal(tmp_path, values)
 
-    assert "EDGE_BASE_URL is not hand-settable (minted from the gateway declaration)" in message
+    assert "EDGE_BASE_URL is not hand-settable (minted from the public face)" in message
 
 
 def test_an_unknown_ports_override_refuses(tmp_path: Path) -> None:
@@ -230,15 +233,15 @@ def test_an_unknown_ports_override_refuses(tmp_path: Path) -> None:
 
 
 def test_a_gateway_override_without_a_declared_gateway_refuses(tmp_path: Path) -> None:
-    values = _filled_values({"gateway": 9000})
+    values = _filled_values({"gateway_port": 9000})
 
     message = _refusal(tmp_path, values)
 
-    assert "gateway is set but boatyard.yml declares no gateway" in message
+    assert "gateway_port is set but boatyard.yml declares no gateway" in message
 
 
 def test_typed_port_and_gateway_overrides_load(tmp_path: Path) -> None:
-    values = _filled_values({"gateway": 9000, "ports": {"core-main": 1234}})
+    values = _filled_values({"gateway_port": 9000, "ports": {"core-main": 1234}})
 
     parsed = _load(
         _write_repo(
@@ -249,7 +252,7 @@ def test_typed_port_and_gateway_overrides_load(tmp_path: Path) -> None:
         )
     )
 
-    assert parsed.gateway == 9000
+    assert parsed.gateway_port == 9000
     assert parsed.ports == {"core-main": 1234}
 
 
@@ -396,11 +399,15 @@ def test_a_reference_chains_through_another_reference(tmp_path: Path) -> None:
 
 
 def test_the_minted_public_url_is_a_reference_root(tmp_path: Path) -> None:
-    values = _filled_values({"public_url": "https://example.dev"})
+    values = _filled_values({"public_host": "example.dev", "public_scheme": "https"})
     values["values"] = _core_values(API_TOKEN="${PUBLIC_URL}/token")
     root = _write_repo(tmp_path, values)
 
     assert _resolve(root).env == {
+        "PUBLIC_HOST": "example.dev",
+        "PUBLIC_SCHEME": "https",
+        "PUBLIC_PORT": "443",
+        "PUBLIC_URL_PATH": "",
         "PUBLIC_URL": "https://example.dev",
         "API_TOKEN": "https://example.dev/token",
         "BIND_TOKEN": "two",
@@ -411,7 +418,29 @@ def test_the_minted_public_url_is_a_reference_root(tmp_path: Path) -> None:
     }
 
 
-def test_the_minted_public_url_is_no_root_when_public_url_is_absent(tmp_path: Path) -> None:
+def test_the_minted_public_url_elides_the_scheme_default_port(tmp_path: Path) -> None:
+    values = _filled_values({"public_host": "example.dev"})
+    values["values"] = _core_values(API_TOKEN="${PUBLIC_URL}/token")
+    root = _write_repo(tmp_path, values)
+
+    env = _resolve(root).env
+
+    assert env["PUBLIC_PORT"] == "80"
+    assert env["PUBLIC_URL"] == "http://example.dev"
+
+
+def test_the_minted_public_url_derives_the_port_from_the_gateway(tmp_path: Path) -> None:
+    values = _filled_values({"public_host": "example.dev", "public_url_path": "/makeitsing"})
+    values["values"] = _core_values(API_TOKEN="${PUBLIC_URL}/token")
+    root = _write_repo(tmp_path, values, gateway=58080)
+
+    env = _resolve(root).env
+
+    assert env["PUBLIC_PORT"] == "58080"
+    assert env["PUBLIC_URL"] == "http://example.dev:58080/makeitsing"
+
+
+def test_the_minted_public_url_is_no_root_when_public_host_is_absent(tmp_path: Path) -> None:
     values = _filled_values()
     values["values"] = _core_values(API_TOKEN="${PUBLIC_URL}/token")
 
@@ -426,8 +455,8 @@ def test_the_minted_edge_base_url_is_a_reference_root(tmp_path: Path) -> None:
     root = _write_repo(tmp_path, values, gateway=9443)
 
     assert _resolve(root).env == {
-        "EDGE_BASE_URL": "http://edge:8443",
-        "API_TOKEN": "http://edge:8443/jwks",
+        "EDGE_BASE_URL": "http://boatyard-gateway:8443",
+        "API_TOKEN": "http://boatyard-gateway:8443/jwks",
         "BIND_TOKEN": "two",
         "PROV_TOKEN": "three",
         "MON_TOKEN": "four",
@@ -466,7 +495,7 @@ def test_a_default_spelling_refuses(tmp_path: Path) -> None:
 
 def test_a_lowercase_reference_refuses(tmp_path: Path) -> None:
     values = _filled_values()
-    values["values"] = _core_values(API_TOKEN="${public_url}/token")
+    values["values"] = _core_values(API_TOKEN="${public_host}/token")
 
     message = _refusal(tmp_path, values)
 
@@ -510,13 +539,17 @@ def test_a_self_reference_refuses(tmp_path: Path) -> None:
 
 
 def test_assembly_renders_resolved_values_with_the_minted_slot(tmp_path: Path) -> None:
-    values = _filled_values({"public_url": "https://example.dev"})
+    values = _filled_values({"public_host": "example.dev", "public_scheme": "https"})
     values["values"] = _core_values(API_TOKEN="${PUBLIC_URL}/token")
     root = _write_repo(tmp_path, values)
 
     plan = _resolve(root)
 
     assert plan.env == {
+        "PUBLIC_HOST": "example.dev",
+        "PUBLIC_SCHEME": "https",
+        "PUBLIC_PORT": "443",
+        "PUBLIC_URL_PATH": "",
         "PUBLIC_URL": "https://example.dev",
         "API_TOKEN": "https://example.dev/token",
         "BIND_TOKEN": "two",
@@ -535,8 +568,8 @@ def test_assembly_fills_the_minted_edge_base_url(tmp_path: Path) -> None:
     plan = _resolve(root)
 
     assert plan.env == {
-        "EDGE_BASE_URL": "http://edge:8443",
-        "API_TOKEN": "http://edge:8443/jwks",
+        "EDGE_BASE_URL": "http://boatyard-gateway:8443",
+        "API_TOKEN": "http://boatyard-gateway:8443/jwks",
         "BIND_TOKEN": "two",
         "PROV_TOKEN": "three",
         "MON_TOKEN": "four",

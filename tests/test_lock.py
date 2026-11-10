@@ -129,7 +129,7 @@ def _write_repo(
 ) -> None:
     payload: dict[str, Any] = {"requires": ">=0", "project_name": "demo", "repository": "ghcr.io/org/demo"}
     if gateway is not None:
-        payload["gateway"] = gateway
+        payload["gateway_port"] = gateway
     if base_images:
         payload["platforms"] = platforms or ["linux/amd64"]
         payload["base_images"] = base_images
@@ -798,15 +798,15 @@ class TestBundleRecording:
             "OPTIONAL": {"required": False},
         }
 
-    def test_a_bundle_defining_the_reserved_edge_service_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_a_bundle_defining_the_reserved_gateway_service_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         bundle_text = (
-            "services:\n  tunnel-rathole-rathole:\n    image: busybox:1.36\n  edge:\n    image: busybox:1.36\n"
+            "services:\n  tunnel-rathole-rathole:\n    image: busybox:1.36\n  boatyard-gateway:\n    image: busybox:1.36\n"
         )
 
         result, _, _ = self._invoke(monkeypatch, tmp_path, [], bundle_text=bundle_text)
 
         assert result.exit_code != 0
-        assert "the included bundle defines the reserved service 'edge'" in str(result.exception)
+        assert "the included bundle defines the reserved service 'boatyard-gateway'" in str(result.exception)
 
     def test_an_unresolved_route_upstream_refuses_naming_the_declaration(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

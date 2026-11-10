@@ -37,6 +37,8 @@ PYTHON_VERSION_PATH = Path(".python-version")
 
 ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
+ENTRY_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9-]*$")
+
 PLATFORM_KEY = "platform"
 
 # Match ${ALL_CAPS} placeholder slots in workload files.
@@ -58,7 +60,7 @@ REF_TAG_OPERATOR_PATTERN = re.compile(r"[<>=!~^*]")
 OCI_REFERENCE_PREFIX = "oci://"
 
 AUTH_GROUP_NAME = "auth"
-EDGE_SERVICE_NAME = "edge"
+GATEWAY_SERVICE_NAME = "boatyard-gateway"
 EDGE_LISTEN_PORT = 8443
 BARRIER_SERVICE = "wait-for-resources"
 CADDY_IMAGE = "CADDY_IMAGE"
@@ -85,7 +87,7 @@ class ConfigFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     requires: str
-    gateway: PortNumber | None = None
+    gateway_port: PortNumber | None = None
     repository: str | None = None
     base_images: dict[AllCapsName, str | LocalBaseEntry] = Field(default_factory=dict)
     barrier_image: str = DEFAULT_BARRIER_IMAGE
@@ -156,7 +158,7 @@ class ConfigFile(BaseModel):
         owned: dict[str, str] = {}
         if self.local_workload_names():
             owned[ALPINE_IMAGE] = self.barrier_image
-        if self.gateway is not None:
+        if self.gateway_port is not None:
             owned[CADDY_IMAGE] = self.edge_image
         return owned
 
@@ -233,8 +235,20 @@ class ConfigFile(BaseModel):
     @field_validator("services")
     @classmethod
     def _validate_services(
-        cls, services: dict[str, ServiceGroup | ServiceEntry]
+        cls, services: dict[str, ServiceGroup | ServiceEntry], info: ValidationInfo
     ) -> dict[str, ServiceGroup | ServiceEntry]:
+        # Entry names feed compose project names and the shared network name, so every
+        # services key, options key, and project_name must match the one pattern.
+        for name, member in services.items():
+            if ENTRY_NAME_PATTERN.fullmatch(name) is None:
+                raise ValueError(f"services.{name}: names match ^[a-z][a-z0-9-]*$")
+            if isinstance(member, ServiceGroup):
+                for option_name in member.options:
+                    if ENTRY_NAME_PATTERN.fullmatch(option_name) is None:
+                        raise ValueError(f"services.{name}.options.{option_name}: names match ^[a-z][a-z0-9-]*$")
+        project_name = info.data.get("project_name")
+        if isinstance(project_name, str) and ENTRY_NAME_PATTERN.fullmatch(project_name) is None:
+            raise ValueError(f"project_name {project_name!r} must match ^[a-z][a-z0-9-]*$")
         # Collect every route with its declaration site; paths are edge-wide unique.
         route_sites = [
             (where, route)
@@ -288,7 +302,7 @@ class ConfigFile(BaseModel):
                 else [member.routes]
             )
         )
-        if declares_routes and self.gateway is None:
+        if declares_routes and self.gateway_port is None:
             raise ValueError("routes require a gateway declaration")
         upstream_sites: list[tuple[str, str]] = [
             (f"base_images.{name}", reference) for name, reference in self.remote_base_images.items()
