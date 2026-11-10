@@ -303,7 +303,9 @@ def parse_route_annotation(value: str) -> list[WorkloadRoute]:
         if not separator:
             raise ValueError(f"{ROUTE_ANNOTATION} entry {entry!r} must be a path=host:port pair")
         if ROUTE_PATH_PATTERN.fullmatch(path) is None:
-            raise ValueError(f"{ROUTE_ANNOTATION} path {path!r} must be a /-rooted segment chain, optionally wildcarded")
+            raise ValueError(
+                f"{ROUTE_ANNOTATION} path {path!r} must be a /-rooted segment chain, optionally wildcarded"
+            )
         if ROUTE_UPSTREAM_PATTERN.fullmatch(upstream) is None:
             raise ValueError(f"{ROUTE_ANNOTATION} upstream {upstream!r} must be a service name and a literal port")
         routes.append(WorkloadRoute(path=path, upstream=upstream))

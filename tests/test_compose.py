@@ -90,13 +90,9 @@ class UpSpy:
             self.env_content = Path(env_match.group(1)).read_text(encoding="utf-8")
         gateway_match = ASSEMBLY_ARGUMENT_PATTERN.search(command)
         if gateway_match is not None:
-            self.gateway_documents.append(
-                yaml.safe_load(Path(gateway_match.group(1)).read_text(encoding="utf-8"))
-            )
+            self.gateway_documents.append(yaml.safe_load(Path(gateway_match.group(1)).read_text(encoding="utf-8")))
         for override in re.finditer(r"-f (\S*devkit-override-\S+\.yaml)", command):
-            self.override_documents.append(
-                yaml.safe_load(Path(override.group(1)).read_text(encoding="utf-8"))
-            )
+            self.override_documents.append(yaml.safe_load(Path(override.group(1)).read_text(encoding="utf-8")))
 
     def spy_up(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(up, "bash", self.run)
@@ -445,7 +441,10 @@ def _write_consumer_tree(
     _write_lock(
         root,
         entries=dict(ALPINE_OWNED),
-        bundles={"AUTH_KEYCLOAK_BUNDLE": dict(AUTH_KEYCLOAK_BUNDLE_ENTRY), "LIVEKIT_BUNDLE": dict(LIVEKIT_BUNDLE_ENTRY)},
+        bundles={
+            "AUTH_KEYCLOAK_BUNDLE": dict(AUTH_KEYCLOAK_BUNDLE_ENTRY),
+            "LIVEKIT_BUNDLE": dict(LIVEKIT_BUNDLE_ENTRY),
+        },
     )
     rendered_environment = api_environment if bundle_environment is None else bundle_environment
     cuda = _write_bundle_output(root, "placeframe-cuda", ["api", "grafana"], environment=rendered_environment)
@@ -715,9 +714,7 @@ class TestUpMaterialization:
         assert spy.gateway["services"]["boatyard-gateway"]["ports"] == [
             {"target": 8443, "published": 18443, "protocol": "tcp"}
         ]
-        assert spy.override_documents[2]["services"]["livekit"]["ports"] == [
-            {"published": 16178, "target": 6178}
-        ]
+        assert spy.override_documents[2]["services"]["livekit"]["ports"] == [{"published": 16178, "target": 6178}]
 
     def test_an_unselected_port_declaring_entry_sits_inert(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_config(
@@ -756,9 +753,7 @@ class TestUpMaterialization:
 
         assert result.exit_code == 0, result.output
         assert "demo-placeframe-cuda" not in spy.projects
-        assert spy.override_documents[0]["services"]["api"]["ports"] == [
-            {"published": 19777, "target": 8000}
-        ]
+        assert spy.override_documents[0]["services"]["api"]["ports"] == [{"published": 19777, "target": 8000}]
 
     def test_the_edge_refuses_without_the_caddy_lock_entry(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_consumer_tree(tmp_path)
@@ -893,7 +888,11 @@ class TestUpValidation:
             entries=dict(ALPINE_OWNED),
             bundles={
                 "AUTH_KEYCLOAK_BUNDLE": KEYCLOAK_PINNED,
-                "LIVEKIT_BUNDLE": {"reference": LIVEKIT_PINNED, "services": ["livekit"], "slots": {"LIVEKIT_TOKEN": {"required": True}}},
+                "LIVEKIT_BUNDLE": {
+                    "reference": LIVEKIT_PINNED,
+                    "services": ["livekit"],
+                    "slots": {"LIVEKIT_TOKEN": {"required": True}},
+                },
             },
         )
 
@@ -925,7 +924,11 @@ class TestUpValidation:
             entries=dict(ALPINE_OWNED),
             bundles={
                 "AUTH_KEYCLOAK_BUNDLE": KEYCLOAK_PINNED,
-                "LIVEKIT_BUNDLE": {"reference": LIVEKIT_PINNED, "services": ["livekit"], "slots": {"LIVEKIT_TOKEN": {"required": True}}},
+                "LIVEKIT_BUNDLE": {
+                    "reference": LIVEKIT_PINNED,
+                    "services": ["livekit"],
+                    "slots": {"LIVEKIT_TOKEN": {"required": True}},
+                },
             },
         )
 
@@ -967,12 +970,8 @@ class TestSharedNames:
 
         assert result.exit_code == 0, result.output
         assert spy.projects == ["demo-left-a", "demo-right-b", "demo"]
-        assert spy.override_documents[0]["services"]["api"]["networks"] == {
-            "demo-shared": {"aliases": ["left-a-api"]}
-        }
-        assert spy.override_documents[1]["services"]["api"]["networks"] == {
-            "demo-shared": {"aliases": ["right-b-api"]}
-        }
+        assert spy.override_documents[0]["services"]["api"]["networks"] == {"demo-shared": {"aliases": ["left-a-api"]}}
+        assert spy.override_documents[1]["services"]["api"]["networks"] == {"demo-shared": {"aliases": ["right-b-api"]}}
         content = spy.gateway["configs"]["devkit-edge-caddyfile"]["content"]
         assert "reverse_proxy left-a-api:8000" in content
 
@@ -1353,9 +1352,11 @@ class TestBundleLockEnforcement:
         relocked = dict(TUNNEL_BUNDLES)
         relocked["TUNNEL_BUNDLE"] = f"ghcr.io/org/livekit:{LIVEKIT_SHA_TAG}@{PLATFORM_DIGEST}"
         _write_lock(tmp_path, entries={}, bundles=relocked)
-        spy = UpSpy(texts_by_reference={
-            f"ghcr.io/org/livekit:{LIVEKIT_SHA_TAG}@{PLATFORM_DIGEST}": [LIVEKIT_TEXT],
-        }).spy_up(monkeypatch)
+        spy = UpSpy(
+            texts_by_reference={
+                f"ghcr.io/org/livekit:{LIVEKIT_SHA_TAG}@{PLATFORM_DIGEST}": [LIVEKIT_TEXT],
+            }
+        ).spy_up(monkeypatch)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -1639,7 +1640,9 @@ class TestBundleOverrides:
         # reserved service name; the refusal guards every locally included bundle file.
         producer_output = _write_producer(tmp_path, ["api"], _producer_lock(["linux/amd64"]))
         producer_output.write_text(
-            yaml.safe_dump({"services": {"api": {"image": "demo/api:1"}, "boatyard-gateway": {"image": "demo/edge:1"}}}),
+            yaml.safe_dump({
+                "services": {"api": {"image": "demo/api:1"}, "boatyard-gateway": {"image": "demo/edge:1"}}
+            }),
             encoding="utf-8",
         )
         _write_override_consumer(consumer, {"path_overrides": {"placeframe-cuda": OVERRIDE_PATH}})
@@ -1721,7 +1724,11 @@ class TestValuesFileLaw:
             entries=dict(ALPINE_OWNED),
             bundles={
                 "AUTH_KEYCLOAK_BUNDLE": KEYCLOAK_PINNED,
-                "LIVEKIT_BUNDLE": {"reference": LIVEKIT_PINNED, "services": ["livekit"], "slots": {"LIVEKIT_TOKEN": {"required": True}}},
+                "LIVEKIT_BUNDLE": {
+                    "reference": LIVEKIT_PINNED,
+                    "services": ["livekit"],
+                    "slots": {"LIVEKIT_TOKEN": {"required": True}},
+                },
             },
         )
         spy = UpSpy().spy_up(monkeypatch)
@@ -1739,7 +1746,11 @@ class TestValuesFileLaw:
             entries=dict(ALPINE_OWNED),
             bundles={
                 "AUTH_KEYCLOAK_BUNDLE": KEYCLOAK_PINNED,
-                "LIVEKIT_BUNDLE": {"reference": LIVEKIT_PINNED, "services": ["livekit"], "slots": {"LIVEKIT_TOKEN": {"required": False}}},
+                "LIVEKIT_BUNDLE": {
+                    "reference": LIVEKIT_PINNED,
+                    "services": ["livekit"],
+                    "slots": {"LIVEKIT_TOKEN": {"required": False}},
+                },
             },
         )
         monkeypatch.setenv("LIVEKIT_TOKEN", "shell-value")

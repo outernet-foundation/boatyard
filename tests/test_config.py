@@ -1233,7 +1233,9 @@ class TestAuthGroup:
 
 class TestWorkloadLensAnnotations:
     def _document(self, annotations: dict[str, str]) -> WorkloadDocument:
-        return WorkloadDocument.parse({"metadata": {"name": "api", "annotations": annotations}, "containers": {}}, "api.yaml")
+        return WorkloadDocument.parse(
+            {"metadata": {"name": "api", "annotations": annotations}, "containers": {}}, "api.yaml"
+        )
 
     def test_multiple_routes_parse_in_order(self) -> None:
         document = self._document({"outernet.internal/route": "/grafana/*=grafana:3000,/*=api:8000"})

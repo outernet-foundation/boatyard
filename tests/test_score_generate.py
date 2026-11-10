@@ -564,9 +564,7 @@ def test_generate_compose_renames_the_barrier_and_its_references_per_entry(
     assert list(document["services"]) == ["api", "pf-postgres", "wait-for-resources"]
     assert document["services"]["api"]["depends_on"] == {"wait-for-resources": {"condition": "service_started"}}
     assert document["services"]["pf-postgres"]["depends_on"] == ["wait-for-resources"]
-    assert (
-        document["services"]["wait-for-resources"]["image"] == "${CORE_MAIN__BOATYARD_LOCK__ALPINE_IMAGE:?err}"
-    )
+    assert document["services"]["wait-for-resources"]["image"] == "${CORE_MAIN__BOATYARD_LOCK__ALPINE_IMAGE:?err}"
 
 
 def test_generate_compose_barrier_names_differ_per_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1409,9 +1407,7 @@ def test_consumer_interpolated_binds_land_undoubled(tmp_path: Path, monkeypatch:
     output = tmp_path / "stack" / "generated" / "compose" / "compose.rathole-client.yaml"
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
     service = document["services"]["rathole-client"]
-    assert service["configs"] == [
-        {"source": "rathole-client-files-client.toml", "target": "/etc/rathole/client.toml"}
-    ]
+    assert service["configs"] == [{"source": "rathole-client-files-client.toml", "target": "/etc/rathole/client.toml"}]
     assert (
         document["configs"]["rathole-client-files-client.toml"]["content"]
         == 'remote_addr = "${TUNNEL_CONTROL_ENDPOINT:?err}"\n'

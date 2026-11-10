@@ -817,10 +817,10 @@ class TestBundleRecording:
             "OPTIONAL": {"required": False},
         }
 
-    def test_a_bundle_defining_the_reserved_gateway_service_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        bundle_text = (
-            "services:\n  tunnel-rathole-rathole:\n    image: busybox:1.36\n  boatyard-gateway:\n    image: busybox:1.36\n"
-        )
+    def test_a_bundle_defining_the_reserved_gateway_service_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        bundle_text = "services:\n  tunnel-rathole-rathole:\n    image: busybox:1.36\n  boatyard-gateway:\n    image: busybox:1.36\n"
 
         result, _, _ = self._invoke(monkeypatch, tmp_path, [], bundle_text=bundle_text)
 
@@ -922,7 +922,9 @@ class TestBundleRecording:
         assert read_references == [f"{self.RATHOLE_BASE}@{DIGEST_B}"]
         assert _read_lock(tmp_path) == {
             "bundles": {
-                "TUNNEL_RATHOLE_BUNDLE": _bundle_entry(f"{self.RATHOLE_BASE}@{DIGEST_B}", services=["tunnel-rathole-rathole"])
+                "TUNNEL_RATHOLE_BUNDLE": _bundle_entry(
+                    f"{self.RATHOLE_BASE}@{DIGEST_B}", services=["tunnel-rathole-rathole"]
+                )
             }
         }
 
@@ -979,9 +981,7 @@ class TestBundleRecording:
             }
         }
 
-    def test_annotations_extract_in_artifact_order(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_annotations_extract_in_artifact_order(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         bundle_text = (
             "services:\n"
             "  api:\n"
@@ -1012,15 +1012,9 @@ class TestBundleRecording:
         ]
         assert entry["container_names"] == ["grafana"]
 
-    def test_a_route_referencing_no_bundle_service_refuses(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_a_route_referencing_no_bundle_service_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         bundle_text = (
-            "services:\n"
-            "  api:\n"
-            "    image: demo/api:1\n"
-            "    labels:\n"
-            "      outernet.internal/route: /*=ghost:8000\n"
+            "services:\n  api:\n    image: demo/api:1\n    labels:\n      outernet.internal/route: /*=ghost:8000\n"
         )
 
         result, _, _ = self._invoke(monkeypatch, tmp_path, [], bundle_text=bundle_text)
@@ -1031,7 +1025,9 @@ class TestBundleRecording:
     def test_a_committed_lock_without_the_bundle_records_refuses(self, tmp_path: Path) -> None:
         _write_repo(tmp_path, ref_services={"livekit": {"ref": "oci://ghcr.io/org/repo/livekit:0.4.0-dev.3"}})
         (tmp_path / LOCK_PATH).write_text(
-            yaml.safe_dump({"bundles": {"LIVEKIT_BUNDLE": {"reference": "ghcr.io/org/repo/livekit:0.4.0-dev.3@" + DIGEST_A}}}),
+            yaml.safe_dump({
+                "bundles": {"LIVEKIT_BUNDLE": {"reference": "ghcr.io/org/repo/livekit:0.4.0-dev.3@" + DIGEST_A}}
+            }),
             encoding="utf-8",
         )
         config = config_file_module.ConfigFile.load(tmp_path / "boatyard.yml")
