@@ -31,7 +31,7 @@ PLACEFRAME_CUDA_REF = "oci://ghcr.io/org/placeframe:1.2.3"
 PLACEFRAME_ROCM_REF = "oci://ghcr.io/org/placeframe:1.2.3-rocm"
 TUNNEL_BUNDLES = {"TUNNEL_BUNDLE": LIVEKIT_PINNED}
 ALPINE_OWNED = {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST}
-EDGE_BASE_URL_LINE = "EDGE_BASE_URL=http://edge:8443\n"
+EDGE_BASE_URL_LINE = "EDGE_BASE_URL=http://boatyard-gateway:8443\n"
 PINNED_COMPOSE_VERSION = "5.6.1"
 
 ASSEMBLY_ARGUMENT_PATTERN = re.compile(r"-f (\S*devkit-assembly-\S+\.yaml)")
@@ -59,9 +59,9 @@ def _write_config(root: Path, sections: dict[str, Any] | None = None) -> None:
     if sections is not None:
         payload.update(sections)
     payload.setdefault("services", {"ext": {"ref": LIVEKIT_REF}})
-    if "services" in payload and "gateway" not in payload:
-        payload["gateway"] = 8080
-    if payload.get("gateway") is not None:
+    if "services" in payload and "gateway_port" not in payload:
+        payload["gateway_port"] = 8080
+    if payload.get("gateway_port") is not None:
         payload.setdefault("platforms", ["linux/amd64"])
     (root / "boatyard.yml").write_text(
         yaml.safe_dump(payload, default_flow_style=False, sort_keys=False), encoding="utf-8"
@@ -361,7 +361,7 @@ def _write_consumer_tree(
             "project_name": "demo",
             "repository": "ghcr.io/org/demo",
             "platforms": ["linux/amd64"],
-            "gateway": 58080,
+            "gateway_port": 58080,
             "services": {
                 "auth": {
                     "options": {
@@ -399,7 +399,7 @@ def _write_consumer_tree(
     cuda = _write_bundle_output(root, "placeframe-cuda", ["api", "grafana"], environment=rendered_environment)
     _write_bundle_output(root, "placeframe-rocm", ["api", "grafana"], environment=rendered_environment)
     _write_workload(root, "api.yaml", "api", environment=api_environment)
-    values: dict[str, object] = {"public_url": "http://192.168.8.10:58080"}
+    values: dict[str, object] = {"public_host": "192.168.8.10", "public_port": 58080}
     if bundles is not None:
         values["bundles"] = [name for name in bundles.split(",") if name]
     values.update(extra_values or {})
@@ -477,7 +477,7 @@ class TestSelectionLaw:
             {
                 "project_name": "demo",
                 "platforms": ["linux/amd64"],
-                "gateway": 8080,
+                "gateway_port": 8080,
                 "services": {
                     "livekit": {
                         "ref": LIVEKIT_REF,
@@ -509,7 +509,7 @@ class TestSelectionLaw:
             {
                 "project_name": "demo",
                 "platforms": ["linux/amd64"],
-                "gateway": 8080,
+                "gateway_port": 8080,
                 "services": {
                     "placeframe": {
                         "options": {
@@ -539,7 +539,7 @@ class TestSelectionLaw:
         [document] = recorder.documents
         assert document["name"] == "demo"
         assert list(document) == ["name", "configs", "services"]
-        assert document["services"]["edge"]["ports"] == [{"target": 8443, "published": 8080, "protocol": "tcp"}]
+        assert document["services"]["boatyard-gateway"]["ports"] == [{"target": 8443, "published": 8080, "protocol": "tcp"}]
         assert document["configs"]["devkit-edge-caddyfile"]["content"] == ":8443 {\n}\n"
 
     def test_unknown_bundle_name_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -577,7 +577,7 @@ class TestSelectionLaw:
 
         assert result.exit_code == 0, result.output
         [document] = recorder.documents
-        assert "placeframe-cuda-net" in document["services"]["edge"]["networks"]
+        assert "placeframe-cuda-net" in document["services"]["boatyard-gateway"]["networks"]
 
     def test_stray_selection_in_an_undeclaring_repo_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_values_file(tmp_path, {"bundles": ["cuda"]})
@@ -589,7 +589,7 @@ class TestSelectionLaw:
         assert isinstance(result.exception, FileNotFoundError)
 
     def test_up_without_config_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        _write_values_file(tmp_path, {"public_url": "https://example.dev"})
+        _write_values_file(tmp_path, {"public_host": "example.dev"})
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -599,7 +599,7 @@ class TestSelectionLaw:
 
     def test_up_in_a_services_less_repo_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         (tmp_path / "boatyard.yml").write_text("requires: '>=0.0'\nproject_name: demo\n", encoding="utf-8")
-        _write_values_file(tmp_path, {"public_url": "https://example.dev"})
+        _write_values_file(tmp_path, {"public_host": "example.dev"})
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -642,7 +642,7 @@ class TestUpMaterialization:
             (tmp_path / "stack/generated/compose/compose.placeframe-cuda.yaml").resolve().as_posix(),
             "oci://" + LIVEKIT_PINNED,
         ])
-        edge = document["services"]["edge"]
+        edge = document["services"]["boatyard-gateway"]
         assert edge["image"] == MIRROR_PREFIX + "/docker.io/library/caddy:2.8.4-alpine@" + FAKE_DIGEST
         assert edge["ports"] == [{"target": 8443, "published": 58080, "protocol": "tcp"}]
         assert edge["networks"] == {
@@ -681,13 +681,13 @@ class TestUpMaterialization:
 
         assert result.exit_code == 0, result.output
         [document] = recorder.documents
-        edge = document["services"]["edge"]
+        edge = document["services"]["boatyard-gateway"]
         assert "environment" not in edge
         content = document["configs"]["devkit-edge-caddyfile"]["content"]
         assert "/auth/*" not in content
 
     def test_typed_port_overrides_win_over_the_config_defaults(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        _write_consumer_tree(tmp_path, extra_values={"gateway": 18443, "ports": {"livekit": 16178}})
+        _write_consumer_tree(tmp_path, extra_values={"gateway_port": 18443, "ports": {"livekit": 16178}})
         recorder = AssemblyRecorder()
         monkeypatch.setattr(up, "bash", recorder.run)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
@@ -698,7 +698,7 @@ class TestUpMaterialization:
 
         assert result.exit_code == 0, result.output
         [document] = recorder.documents
-        assert document["services"]["edge"]["ports"] == [{"target": 8443, "published": 18443, "protocol": "tcp"}]
+        assert document["services"]["boatyard-gateway"]["ports"] == [{"target": 8443, "published": 18443, "protocol": "tcp"}]
         assert document["services"]["livekit-livekit"]["ports"] == [
             {"target": 6178, "published": 16178, "protocol": "tcp"}
         ]
@@ -769,15 +769,15 @@ class TestUpMaterialization:
         assert isinstance(result.exception, ValueError)
         assert "CADDY_IMAGE" in str(result.exception)
 
-    def test_an_auth_selection_without_public_url_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        _write_consumer_tree(tmp_path, bundles="placeframe-cuda,auth-keycloak", extra_values={"public_url": None})
+    def test_an_auth_selection_without_public_host_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        _write_consumer_tree(tmp_path, bundles="placeframe-cuda,auth-keycloak", extra_values={"public_host": None})
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "public_url" in str(result.exception)
+        assert "public_host" in str(result.exception)
 
 
 class TestUpValidation:
@@ -809,7 +809,7 @@ class TestUpValidation:
                 "project_name": "demo",
                 "repository": "ghcr.io/org/demo",
                 "platforms": ["linux/amd64"],
-                "gateway": 8080,
+                "gateway_port": 8080,
                 "services": {
                     "placeframe": {
                         "options": {
@@ -840,7 +840,7 @@ class TestUpValidation:
                 "services": {
                     "placeframe-cuda-api": {"image": "demo/api:1"},
                     "placeframe-cuda-grafana": {"image": "demo/grafana:1"},
-                    "edge": {"image": "demo/edge:1"},
+                    "boatyard-gateway": {"image": "demo/edge:1"},
                 }
             }),
             encoding="utf-8",
@@ -850,7 +850,7 @@ class TestUpValidation:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "reserved service 'edge'" in str(result.exception)
+        assert "reserved service 'boatyard-gateway'" in str(result.exception)
 
     def test_a_workload_slot_no_environment_source_fills_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_consumer_tree(tmp_path, api_environment={"TOKEN": "${API_TOKEN:?err}"})
@@ -920,7 +920,7 @@ class TestSharedNames:
             {
                 "project_name": "demo",
                 "platforms": ["linux/amd64"],
-                "gateway": 8080,
+                "gateway_port": 8080,
                 "repository": "ghcr.io/org/demo",
                 "services": {
                     "left": {
@@ -960,7 +960,7 @@ class TestSharedNames:
             {
                 "project_name": "demo",
                 "platforms": ["linux/amd64"],
-                "gateway": 8080,
+                "gateway_port": 8080,
                 "repository": "ghcr.io/org/demo",
                 "services": {
                     "left": {
@@ -1037,7 +1037,7 @@ class TestDownTeardown:
         assert recorder.commands[0].endswith("down --remove-orphans -v")
 
     def test_down_without_config_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        _write_values_file(tmp_path, {"public_url": "https://example.dev"})
+        _write_values_file(tmp_path, {"public_host": "example.dev"})
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["down"])
@@ -1047,7 +1047,7 @@ class TestDownTeardown:
 
     def test_down_tears_down_by_name(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_config(tmp_path)
-        _write_values_file(tmp_path, {"public_url": "https://example.dev"})
+        _write_values_file(tmp_path, {"public_host": "example.dev"})
         recorder = AssemblyRecorder()
         monkeypatch.setattr(down, "bash_handoff", recorder.run)
         monkeypatch.chdir(tmp_path)
@@ -1065,7 +1065,7 @@ class TestLockRequirement:
             {
                 "project_name": "demo",
                 "repository": "ghcr.io/org/demo",
-                "gateway": None,
+                "gateway_port": None,
                 "platforms": ["linux/amd64"],
                 "services": {"apps": {"options": {"core": {"workloads": ["api.yaml"]}}}},
             },
@@ -1602,7 +1602,7 @@ class TestBundleOverrides:
         # reserved service name; the refusal guards every locally included bundle file.
         producer_output = _write_producer(tmp_path, ["api"], _producer_lock(["linux/amd64"]))
         producer_output.write_text(
-            yaml.safe_dump({"services": {"api": {"image": "demo/api:1"}, "edge": {"image": "demo/edge:1"}}}),
+            yaml.safe_dump({"services": {"api": {"image": "demo/api:1"}, "boatyard-gateway": {"image": "demo/edge:1"}}}),
             encoding="utf-8",
         )
         _write_override_consumer(consumer, {"path_overrides": {"placeframe-cuda": OVERRIDE_PATH}})
@@ -1612,7 +1612,7 @@ class TestBundleOverrides:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "reserved service 'edge'" in str(result.exception)
+        assert "reserved service 'boatyard-gateway'" in str(result.exception)
 
     def test_an_override_sharing_a_service_name_with_another_output_namespaces_apart(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

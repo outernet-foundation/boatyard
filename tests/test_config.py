@@ -845,7 +845,7 @@ class TestServices:
                 "requires": ">=0.1",
                 "repository": "ghcr.io/org/repo",
                 "project_name": "example",
-                "gateway": 58080,
+                "gateway_port": 58080,
                 "platforms": EDGE_PLATFORMS,
                 "services": {
                     "auth": {
@@ -1067,7 +1067,7 @@ class TestServices:
             {
                 "requires": ">=0.1",
                 "project_name": "example",
-                "gateway": 8080,
+                "gateway_port": 8080,
                 "services": {"core": {"workloads": ["api.yaml"]}},
             },
         )
@@ -1081,7 +1081,7 @@ class TestServices:
             {
                 "requires": ">=0.1",
                 "project_name": "example",
-                "gateway": 8080,
+                "gateway_port": 8080,
                 "platforms": EDGE_PLATFORMS,
                 "services": {
                     "livekit": {
@@ -1165,7 +1165,7 @@ class TestAuthGroup:
         return {
             "requires": ">=0.1",
             "project_name": "example",
-            "gateway": 8080,
+            "gateway_port": 8080,
             "platforms": EDGE_PLATFORMS,
             "services": {"auth": {"options": options}},
         }
@@ -1228,7 +1228,7 @@ class TestRoutes:
         return {
             "requires": ">=0.1",
             "project_name": "example",
-            "gateway": 8080,
+            "gateway_port": 8080,
             "platforms": EDGE_PLATFORMS,
             "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG, "routes": routes}},
         }
@@ -1239,7 +1239,7 @@ class TestRoutes:
             {
                 "requires": ">=0.1",
                 "project_name": "example",
-                "gateway": 8080,
+                "gateway_port": 8080,
                 "services": {
                     "one": {
                         "options": {
@@ -1386,7 +1386,7 @@ class TestGatewayKey:
                 "requires": ">=0.1",
                 "project_name": "example",
                 "platforms": ["linux/amd64"],
-                "gateway": 8080,
+                "gateway_port": 8080,
                 "edge_image": "docker.io/library/caddy:2.9.0",
                 "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG}},
             },
@@ -1405,7 +1405,7 @@ class TestGatewayKey:
                 "requires": ">=0.1",
                 "project_name": "example",
                 "platforms": ["linux/amd64"],
-                "gateway": 8080,
+                "gateway_port": 8080,
                 "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG}},
             },
         )
@@ -1420,7 +1420,7 @@ class TestGatewayKey:
             {
                 "requires": ">=0.1",
                 "project_name": "example",
-                "gateway": 8443,
+                "gateway_port": 8443,
                 "platforms": EDGE_PLATFORMS,
                 "services": {
                     "livekit": {
@@ -1439,7 +1439,7 @@ class TestGatewayKey:
             {
                 "requires": ">=0.1",
                 "project_name": "example",
-                "gateway": "${gateway port}",
+                "gateway_port": "${gateway port}",
                 "services": {
                     "livekit": {
                         "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
@@ -1459,7 +1459,7 @@ class TestPorts:
             "requires": ">=0.1",
             "repository": "ghcr.io/org/repo",
             "project_name": "example",
-            "gateway": 8080,
+            "gateway_port": 8080,
             "platforms": EDGE_PLATFORMS,
             "services": services,
         }
@@ -1894,7 +1894,7 @@ def test_direct_model_construction_is_valid_for_tests(tmp_path: Path) -> None:
         "requires": ">=0.1",
         "repository": "ghcr.io/org/repo",
         "project_name": "example",
-        "gateway": 8080,
+        "gateway_port": 8080,
         "platforms": ["linux/amd64"],
         "services": {"core": {"options": {"main": {"workloads": ["api.yaml"]}}}},
     })

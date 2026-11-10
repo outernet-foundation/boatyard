@@ -35,7 +35,7 @@ def _root_config(**sections: object) -> ConfigFile:
     payload: dict[str, object] = {"requires": ">=0.1", "project_name": "example"}
     payload.update(sections)
     if "services" in payload:
-        payload.setdefault("gateway", 8080)
+        payload.setdefault("gateway_port", 8080)
         payload.setdefault("platforms", ["linux/amd64"])
     payload.setdefault("services", {"ext": {"ref": "oci://ghcr.io/org/ext:0.1.0"}})
     return ConfigFile.model_validate(payload)
@@ -962,7 +962,7 @@ def _bundle_config(tmp_path: Path, **bundle: object) -> ConfigFile:
         "repository": "ghcr.io/org/repo",
         "project_name": "example",
         "platforms": ["linux/amd64"],
-        "gateway": 8080,
+        "gateway_port": 8080,
         "base_images": {"API_IMAGE": "docker.io/library/api:1"},
         "services": {"core": {"options": {"main": {"workloads": ["api.yaml"], **bundle}}}},
     }

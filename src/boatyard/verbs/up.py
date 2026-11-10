@@ -16,12 +16,12 @@ from boatyard.build import run_build
 from boatyard.compose import compose_command
 from boatyard.models.config_file import (
     EDGE_LISTEN_PORT,
-    EDGE_SERVICE_NAME,
+    GATEWAY_SERVICE_NAME,
     ConfigFile,
     double_dollars,
 )
 from boatyard.models.lock_file import LockFile
-from boatyard.models.values_file import ValuesFile
+from boatyard.models.values_file import PUBLIC_PORT_SLOT, PUBLIC_SCHEME_SLOT, ValuesFile
 from boatyard.paths import DEFAULT_CONFIG_PATH, LOCK_PATH, VALUES_FILE
 from boatyard.resolve import resolve
 from boatyard.yaml import Yaml
@@ -78,10 +78,10 @@ def up(
     document: dict[str, Yaml] = {"name": config.project_name}
 
     # Render the edge and its Caddyfile when a gateway is declared
-    if config.gateway is not None:
+    if config.gateway_port is not None:
         if plan.edge_image is None:
             raise ValueError("a gateway is declared; boatyard.lock.yml lacks the boatyard-owned CADDY_IMAGE pin")
-        gateway = config.gateway if config_values.gateway is None else config_values.gateway
+        gateway = config.gateway_port if config_values.gateway_port is None else config_values.gateway_port
         edge: dict[str, Yaml] = {
             "image": plan.edge_image,
             "configs": [{"source": EDGE_CONFIG_NAME, "target": "/etc/caddy/Caddyfile"}],
@@ -90,10 +90,13 @@ def up(
             "networks": dict.fromkeys(f"{service.name}-net" for service in services),
         }
         if any(service.auth for service in services):
-            if config_values.public_url is None:
-                raise ValueError("an auth option is selected; public_url is required in boatyard.values.yaml")
-            edge["environment"] = config_values.public_url.forwarded
-        document_services[EDGE_SERVICE_NAME] = edge
+            if config_values.public_host is None:
+                raise ValueError("an auth option is selected; public_host is required in boatyard.values.yaml")
+            edge["environment"] = {
+                "FORWARDED_PROTO": plan.env[PUBLIC_SCHEME_SLOT],
+                "FORWARDED_PORT": plan.env[PUBLIC_PORT_SLOT],
+            }
+        document_services[GATEWAY_SERVICE_NAME] = edge
 
         # Render one handle block per route in declaration order
         lines = [f":{EDGE_LISTEN_PORT} {{"]

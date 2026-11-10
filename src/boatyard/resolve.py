@@ -6,7 +6,7 @@ from typing import NamedTuple
 from boatyard.models.config_file import (
     CADDY_IMAGE,
     EDGE_LISTEN_PORT,
-    EDGE_SERVICE_NAME,
+    GATEWAY_SERVICE_NAME,
     OCI_REFERENCE_PREFIX,
     PLACEHOLDER,
     ConfigFile,
@@ -24,6 +24,10 @@ from boatyard.models.config_file import (
 from boatyard.models.lock_file import LockFile
 from boatyard.models.values_file import (
     EDGE_BASE_URL_SLOT,
+    PUBLIC_HOST_SLOT,
+    PUBLIC_PORT_SLOT,
+    PUBLIC_SCHEME_SLOT,
+    PUBLIC_URL_PATH_SLOT,
     PUBLIC_URL_SLOT,
     ValuesFile,
 )
@@ -59,8 +63,8 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
     service_entries = config.service_entries
     root = config.root
 
-    if values.gateway is not None and config.gateway is None:
-        raise ValueError(f"{source}: gateway is set but boatyard.yml declares no gateway")
+    if values.gateway_port is not None and config.gateway_port is None:
+        raise ValueError(f"{source}: gateway_port is set but boatyard.yml declares no gateway")
 
     # Raise if a name in the bundles section of the values file is not a declared option of any service group
     qualified_options = {row.name: (row.root, row.option) for row in service_entries if row.option is not None}
@@ -197,8 +201,8 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
         service_names = refuse_unresolved_references(
             name, bundle.row.effective_routes, bundle.row.effective_ports, [bundle.text], prefix=f"{name}-"
         )
-        if EDGE_SERVICE_NAME in service_names:
-            raise ValueError(f"{bundle.path}: the included bundle defines the reserved service {EDGE_SERVICE_NAME!r}")
+        if GATEWAY_SERVICE_NAME in service_names:
+            raise ValueError(f"{bundle.path}: the included bundle defines the reserved service {GATEWAY_SERVICE_NAME!r}")
 
     # Raise if no declared surface consumes a value from the values section
     consumers: dict[str, set[str]] = {}
@@ -247,10 +251,22 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
 
 def _minted(config: ConfigFile, values: ValuesFile) -> dict[str, str]:
     minted: dict[str, str] = {}
-    if values.public_url is not None:
-        minted[PUBLIC_URL_SLOT] = values.public_url.raw
-    if config.gateway is not None:
-        minted[EDGE_BASE_URL_SLOT] = f"http://{EDGE_SERVICE_NAME}:{EDGE_LISTEN_PORT}"
+    if values.public_host is not None:
+        scheme = values.public_scheme if values.public_scheme is not None else "http"
+        effective_gateway = values.gateway_port if values.gateway_port is not None else config.gateway_port
+        port = values.public_port
+        if port is None:
+            port = effective_gateway if effective_gateway is not None else (443 if scheme == "https" else 80)
+        url_path = values.public_url_path if values.public_url_path is not None else ""
+        minted[PUBLIC_HOST_SLOT] = values.public_host
+        minted[PUBLIC_SCHEME_SLOT] = scheme
+        minted[PUBLIC_PORT_SLOT] = str(port)
+        minted[PUBLIC_URL_PATH_SLOT] = url_path
+        scheme_default = 443 if scheme == "https" else 80
+        spelled_port = "" if port == scheme_default else f":{port}"
+        minted[PUBLIC_URL_SLOT] = f"{scheme}://{values.public_host}{spelled_port}{url_path}"
+    if config.gateway_port is not None:
+        minted[EDGE_BASE_URL_SLOT] = f"http://{GATEWAY_SERVICE_NAME}:{EDGE_LISTEN_PORT}"
     return minted
 
 

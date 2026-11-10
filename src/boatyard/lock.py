@@ -10,7 +10,7 @@ from bashrun.bash import bash_output
 from pydantic import BaseModel, ConfigDict, Field
 
 from boatyard.models.config_file import (
-    EDGE_SERVICE_NAME,
+    GATEWAY_SERVICE_NAME,
     OCI_REFERENCE_PREFIX,
     ConfigFile,
     artifact_slots,
@@ -113,8 +113,8 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
         # Record the pinned reference with the bundle's slot demands.
         texts = OciArtifactManifest.fetch_compose_texts(pinned)
         service_names = refuse_unresolved_references(name, entry.routes, entry.ports, texts, prefix=f"{name}-")
-        if EDGE_SERVICE_NAME in service_names:
-            raise ValueError(f"{pinned}: the included bundle defines the reserved service {EDGE_SERVICE_NAME!r}")
+        if GATEWAY_SERVICE_NAME in service_names:
+            raise ValueError(f"{pinned}: the included bundle defines the reserved service {GATEWAY_SERVICE_NAME!r}")
         bundles[key] = ConfigLockBundle(reference=pinned, slots=artifact_slots(texts))
 
     images: dict[str, ConfigLockEntry] = {}

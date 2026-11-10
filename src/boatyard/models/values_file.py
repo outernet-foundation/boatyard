@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Set as AbstractSet
 from pathlib import Path
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import (
     BeforeValidator,
@@ -21,10 +22,22 @@ from boatyard.models.config_file import (
     RESERVED_SLOT_MARKERS,
 )
 from boatyard.paths import VALUES_FILE
-from boatyard.yaml import Yaml, is_mapping, load_yaml_model
+from boatyard.yaml import is_mapping, load_yaml_model
 
+PUBLIC_HOST_SLOT = "PUBLIC_HOST"
+PUBLIC_SCHEME_SLOT = "PUBLIC_SCHEME"
+PUBLIC_PORT_SLOT = "PUBLIC_PORT"
+PUBLIC_URL_PATH_SLOT = "PUBLIC_URL_PATH"
 PUBLIC_URL_SLOT = "PUBLIC_URL"
 EDGE_BASE_URL_SLOT = "EDGE_BASE_URL"
+
+PUBLIC_SLOTS = (
+    PUBLIC_HOST_SLOT,
+    PUBLIC_SCHEME_SLOT,
+    PUBLIC_PORT_SLOT,
+    PUBLIC_URL_PATH_SLOT,
+    PUBLIC_URL_SLOT,
+)
 
 OVERRIDE_LAYOUT = ("stack", "generated", "compose")
 
@@ -34,9 +47,12 @@ class ValuesFile(BaseModel):
 
     bundles: list[str] = Field(default_factory=list)
     path_overrides: dict[str, Path] = Field(default_factory=dict)
-    public_url: PublicUrl | None = None
+    public_host: str | None = None
+    public_scheme: Literal["http", "https"] | None = None
+    public_port: PortNumber | None = None
+    public_url_path: str | None = None
     platform: str | None = None
-    gateway: PortNumber | None = None
+    gateway_port: PortNumber | None = None
     ports: dict[str, PortNumber] = Field(default_factory=dict)
     values: ValuesMap = Field(default_factory=dict)
     source: str = Field(default=VALUES_FILE.name, exclude=True)
@@ -64,6 +80,24 @@ class ValuesFile(BaseModel):
             cycle = chain[seen[node] :]
             raise ValueError(f"{source}: reference cycle: {' -> '.join([*cycle, cycle[0]])}")
         return self
+
+    @field_validator("public_host")
+    @classmethod
+    def _require_public_host_shape(cls, value: str | None) -> str | None:
+        if value is not None and (not value.strip() or value != value.strip() or "/" in value or ":" in value):
+            raise ValueError(f"public_host: {value!r} must be a bare host (no scheme, port, path, or padding)")
+        return value
+
+    @field_validator("public_url_path")
+    @classmethod
+    def _require_public_url_path_shape(cls, value: str | None) -> str | None:
+        if value is not None:
+            if re.search(r"\s", value) or not value.startswith("/") or value == "/" or value.endswith("/"):
+                raise ValueError(
+                    f"public_url_path: {value!r} must be a /-rooted path with no whitespace and no trailing / "
+                    "(the empty default is the spelling for no path)"
+                )
+        return value
 
     @field_validator("path_overrides", mode="before")
     @classmethod
@@ -130,37 +164,8 @@ class ValuesFile(BaseModel):
             raise ValueError(
                 f"{source}: key {name!r} must not carry a reserved __BOATYARD_LOCK__/__BOATYARD_TREE__ marker"
             )
-        if name == PUBLIC_URL_SLOT:
-            raise ValueError(f"{source}: {name} is not hand-settable (minted from public_url)")
-        if name == EDGE_BASE_URL_SLOT:
-            raise ValueError(f"{source}: {name} is not hand-settable (minted from the gateway declaration)")
-
-
-class PublicUrl(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    raw: str
-    forwarded_proto: str
-    forwarded_port: str
-
-    @model_validator(mode="before")
-    @classmethod
-    def _parse(cls, value: str) -> dict[str, str]:
-        scheme, separator, rest = value.partition("://")
-        if not separator:
-            raise ValueError(f"public_url: {value!r} must carry a scheme (https://example.dev)")
-        hostport = rest.partition("/")[0]
-        if ":" in hostport:
-            forwarded_port = hostport.rpartition(":")[2]
-        elif scheme == "https":
-            forwarded_port = "443"
-        else:
-            forwarded_port = "80"
-        return {"raw": value, "forwarded_proto": scheme, "forwarded_port": forwarded_port}
-
-    @property
-    def forwarded(self) -> dict[str, Yaml]:
-        return {"FORWARDED_PROTO": self.forwarded_proto, "FORWARDED_PORT": self.forwarded_port}
+        if name in PUBLIC_SLOTS or name == EDGE_BASE_URL_SLOT:
+            raise ValueError(f"{source}: {name} is not hand-settable (minted from the public face)")
 
 
 def _coerce_values(raw: object) -> dict[str, str]:

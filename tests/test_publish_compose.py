@@ -226,7 +226,7 @@ class TestPublishComposeVerb:
                 "repository": REPOSITORY,
                 "project_name": "livekit-tier",
                 "platforms": ["linux/amd64"],
-                "gateway": 18443,
+                "gateway_port": 18443,
                 "services": {"livekit": {"options": {"tier": {"workloads": ["livekit-token.yaml"]}}}},
             },
         )

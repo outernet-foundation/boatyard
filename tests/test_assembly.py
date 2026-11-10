@@ -44,8 +44,10 @@ def _write_edge_tree(
     routes: list[dict[str, object]],
     *,
     auth: bool = False,
-    gateway: int | None = 58080,
-    public_url: str = "http://192.168.8.10:58080",
+    gateway_port: int | None = 58080,
+    public_host: str | None = "192.168.8.10",
+    public_scheme: str | None = None,
+    public_port: int | None = 58080,
 ) -> None:
     services: dict[str, object] = {
         "livekit": {"ref": LIVEKIT_REF, "routes": routes},
@@ -66,8 +68,8 @@ def _write_edge_tree(
         "platforms": ["linux/amd64"],
         "services": services,
     }
-    if gateway is not None:
-        payload["gateway"] = gateway
+    if gateway_port is not None:
+        payload["gateway_port"] = gateway_port
     (tmp_path / "boatyard.yml").write_text(
         yaml.safe_dump(payload, default_flow_style=False, sort_keys=False),
         encoding="utf-8",
@@ -90,7 +92,11 @@ def _write_edge_tree(
         }),
         encoding="utf-8",
     )
-    values: dict[str, object] = {"public_url": public_url}
+    values: dict[str, object] = {key: value for key, value in {
+        "public_host": public_host,
+        "public_scheme": public_scheme,
+        "public_port": public_port,
+    }.items() if value is not None}
     if auth:
         values["bundles"] = ["auth-keycloak"]
     (tmp_path / "boatyard.values.yaml").write_text(
@@ -106,10 +112,21 @@ def _assembly_document(
     routes: list[dict[str, object]],
     *,
     auth: bool = False,
-    gateway: int | None = 58080,
-    public_url: str = "http://192.168.8.10:58080",
+    gateway_port: int | None = 58080,
+    public_host: str | None = "192.168.8.10",
+    public_scheme: str | None = None,
+    public_port: int | None = 58080,
 ) -> dict[str, Any]:
-    _write_edge_tree(tmp_path, monkeypatch, routes, auth=auth, gateway=gateway, public_url=public_url)
+    _write_edge_tree(
+        tmp_path,
+        monkeypatch,
+        routes,
+        auth=auth,
+        gateway_port=gateway_port,
+        public_host=public_host,
+        public_scheme=public_scheme,
+        public_port=public_port,
+    )
     capture = AssemblyCapture()
     monkeypatch.setattr(up, "bash", capture.run)
     monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
@@ -192,26 +209,36 @@ class TestRenderCaddyfile:
 
 class TestPublicUrlDerivation:
     @pytest.mark.parametrize(
-        ("public_url", "expected"),
+        ("public_host", "public_scheme", "public_port", "gateway_port", "expected"),
         [
-            ("http://192.168.8.10:58080", ("http", "58080")),
-            ("https://example.dev:8443/path", ("https", "8443")),
-            ("https://example.dev", ("https", "443")),
-            ("http://example.dev", ("http", "80")),
+            ("192.168.8.10", None, 58080, 58080, ("http", "58080")),
+            ("example.dev", "https", 8443, 8443, ("https", "8443")),
+            ("example.dev", "https", None, 8443, ("https", "8443")),
+            ("example.dev", None, None, 8080, ("http", "8080")),
         ],
     )
-    def test_the_forwarded_pair_derives_from_public_url(
+    def test_the_forwarded_pair_derives_from_the_public_face(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
-        public_url: str,
+        public_host: str,
+        public_scheme: str | None,
+        public_port: int | None,
+        gateway_port: int | None,
         expected: tuple[str, str],
     ) -> None:
         document = _assembly_document(
-            tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], auth=True, public_url=public_url
+            tmp_path,
+            monkeypatch,
+            [{"path": "/*", "upstream": "livekit:8000"}],
+            auth=True,
+            gateway_port=gateway_port,
+            public_host=public_host,
+            public_scheme=public_scheme,
+            public_port=public_port,
         )
 
-        assert document["services"]["edge"]["environment"] == {
+        assert document["services"]["boatyard-gateway"]["environment"] == {
             "FORWARDED_PROTO": expected[0],
             "FORWARDED_PORT": expected[1],
         }
@@ -223,7 +250,7 @@ class TestEdgeStanza:
     ) -> None:
         document = _assembly_document(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
 
-        assert document["services"]["edge"] == {
+        assert document["services"]["boatyard-gateway"] == {
             "image": CADDY_LOCK_ENTRY,
             "configs": [{"source": "devkit-edge-caddyfile", "target": "/etc/caddy/Caddyfile"}],
             "ports": [{"target": 8443, "published": 58080, "protocol": "tcp"}],
@@ -231,12 +258,16 @@ class TestEdgeStanza:
         }
 
     def test_the_published_port_uses_a_literal_gateway(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        document = _assembly_document(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], gateway=8080)
+        document = _assembly_document(
+            tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], gateway_port=8080, public_port=8080
+        )
 
-        assert document["services"]["edge"]["ports"] == [{"target": 8443, "published": 8080, "protocol": "tcp"}]
+        assert document["services"]["boatyard-gateway"]["ports"] == [
+            {"target": 8443, "published": 8080, "protocol": "tcp"}
+        ]
 
     def test_routes_without_a_gateway_refuse_at_load(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        _write_edge_tree(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], gateway=None)
+        _write_edge_tree(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], gateway_port=None)
 
         result = runner.invoke(app, ["up"])
 
