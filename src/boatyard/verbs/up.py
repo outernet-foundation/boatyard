@@ -1,34 +1,47 @@
 from __future__ import annotations
 
-from collections.abc import Generator, Mapping
-from contextlib import ExitStack, contextmanager
-from itertools import groupby
+import re
+from collections.abc import Mapping
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Annotated
+from typing import Annotated, NamedTuple
 
 import typer
 import yaml
-from bashrun.bash import bash_handoff
+from bashrun.bash import CalledProcessError, bash, bash_check, bash_handoff
 
 from boatyard.build import run_build
 from boatyard.compose import compose_command
+from boatyard.crane import install_crane
+from boatyard.lock import OciArtifactManifest, extract_bundle_records
 from boatyard.models.config_file import (
     EDGE_LISTEN_PORT,
     GATEWAY_SERVICE_NAME,
     ConfigFile,
+    PortDeclaration,
     double_dollars,
 )
 from boatyard.models.lock_file import LockFile
-from boatyard.models.values_file import PUBLIC_PORT_SLOT, PUBLIC_SCHEME_SLOT, ValuesFile
+from boatyard.models.values_file import ValuesFile
 from boatyard.paths import DEFAULT_CONFIG_PATH, LOCK_PATH, VALUES_FILE
-from boatyard.resolve import resolve
+from boatyard.resolve import AssemblyPlan, BundleProject, GatewayPlan, resolve
 from boatyard.yaml import Yaml
 
-# Name the edge's Caddyfile configs key
+# Name the gateway's Caddyfile configs key
 EDGE_CONFIG_NAME = "devkit-edge-caddyfile"
 
 app = typer.Typer()
+
+
+class BundleInvocation(NamedTuple):
+    bundle: BundleProject
+    compose_files: list[Path]
+
+
+class UpContext(NamedTuple):
+    env_file: Path
+    invocations: list[BundleInvocation]
+    gateway_file: Path | None
 
 
 @app.command()
@@ -53,123 +66,158 @@ def up(
 
     # One resolve answers the bundle projects, the gateway plan, the env table, and the edge image
     plan = resolve(config, lock, config_values)
-    bundles = plan.bundles
     auth_entries = {row.name for row in config.service_entries if row.auth}
+    shared_network_name = f"{config.project_name}-shared"
+    materialized: list[Path] = []
 
-    # Group the ports under their namespaced owners into per-service stanzas, the typed
-    # values overrides winning over the effective declarations
-    document_services: dict[str, Yaml] = {
-        f"{bundle.entry_name}-{owner}": {
-            "ports": [
-                {
-                    **port.model_dump(exclude={"service"}, exclude_none=True),
-                    "published": config_values.ports.get(owner, port.published),
-                }
-                for port in owner_ports
-            ]
-        }
-        for bundle in bundles
-        for owner, owner_ports in groupby(
-            sorted(bundle.effective_ports, key=lambda port: port.service), key=lambda port: port.service
+    try:
+        up_context = _materialize_up(config, config_values, plan, auth_entries, shared_network_name, materialized)
+        _orchestrate_up(
+            root,
+            config,
+            plan,
+            up_context,
+            attached=attached,
+            quiet_pull=quiet_pull,
+            build=build,
         )
-    }
+    except CalledProcessError as error:
+        raise SystemExit(_retained_report(_failing_project(error), materialized)) from None
+    except BaseException:
+        print(_retained_report(None, materialized))
+        raise
 
-    # Assemble the root document, sections omitted when empty
-    document: dict[str, Yaml] = {"name": config.project_name}
+    for path in materialized:
+        path.unlink(missing_ok=True)
 
-    # Render the edge and its Caddyfile when a gateway is declared
-    if config.gateway_port is not None:
-        if plan.edge_image is None:
-            raise ValueError("a gateway is declared; boatyard.lock.yml lacks the boatyard-owned CADDY_IMAGE pin")
-        gateway = config.gateway_port if config_values.gateway_port is None else config_values.gateway_port
-        edge: dict[str, Yaml] = {
-            "image": plan.edge_image,
-            "configs": [{"source": EDGE_CONFIG_NAME, "target": "/etc/caddy/Caddyfile"}],
-            "ports": [{"target": EDGE_LISTEN_PORT, "published": gateway, "protocol": "tcp"}],
-            # Attach the edge to every selected bundle's network
-            "networks": dict.fromkeys(f"{bundle.entry_name}-net" for bundle in bundles),
-        }
-        if any(bundle.entry_name in auth_entries for bundle in bundles):
-            if config_values.public_host is None:
-                raise ValueError("an auth option is selected; public_host is required in boatyard.values.yaml")
-            edge["environment"] = {
-                "FORWARDED_PROTO": plan.env[PUBLIC_SCHEME_SLOT],
-                "FORWARDED_PORT": plan.env[PUBLIC_PORT_SLOT],
-            }
-        document_services[GATEWAY_SERVICE_NAME] = edge
 
-        # Render one handle block per route in declaration order
-        lines = [f":{EDGE_LISTEN_PORT} {{"]
-        for bundle, index, route in (
-            (bundle, index, route) for bundle in bundles for index, route in enumerate(bundle.effective_routes)
-        ):
-            upstream = f"{bundle.entry_name}-{route.upstream}"
-            opener = (
-                ("\thandle_path" if route.strip_prefix else "\thandle")
-                + ("" if route.path == "/*" else f" {route.path}")
-                + " {"
-            )
-            if route.raw is not None:
-                lines.extend((opener, *["\t\t" + line for line in route.raw.splitlines()], "\t}"))
-                continue
+def _materialize_up(
+    config: ConfigFile,
+    config_values: ValuesFile,
+    plan: AssemblyPlan,
+    auth_entries: set[str],
+    shared_network_name: str,
+    materialized: list[Path],
+) -> UpContext:
+    # Materialize the env file every invocation shares
+    with NamedTemporaryFile("w", suffix=".env", prefix="devkit-env-", delete=False, encoding="utf-8") as handle:
+        handle.write(render_env_entries(plan.env))
+    env_file = Path(handle.name)
+    materialized.append(env_file)
 
-            if bundle.entry_name in auth_entries and index == 0:
-                lines.extend((
-                    opener,
-                    *[
-                        f"\t\treverse_proxy {upstream} {{",
-                        "\t\t\theader_up X-Forwarded-Proto {$FORWARDED_PROTO}",
-                        "\t\t\theader_up X-Forwarded-Port {$FORWARDED_PORT}",
-                        "\t\t}",
-                    ],
-                    "\t}",
-                ))
-                continue
+    # Materialize the gateway document when a gateway is declared, before any fetch
+    gateway_file = (
+        _materialize(
+            materialized,
+            "devkit-gateway-",
+            render_gateway_document(config.project_name, shared_network_name, plan, auth_entries),
+        )
+        if plan.gateway is not None
+        else None
+    )
 
-            lines.extend((opener, *[f"\t\treverse_proxy {upstream}"], "\t}"))
-        lines.append("}")
-        document["configs"] = {EDGE_CONFIG_NAME: {"content": double_dollars("\n".join(lines) + "\n")}}
+    # Materialize each bundle's compose files (fetching a remote bundle's texts once) and
+    # its override document
+    invocations: list[BundleInvocation] = []
+    for bundle in plan.bundles:
+        if bundle.bundle_path is not None:
+            compose_files = [bundle.bundle_path]
+            declared_ports = extract_bundle_records(
+                [bundle.bundle_path.read_text(encoding="utf-8")]
+            ).declared_ports
+        else:
+            install_crane()
+            texts = OciArtifactManifest.fetch_compose_texts(bundle.pinned_reference or "")
+            compose_files = [_materialize(materialized, "devkit-bundle-", text) for text in texts]
+            declared_ports = extract_bundle_records(texts).declared_ports
+        override_file = _materialize(
+            materialized,
+            "devkit-override-",
+            render_override_document(shared_network_name, bundle, config_values, declared_ports),
+        )
+        invocations.append(BundleInvocation(bundle=bundle, compose_files=[*compose_files, override_file]))
+    return UpContext(env_file=env_file, invocations=invocations, gateway_file=gateway_file)
 
-    includes: list[Yaml] = [
-        bundle.bundle_path.as_posix() if bundle.bundle_path is not None else f"oci://{bundle.pinned_reference}"
-        for bundle in bundles
-    ]
-    if includes:
-        document["include"] = includes
-    if document_services:
-        document["services"] = document_services
 
-    with ExitStack() as stack:
-        # Materialize the env file
-        with NamedTemporaryFile("w", suffix=".env", prefix="devkit-env-", delete=False, encoding="utf-8") as handle:
-            handle.write(render_env_entries(plan.env))
-        materialized_env_file = Path(handle.name)
-        stack.enter_context(lock_env_unwind(materialized_env_file))
+def _orchestrate_up(
+    root: Path,
+    config: ConfigFile,
+    plan: AssemblyPlan,
+    up_context: UpContext,
+    *,
+    attached: bool,
+    quiet_pull: bool,
+    build: bool,
+) -> None:
+    # Create the shared network before any project when at least one project exists
+    if up_context.invocations or up_context.gateway_file is not None:
+        if not bash_check(f"docker network inspect {config.project_name}-shared"):
+            bash(f"docker network create {config.project_name}-shared")
 
-        # Materialize the compose file
-        with NamedTemporaryFile(
-            "w", suffix=".yaml", prefix="devkit-assembly-", delete=False, encoding="utf-8"
-        ) as handle:
-            handle.write(yaml.safe_dump(document, sort_keys=False, default_flow_style=False))
-        materialized_compose_file = Path(handle.name)
-        stack.callback(materialized_compose_file.unlink, missing_ok=True)
+    # Build local images
+    if build:
+        run_build(config=config)
 
-        # Build local images
-        if build:
-            run_build(config=config)
-
-        # Hand off to docker compose
-        bash_handoff(
+    # Bring every bundle up as its own project, then the gateway project last
+    for invocation in up_context.invocations:
+        bash(
             compose_command(
                 root,
-                [materialized_compose_file],
+                invocation.compose_files,
                 "up",
-                *["--pull", "missing", *(["--quiet-pull"] if quiet_pull else []), *(["-d"] if not attached else [])],
-                project_name=config.project_name,
-                env_file=materialized_env_file,
+                "--pull",
+                "missing",
+                *(["--quiet-pull"] if quiet_pull else []),
+                "-d",
+                project_name=invocation.bundle.project_name,
+                env_file=up_context.env_file,
                 slot_names=list(plan.env),
             )
         )
+
+    if up_context.gateway_file is not None:
+        arguments = ["up", "--pull", "missing", *(["--quiet-pull"] if quiet_pull else [])]
+        if attached:
+            bash_handoff(
+                compose_command(
+                    root,
+                    [up_context.gateway_file],
+                    *arguments,
+                    project_name=config.project_name,
+                    env_file=up_context.env_file,
+                    slot_names=list(plan.env),
+                )
+            )
+        bash(
+            compose_command(
+                root,
+                [up_context.gateway_file],
+                *arguments,
+                "-d",
+                project_name=config.project_name,
+                env_file=up_context.env_file,
+                slot_names=list(plan.env),
+            )
+        )
+
+
+def _materialize(materialized: list[Path], prefix: str, text: str) -> Path:
+    with NamedTemporaryFile("w", suffix=".yaml", prefix=prefix, delete=False, encoding="utf-8") as handle:
+        handle.write(text)
+    path = Path(handle.name)
+    materialized.append(path)
+    return path
+
+
+def _failing_project(error: CalledProcessError) -> str | None:
+    # Every compose invocation names its project with -p; a non-compose failure names none
+    match = re.search(r"-p (\S+)", error.cmd if isinstance(error.cmd, str) else "")
+    return match.group(1) if match is not None else None
+
+
+def _retained_report(project: str | None, materialized: list[Path]) -> str:
+    named = f"the project {project} failed; " if project is not None else "up failed; "
+    return named + "kept artifacts for inspection: " + ", ".join(str(path) for path in materialized)
 
 
 def render_env_entries(entries: Mapping[str, str]) -> str:
@@ -177,13 +225,120 @@ def render_env_entries(entries: Mapping[str, str]) -> str:
     return "".join(f"{name}={reference}\n" for name, reference in sorted(entries.items()))
 
 
-@contextmanager
-def lock_env_unwind(path: Path) -> Generator[None]:
-    # Keep the env file on failure echoing only its path, since contents may carry secrets, and unlink it on success
-    try:
-        yield
-    except BaseException:
-        print(f"env file kept for inspection: {path}")
-        raise
+def render_override_document(
+    shared_network_name: str,
+    bundle: BundleProject,
+    values: ValuesFile,
+    declared_ports: dict[str, list[tuple[int, int, str]]],
+) -> str:
+    # Hand-rendered because the document carries the !reset spelling safe_dump cannot write.
+    lines = ["networks:", f"  {shared_network_name}:", "    external: true"]
+    if bundle.services:
+        lines.append("services:")
+    for service_name in bundle.services:
+        lines.extend((
+            f"  {service_name}:",
+            "    networks:",
+            f"      {shared_network_name}:",
+            f"        aliases: [{bundle.entry_name}-{service_name}]",
+        ))
+        ports = _override_ports(bundle, service_name, values, declared_ports)
+        if ports:
+            lines.append("    ports:")
+            lines.extend(f"      - {_port_entry(port)}" for port in ports)
+        if service_name in bundle.container_names:
+            lines.append("    container_name: !reset null")
+    return "\n".join(lines) + "\n"
 
-    path.unlink(missing_ok=True)
+
+def _override_ports(
+    bundle: BundleProject,
+    service_name: str,
+    values: ValuesFile,
+    declared_ports: dict[str, list[tuple[int, int, str]]],
+) -> list[PortDeclaration]:
+    # A declared port rides in the bundle's own text; the override re-publishes only the rest,
+    # with the values scalar (single-port services only, validated at resolve) moving the host port.
+    declared = set(declared_ports.get(service_name, []))
+    return [
+        port.model_copy(update={"published": values.ports.get(service_name, port.published)})
+        for port in bundle.effective_ports
+        if port.service == service_name
+        and (values.ports.get(service_name, port.published), port.target, port.protocol) not in declared
+    ]
+
+
+def _port_entry(port: PortDeclaration) -> str:
+    fields = [f"published: {port.published}", f"target: {port.target}"]
+    if port.protocol != "tcp":
+        fields.append(f"protocol: {port.protocol}")
+    if port.host_ip is not None:
+        fields.append(f"host_ip: {port.host_ip}")
+    return "{" + ", ".join(fields) + "}"
+
+
+def render_gateway_document(
+    project_name: str,
+    shared_network_name: str,
+    plan: AssemblyPlan,
+    auth_entries: set[str],
+) -> str:
+    gateway = _require_gateway(plan)
+    if any(bundle.entry_name in auth_entries for bundle in plan.bundles) and gateway.public_face is None:
+        raise ValueError("an auth option is selected; public_host is required in boatyard.values.yaml")
+    document: dict[str, Yaml] = {
+        "name": project_name,
+        "networks": {shared_network_name: {"external": True}},
+        "services": {
+            GATEWAY_SERVICE_NAME: {
+                "image": plan.edge_image,
+                "configs": [{"source": EDGE_CONFIG_NAME, "target": "/etc/caddy/Caddyfile"}],
+                "ports": [{"target": EDGE_LISTEN_PORT, "published": gateway.port, "protocol": "tcp"}],
+                "networks": {shared_network_name: None},
+            }
+        },
+        "configs": {EDGE_CONFIG_NAME: {"content": double_dollars(render_caddyfile(plan, gateway, auth_entries))}},
+    }
+    return yaml.safe_dump(document, sort_keys=False, default_flow_style=False)
+
+
+def render_caddyfile(plan: AssemblyPlan, gateway: GatewayPlan, auth_entries: set[str]) -> str:
+    # One handle block per route in declaration order; the auth route's first block bakes the
+    # effective public face as literals, never compose slots.
+    lines = [f":{EDGE_LISTEN_PORT} {{"]
+    for bundle, index, route in (
+        (bundle, index, route) for bundle in plan.bundles for index, route in enumerate(bundle.effective_routes)
+    ):
+        upstream = f"{bundle.entry_name}-{route.upstream}"
+        opener = (
+            ("\thandle_path" if route.strip_prefix else "\thandle")
+            + ("" if route.path == "/*" else f" {route.path}")
+            + " {"
+        )
+        if route.raw is not None:
+            lines.extend((opener, *["\t\t" + line for line in route.raw.splitlines()], "\t}"))
+            continue
+
+        if bundle.entry_name in auth_entries and index == 0 and gateway.public_face is not None:
+            face = gateway.public_face
+            lines.extend((
+                opener,
+                *[
+                    f"\t\treverse_proxy {upstream} {{",
+                    f"\t\t\theader_up X-Forwarded-Proto {face.scheme}",
+                    f"\t\t\theader_up X-Forwarded-Port {face.port}",
+                    "\t\t}",
+                ],
+                "\t}",
+            ))
+            continue
+
+        lines.extend((opener, *[f"\t\treverse_proxy {upstream}"], "\t}"))
+    lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
+def _require_gateway(plan: AssemblyPlan) -> GatewayPlan:
+    if plan.gateway is None:
+        raise ValueError("the gateway document renders only against a declared gateway")
+    return plan.gateway

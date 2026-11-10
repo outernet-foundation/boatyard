@@ -333,11 +333,16 @@ def _declared_port_record(entry: Yaml) -> tuple[int, int, str] | None:
         if isinstance(published, int) and isinstance(target, int):
             protocol = entry.get("protocol", "tcp")
             return (published, target, str(protocol))
+        if len(entry) == 1:
+            # The short syntax lands here as a single-pair mapping (6178:6178 parses as {6178: 6178})
+            [(short_published, short_target)] = entry.items()
+            if isinstance(short_target, int) and str(short_published).isdigit():
+                return (int(short_published), short_target, "tcp")
         return None
     if isinstance(entry, str):
-        ports, separator, protocol = entry.partition("/")
+        ports, _separator, protocol = entry.partition("/")
         published, port_separator, target = ports.partition(":")
-        if separator and port_separator and published.isdigit() and target.isdigit():
+        if port_separator and published.isdigit() and target.isdigit():
             return (int(published), int(target), protocol if protocol else "tcp")
     return None
 
