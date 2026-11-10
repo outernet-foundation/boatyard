@@ -56,6 +56,7 @@ Boatyard's quick loop is `uv run pytest` + `uv run ruff check`; full gate `uv ru
        upstream: str
        strip_prefix: bool = False
 
+
    class WorkloadPublish(NamedTuple):
        published: int
        target: int
@@ -109,16 +110,19 @@ class BundleProject(NamedTuple):
     effective_ports: list[PortDeclaration]
     container_names: list[str]
 
+
 class PublicFace(NamedTuple):
     host: str
     scheme: str
     port: int
     url_path: str
 
+
 class GatewayPlan(NamedTuple):
     port: int
     public_face: PublicFace | None
     routes: list[tuple[str, RouteConfig]]
+
 
 class AssemblyPlan(NamedTuple):
     bundles: list[BundleProject]
