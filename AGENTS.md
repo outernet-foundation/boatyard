@@ -26,10 +26,10 @@ Design intent and silent-failure traps, one fact per bullet.
   `helm template` is a renderer, never a deployer.
 - `boatyard.values.yaml` (consumer root, gitignored) is the only machine-values source; the
   ambient shell fills nothing. `up` requires it; `down` and score generation run without it.
-- `down` reads no values file, no lock, no selection — a name-only root plus
-  `--remove-orphans` removes every container the project ever created.
-- The edge does no token validation; re-protection is a bundle-shipped oauth2-proxy sidecar
-  treaty.
+- `down` reads config only and derives every candidate project name from the config's full
+  entry set plus the bare project name, removing the shared network last.
+- The `boatyard-gateway` service does no token validation; re-protection is a bundle-shipped
+  oauth2-proxy sidecar treaty.
 - `$`-doubling: a literal `$` in file text placed inside a compose document (edge Caddyfile,
   file-sourced configs, score's bind inlining) is doubled via `double_dollars` in
   `models/config_file.py` — the one home. Text outside a compose document (k8s manifests) never
@@ -105,7 +105,8 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
 - `paths.py` — consumer-repo document paths.
 - `temp.py` — shared digest/platform/tree-tag regex spellings.
 - `yaml.py` — strict YAML load + model load; `Yaml` and the `is_mapping`/`is_list` guards.
-- `verbs/up.py` — assembly rendering, the per-run dotenv, unwind on failure.
+- `verbs/up.py` — per-bundle compose projects plus the gateway project over the shared
+  network, the override documents, the per-run dotenv, unwind on failure.
 
 ## This file
 
