@@ -217,7 +217,7 @@ def test_authored_declarations_replace_the_adopted_set_wholesale(tmp_path: Path)
         "      TOKEN: ${API_TOKEN:?err}\n",
         "      TOKEN: ${API_TOKEN:?err}\n    labels:\n      outernet.internal/publish: 7000:7000\n",
     )
-    authored = [{"service": "api", "published": 5678, "target": 5678}]
+    authored: list[dict[str, object]] = [{"service": "api", "published": 5678, "target": 5678}]
 
     (tmp_path / "adopted").mkdir()
     (tmp_path / "authored").mkdir()

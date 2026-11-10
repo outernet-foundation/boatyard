@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import NamedTuple, Self
+from typing import Literal, NamedTuple, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 import yaml
@@ -25,7 +25,7 @@ ROUTE_PATH_PATTERN = re.compile(r"(?:/\*|/(?:[^/\s*]+(?:/[^/\s*]+)*)?(?:/\*)?)")
 
 ROUTE_UPSTREAM_PATTERN = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*:[0-9]+")
 
-PUBLISH_PROTOCOLS = ("tcp", "udp")
+PUBLISH_PROTOCOLS: tuple[Literal["tcp", "udp"], ...] = ("tcp", "udp")
 
 
 def _default_metadata() -> WorkloadMetadata:
@@ -253,7 +253,7 @@ class WorkloadRoute(NamedTuple):
 class WorkloadPublish(NamedTuple):
     published: int
     target: int
-    protocol: str = "tcp"
+    protocol: Literal["tcp", "udp"] = "tcp"
 
 
 def require_compose_probe_adapters(workloads: list[LoadedWorkload]) -> None:

@@ -97,7 +97,7 @@ class UpSpy:
     def spy_up(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(up, "bash", self.run)
         monkeypatch.setattr(up, "bash_handoff", self.run)
-        monkeypatch.setattr(up, "bash_check", lambda _command: True)
+        monkeypatch.setattr(up, "bash_check", _bash_check_true)
         monkeypatch.setattr(up, "install_crane", lambda: None)
         monkeypatch.setattr(up, "OciArtifactManifest", self.artifacts)
         return self
@@ -169,7 +169,7 @@ def _write_lock(
     root: Path,
     entries: dict[str, str] | None = None,
     platform_entries: dict[str, str] | None = None,
-    bundles: Mapping[str, object] | None = None,
+    bundles: Mapping[str, str | dict[str, object]] | None = None,
 ) -> None:
     # Write one platform-manifest reference per declared platform beside the index.
     declared = {
@@ -362,8 +362,12 @@ def _write_workload(root: Path, name: str, service_name: str, environment: dict[
     path.write_text(yaml.safe_dump(document), encoding="utf-8")
 
 
-def _silent_handoff(_command: str) -> None:
-    return None
+def _bash_check_true(_command: str) -> bool:
+    return True
+
+
+def _bash_check_false(_command: str) -> bool:
+    return False
 
 
 def _producer_tree_sha(self: Image, root: Path) -> str:
@@ -382,6 +386,7 @@ class AssemblyRecorder(HandoffRecorder):
     def __init__(self) -> None:
         super().__init__()
         self.documents: list[dict[str, Any]] = []
+        self.env_contents: list[str] = []
 
     def run(self, command: str) -> None:
         super().run(command)
@@ -1000,7 +1005,7 @@ class TestSharedNames:
         _write_values_file(tmp_path, {"bundles": ["left-a", "right-b"]})
         recorder = HandoffRecorder()
         monkeypatch.setattr(down, "bash", recorder.run)
-        monkeypatch.setattr(down, "bash_check", lambda _command: True)
+        monkeypatch.setattr(down, "bash_check", _bash_check_true)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["down"])
@@ -1019,7 +1024,7 @@ class TestDownTeardown:
         _write_consumer_tree(tmp_path)
         recorder = HandoffRecorder()
         monkeypatch.setattr(down, "bash", recorder.run)
-        monkeypatch.setattr(down, "bash_check", lambda _command: True)
+        monkeypatch.setattr(down, "bash_check", _bash_check_true)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["down"])
@@ -1041,7 +1046,7 @@ class TestDownTeardown:
             _write_consumer_tree(tree, bundles=bundles)
             recorder = HandoffRecorder()
             monkeypatch.setattr(down, "bash", recorder.run)
-            monkeypatch.setattr(down, "bash_check", lambda _command: True)
+            monkeypatch.setattr(down, "bash_check", _bash_check_true)
             monkeypatch.chdir(tree)
 
             result = runner.invoke(app, ["down"])
@@ -1055,7 +1060,7 @@ class TestDownTeardown:
         _write_consumer_tree(tmp_path)
         recorder = HandoffRecorder()
         monkeypatch.setattr(down, "bash", recorder.run)
-        monkeypatch.setattr(down, "bash_check", lambda _command: True)
+        monkeypatch.setattr(down, "bash_check", _bash_check_true)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["down", "--volumes"])
@@ -1078,7 +1083,7 @@ class TestDownTeardown:
         _write_values_file(tmp_path, {"public_host": "example.dev"})
         recorder = HandoffRecorder()
         monkeypatch.setattr(down, "bash", recorder.run)
-        monkeypatch.setattr(down, "bash_check", lambda _command: False)
+        monkeypatch.setattr(down, "bash_check", _bash_check_false)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["down"])
