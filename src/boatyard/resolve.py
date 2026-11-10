@@ -220,7 +220,9 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
 
             # If no boatyard.yml-bearing repo root sits above the bundle, refuse
             if not (producer_root / DEFAULT_CONFIG_PATH).is_file():
-                raise ValueError(f"{bundle_path.as_posix()}: no boatyard.yml-bearing repo root above the bundle override")
+                raise ValueError(
+                    f"{bundle_path.as_posix()}: no boatyard.yml-bearing repo root above the bundle override"
+                )
             producer_config = ConfigFile.load(producer_root / DEFAULT_CONFIG_PATH)
             producer_lock = LockFile.load(producer_root / LOCK_PATH, producer_config)
             sources = BundleSources(
@@ -276,9 +278,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
         )
     ambiguous = sorted(name for name in values.ports if port_counts.get(name, 0) != 1)
     if ambiguous:
-        raise ValueError(
-            f"{source}: ports: {ambiguous} carry a count of effective ports a scalar cannot disambiguate"
-        )
+        raise ValueError(f"{source}: ports: {ambiguous} carry a count of effective ports a scalar cannot disambiguate")
 
     # Raise if no declared surface consumes a value from the values section
     consumers: dict[str, set[str]] = {}
@@ -302,8 +302,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
             public_slots = sorted(name for name in slots_by_entry.get(entry_name, {}) if name in PUBLIC_SLOTS)
             if public_slots:
                 raise ValueError(
-                    f"{source}: {entry_name} consumes {public_slots[0]}, which requires public_host "
-                    f"in the values file"
+                    f"{source}: {entry_name} consumes {public_slots[0]}, which requires public_host in the values file"
                 )
 
     # Raise if no declared source fills a required slot of an assembled entry

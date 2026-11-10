@@ -145,11 +145,15 @@ def _write_edge_tree(
         }),
         encoding="utf-8",
     )
-    values: dict[str, object] = {key: value for key, value in {
-        "public_host": public_host,
-        "public_scheme": public_scheme,
-        "public_port": public_port,
-    }.items() if value is not None}
+    values: dict[str, object] = {
+        key: value
+        for key, value in {
+            "public_host": public_host,
+            "public_scheme": public_scheme,
+            "public_port": public_port,
+        }.items()
+        if value is not None
+    }
     if auth:
         values["bundles"] = ["auth-keycloak"]
     values.update(values_extra or {})
@@ -191,10 +195,14 @@ def _invoke_up(
     monkeypatch.setattr(up, "bash", spy.run)
     monkeypatch.setattr(up, "bash_check", lambda _command: True)
     monkeypatch.setattr(up, "install_crane", lambda: None)
-    monkeypatch.setattr(up, "OciArtifactManifest", StubArtifacts({
-        LIVEKIT_PINNED: [livekit_text],
-        KEYCLOAK_PINNED: [KEYCLOAK_TEXT],
-    }))
+    monkeypatch.setattr(
+        up,
+        "OciArtifactManifest",
+        StubArtifacts({
+            LIVEKIT_PINNED: [livekit_text],
+            KEYCLOAK_PINNED: [KEYCLOAK_TEXT],
+        }),
+    )
     if attached:
         monkeypatch.setattr(up, "bash_handoff", _handoff_spy(spy))
     return spy
@@ -649,15 +657,11 @@ class TestRenderCaddyfile:
         assert "\thandle /grafana/* {\n\t\treverse_proxy livekit-grafana:3000\n\t}" in _caddyfile(spy)
 
     def test_strip_prefix_renders_as_handle_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        spy = _up(
-            tmp_path, monkeypatch, [{"path": "/grafana/*", "upstream": "grafana:3000", "strip_prefix": True}]
-        )
+        spy = _up(tmp_path, monkeypatch, [{"path": "/grafana/*", "upstream": "grafana:3000", "strip_prefix": True}])
 
         assert "\thandle_path /grafana/* {\n\t\treverse_proxy livekit-grafana:3000\n\t}" in _caddyfile(spy)
 
-    def test_the_auth_route_bakes_the_forwarded_literals(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_the_auth_route_bakes_the_forwarded_literals(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         spy = _up(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], auth=True)
 
         caddyfile = _caddyfile(spy)

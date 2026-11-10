@@ -122,9 +122,7 @@ def _materialize_up(
     for bundle in plan.bundles:
         if bundle.bundle_path is not None:
             compose_files = [bundle.bundle_path]
-            declared_ports = extract_bundle_records(
-                [bundle.bundle_path.read_text(encoding="utf-8")]
-            ).declared_ports
+            declared_ports = extract_bundle_records([bundle.bundle_path.read_text(encoding="utf-8")]).declared_ports
         else:
             install_crane()
             texts = OciArtifactManifest.fetch_compose_texts(bundle.pinned_reference or "")

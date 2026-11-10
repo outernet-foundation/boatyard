@@ -285,9 +285,7 @@ def extract_bundle_records(texts: list[str]) -> BundleRecords:
                         f"{ROUTE_ANNOTATION}: the route {route.path} references the service {upstream!r}, "
                         f"which the bundle defines no stanza for"
                     )
-                routes.append(
-                    RouteConfig(path=route.path, upstream=route.upstream, strip_prefix=route.strip_prefix)
-                )
+                routes.append(RouteConfig(path=route.path, upstream=route.upstream, strip_prefix=route.strip_prefix))
         publish_value = stanza_annotations.get(PUBLISH_ANNOTATION)
         if publish_value is not None:
             ports.extend(
@@ -317,7 +315,9 @@ def _stanza_annotations(stanza: dict[str, Yaml]) -> dict[str, str]:
     return annotations
 
 
-def _collect_declared_ports(declared_ports: dict[str, list[tuple[int, int, str]]], service_name: str, value: Yaml) -> None:
+def _collect_declared_ports(
+    declared_ports: dict[str, list[tuple[int, int, str]]], service_name: str, value: Yaml
+) -> None:
     if not is_list(value):
         return
     for entry in value:
