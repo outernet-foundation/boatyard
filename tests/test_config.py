@@ -16,7 +16,7 @@ from boatyard.models.config_file import (
 )
 from boatyard.models.lock_file import LOCK_PATH, LockFile
 from boatyard.models.workload import WorkloadDocument
-from boatyard.yaml import load_yaml_model
+from boatyard.yaml import Yaml, load_yaml_model
 
 EDGE_PLATFORMS = ["linux/amd64"]
 
@@ -1232,10 +1232,9 @@ class TestAuthGroup:
 
 
 class TestWorkloadLensAnnotations:
-    def _document(self, annotations: dict[str, str]) -> WorkloadDocument:
-        return WorkloadDocument.parse(
-            {"metadata": {"name": "api", "annotations": annotations}, "containers": {}}, "api.yaml"
-        )
+    def _document(self, annotations: dict[str, Yaml]) -> WorkloadDocument:
+        raw: dict[str, Yaml] = {"metadata": {"name": "api", "annotations": annotations}, "containers": {}}
+        return WorkloadDocument.parse(raw, "api.yaml")
 
     def test_multiple_routes_parse_in_order(self) -> None:
         document = self._document({"outernet.internal/route": "/grafana/*=grafana:3000,/*=api:8000"})

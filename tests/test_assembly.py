@@ -76,6 +76,10 @@ def _handoff_spy(spy: UpSpy):
     return run
 
 
+def _bash_check_true(_command: str) -> bool:
+    return True
+
+
 def _write_edge_tree(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -89,7 +93,7 @@ def _write_edge_tree(
     values_extra: dict[str, object] | None = None,
     entry_ports: list[dict[str, object]] | None = None,
 ) -> None:
-    services: dict[str, object] = {
+    services: dict[str, dict[str, object]] = {
         "livekit": {"ref": LIVEKIT_REF, "routes": routes},
     }
     if entry_ports is not None:
@@ -193,7 +197,7 @@ def _invoke_up(
     )
     spy = UpSpy()
     monkeypatch.setattr(up, "bash", spy.run)
-    monkeypatch.setattr(up, "bash_check", lambda _command: True)
+    monkeypatch.setattr(up, "bash_check", _bash_check_true)
     monkeypatch.setattr(up, "install_crane", lambda: None)
     monkeypatch.setattr(
         up,
@@ -446,7 +450,7 @@ class TestOverrideDocument:
     def test_effective_ports_ride_except_what_the_bundle_text_declares(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        ports = [{"service": "livekit", "published": 6178, "target": 6178}]
+        ports: list[dict[str, object]] = [{"service": "livekit", "published": 6178, "target": 6178}]
         spy = _up(
             tmp_path,
             monkeypatch,
@@ -478,7 +482,7 @@ class TestOverrideDocument:
         (tmp_path / LOCK_PATH).write_text(yaml.safe_dump(lock), encoding="utf-8")
         spy = UpSpy()
         monkeypatch.setattr(up, "bash", spy.run)
-        monkeypatch.setattr(up, "bash_check", lambda _command: True)
+        monkeypatch.setattr(up, "bash_check", _bash_check_true)
         monkeypatch.setattr(up, "install_crane", lambda: None)
         monkeypatch.setattr(up, "OciArtifactManifest", StubArtifacts({LIVEKIT_PINNED: [LIVEKIT_TEXT]}))
 
@@ -594,7 +598,7 @@ class TestUpProjects:
         monkeypatch.chdir(tmp_path)
         spy = UpSpy()
         monkeypatch.setattr(up, "bash", spy.run)
-        monkeypatch.setattr(up, "bash_check", lambda _command: True)
+        monkeypatch.setattr(up, "bash_check", _bash_check_true)
         monkeypatch.setattr(up, "install_crane", lambda: None)
         monkeypatch.setattr(up, "OciArtifactManifest", StubArtifacts({LIVEKIT_PINNED: [LIVEKIT_TEXT]}))
 
@@ -610,7 +614,7 @@ class TestDownLoop:
         _write_edge_tree(tmp_path, monkeypatch, [], auth=True)
         commands: list[str] = []
         monkeypatch.setattr(down, "bash", commands.append)
-        monkeypatch.setattr(down, "bash_check", lambda _command: True)
+        monkeypatch.setattr(down, "bash_check", _bash_check_true)
 
         result = runner.invoke(app, ["down", *arguments])
 
