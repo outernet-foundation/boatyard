@@ -486,14 +486,14 @@ def test_generate_compose_collapses_doubled_names_and_inlines_binds(
     output = _generate_compose(monkeypatch, tmp_path, GENERATED_COMPOSE)
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
-    assert list(document["services"]) == ["core-main-api", "core-main-pf-postgres"]
-    api = document["services"]["core-main-api"]
+    assert list(document["services"]) == ["api", "pf-postgres"]
+    api = document["services"]["api"]
     assert api["image"] == "ghcr.io/org/api:1"
     assert "volumes" not in api
-    assert api["networks"] == {"core-main-net": {"aliases": ["api"]}}
-    assert api["configs"] == [{"source": "core-main-config.yaml", "target": "/etc/placeframe/config.yaml"}]
-    assert document["configs"] == {"core-main-config.yaml": {"content": "key: $${FOO}\n"}}
-    assert document["networks"] == {"core-main-net": {}}
+    assert "networks" not in api
+    assert api["configs"] == [{"source": "config.yaml", "target": "/etc/placeframe/config.yaml"}]
+    assert document["configs"] == {"config.yaml": {"content": "key: $${FOO}\n"}}
+    assert "networks" not in document
 
 
 def test_generate_compose_collapses_doubled_names_with_no_binds(
@@ -507,10 +507,10 @@ def test_generate_compose_collapses_doubled_names_with_no_binds(
     )
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
-    assert list(document["services"]) == ["core-main-gateway"]
-    assert document["services"]["core-main-gateway"]["image"] == "ghcr.io/org/gateway:1"
+    assert list(document["services"]) == ["gateway"]
+    assert document["services"]["gateway"]["image"] == "ghcr.io/org/gateway:1"
     assert "configs" not in document
-    assert document["networks"] == {"core-main-net": {}}
+    assert "networks" not in document
 
 
 def test_generate_compose_carries_a_coincidentally_prefixed_service_through(
@@ -521,7 +521,7 @@ def test_generate_compose_carries_a_coincidentally_prefixed_service_through(
     output = _generate_compose(monkeypatch, tmp_path, generated)
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
-    assert list(document["services"]) == ["core-main-api", "core-main-pf-postgres", "core-main-api-migrations"]
+    assert list(document["services"]) == ["api", "pf-postgres", "api-migrations"]
 
 
 def test_generate_compose_strips_the_workload_prefix_from_differing_container_names(
@@ -536,8 +536,8 @@ def test_generate_compose_strips_the_workload_prefix_from_differing_container_na
     )
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
-    assert list(document["services"]) == ["core-main-rathole-client"]
-    assert document["services"]["core-main-rathole-client"]["image"] == "ghcr.io/org/rathole-client:1"
+    assert list(document["services"]) == ["rathole-client"]
+    assert document["services"]["rathole-client"]["image"] == "ghcr.io/org/rathole-client:1"
 
 
 COMPOSE_WITH_BARRIER = (
@@ -561,14 +561,11 @@ def test_generate_compose_renames_the_barrier_and_its_references_per_entry(
     output = _generate_compose(monkeypatch, tmp_path, COMPOSE_WITH_BARRIER)
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
-    assert list(document["services"]) == ["core-main-api", "core-main-pf-postgres", "core-main-wait-for-resources"]
-    assert document["services"]["core-main-api"]["depends_on"] == {
-        "core-main-wait-for-resources": {"condition": "service_started"}
-    }
-    assert document["services"]["core-main-pf-postgres"]["depends_on"] == ["core-main-wait-for-resources"]
+    assert list(document["services"]) == ["api", "pf-postgres", "wait-for-resources"]
+    assert document["services"]["api"]["depends_on"] == {"wait-for-resources": {"condition": "service_started"}}
+    assert document["services"]["pf-postgres"]["depends_on"] == ["wait-for-resources"]
     assert (
-        document["services"]["core-main-wait-for-resources"]["image"]
-        == "${CORE_MAIN__BOATYARD_LOCK__ALPINE_IMAGE:?err}"
+        document["services"]["wait-for-resources"]["image"] == "${CORE_MAIN__BOATYARD_LOCK__ALPINE_IMAGE:?err}"
     )
 
 
@@ -602,8 +599,8 @@ def test_generate_compose_barrier_names_differ_per_entry(tmp_path: Path, monkeyp
 
     core = yaml.safe_load((tmp_path / "stack/generated/compose/compose.core-main.yaml").read_text(encoding="utf-8"))
     edge = yaml.safe_load((tmp_path / "stack/generated/compose/compose.edge-main.yaml").read_text(encoding="utf-8"))
-    assert core["services"]["core-main-wait-for-resources"]["image"] == "${CORE_MAIN__BOATYARD_LOCK__ALPINE_IMAGE:?err}"
-    assert edge["services"]["edge-main-wait-for-resources"]["image"] == "${EDGE_MAIN__BOATYARD_LOCK__ALPINE_IMAGE:?err}"
+    assert core["services"]["wait-for-resources"]["image"] == "${CORE_MAIN__BOATYARD_LOCK__ALPINE_IMAGE:?err}"
+    assert edge["services"]["wait-for-resources"]["image"] == "${EDGE_MAIN__BOATYARD_LOCK__ALPINE_IMAGE:?err}"
 
 
 class WorkloadContentsRecorder:
@@ -872,7 +869,7 @@ class TestRenderedNameClaims:
 
         output = tmp_path / "stack" / "generated" / "compose" / "compose.core-main.yaml"
         document = yaml.safe_load(output.read_text(encoding="utf-8"))
-        assert list(document["services"]) == ["core-main-api", "core-main-pf-postgres"]
+        assert list(document["services"]) == ["api", "pf-postgres"]
 
 
 SHIPPED_TEMPLATES = {
@@ -1411,12 +1408,12 @@ def test_consumer_interpolated_binds_land_undoubled(tmp_path: Path, monkeypatch:
 
     output = tmp_path / "stack" / "generated" / "compose" / "compose.rathole-client.yaml"
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
-    service = document["services"]["rathole-client-rathole-client"]
+    service = document["services"]["rathole-client"]
     assert service["configs"] == [
-        {"source": "rathole-client-rathole-client-files-client.toml", "target": "/etc/rathole/client.toml"}
+        {"source": "rathole-client-files-client.toml", "target": "/etc/rathole/client.toml"}
     ]
     assert (
-        document["configs"]["rathole-client-rathole-client-files-client.toml"]["content"]
+        document["configs"]["rathole-client-files-client.toml"]["content"]
         == 'remote_addr = "${TUNNEL_CONTROL_ENDPOINT:?err}"\n'
     )
 
