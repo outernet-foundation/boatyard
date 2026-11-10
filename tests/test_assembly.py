@@ -75,10 +75,22 @@ def _write_edge_tree(
         encoding="utf-8",
     )
     bundles: dict[str, object] = {
-        "LIVEKIT_BUNDLE": {"reference": f"ghcr.io/org/livekit:{LIVEKIT_SHA_TAG}@{FAKE_DIGEST}"},
+        "LIVEKIT_BUNDLE": {
+            "reference": f"ghcr.io/org/livekit:{LIVEKIT_SHA_TAG}@{FAKE_DIGEST}",
+            "services": ["livekit"],
+            "routes": [],
+            "ports": [],
+            "container_names": [],
+        },
     }
     if auth:
-        bundles["AUTH_KEYCLOAK_BUNDLE"] = {"reference": f"ghcr.io/org/keycloak:0.3.1@{FAKE_DIGEST}"}
+        bundles["AUTH_KEYCLOAK_BUNDLE"] = {
+            "reference": f"ghcr.io/org/keycloak:0.3.1@{FAKE_DIGEST}",
+            "services": ["keycloak"],
+            "routes": [{"path": "/auth/*", "upstream": "keycloak:8080", "strip_prefix": True}],
+            "ports": [],
+            "container_names": [],
+        }
     tmp_path.joinpath(*LOCK_PATH.parts).write_text(
         yaml.safe_dump({
             "platforms": ["linux/amd64"],
@@ -300,8 +312,18 @@ class TestValuesLoad:
                         "CORE_CUDA_BUNDLE": {
                             "reference": f"ghcr.io/org/core:0.1.0@{FAKE_DIGEST}",
                             "slots": {"RELOAD": {"required": False}, "GPU_MEM": {"required": True}},
+                            "services": ["core"],
+                            "routes": [],
+                            "ports": [],
+                            "container_names": [],
                         },
-                        "UI_OPEN_BUNDLE": {"reference": f"ghcr.io/org/ui:0.1.0@{FAKE_DIGEST}"},
+                        "UI_OPEN_BUNDLE": {
+                            "reference": f"ghcr.io/org/ui:0.1.0@{FAKE_DIGEST}",
+                            "services": ["ui"],
+                            "routes": [],
+                            "ports": [],
+                            "container_names": [],
+                        },
                     }
                 },
                 default_flow_style=False,

@@ -4,6 +4,7 @@ import base64
 import json
 import re
 import shlex
+from typing import NamedTuple
 
 import yaml
 from bashrun.bash import bash_output
@@ -12,6 +13,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from boatyard.models.config_file import (
     GATEWAY_SERVICE_NAME,
     OCI_REFERENCE_PREFIX,
+    PortDeclaration,
+    RouteConfig,
     ConfigFile,
     artifact_slots,
     bundle_lock_key,
@@ -26,6 +29,12 @@ from boatyard.models.lock_file import (
     ConfigLockBundle,
     ConfigLockEntry,
     refuse_local_lock_entries,
+)
+from boatyard.models.workload import (
+    PUBLISH_ANNOTATION,
+    ROUTE_ANNOTATION,
+    parse_publish_annotation,
+    parse_route_annotation,
 )
 from boatyard.temp import SHA256_DIGEST_REGEX
 from boatyard.yaml import Yaml, is_list, is_mapping, load_yaml_model
@@ -88,6 +97,14 @@ class OciArtifactManifest(BaseModel):
         return compose_texts
 
 
+class BundleRecords(NamedTuple):
+    services: list[str]
+    routes: list[RouteConfig]
+    ports: list[PortDeclaration]
+    container_names: list[str]
+    declared_ports: dict[str, list[tuple[int, int, str]]]
+
+
 def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) -> LockFile:
     # Install the pinned crane and derive the mirror prefix.
     install_crane()
@@ -110,12 +127,20 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
             else f"{reference}@{resolve_remote_digest(reference)}"
         )
 
-        # Record the pinned reference with the bundle's slot demands.
+        # Record the pinned reference with the bundle's slot demands and extracted records.
         texts = OciArtifactManifest.fetch_compose_texts(pinned)
-        service_names = refuse_unresolved_references(name, entry.routes, entry.ports, texts, prefix=f"{name}-")
-        if GATEWAY_SERVICE_NAME in service_names:
+        refuse_unresolved_references(name, entry.routes, entry.ports, texts)
+        records = extract_bundle_records(texts)
+        if GATEWAY_SERVICE_NAME in records.services:
             raise ValueError(f"{pinned}: the included bundle defines the reserved service {GATEWAY_SERVICE_NAME!r}")
-        bundles[key] = ConfigLockBundle(reference=pinned, slots=artifact_slots(texts))
+        bundles[key] = ConfigLockBundle(
+            reference=pinned,
+            slots=artifact_slots(texts),
+            services=records.services,
+            routes=records.routes,
+            ports=records.ports,
+            container_names=records.container_names,
+        )
 
     images: dict[str, ConfigLockEntry] = {}
     refuse_local_lock_entries(committed, config, committed_path.as_posix())
@@ -223,6 +248,98 @@ def resolve_remote_digest(reference: str) -> str:
     if re.fullmatch(SHA256_DIGEST_REGEX, output) is None:
         raise ValueError(f"crane digest output for {reference} must be one sha256 digest")
     return output
+
+
+def extract_bundle_records(texts: list[str]) -> BundleRecords:
+    # Two passes: every stanza's name lands before any annotation reference is checked, so
+    # a route may name a service defined later in the artifact or in another text.
+    services: list[str] = []
+    container_names: set[str] = set()
+    declared_ports: dict[str, list[tuple[int, int, str]]] = {}
+    stanzas: list[tuple[str, Yaml, dict[str, str]]] = []
+    for text in texts:
+        document = yaml.safe_load(text)
+        service_map = document.get("services") if is_mapping(document) else None
+        if not is_mapping(service_map):
+            continue
+        for service_name, stanza in service_map.items():
+            if service_name not in services:
+                services.append(service_name)
+            if not is_mapping(stanza):
+                stanzas.append((service_name, stanza, {}))
+                continue
+            if "container_name" in stanza:
+                container_names.add(service_name)
+            _collect_declared_ports(declared_ports, service_name, stanza.get("ports"))
+            stanzas.append((service_name, stanza, _stanza_annotations(stanza)))
+
+    routes: list[RouteConfig] = []
+    ports: list[PortDeclaration] = []
+    for service_name, _stanza, stanza_annotations in stanzas:
+        route_value = stanza_annotations.get(ROUTE_ANNOTATION)
+        if route_value is not None:
+            for route in parse_route_annotation(route_value):
+                upstream = route.upstream.partition(":")[0]
+                if upstream not in services:
+                    raise ValueError(
+                        f"{ROUTE_ANNOTATION}: the route {route.path} references the service {upstream!r}, "
+                        f"which the bundle defines no stanza for"
+                    )
+                routes.append(
+                    RouteConfig(path=route.path, upstream=route.upstream, strip_prefix=route.strip_prefix)
+                )
+        publish_value = stanza_annotations.get(PUBLISH_ANNOTATION)
+        if publish_value is not None:
+            ports.extend(
+                PortDeclaration(
+                    service=service_name,
+                    published=publish.published,
+                    target=publish.target,
+                    protocol=publish.protocol,
+                )
+                for publish in parse_publish_annotation(publish_value)
+            )
+    return BundleRecords(
+        services=services,
+        routes=routes,
+        ports=ports,
+        container_names=sorted(container_names),
+        declared_ports=declared_ports,
+    )
+
+
+def _stanza_annotations(stanza: dict[str, Yaml]) -> dict[str, str]:
+    annotations: dict[str, str] = {}
+    for key in ("annotations", "labels"):
+        value = stanza.get(key)
+        if is_mapping(value):
+            annotations.update({str(name): str(item) for name, item in value.items()})
+    return annotations
+
+
+def _collect_declared_ports(declared_ports: dict[str, list[tuple[int, int, str]]], service_name: str, value: Yaml) -> None:
+    if not is_list(value):
+        return
+    for entry in value:
+        record = _declared_port_record(entry)
+        if record is not None:
+            declared_ports.setdefault(service_name, []).append(record)
+
+
+def _declared_port_record(entry: Yaml) -> tuple[int, int, str] | None:
+    if is_mapping(entry):
+        published = entry.get("published")
+        target = entry.get("target")
+        if isinstance(published, int) and isinstance(target, int):
+            protocol = entry.get("protocol", "tcp")
+            return (published, target, str(protocol))
+        return None
+    if isinstance(entry, str):
+        ports, separator, protocol = entry.partition("/")
+        published, port_separator, target = ports.partition(":")
+        if separator and port_separator and published.isdigit() and target.isdigit():
+            return (int(published), int(target), protocol if protocol else "tcp")
+    return None
 
 
 def _canonical(value: Yaml) -> Yaml:

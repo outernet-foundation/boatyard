@@ -111,6 +111,17 @@ def _structured_entry(reference: str, *, index_digest: str, platforms: dict[str,
     }
 
 
+def _bundle_entry(reference: str, **records: object) -> dict[str, object]:
+    return {
+        "reference": reference,
+        "services": [],
+        "routes": [],
+        "ports": [],
+        "container_names": [],
+        **records,
+    }
+
+
 BARRIER_MIRROR_BASE = f"{MIRROR_PREFIX}/docker.io/library/alpine:3.20"
 
 
@@ -751,7 +762,11 @@ class TestBundleRecording:
         assert result.exit_code == 0, result.output
         assert recorder.inspected == [self.RATHOLE_BASE]
         assert _read_lock(tmp_path) == {
-            "bundles": {"TUNNEL_RATHOLE_BUNDLE": {"reference": f"{self.RATHOLE_BASE}@{DIGEST_A}"}}
+            "bundles": {
+                "TUNNEL_RATHOLE_BUNDLE": _bundle_entry(
+                    f"{self.RATHOLE_BASE}@{DIGEST_A}", services=["tunnel-rathole-rathole"]
+                )
+            }
         }
 
     def test_a_bare_entry_ref_resolves_under_its_own_key(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -764,7 +779,11 @@ class TestBundleRecording:
 
         assert result.exit_code == 0, result.output
         assert _read_lock(tmp_path) == {
-            "bundles": {"LIVEKIT_BUNDLE": {"reference": "ghcr.io/org/repo/livekit:0.4.0-dev.3@" + DIGEST_A}}
+            "bundles": {
+                "LIVEKIT_BUNDLE": _bundle_entry(
+                    "ghcr.io/org/repo/livekit:0.4.0-dev.3@" + DIGEST_A, services=["tunnel-rathole-rathole"]
+                )
+            }
         }
 
     def test_bundle_entries_resolve_direct_never_mirror_prefixed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -829,7 +848,7 @@ class TestBundleRecording:
         )
 
         assert result.exit_code == 1
-        assert "references 'tunnel-rathole-webapp'" in str(result.exception) + result.output
+        assert "references 'webapp'" in str(result.exception) + result.output
         assert "'/*'" in str(result.exception) + result.output
         assert read_references == [f"{self.RATHOLE_BASE}@{DIGEST_A}"]
 
@@ -852,7 +871,7 @@ class TestBundleRecording:
         )
 
         assert result.exit_code == 1
-        assert "references 'tunnel-rathole-database'" in str(result.exception) + result.output
+        assert "references 'database'" in str(result.exception) + result.output
 
     def test_a_frozen_digest_with_declared_routes_still_reads_and_validates(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -861,14 +880,16 @@ class TestBundleRecording:
         caddy_base = MIRROR_PREFIX + "/" + caddy_declaration
         committed = yaml.safe_dump({
             "images": {"CADDY_IMAGE": {"index": caddy_base, "platforms": {"linux/amd64": caddy_base}}},
-            "bundles": {"TUNNEL_RATHOLE_BUNDLE": {"reference": f"{self.RATHOLE_BASE}@{DIGEST_B}"}},
+            "bundles": {"TUNNEL_RATHOLE_BUNDLE": _bundle_entry(f"{self.RATHOLE_BASE}@{DIGEST_B}")},
         })
+        bundle_text = "services:\n  rathole:\n    image: busybox:1.36\n"
 
         result, recorder, read_references = self._invoke(
             monkeypatch,
             tmp_path,
             [],
             committed=committed,
+            bundle_text=bundle_text,
             declares_routes=True,
             ref_services={
                 "tunnel": {
@@ -886,12 +907,12 @@ class TestBundleRecording:
         assert recorder.inspected == []
         assert read_references == [f"{self.RATHOLE_BASE}@{DIGEST_B}"]
         assert _read_lock(tmp_path)["bundles"] == {
-            "TUNNEL_RATHOLE_BUNDLE": {"reference": f"{self.RATHOLE_BASE}@{DIGEST_B}"}
+            "TUNNEL_RATHOLE_BUNDLE": _bundle_entry(f"{self.RATHOLE_BASE}@{DIGEST_B}", services=["rathole"])
         }
 
     def test_an_unchanged_ref_copies_its_frozen_digest_forward(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         committed = yaml.safe_dump({
-            "bundles": {"TUNNEL_RATHOLE_BUNDLE": {"reference": f"{self.RATHOLE_BASE}@{DIGEST_B}"}}
+            "bundles": {"TUNNEL_RATHOLE_BUNDLE": _bundle_entry(f"{self.RATHOLE_BASE}@{DIGEST_B}")}
         })
 
         result, recorder, read_references = self._invoke(monkeypatch, tmp_path, [], committed=committed)
@@ -900,12 +921,14 @@ class TestBundleRecording:
         assert recorder.inspected == []
         assert read_references == [f"{self.RATHOLE_BASE}@{DIGEST_B}"]
         assert _read_lock(tmp_path) == {
-            "bundles": {"TUNNEL_RATHOLE_BUNDLE": {"reference": f"{self.RATHOLE_BASE}@{DIGEST_B}"}}
+            "bundles": {
+                "TUNNEL_RATHOLE_BUNDLE": _bundle_entry(f"{self.RATHOLE_BASE}@{DIGEST_B}", services=["tunnel-rathole-rathole"])
+            }
         }
 
     def test_a_tag_bump_re_resolves(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         committed = yaml.safe_dump({
-            "bundles": {"TUNNEL_RATHOLE_BUNDLE": {"reference": f"{self.RATHOLE_BASE}@{DIGEST_B}"}}
+            "bundles": {"TUNNEL_RATHOLE_BUNDLE": _bundle_entry(f"{self.RATHOLE_BASE}@{DIGEST_B}")}
         })
 
         result, recorder, _ = self._invoke(
@@ -924,7 +947,7 @@ class TestBundleRecording:
 
     def test_upgrade_re_resolves_frozen_bundle_entries(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         committed = yaml.safe_dump({
-            "bundles": {"TUNNEL_RATHOLE_BUNDLE": {"reference": f"{self.RATHOLE_BASE}@{DIGEST_B}"}}
+            "bundles": {"TUNNEL_RATHOLE_BUNDLE": _bundle_entry(f"{self.RATHOLE_BASE}@{DIGEST_B}")}
         })
 
         result, recorder, _ = self._invoke(monkeypatch, tmp_path, ["--upgrade"], committed=committed)
@@ -940,8 +963,8 @@ class TestBundleRecording:
     ):
         committed = yaml.safe_dump({
             "bundles": {
-                "GHOST_BUNDLE": {"reference": f"ghcr.io/org/repo/ghost:0.1.0@{DIGEST_B}"},
-                "TUNNEL_RATHOLE_BUNDLE": {"reference": f"{self.RATHOLE_BASE}@{DIGEST_B}"},
+                "GHOST_BUNDLE": _bundle_entry(f"ghcr.io/org/repo/ghost:0.1.0@{DIGEST_B}"),
+                "TUNNEL_RATHOLE_BUNDLE": _bundle_entry(f"{self.RATHOLE_BASE}@{DIGEST_B}"),
             }
         })
 
@@ -949,8 +972,72 @@ class TestBundleRecording:
 
         assert result.exit_code == 0, result.output
         assert _read_lock(tmp_path) == {
-            "bundles": {"TUNNEL_RATHOLE_BUNDLE": {"reference": f"{self.RATHOLE_BASE}@{DIGEST_B}"}}
+            "bundles": {
+                "TUNNEL_RATHOLE_BUNDLE": _bundle_entry(
+                    f"{self.RATHOLE_BASE}@{DIGEST_B}", services=["tunnel-rathole-rathole"]
+                )
+            }
         }
+
+    def test_annotations_extract_in_artifact_order(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        bundle_text = (
+            "services:\n"
+            "  api:\n"
+            "    image: demo/api:1\n"
+            "    labels:\n"
+            "      outernet.internal/route: /grafana/*=grafana:3000,/*=api:8000\n"
+            "  grafana:\n"
+            "    image: demo/grafana:1\n"
+            "    container_name: demo-grafana\n"
+            "  livekit:\n"
+            "    image: demo/livekit:1\n"
+            "    labels:\n"
+            "      outernet.internal/publish: 6178:6178,5957:5957/udp\n"
+        )
+
+        result, _, _ = self._invoke(monkeypatch, tmp_path, [], bundle_text=bundle_text)
+
+        assert result.exit_code == 0, result.output
+        [entry] = _read_lock(tmp_path)["bundles"].values()
+        assert entry["services"] == ["api", "grafana", "livekit"]
+        assert entry["routes"] == [
+            {"path": "/grafana/*", "upstream": "grafana:3000"},
+            {"path": "/*", "upstream": "api:8000"},
+        ]
+        assert entry["ports"] == [
+            {"service": "livekit", "published": 6178, "target": 6178},
+            {"service": "livekit", "published": 5957, "target": 5957, "protocol": "udp"},
+        ]
+        assert entry["container_names"] == ["grafana"]
+
+    def test_a_route_referencing_no_bundle_service_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        bundle_text = (
+            "services:\n"
+            "  api:\n"
+            "    image: demo/api:1\n"
+            "    labels:\n"
+            "      outernet.internal/route: /*=ghost:8000\n"
+        )
+
+        result, _, _ = self._invoke(monkeypatch, tmp_path, [], bundle_text=bundle_text)
+
+        assert result.exit_code != 0
+        assert "outernet.internal/route: the route /* references the service 'ghost'" in str(result.exception)
+
+    def test_a_committed_lock_without_the_bundle_records_refuses(self, tmp_path: Path) -> None:
+        _write_repo(tmp_path, ref_services={"livekit": {"ref": "oci://ghcr.io/org/repo/livekit:0.4.0-dev.3"}})
+        (tmp_path / LOCK_PATH).write_text(
+            yaml.safe_dump({"bundles": {"LIVEKIT_BUNDLE": {"reference": "ghcr.io/org/repo/livekit:0.4.0-dev.3@" + DIGEST_A}}}),
+            encoding="utf-8",
+        )
+        config = config_file_module.ConfigFile.load(tmp_path / "boatyard.yml")
+
+        with pytest.raises(ValidationError, match=r"services\s+Field required"):
+            LockFile.load(tmp_path / LOCK_PATH, config)
 
 
 def _skip_crane_install() -> None:

@@ -199,7 +199,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
     for bundle in included_bundles:
         name = bundle.row.name
         service_names = refuse_unresolved_references(
-            name, bundle.row.effective_routes, bundle.row.effective_ports, [bundle.text], prefix=f"{name}-"
+            name, bundle.row.effective_routes, bundle.row.effective_ports, [bundle.text]
         )
         if GATEWAY_SERVICE_NAME in service_names:
             raise ValueError(f"{bundle.path}: the included bundle defines the reserved service {GATEWAY_SERVICE_NAME!r}")

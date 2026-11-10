@@ -111,7 +111,17 @@ def _write_lock(
     }
     if bundles is not None:
         document["bundles"] = {
-            name: ({"reference": reference} if isinstance(reference, str) else reference)
+            name: (
+                {"reference": reference, "services": [], "routes": [], "ports": [], "container_names": []}
+                if isinstance(reference, str)
+                else {
+                    "services": [],
+                    "routes": [],
+                    "ports": [],
+                    "container_names": [],
+                    **reference,
+                }
+            )
             for name, reference in bundles.items()
         }
     root.joinpath(*LOCK_PATH.parts).write_text(
@@ -123,18 +133,15 @@ def _write_lock(
 def _write_bundle_output(root: Path, name: str, services: list[str], environment: dict[str, str] | None = None) -> Path:
     path = root / "stack" / "generated" / "compose" / f"compose.{name}.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
-    network = f"{name}-net"
     path.write_text(
         yaml.safe_dump({
             "services": {
-                f"{name}-{service}": {
+                service: {
                     "image": f"demo/{service}:1",
-                    "networks": {network: {"aliases": [service]}},
                     **({"environment": dict(environment)} if environment is not None else {}),
                 }
                 for service in services
             },
-            "networks": {network: None},
         }),
         encoding="utf-8",
     )
@@ -755,8 +762,20 @@ class TestUpMaterialization:
                 "platforms": ["linux/amd64"],
                 "images": {},
                 "bundles": {
-                    "AUTH_KEYCLOAK_BUNDLE": {"reference": KEYCLOAK_PINNED},
-                    "LIVEKIT_BUNDLE": {"reference": LIVEKIT_PINNED},
+                    "AUTH_KEYCLOAK_BUNDLE": {
+                        "reference": KEYCLOAK_PINNED,
+                        "services": ["keycloak"],
+                        "routes": [],
+                        "ports": [],
+                        "container_names": [],
+                    },
+                    "LIVEKIT_BUNDLE": {
+                        "reference": LIVEKIT_PINNED,
+                        "services": ["livekit"],
+                        "routes": [],
+                        "ports": [],
+                        "container_names": [],
+                    },
                 },
             }),
             encoding="utf-8",
@@ -799,7 +818,7 @@ class TestUpValidation:
         assert isinstance(result.exception, ValueError)
         message = str(result.exception)
         assert "services entry 'placeframe-cuda'" in message
-        assert "'/grafana/*' references 'placeframe-cuda-grafana'" in message
+        assert "'/grafana/*' references 'grafana'" in message
 
     def test_a_local_port_owner_absent_from_the_output_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_bundle_output(tmp_path, "placeframe-cuda", ["api"])
@@ -830,7 +849,7 @@ class TestUpValidation:
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "'3306' references 'placeframe-cuda-grafana'" in str(result.exception)
+        assert "'3306' references 'grafana'" in str(result.exception)
 
     def test_a_local_output_defining_the_edge_service_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         # A hand-edited generated output can spell the reserved name; the scan refuses it at bring-up.
@@ -838,8 +857,8 @@ class TestUpValidation:
         cuda.write_text(
             yaml.safe_dump({
                 "services": {
-                    "placeframe-cuda-api": {"image": "demo/api:1"},
-                    "placeframe-cuda-grafana": {"image": "demo/grafana:1"},
+                    "api": {"image": "demo/api:1"},
+                    "grafana": {"image": "demo/grafana:1"},
                     "boatyard-gateway": {"image": "demo/edge:1"},
                 }
             }),
