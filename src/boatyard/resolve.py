@@ -3,15 +3,17 @@ from __future__ import annotations
 from pathlib import Path
 from typing import NamedTuple
 
+from boatyard.lock import extract_bundle_records
 from boatyard.models.config_file import (
     CADDY_IMAGE,
     EDGE_LISTEN_PORT,
     GATEWAY_SERVICE_NAME,
-    OCI_REFERENCE_PREFIX,
     PLACEHOLDER,
     ConfigFile,
     FlattenedServiceEntry,
     Image,
+    PortDeclaration,
+    RouteConfig,
     Slot,
     artifact_slots,
     bundle_lock_key,
@@ -27,6 +29,7 @@ from boatyard.models.values_file import (
     PUBLIC_HOST_SLOT,
     PUBLIC_PORT_SLOT,
     PUBLIC_SCHEME_SLOT,
+    PUBLIC_SLOTS,
     PUBLIC_URL_PATH_SLOT,
     PUBLIC_URL_SLOT,
     ValuesFile,
@@ -34,9 +37,33 @@ from boatyard.models.values_file import (
 from boatyard.paths import DEFAULT_CONFIG_PATH, LOCK_PATH
 
 
+class BundleProject(NamedTuple):
+    entry_name: str
+    project_name: str
+    bundle_path: Path | None
+    pinned_reference: str | None
+    services: list[str]
+    effective_routes: list[RouteConfig]
+    effective_ports: list[PortDeclaration]
+    container_names: list[str]
+
+
+class PublicFace(NamedTuple):
+    host: str
+    scheme: str
+    port: int
+    url_path: str
+
+
+class GatewayPlan(NamedTuple):
+    port: int
+    public_face: PublicFace | None
+    routes: list[tuple[str, RouteConfig]]
+
+
 class AssemblyPlan(NamedTuple):
-    services: list[FlattenedServiceEntry]
-    includes: list[str]
+    bundles: list[BundleProject]
+    gateway: GatewayPlan | None
     env: dict[str, str]
     edge_image: str | None
 
@@ -48,16 +75,11 @@ class BundleSources(NamedTuple):
     images: dict[str, Image]
 
 
-class IncludedBundle(NamedTuple):
-    row: FlattenedServiceEntry
-    path: str
-    text: str
-
-
 def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyPlan:
     # Combine the config, the lock, and the values file into the assembly plan that `up` renders
     source = values.source
     hand = values.values
+    public_face = _public_face(config, values)
     minted = _minted(config, values)
     consumer_manifests = lock.manifest_references(values.platform)
     service_entries = config.service_entries
@@ -71,12 +93,6 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
     unknown = sorted(set(values.bundles) - set(qualified_options))
     if unknown:
         raise ValueError(f"{source}: bundles: names {unknown} are not among the selectable options")
-
-    # Raise if a name in the ports section of the values file does not name a port-declaring entry
-    port_declaring_names = {row.name for row in service_entries if row.effective_ports}
-    unknown = sorted(set(values.ports) - port_declaring_names)
-    if unknown:
-        raise ValueError(f"{source}: ports: names {unknown} are not among the port-declaring entries")
 
     # Raise if a name in the path_overrides section of the values file does not name a ref entry
     ref_entry_names = {row.name for row in service_entries if row.entry.remote}
@@ -140,13 +156,11 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
         texts[name] = bundle_path.read_text(encoding="utf-8")
         slots_by_entry[name] = artifact_slots([texts[name]])
 
-    includes: list[str] = []
-    services: list[FlattenedServiceEntry] = []
+    bundles: list[BundleProject] = []
     env: dict[str, str] = dict(minted)
     shas_by_root: dict[Path, dict[str, str]] = {}
-    included_bundles: list[IncludedBundle] = []
 
-    # Render each winner into includes, env fan entries, and bundle records.
+    # Render each winner into a bundle project, adopting records and folding the env fans.
     for row in service_entries:
         name = row.name
 
@@ -154,55 +168,117 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
         if name not in winners:
             continue
 
-        services.append(row)
-
-        # If a remote ref won without an active override, include its bundle by the recorded digest
+        # If a remote ref won without an active override, its records come from the lock
         if row.entry.ref is not None and name not in overrides:
             locked = lock.require_bundle(bundle_lock_key(name), f"bundle {name!r}")
-            includes.append(f"{OCI_REFERENCE_PREFIX}{locked.reference}")
-            continue
+            adopted_services = list(locked.services)
+            adopted_routes = list(locked.routes)
+            adopted_ports = list(locked.ports)
+            adopted_container_names = list(locked.container_names)
+            bundle_path = None
+            pinned_reference = locked.reference
+        else:
+            records = extract_bundle_records([texts[name]])
+            adopted_services = records.services
+            adopted_routes = records.routes
+            adopted_ports = records.ports
+            adopted_container_names = records.container_names
+            bundle_path = paths[name]
+            pinned_reference = None
 
-        # If a local entry won, include the artifact this repo's score generation rendered
-        if row.entry.ref is None:
-            includes.append(paths[name].as_posix())
+        # Config-authored declarations replace the adopted set wholesale when non-empty
+        effective_routes = list(row.effective_routes) if row.effective_routes else adopted_routes
+        effective_ports = list(row.effective_ports) if row.effective_ports else adopted_ports
+
+        bundles.append(
+            BundleProject(
+                entry_name=name,
+                project_name=f"{config.project_name}-{name}",
+                bundle_path=bundle_path,
+                pinned_reference=pinned_reference,
+                services=adopted_services,
+                effective_routes=effective_routes,
+                effective_ports=effective_ports,
+                container_names=adopted_container_names,
+            )
+        )
+
+        # The lock and tree fans ride for local and override entries only
+        if bundle_path is not None:
+            if row.entry.ref is None:
+                sources = BundleSources(
+                    bundle_path=bundle_path,
+                    lock_references=consumer_manifests,
+                    tree_root=root,
+                    images=config.images,
+                )
+                _entry_env(env, shas_by_root, name, sources)
+                continue
+
+            # The producer root sits four levels above a stack/generated/compose/ output
+            producer_root = bundle_path.parents[3]
+
+            # If no boatyard.yml-bearing repo root sits above the bundle, refuse
+            if not (producer_root / DEFAULT_CONFIG_PATH).is_file():
+                raise ValueError(f"{bundle_path.as_posix()}: no boatyard.yml-bearing repo root above the bundle override")
+            producer_config = ConfigFile.load(producer_root / DEFAULT_CONFIG_PATH)
+            producer_lock = LockFile.load(producer_root / LOCK_PATH, producer_config)
             sources = BundleSources(
-                bundle_path=paths[name],
-                lock_references=consumer_manifests,
-                tree_root=root,
-                images=config.images,
+                bundle_path=bundle_path,
+                lock_references=producer_lock.manifest_references(values.platform),
+                tree_root=producer_root,
+                images=producer_config.images,
             )
             _entry_env(env, shas_by_root, name, sources)
-            included_bundles.append(IncludedBundle(row=row, path=paths[name].as_posix(), text=texts[name]))
+
+    # Raise if a local or override artifact defines the reserved gateway service or an unresolved reference
+    for bundle in bundles:
+        if bundle.bundle_path is None:
             continue
-
-        # If a winner's override is active, include through the bundle its producer rendered
-
-        # The producer root sits four levels above a stack/generated/compose/ output
-        producer_root = paths[name].parents[3]
-
-        # If no boatyard.yml-bearing repo root sits above the bundle, refuse
-        if not (producer_root / DEFAULT_CONFIG_PATH).is_file():
-            raise ValueError(f"{paths[name].as_posix()}: no boatyard.yml-bearing repo root above the bundle override")
-        producer_config = ConfigFile.load(producer_root / DEFAULT_CONFIG_PATH)
-        producer_lock = LockFile.load(producer_root / LOCK_PATH, producer_config)
-        includes.append(paths[name].as_posix())
-        sources = BundleSources(
-            bundle_path=paths[name],
-            lock_references=producer_lock.manifest_references(values.platform),
-            tree_root=producer_root,
-            images=producer_config.images,
-        )
-        _entry_env(env, shas_by_root, name, sources)
-        included_bundles.append(IncludedBundle(row=row, path=paths[name].as_posix(), text=texts[name]))
-
-    # Raise if an included bundle defines the reserved edge service or an unresolved route or port reference
-    for bundle in included_bundles:
-        name = bundle.row.name
         service_names = refuse_unresolved_references(
-            name, bundle.row.effective_routes, bundle.row.effective_ports, [bundle.text]
+            bundle.entry_name, bundle.effective_routes, bundle.effective_ports, [texts[bundle.entry_name]]
         )
         if GATEWAY_SERVICE_NAME in service_names:
-            raise ValueError(f"{bundle.path}: the included bundle defines the reserved service {GATEWAY_SERVICE_NAME!r}")
+            raise ValueError(
+                f"{bundle.bundle_path.as_posix()}: the included bundle defines the reserved service "
+                f"{GATEWAY_SERVICE_NAME!r}"
+            )
+
+    # Combined-set validations over every winner's effective declarations
+    path_claims: dict[str, str] = {}
+    for bundle in bundles:
+        for route in bundle.effective_routes:
+            if route.path in path_claims:
+                raise ValueError(
+                    f"{source}: route path {route.path} is claimed by both {path_claims[route.path]} "
+                    f"and {bundle.entry_name}"
+                )
+            path_claims[route.path] = bundle.entry_name
+    for row in service_entries:
+        if row.name in winners and row.auth:
+            selected = next(bundle for bundle in bundles if bundle.entry_name == row.name)
+            if len(selected.effective_routes) != 1:
+                raise ValueError(f"{source}: the selected auth option {row.name!r} carries exactly one effective route")
+    if path_claims and config.gateway_port is None:
+        raise ValueError(f"{source}: effective routes require a gateway declaration")
+
+    # A values ports key names a service of a selected bundle carrying exactly one effective port
+    services_by_project = {service: bundle for bundle in bundles for service in bundle.services}
+    port_counts = {port.service: 0 for bundle in bundles for port in bundle.effective_ports}
+    for bundle in bundles:
+        for port in bundle.effective_ports:
+            port_counts[port.service] += 1
+    unknown = sorted(set(values.ports) - set(services_by_project))
+    if unknown:
+        raise ValueError(
+            f"{source}: ports: names {unknown} are services of no selected bundle "
+            f"(services: {sorted(services_by_project)})"
+        )
+    ambiguous = sorted(name for name in values.ports if port_counts.get(name, 0) != 1)
+    if ambiguous:
+        raise ValueError(
+            f"{source}: ports: {ambiguous} carry a count of effective ports a scalar cannot disambiguate"
+        )
 
     # Raise if no declared surface consumes a value from the values section
     consumers: dict[str, set[str]] = {}
@@ -220,10 +296,20 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
         name = min(name for name, referenced in values.references.items() if referenced & set(unresolvable))
         raise ValueError(f"{source}: {name}: ${{{unresolvable[0]}}} resolves to no root")
 
+    # With no public face, no selected surface may consume one of the minted PUBLIC_* slots
+    if public_face is None:
+        for entry_name in sorted(bundle.entry_name for bundle in bundles):
+            public_slots = sorted(name for name in slots_by_entry.get(entry_name, {}) if name in PUBLIC_SLOTS)
+            if public_slots:
+                raise ValueError(
+                    f"{source}: {entry_name} consumes {public_slots[0]}, which requires public_host "
+                    f"in the values file"
+                )
+
     # Raise if no declared source fills a required slot of an assembled entry
     filled = set(hand) | set(minted)
     missing: dict[str, list[str]] = {}
-    for entry_name in sorted(service.name for service in services):
+    for entry_name in sorted(bundle.entry_name for bundle in bundles):
         unfilled = sorted(
             name for name, slot in slots_by_entry.get(entry_name, {}).items() if slot.required and name not in filled
         )
@@ -235,36 +321,56 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
 
     # Unfilled optionals ride as env-file empties; compose takes the :- default for set-to-empty
     # and unset alike
-    for name in sorted({name for service in services for name in slots_by_entry.get(service.name, {})}):
+    for name in sorted({name for bundle in bundles for name in slots_by_entry.get(bundle.entry_name, {})}):
         env.setdefault(name, "")
     for name in values.reference_order:
         parts = PLACEHOLDER.split(hand[name])
         env[name] = "".join(part if index % 2 == 0 else env[part] for index, part in enumerate(parts))
 
+    gateway = None
+    if config.gateway_port is not None:
+        routes = [(bundle.entry_name, route) for bundle in bundles for route in bundle.effective_routes]
+        gateway = GatewayPlan(
+            port=values.gateway_port if values.gateway_port is not None else config.gateway_port,
+            public_face=public_face,
+            routes=routes,
+        )
+
     return AssemblyPlan(
-        services=services,
-        includes=includes,
+        bundles=bundles,
+        gateway=gateway,
         env=env,
         edge_image=consumer_manifests.get(CADDY_IMAGE),
     )
 
 
+def _public_face(config: ConfigFile, values: ValuesFile) -> PublicFace | None:
+    if values.public_host is None:
+        return None
+    scheme = values.public_scheme if values.public_scheme is not None else "http"
+    effective_gateway = values.gateway_port if values.gateway_port is not None else config.gateway_port
+    port = values.public_port
+    if port is None:
+        port = effective_gateway if effective_gateway is not None else (443 if scheme == "https" else 80)
+    return PublicFace(
+        host=values.public_host,
+        scheme=scheme,
+        port=port,
+        url_path=values.public_url_path if values.public_url_path is not None else "",
+    )
+
+
 def _minted(config: ConfigFile, values: ValuesFile) -> dict[str, str]:
     minted: dict[str, str] = {}
-    if values.public_host is not None:
-        scheme = values.public_scheme if values.public_scheme is not None else "http"
-        effective_gateway = values.gateway_port if values.gateway_port is not None else config.gateway_port
-        port = values.public_port
-        if port is None:
-            port = effective_gateway if effective_gateway is not None else (443 if scheme == "https" else 80)
-        url_path = values.public_url_path if values.public_url_path is not None else ""
-        minted[PUBLIC_HOST_SLOT] = values.public_host
-        minted[PUBLIC_SCHEME_SLOT] = scheme
-        minted[PUBLIC_PORT_SLOT] = str(port)
-        minted[PUBLIC_URL_PATH_SLOT] = url_path
-        scheme_default = 443 if scheme == "https" else 80
-        spelled_port = "" if port == scheme_default else f":{port}"
-        minted[PUBLIC_URL_SLOT] = f"{scheme}://{values.public_host}{spelled_port}{url_path}"
+    face = _public_face(config, values)
+    if face is not None:
+        scheme_default = 443 if face.scheme == "https" else 80
+        spelled_port = "" if face.port == scheme_default else f":{face.port}"
+        minted[PUBLIC_HOST_SLOT] = face.host
+        minted[PUBLIC_SCHEME_SLOT] = face.scheme
+        minted[PUBLIC_PORT_SLOT] = str(face.port)
+        minted[PUBLIC_URL_PATH_SLOT] = face.url_path
+        minted[PUBLIC_URL_SLOT] = f"{face.scheme}://{face.host}{spelled_port}{face.url_path}"
     if config.gateway_port is not None:
         minted[EDGE_BASE_URL_SLOT] = f"http://{GATEWAY_SERVICE_NAME}:{EDGE_LISTEN_PORT}"
     return minted
