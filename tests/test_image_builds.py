@@ -163,13 +163,6 @@ class TestDeriveImages:
         assert images["localizer"].contexts == ["neural-networks-base"]
         assert images["localizer"].sha_args == ["LOCALIZER_SHA"]
 
-    def test_an_owned_image_key_resolves_a_from(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "api", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n")
-
-        images = _derive(tmp_path, local=True)
-
-        assert sorted(images) == ["api"]
-
     def test_stage_names_are_not_context_edges(self, tmp_path: Path) -> None:
         write_dockerfile(
             tmp_path,

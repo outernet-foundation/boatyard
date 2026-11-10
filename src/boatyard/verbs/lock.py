@@ -28,7 +28,7 @@ def lock(
         print("no boatyard.yml; no lock declarations to relock")
         return
     config = ConfigFile.load(config_path)
-    if not (config.base_images or config.owned_images or config.declared_charts or config.remote_declared_entries()):
+    if not (config.base_images or config.declared_charts or config.remote_declared_entries()):
         print("no lock declarations (none of base_images, k8s.charts, service refs); nothing to relock")
         return
     relock(config, upgrade=upgrade, check=check)

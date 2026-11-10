@@ -342,7 +342,9 @@ class TestMarkerSubstrateResolution:
         )
         platform_lines = "".join(f"  - {platform}\n" for platform in platforms)
         base_image_lines = (
-            "base_images:\n  LOKI_IMAGE: docker.io/grafana/loki:3.5.0\nbarrier_image: docker.io/library/alpine:3.21.0\n"
+            "base_images:\n"
+            "  LOKI_IMAGE: docker.io/grafana/loki:3.5.0\n"
+            "  ALPINE_IMAGE: docker.io/library/alpine:3.21.0\n"
         )
         (tmp_path / "boatyard.yml").write_text(
             "requires: '>=0'\n"
@@ -555,7 +557,7 @@ COMPOSE_WITH_BARRIER = (
 )
 
 
-def test_generate_compose_renames_the_barrier_and_its_references_per_entry(
+def test_generate_compose_renames_the_barrier_and_keeps_its_references_bare(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     output = _generate_compose(monkeypatch, tmp_path, COMPOSE_WITH_BARRIER)
@@ -564,10 +566,10 @@ def test_generate_compose_renames_the_barrier_and_its_references_per_entry(
     assert list(document["services"]) == ["api", "pf-postgres", "wait-for-resources"]
     assert document["services"]["api"]["depends_on"] == {"wait-for-resources": {"condition": "service_started"}}
     assert document["services"]["pf-postgres"]["depends_on"] == ["wait-for-resources"]
-    assert document["services"]["wait-for-resources"]["image"] == "${CORE_MAIN__BOATYARD_LOCK__ALPINE_IMAGE:?err}"
+    assert document["services"]["wait-for-resources"]["image"] == "${BOATYARD_BARRIER_IMAGE:?err}"
 
 
-def test_generate_compose_barrier_names_differ_per_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_generate_compose_barrier_names_are_one_global_slot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "api.yaml").write_text(
         "metadata:\n  name: api\n  annotations:\n    outernet.internal/lock: api=API_IMAGE\ncontainers:\n  api: {}\n",
@@ -597,8 +599,8 @@ def test_generate_compose_barrier_names_differ_per_entry(tmp_path: Path, monkeyp
 
     core = yaml.safe_load((tmp_path / "stack/generated/compose/compose.core-main.yaml").read_text(encoding="utf-8"))
     edge = yaml.safe_load((tmp_path / "stack/generated/compose/compose.edge-main.yaml").read_text(encoding="utf-8"))
-    assert core["services"]["wait-for-resources"]["image"] == "${CORE_MAIN__BOATYARD_LOCK__ALPINE_IMAGE:?err}"
-    assert edge["services"]["wait-for-resources"]["image"] == "${EDGE_MAIN__BOATYARD_LOCK__ALPINE_IMAGE:?err}"
+    assert core["services"]["wait-for-resources"]["image"] == "${BOATYARD_BARRIER_IMAGE:?err}"
+    assert edge["services"]["wait-for-resources"]["image"] == "${BOATYARD_BARRIER_IMAGE:?err}"
 
 
 class WorkloadContentsRecorder:
@@ -958,7 +960,7 @@ def _bundle_config(tmp_path: Path, **bundle: object) -> ConfigFile:
         "project_name": "example",
         "platforms": ["linux/amd64"],
         "gateway_port": 8080,
-        "base_images": {"API_IMAGE": "docker.io/library/api:1"},
+        "base_images": {"API_IMAGE": "docker.io/library/api:1", "ALPINE_IMAGE": "docker.io/library/alpine:3.21.0"},
         "services": {"core": {"options": {"main": {"workloads": ["api.yaml"], **bundle}}}},
     }
     (tmp_path / "boatyard.yml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
@@ -1015,14 +1017,6 @@ def test_barrier_pin_stays_unregistered_without_provisioner_services(
     )
 
     assert templates == [["probe-adapter-healthchecks.tpl", "restart.tpl"]]
-
-
-def test_generate_compose_pins_the_barrier_to_the_owned_alpine_slot(tmp_path: Path) -> None:
-    (tmp_path / "stack" / "score").mkdir(parents=True)
-    (tmp_path / "stack" / "score" / "api.yaml").write_text("metadata:\n  name: api\ncontainers: {}\n", encoding="utf-8")
-    config = _bundle_config(tmp_path)
-
-    assert list(config.owned_images) == ["ALPINE_IMAGE", "CADDY_IMAGE"]
 
 
 def test_provisioners_register_by_resource_type_closure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1785,6 +1779,7 @@ def _verb_repo(tmp_path: Path) -> None:
             "platforms": ["linux/amd64"],
             "base_images": {
                 "LOKI_IMAGE": "docker.io/grafana/loki:3.5.0",
+                "ALPINE_IMAGE": "docker.io/library/alpine:3.21.0",
             },
             "services": {"core": {"options": {"main": {"workloads": ["api.yaml"]}}}},
         }),

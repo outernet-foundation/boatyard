@@ -137,25 +137,29 @@ def _write_repo(
     platforms: list[str] | None = None,
     ref_services: dict[str, Any] | None = None,
     gateway: int | None = None,
+    alpine: bool = True,
 ) -> None:
     payload: dict[str, Any] = {"requires": ">=0", "project_name": "demo", "repository": "ghcr.io/org/demo"}
     if gateway is not None:
         payload["gateway_port"] = gateway
-    if base_images:
+    declared: dict[str, Any] = dict(base_images or {})
+    caller_refs = ref_services is not None and bool(ref_services)
+    if alpine:
+        declared.setdefault("ALPINE_IMAGE", "docker.io/library/alpine:3.20")
+    if ref_services is None:
+        ref_services = {"core": {"options": {"main": {"workloads": ["api.yaml"]}}}}
         payload["platforms"] = platforms or ["linux/amd64"]
-        payload["base_images"] = base_images
+    elif platforms:
+        payload["platforms"] = platforms
+    if declared:
+        payload["platforms"] = platforms or ["linux/amd64"]
+        payload["base_images"] = declared
     if charts:
         payload["k8s"] = {"charts": charts}
         for chart in charts:
             values = root / "stack" / "score" / "k8s" / "values" / f"{chart}.yaml"
             values.parent.mkdir(parents=True, exist_ok=True)
             values.write_text("chart: {}\n", encoding="utf-8")
-    caller_refs = ref_services is not None and bool(ref_services)
-    if ref_services is None:
-        ref_services = {"core": {"options": {"main": {"workloads": ["api.yaml"]}}}}
-        payload["platforms"] = platforms or ["linux/amd64"]
-    elif platforms:
-        payload["platforms"] = platforms
     if ref_services:
         payload["project_name"] = "demo"
         payload["services"] = ref_services
@@ -163,7 +167,7 @@ def _write_repo(
         score.mkdir(parents=True, exist_ok=True)
         (score / "api.yaml").write_text("metadata:\n  name: api\ncontainers: {}\n", encoding="utf-8")
     (root / "boatyard.yml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-    if (base_images or charts or caller_refs) and not (root / LOCK_PATH).exists():
+    if (declared or charts or caller_refs) and not (root / LOCK_PATH).exists():
         (root / LOCK_PATH).write_text("", encoding="utf-8")
 
 
@@ -207,6 +211,16 @@ class TestSelfSkip:
         assert not (tmp_path / LOCK_PATH).exists()
 
     def test_skips_without_declarations(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.chdir(tmp_path)
+        _write_repo(tmp_path, alpine=False)
+
+        result = runner.invoke(app, ["lock"])
+
+        assert result.exit_code == 0, result.output
+        assert "no lock declarations" in result.output
+        assert not (tmp_path / LOCK_PATH).exists()
+
+    def test_a_local_repo_with_only_the_alpine_base_records_it(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(Image, "compute_sha", _refuse_the_tree_walk)
         monkeypatch.setattr(lock_module, "bash_output", IndexRegistry().bash_output)
         monkeypatch.setattr(lock_module, "resolve_remote_digest", DigestRecorder().resolve)
@@ -736,20 +750,15 @@ class TestBundleRecording:
         monkeypatch.chdir(tmp_path)
         services = ref_services or {"tunnel": {"options": {"rathole": {"ref": self.TUNNEL_RATHOLE}}}}
         if declares_routes:
-            caddy_declaration = "docker.io/library/caddy:2.8.4-alpine@" + DIGEST_A
-            caddy_base = MIRROR_PREFIX + "/" + caddy_declaration
             _write_repo(
                 tmp_path,
                 gateway=8080,
                 platforms=["linux/amd64"],
                 ref_services=services,
+                alpine=False,
             )
-            if not committed:
-                committed = yaml.safe_dump({
-                    "images": {"CADDY_IMAGE": {"index": caddy_base, "platforms": {"linux/amd64": caddy_base}}}
-                })
         else:
-            _write_repo(tmp_path, ref_services=services)
+            _write_repo(tmp_path, ref_services=services, alpine=False)
         if committed:
             (tmp_path / LOCK_PATH).write_text(committed, encoding="utf-8")
         return runner.invoke(app, ["lock", *arguments]), recorder, registry.inspected
@@ -1386,7 +1395,9 @@ class TestPairedLoad:
     def test_a_missing_lock_in_a_bundles_only_repo_reads_as_empty(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        _write_repo(tmp_path, ref_services={"livekit": {"ref": "oci://ghcr.io/org/repo/livekit:0.4.0-dev.3"}})
+        _write_repo(
+            tmp_path, ref_services={"livekit": {"ref": "oci://ghcr.io/org/repo/livekit:0.4.0-dev.3"}}, alpine=False
+        )
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["mirror"])
@@ -1395,7 +1406,9 @@ class TestPairedLoad:
         assert "nothing is declared to mirror" in str(result.exception)
 
     def test_load_reads_a_missing_lock_as_the_empty_paired_lock(self, tmp_path: Path) -> None:
-        _write_repo(tmp_path, ref_services={"livekit": {"ref": "oci://ghcr.io/org/repo/livekit:0.4.0-dev.3"}})
+        _write_repo(
+            tmp_path, ref_services={"livekit": {"ref": "oci://ghcr.io/org/repo/livekit:0.4.0-dev.3"}}, alpine=False
+        )
 
         lock = LockFile.load(tmp_path / LOCK_PATH, self._config(tmp_path))
 

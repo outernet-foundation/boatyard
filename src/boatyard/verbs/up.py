@@ -15,6 +15,7 @@ from boatyard.compose import compose_command
 from boatyard.crane import install_crane
 from boatyard.lock import OciArtifactManifest, extract_bundle_records
 from boatyard.models.config_file import (
+    EDGE_IMAGE,
     EDGE_LISTEN_PORT,
     GATEWAY_SERVICE_NAME,
     ConfigFile,
@@ -289,7 +290,7 @@ def render_gateway_document(
         "networks": {shared_network_name: {"external": True}},
         "services": {
             GATEWAY_SERVICE_NAME: {
-                "image": plan.edge_image,
+                "image": EDGE_IMAGE,
                 "configs": [{"source": EDGE_CONFIG_NAME, "target": "/etc/caddy/Caddyfile"}],
                 "ports": [{"target": EDGE_LISTEN_PORT, "published": gateway.port, "protocol": "tcp"}],
                 "networks": {shared_network_name: None},

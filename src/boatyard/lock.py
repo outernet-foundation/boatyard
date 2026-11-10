@@ -144,7 +144,7 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
 
     images: dict[str, ConfigLockEntry] = {}
     refuse_local_lock_entries(committed, config, committed_path.as_posix())
-    for name, reference in config.mirrored_base_images.items():
+    for name, reference in config.remote_base_images.items():
         base = mirrored_ref(reference, prefix)
         committed_entry = committed.images.get(name)
 

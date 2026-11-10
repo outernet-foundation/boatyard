@@ -44,8 +44,8 @@ AUTH_KEYCLOAK_BUNDLE_ENTRY = {
     "ports": [],
     "container_names": [],
 }
-ALPINE_OWNED = {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST}
 EDGE_BASE_URL_LINE = "EDGE_BASE_URL=http://boatyard-gateway:8443\n"
+BARRIER_MINT_LINE = "BOATYARD_BARRIER_IMAGE=docker.io/library/alpine:3.20\n"
 PINNED_COMPOSE_VERSION = "5.6.1"
 
 ASSEMBLY_ARGUMENT_PATTERN = re.compile(r"-f (\S*devkit-gateway-\S+\.yaml)")
@@ -172,10 +172,7 @@ def _write_lock(
     bundles: Mapping[str, str | dict[str, object]] | None = None,
 ) -> None:
     # Write one platform-manifest reference per declared platform beside the index.
-    declared = {
-        "CADDY_IMAGE": MIRROR_PREFIX + "/docker.io/library/caddy:2.8.4-alpine@" + FAKE_DIGEST,
-        **(entries or {}),
-    }
+    declared = dict(entries or {})
     platforms = platform_entries if platform_entries is not None else {"linux/amd64": ""}
     document: dict[str, object] = {
         "platforms": list(platforms),
@@ -273,6 +270,7 @@ def _write_producer(
                 "services": {"core": {"options": {"main": {"workloads": referenced or ["api.yaml"]}}}},
                 "base_images": {
                     "LOKI_IMAGE": "docker.io/grafana/loki:3.0",
+                    "ALPINE_IMAGE": "docker.io/library/alpine:3.20",
                 },
                 "platforms": list(lock.get("platforms", [])),
             }),
@@ -319,7 +317,6 @@ def _write_override_consumer(
     platforms: list[str] | None = None,
     lock_images: dict[str, str] | None = None,
     services_extra: dict[str, object] | None = None,
-    owned_barrier: bool = False,
 ) -> None:
     # The overridden placeframe-cuda ref gets no lock entry; the override replaces its registry source.
     services: dict[str, object] = {
@@ -344,8 +341,6 @@ def _write_override_consumer(
         payload["base_images"] = dict.fromkeys(images, "docker.io/library/alpine:3.20")
     _write_config(root, payload)
     entries = dict(images)
-    if owned_barrier:
-        entries.update(ALPINE_OWNED)
     _write_lock(
         root,
         entries=entries,
@@ -445,7 +440,6 @@ def _write_consumer_tree(
     )
     _write_lock(
         root,
-        entries=dict(ALPINE_OWNED),
         bundles={
             "AUTH_KEYCLOAK_BUNDLE": dict(AUTH_KEYCLOAK_BUNDLE_ENTRY),
             "LIVEKIT_BUNDLE": dict(LIVEKIT_BUNDLE_ENTRY),
@@ -501,7 +495,7 @@ class TestSelectionLaw:
                 },
             },
         )
-        _write_lock(tmp_path, entries=dict(ALPINE_OWNED))
+        _write_lock(tmp_path)
         one_cuda = _write_bundle_output(tmp_path, "one-cuda", ["api"])
         _write_bundle_output(tmp_path, "two-cuda", ["edge"])
         _write_workload(tmp_path, "api.yaml", "api")
@@ -571,7 +565,7 @@ class TestSelectionLaw:
                 "repository": "ghcr.io/org/demo",
             },
         )
-        _write_lock(tmp_path, entries=dict(ALPINE_OWNED))
+        _write_lock(tmp_path)
         _write_bundle_output(tmp_path, "placeframe-cuda", ["api"])
         _write_workload(tmp_path, "api.yaml", "api")
         _write_values_file(tmp_path, {})
@@ -681,7 +675,7 @@ class TestUpMaterialization:
         assert result.exit_code == 0, result.output
         assert spy.projects == ["demo-auth-keycloak", "demo-placeframe-cuda", "demo-livekit", "demo"]
         gateway_service = spy.gateway["services"]["boatyard-gateway"]
-        assert gateway_service["image"] == MIRROR_PREFIX + "/docker.io/library/caddy:2.8.4-alpine@" + FAKE_DIGEST
+        assert gateway_service["image"] == "docker.io/library/caddy:2.8.4-alpine"
         assert gateway_service["ports"] == [{"target": 8443, "published": 58080, "protocol": "tcp"}]
         assert gateway_service["networks"] == {"demo-shared": None}
         assert "environment" not in gateway_service
@@ -743,7 +737,7 @@ class TestUpMaterialization:
                 },
             },
         )
-        _write_lock(tmp_path, entries=dict(ALPINE_OWNED))
+        _write_lock(tmp_path)
         _write_bundle_output(tmp_path, "placeframe-cuda", ["api"])
         _write_bundle_output(tmp_path, "placeframe-rocm", ["api"])
         _write_workload(tmp_path, "api.yaml", "api")
@@ -760,7 +754,9 @@ class TestUpMaterialization:
         assert "demo-placeframe-cuda" not in spy.projects
         assert spy.override_documents[0]["services"]["api"]["ports"] == [{"published": 19777, "target": 8000}]
 
-    def test_the_edge_refuses_without_the_caddy_lock_entry(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_the_gateway_renders_the_pinned_caddy_with_an_empty_image_lock(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         _write_consumer_tree(tmp_path)
         tmp_path.joinpath(*LOCK_PATH.parts).write_text(
             yaml.safe_dump({
@@ -785,13 +781,13 @@ class TestUpMaterialization:
             }),
             encoding="utf-8",
         )
+        spy = UpSpy().spy_up(monkeypatch)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
 
-        assert result.exit_code != 0
-        assert isinstance(result.exception, ValueError)
-        assert "CADDY_IMAGE" in str(result.exception)
+        assert result.exit_code == 0, result.output
+        assert spy.gateway["services"]["boatyard-gateway"]["image"] == "docker.io/library/caddy:2.8.4-alpine"
 
     def test_an_auth_selection_without_public_host_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_consumer_tree(tmp_path, bundles="placeframe-cuda,auth-keycloak", extra_values={"public_host": None})
@@ -846,7 +842,7 @@ class TestUpValidation:
             },
         )
         _write_workload(tmp_path, "api.yaml", "api")
-        _write_lock(tmp_path, entries=dict(ALPINE_OWNED))
+        _write_lock(tmp_path)
         _write_values_file(tmp_path, {"bundles": ["placeframe-cuda"]})
 
         result = self._invoke_up(tmp_path, monkeypatch)
@@ -890,8 +886,7 @@ class TestUpValidation:
         _write_consumer_tree(tmp_path)
         _write_lock(
             tmp_path,
-            entries=dict(ALPINE_OWNED),
-            bundles={
+                bundles={
                 "AUTH_KEYCLOAK_BUNDLE": KEYCLOAK_PINNED,
                 "LIVEKIT_BUNDLE": {
                     "reference": LIVEKIT_PINNED,
@@ -926,8 +921,7 @@ class TestUpValidation:
         )
         _write_lock(
             tmp_path,
-            entries=dict(ALPINE_OWNED),
-            bundles={
+                bundles={
                 "AUTH_KEYCLOAK_BUNDLE": KEYCLOAK_PINNED,
                 "LIVEKIT_BUNDLE": {
                     "reference": LIVEKIT_PINNED,
@@ -963,7 +957,7 @@ class TestSharedNames:
                 },
             },
         )
-        _write_lock(tmp_path, entries=dict(ALPINE_OWNED))
+        _write_lock(tmp_path)
         _write_bundle_output(tmp_path, "left-a", ["api"])
         _write_bundle_output(tmp_path, "right-b", ["api"])
         _write_workload(tmp_path, "api.yaml", "api")
@@ -998,7 +992,7 @@ class TestSharedNames:
                 },
             },
         )
-        _write_lock(tmp_path, entries=dict(ALPINE_OWNED))
+        _write_lock(tmp_path)
         _write_bundle_output(tmp_path, "left-a", ["api"])
         _write_bundle_output(tmp_path, "right-b", ["api"])
         _write_workload(tmp_path, "api.yaml", "api")
@@ -1137,31 +1131,7 @@ class TestLockEnvSynthesis:
             {
                 "project_name": "demo",
                 "repository": "ghcr.io/org/demo",
-                "services": {"apps": {"options": {"core": {"workloads": ["api.yaml"]}}}},
-            },
-        )
-        _write_bundle_output(tmp_path, "apps-core", ["api"])
-        _write_workload(tmp_path, "api.yaml", "api")
-        _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST})
-        _write_values_file(tmp_path, {"bundles": ["apps-core"]})
-        spy = self._invoke_up_with_lock(tmp_path, monkeypatch)
-
-        result = runner.invoke(app, ["up"])
-
-        assert result.exit_code == 0, result.output
-        assert spy.env_content == (
-            f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
-            f"APPS_CORE__BOATYARD_LOCK__CADDY_IMAGE={self.ALPINE_MANIFEST}\n" + EDGE_BASE_URL_LINE
-        )
-
-    def test_a_selected_local_entry_reads_its_lock_keys_under_the_entry_prefix(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        _write_config(
-            tmp_path,
-            {
-                "project_name": "demo",
-                "repository": "ghcr.io/org/demo",
+                "base_images": {"ALPINE_IMAGE": "docker.io/library/alpine:3.20"},
                 "platforms": ["linux/amd64"],
                 "services": {"apps": {"options": {"core": {"workloads": ["api.yaml"]}}}},
             },
@@ -1177,7 +1147,36 @@ class TestLockEnvSynthesis:
         assert result.exit_code == 0, result.output
         assert spy.env_content == (
             f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
-            f"APPS_CORE__BOATYARD_LOCK__CADDY_IMAGE={self.ALPINE_MANIFEST}\n" + EDGE_BASE_URL_LINE
+            + BARRIER_MINT_LINE
+            + EDGE_BASE_URL_LINE
+        )
+
+    def test_a_selected_local_entry_reads_its_lock_keys_under_the_entry_prefix(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _write_config(
+            tmp_path,
+            {
+                "project_name": "demo",
+                "repository": "ghcr.io/org/demo",
+                "base_images": {"ALPINE_IMAGE": "docker.io/library/alpine:3.20"},
+                "platforms": ["linux/amd64"],
+                "services": {"apps": {"options": {"core": {"workloads": ["api.yaml"]}}}},
+            },
+        )
+        _write_bundle_output(tmp_path, "apps-core", ["api"])
+        _write_workload(tmp_path, "api.yaml", "api")
+        _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST})
+        _write_values_file(tmp_path, {"bundles": ["apps-core"]})
+        spy = self._invoke_up_with_lock(tmp_path, monkeypatch)
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code == 0, result.output
+        assert spy.env_content == (
+            f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
+            + BARRIER_MINT_LINE
+            + EDGE_BASE_URL_LINE
         )
 
     def test_a_selected_local_entry_carries_its_tree_tags_under_the_entry_prefix(
@@ -1188,6 +1187,8 @@ class TestLockEnvSynthesis:
             {
                 "project_name": "demo",
                 "repository": "ghcr.io/org/demo",
+                "base_images": {"ALPINE_IMAGE": "docker.io/library/alpine:3.20"},
+                "platforms": ["linux/amd64"],
                 "services": {"apps": {"options": {"core": {"workloads": ["api.yaml"]}}}},
             },
         )
@@ -1216,8 +1217,9 @@ class TestLockEnvSynthesis:
         assert result.exit_code == 0, result.output
         assert spy.env_content == (
             f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
-            f"APPS_CORE__BOATYARD_LOCK__CADDY_IMAGE={self.ALPINE_MANIFEST}\n"
-            "APPS_CORE__BOATYARD_TREE__API_SHA=tree-consumer\n" + EDGE_BASE_URL_LINE
+            "APPS_CORE__BOATYARD_TREE__API_SHA=tree-consumer\n"
+            + BARRIER_MINT_LINE
+            + EDGE_BASE_URL_LINE
         )
         assert " -u APPS_CORE__BOATYARD_TREE__API_SHA " in spy.commands[0]
 
@@ -1242,6 +1244,7 @@ class TestLockEnvSynthesis:
                 "project_name": "demo",
                 "platforms": ["linux/amd64", "linux/arm64"],
                 "repository": "ghcr.io/org/demo",
+                "base_images": {"ALPINE_IMAGE": "docker.io/library/alpine:3.20"},
                 "services": {"apps": {"options": {"core": {"workloads": ["api.yaml"]}}}},
             },
         )
@@ -1260,8 +1263,7 @@ class TestLockEnvSynthesis:
 
         assert result.exit_code == 0, result.output
         assert spy.env_content == (
-            f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={arm64_manifest}\n"
-            f"APPS_CORE__BOATYARD_LOCK__CADDY_IMAGE={arm64_manifest}\n" + EDGE_BASE_URL_LINE
+            f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={arm64_manifest}\n" + BARRIER_MINT_LINE + EDGE_BASE_URL_LINE
         )
 
     def test_a_multi_platform_repo_without_a_selection_refuses_listing_declared(
@@ -1328,7 +1330,9 @@ class TestLockEnvSynthesis:
         assert "the project demo-tunnel failed" in report
         retained = [Path(path) for path in report.split("kept artifacts for inspection: ", 1)[1].split(", ")]
         [env_file] = [path for path in retained if path.suffix == ".env"]
-        assert env_file.read_text(encoding="utf-8") == EDGE_BASE_URL_LINE + "SECRET_TOKEN=supersecret\n"
+        assert env_file.read_text(encoding="utf-8") == (
+            BARRIER_MINT_LINE + EDGE_BASE_URL_LINE + "SECRET_TOKEN=supersecret\n"
+        )
         assert "supersecret" not in result.output
 
 
@@ -1399,19 +1403,20 @@ class TestBundleOverrides:
         assert output.resolve().as_posix() in spy.bundle_command("demo-placeframe-cuda")
         assert [_normalize(command, consumer, output) for command in spy.commands] == [
             (
-                "env -u EDGE_BASE_URL -u PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE "
+                "env -u BOATYARD_BARRIER_IMAGE -u EDGE_BASE_URL -u PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE "
                 "-u PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE "
                 "docker compose -p demo-placeframe-cuda -f PRODUCER -f OVERRIDE "
                 "--project-directory ROOT --env-file LOCKENV up --pull missing -d"
             ),
             (
-                "env -u EDGE_BASE_URL -u PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE "
+                "env -u BOATYARD_BARRIER_IMAGE -u EDGE_BASE_URL -u PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE "
                 "-u PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE "
                 "docker compose -p demo -f GATEWAY --project-directory ROOT --env-file LOCKENV up --pull missing -d"
             ),
         ]
         assert spy.env_content == (
-            EDGE_BASE_URL_LINE
+            BARRIER_MINT_LINE
+            + EDGE_BASE_URL_LINE
             + (
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
@@ -1434,7 +1439,8 @@ class TestBundleOverrides:
 
         assert result.exit_code == 0, result.output
         assert spy.env_content == (
-            EDGE_BASE_URL_LINE
+            BARRIER_MINT_LINE
+            + EDGE_BASE_URL_LINE
             + (
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
@@ -1457,7 +1463,8 @@ class TestBundleOverrides:
 
         assert result.exit_code == 0, result.output
         assert spy.env_content == (
-            EDGE_BASE_URL_LINE
+            BARRIER_MINT_LINE
+            + EDGE_BASE_URL_LINE
             + (
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
@@ -1481,7 +1488,8 @@ class TestBundleOverrides:
 
         assert result.exit_code == 0, result.output
         assert spy.env_content == (
-            EDGE_BASE_URL_LINE
+            BARRIER_MINT_LINE
+            + EDGE_BASE_URL_LINE
             + (
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_ARM64_DIGEST}\n"
@@ -1547,8 +1555,7 @@ class TestBundleOverrides:
         _write_override_consumer(
             consumer,
             {"path_overrides": {"extra-main": "../producer/stack/generated/compose/compose.extra.yaml"}},
-            services_extra={"extra": {"options": {"main": {"workloads": ["extra.yaml"]}}}},
-            owned_barrier=True,
+            services_extra={"extra": {"options": {"main": {"workloads": ["extra.yaml"]}}}}
         )
         _write_workload(consumer, "extra.yaml", "extra")
         self._invoke_up(monkeypatch, consumer)
@@ -1582,7 +1589,8 @@ class TestBundleOverrides:
         assert spy.projects == ["demo-placeframe-cuda", "demo"]
         assert output.resolve().as_posix() in spy.bundle_command("demo-placeframe-cuda")
         assert spy.env_content == (
-            EDGE_BASE_URL_LINE
+            BARRIER_MINT_LINE
+            + EDGE_BASE_URL_LINE
             + (
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
@@ -1671,8 +1679,7 @@ class TestBundleOverrides:
                 "path_overrides": {"placeframe-cuda": OVERRIDE_PATH},
                 "bundles": ["placeframe-cuda", "extra-main"],
             },
-            services_extra={"extra": {"options": {"main": {"workloads": ["grafana.yaml"]}}}},
-            owned_barrier=True,
+            services_extra={"extra": {"options": {"main": {"workloads": ["grafana.yaml"]}}}}
         )
         _write_workload(consumer, "grafana.yaml", "grafana")
         _write_bundle_output(consumer, "extra-main", ["api"])
@@ -1726,8 +1733,7 @@ class TestValuesFileLaw:
         )
         _write_lock(
             tmp_path,
-            entries=dict(ALPINE_OWNED),
-            bundles={
+                bundles={
                 "AUTH_KEYCLOAK_BUNDLE": KEYCLOAK_PINNED,
                 "LIVEKIT_BUNDLE": {
                     "reference": LIVEKIT_PINNED,
@@ -1748,8 +1754,7 @@ class TestValuesFileLaw:
         _write_consumer_tree(tmp_path)
         _write_lock(
             tmp_path,
-            entries=dict(ALPINE_OWNED),
-            bundles={
+                bundles={
                 "AUTH_KEYCLOAK_BUNDLE": KEYCLOAK_PINNED,
                 "LIVEKIT_BUNDLE": {
                     "reference": LIVEKIT_PINNED,

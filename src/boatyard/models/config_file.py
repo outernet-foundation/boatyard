@@ -67,11 +67,12 @@ AUTH_GROUP_NAME = "auth"
 GATEWAY_SERVICE_NAME = "boatyard-gateway"
 EDGE_LISTEN_PORT = 8443
 BARRIER_SERVICE = "wait-for-resources"
-CADDY_IMAGE = "CADDY_IMAGE"
-ALPINE_IMAGE = "ALPINE_IMAGE"
 
-DEFAULT_BARRIER_IMAGE = "docker.io/library/alpine:3.20"
-DEFAULT_EDGE_IMAGE = "docker.io/library/caddy:2.8.4-alpine"
+# Boatyard machinery pins: moved by boatyard releases, never authored, locked, or mirrored
+# by consumers; pulled by tag from upstream until boatyard hosts its own mirror.
+BARRIER_IMAGE = "docker.io/library/alpine:3.20"
+EDGE_IMAGE = "docker.io/library/caddy:2.8.4-alpine"
+BARRIER_IMAGE_SLOT = "BOATYARD_BARRIER_IMAGE"
 
 COMPOSE_OUTPUT_DIR = Path("stack/generated/compose")
 
@@ -94,8 +95,6 @@ class ConfigFile(BaseModel):
     gateway_port: PortNumber | None = None
     repository: str | None = None
     base_images: dict[AllCapsName, str | LocalBaseEntry] = Field(default_factory=dict)
-    barrier_image: str = DEFAULT_BARRIER_IMAGE
-    edge_image: str = DEFAULT_EDGE_IMAGE
     project_name: str
     platforms: list[str] = Field(default_factory=list)
     services: dict[str, ServiceMember] = Field(default_factory=dict)
@@ -157,21 +156,6 @@ class ConfigFile(BaseModel):
         return {name: reference for name, reference in self.base_images.items() if isinstance(reference, str)}
 
     @property
-    def owned_images(self) -> dict[str, str]:
-        # Boatyard-emitted service pins: the barrier ships with local workloads, the edge with a gateway
-        owned: dict[str, str] = {}
-        if self.local_workload_names():
-            owned[ALPINE_IMAGE] = self.barrier_image
-        if self.gateway_port is not None:
-            owned[CADDY_IMAGE] = self.edge_image
-        return owned
-
-    @property
-    def mirrored_base_images(self) -> dict[str, str]:
-        # Authored remote bases plus boatyard-owned keys; everything resolved through the mirror prefix
-        return {**self.remote_base_images, **self.owned_images}
-
-    @property
     def variant_axes(self) -> dict[str, list[str]]:
         # The declared axes over the image set; equal axis names carry equal value sets by the
         # axis-equality law at load
@@ -207,18 +191,8 @@ class ConfigFile(BaseModel):
         cls, value: dict[AllCapsName, str | LocalBaseEntry]
     ) -> dict[AllCapsName, str | LocalBaseEntry]:
         for name, reference in value.items():
-            if name in (ALPINE_IMAGE, CADDY_IMAGE):
-                raise ValueError(
-                    f"base_images.{name}: the barrier and edge pins are boatyard-owned (barrier_image:/edge_image:)"
-                )
             if isinstance(reference, str):
                 _require_declared_reference(reference, f"base_images.{name}")
-        return value
-
-    @field_validator("barrier_image", "edge_image")
-    @classmethod
-    def _validate_owned_image_pins(cls, value: str, info: ValidationInfo) -> str:
-        _require_declared_reference(value, str(info.field_name))
         return value
 
     @field_validator("platforms")
@@ -295,7 +269,7 @@ class ConfigFile(BaseModel):
         any_local = bool(self.local_workload_names())
         if any_local and not self.repository:
             raise ValueError("repository is required by the local entries (workloads:)")
-        if (self.base_images or self.owned_images) and not self.platforms:
+        if self.base_images and not self.platforms:
             raise ValueError(
                 "platforms is required when images are declared (an amd64-only repo declares [linux/amd64])"
             )
@@ -313,10 +287,6 @@ class ConfigFile(BaseModel):
         upstream_sites: list[tuple[str, str]] = [
             (f"base_images.{name}", reference) for name, reference in self.remote_base_images.items()
         ]
-        upstream_sites.extend([
-            ("barrier_image", self.barrier_image),
-            ("edge_image", self.edge_image),
-        ])
         if self.k8s is not None:
             upstream_sites.extend(
                 (f"k8s.charts.{name}", reference.removeprefix(OCI_REFERENCE_PREFIX))
@@ -563,8 +533,7 @@ def _derive(config: ConfigFile, root: Path) -> None:
             entry_axes[image_name] = (axis, values)
 
     # Resolve each FROM key into at most one local base edge
-    owned = config.owned_images
-    resolvable = set(remote_bases) | set(local_bases) | set(owned)
+    resolvable = set(remote_bases) | set(local_bases)
     images: dict[str, Image] = {}
     for name, fact in facts.items():
         bases: dict[str, str] = {}

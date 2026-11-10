@@ -111,16 +111,7 @@ def _write_repo(
             "index": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}",
             "platforms": {"linux/amd64": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}"},
         },
-        "ALPINE_IMAGE": {
-            "index": f"ghcr.io/org/alpine:3.20@{FAKE_DIGEST}",
-            "platforms": {"linux/amd64": f"ghcr.io/org/alpine:3.20@{FAKE_DIGEST}"},
-        },
     }
-    if gateway is not None:
-        lock_images["CADDY_IMAGE"] = {
-            "index": f"ghcr.io/org/caddy:2.8@{FAKE_DIGEST}",
-            "platforms": {"linux/amd64": f"ghcr.io/org/caddy:2.8@{FAKE_DIGEST}"},
-        }
     root.joinpath(*LOCK_PATH.parts).write_text(
         yaml.safe_dump({
             "platforms": ["linux/amd64"],
@@ -493,7 +484,7 @@ def test_a_reference_to_a_sibling_key_resolves_at_render(tmp_path: Path) -> None
         "BIND_TOKEN": "two",
         "PROV_TOKEN": "three",
         "MON_TOKEN": "four",
-        "CORE_MAIN__BOATYARD_LOCK__ALPINE_IMAGE": f"ghcr.io/org/alpine:3.20@{FAKE_DIGEST}",
+        "BOATYARD_BARRIER_IMAGE": "docker.io/library/alpine:3.20",
         "CORE_MAIN__BOATYARD_LOCK__LOKI_IMAGE": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}",
     }
 
@@ -508,7 +499,7 @@ def test_a_reference_chains_through_another_reference(tmp_path: Path) -> None:
         "BIND_TOKEN": "threeb",
         "PROV_TOKEN": "three",
         "MON_TOKEN": "four",
-        "CORE_MAIN__BOATYARD_LOCK__ALPINE_IMAGE": f"ghcr.io/org/alpine:3.20@{FAKE_DIGEST}",
+        "BOATYARD_BARRIER_IMAGE": "docker.io/library/alpine:3.20",
         "CORE_MAIN__BOATYARD_LOCK__LOKI_IMAGE": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}",
     }
 
@@ -528,7 +519,7 @@ def test_the_minted_public_url_is_a_reference_root(tmp_path: Path) -> None:
         "BIND_TOKEN": "two",
         "PROV_TOKEN": "three",
         "MON_TOKEN": "four",
-        "CORE_MAIN__BOATYARD_LOCK__ALPINE_IMAGE": f"ghcr.io/org/alpine:3.20@{FAKE_DIGEST}",
+        "BOATYARD_BARRIER_IMAGE": "docker.io/library/alpine:3.20",
         "CORE_MAIN__BOATYARD_LOCK__LOKI_IMAGE": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}",
     }
 
@@ -575,8 +566,7 @@ def test_the_minted_edge_base_url_is_a_reference_root(tmp_path: Path) -> None:
         "BIND_TOKEN": "two",
         "PROV_TOKEN": "three",
         "MON_TOKEN": "four",
-        "CORE_MAIN__BOATYARD_LOCK__ALPINE_IMAGE": f"ghcr.io/org/alpine:3.20@{FAKE_DIGEST}",
-        "CORE_MAIN__BOATYARD_LOCK__CADDY_IMAGE": f"ghcr.io/org/caddy:2.8@{FAKE_DIGEST}",
+        "BOATYARD_BARRIER_IMAGE": "docker.io/library/alpine:3.20",
         "CORE_MAIN__BOATYARD_LOCK__LOKI_IMAGE": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}",
     }
 
@@ -670,7 +660,7 @@ def test_assembly_renders_resolved_values_with_the_minted_slot(tmp_path: Path) -
         "BIND_TOKEN": "two",
         "PROV_TOKEN": "three",
         "MON_TOKEN": "four",
-        "CORE_MAIN__BOATYARD_LOCK__ALPINE_IMAGE": f"ghcr.io/org/alpine:3.20@{FAKE_DIGEST}",
+        "BOATYARD_BARRIER_IMAGE": "docker.io/library/alpine:3.20",
         "CORE_MAIN__BOATYARD_LOCK__LOKI_IMAGE": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}",
     }
 
@@ -688,7 +678,6 @@ def test_assembly_fills_the_minted_edge_base_url(tmp_path: Path) -> None:
         "BIND_TOKEN": "two",
         "PROV_TOKEN": "three",
         "MON_TOKEN": "four",
-        "CORE_MAIN__BOATYARD_LOCK__ALPINE_IMAGE": f"ghcr.io/org/alpine:3.20@{FAKE_DIGEST}",
-        "CORE_MAIN__BOATYARD_LOCK__CADDY_IMAGE": f"ghcr.io/org/caddy:2.8@{FAKE_DIGEST}",
+        "BOATYARD_BARRIER_IMAGE": "docker.io/library/alpine:3.20",
         "CORE_MAIN__BOATYARD_LOCK__LOKI_IMAGE": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}",
     }
