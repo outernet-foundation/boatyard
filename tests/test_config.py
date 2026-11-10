@@ -26,7 +26,14 @@ SHA_TAG = "a" * 40
 
 def bundle_entries(*qualified_names: str) -> dict[str, dict[str, object]]:
     return {
-        bundle_lock_key(name): {"reference": f"ghcr.io/org/repo/{name}:1.0.0@" + DIGEST} for name in qualified_names
+        bundle_lock_key(name): {
+            "reference": f"ghcr.io/org/repo/{name}:1.0.0@" + DIGEST,
+            "services": [],
+            "routes": [],
+            "ports": [],
+            "container_names": [],
+        }
+        for name in qualified_names
     }
 
 
@@ -2065,9 +2072,13 @@ class TestConfigLockParse:
             self._parse(tmp_path)
 
     def test_a_non_digest_pinned_bundle_refuses(self, tmp_path: Path) -> None:
-        _write_raw_lock(tmp_path, "bundles:\n  LIVEKIT_BUNDLE:\n    reference: ghcr.io/x/livekit:0.3.1\n")
+        _write_raw_lock(
+            tmp_path,
+            "bundles:\n  LIVEKIT_BUNDLE:\n    reference: ghcr.io/x/livekit:0.3.1\n"
+            "    services: []\n    routes: []\n    ports: []\n    container_names: []\n",
+        )
 
-        with pytest.raises(ValueError, match="bundle entry is not digest-pinned"):
+        with pytest.raises(ValidationError, match="bundle entry is not digest-pinned"):
             self._parse(tmp_path)
 
     def test_a_malformed_platform_key_refuses(self, tmp_path: Path) -> None:
@@ -2086,17 +2097,18 @@ class TestConfigLockParse:
             f"images:\n  A_IMAGE:\n    index: ghcr.io/x/a:1@{DIGEST}\ncharts:\n  A_IMAGE: ghcr.io/x/a:1@{DIGEST}\n",
         )
 
-        with pytest.raises(ValueError, match=r"at most one of images, charts, bundles"):
+        with pytest.raises(ValidationError, match=r"at most one of images, charts, bundles"):
             self._parse(tmp_path)
 
     def test_a_bundle_name_colliding_with_base_images_keys_refuses(self, tmp_path: Path) -> None:
         _write_raw_lock(
             tmp_path,
             f"images:\n  LIVEKIT_BUNDLE:\n    index: ghcr.io/x/a:1@{DIGEST}\n"
-            f"bundles:\n  LIVEKIT_BUNDLE:\n    reference: ghcr.io/x/livekit:0.3.1@{DIGEST}\n",
+            f"bundles:\n  LIVEKIT_BUNDLE:\n    reference: ghcr.io/x/livekit:0.3.1@{DIGEST}\n"
+            "    services: []\n    routes: []\n    ports: []\n    container_names: []\n",
         )
 
-        with pytest.raises(ValueError, match=r"at most one of images, charts, bundles"):
+        with pytest.raises(ValidationError, match=r"at most one of images, charts, bundles"):
             self._parse(tmp_path)
 
     def test_require_answers_the_index_for_images_and_the_flat_entry_for_charts(self, tmp_path: Path) -> None:
@@ -2104,7 +2116,8 @@ class TestConfigLockParse:
             tmp_path,
             f"images:\n  A_IMAGE:\n    index: ghcr.io/x/a:1@{DIGEST}\n"
             f"charts:\n  LOKI_CHART: ghcr.io/x/loki:7.3.0@{DIGEST}\n"
-            f"bundles:\n  LIVEKIT_BUNDLE:\n    reference: ghcr.io/x/livekit:0.3.1@{DIGEST}\n",
+            f"bundles:\n  LIVEKIT_BUNDLE:\n    reference: ghcr.io/x/livekit:0.3.1@{DIGEST}\n"
+            "    services: []\n    routes: []\n    ports: []\n    container_names: []\n",
         )
         lock = self._parse(tmp_path)
 

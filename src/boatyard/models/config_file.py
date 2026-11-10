@@ -772,7 +772,6 @@ def refuse_unresolved_references(
     routes: list[RouteConfig],
     ports: list[PortDeclaration],
     texts: list[str],
-    prefix: str = "",
 ) -> set[str]:
     # Union the services keys across the compose texts; a document without a services mapping contributes none.
     service_names: set[str] = set()
@@ -781,8 +780,8 @@ def refuse_unresolved_references(
         services = document.get("services") if is_mapping(document) else None
         if is_mapping(services):
             service_names.update(services)
-    references = {f"{prefix}{route.upstream.partition(':')[0]}": route.path for route in routes}
-    references.update({f"{prefix}{port.service}": str(port.published) for port in ports})
+    references = {route.upstream.partition(":")[0]: route.path for route in routes}
+    references.update({port.service: str(port.published) for port in ports})
     unknown = sorted(name for name in references if name not in service_names)
     if unknown:
         name = unknown[0]

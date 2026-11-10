@@ -45,7 +45,16 @@ def _write_lock(
     if charts:
         document["charts"] = charts
     if bundles:
-        document["bundles"] = {name: {"reference": reference} for name, reference in bundles.items()}
+        document["bundles"] = {
+            name: {
+                "reference": reference,
+                "services": [],
+                "routes": [],
+                "ports": [],
+                "container_names": [],
+            }
+            for name, reference in bundles.items()
+        }
     (root / LOCK_PATH).write_text(yaml.safe_dump(document), encoding="utf-8")
 
 

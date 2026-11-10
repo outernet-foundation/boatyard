@@ -125,7 +125,16 @@ def _write_repo(
         yaml.safe_dump({
             "platforms": ["linux/amd64"],
             "images": lock_images,
-            "bundles": {"MONITOR_BUNDLE": {"reference": MONITOR_PINNED, "slots": _monitor_slots(slots)}},
+            "bundles": {
+                "MONITOR_BUNDLE": {
+                    "reference": MONITOR_PINNED,
+                    "slots": _monitor_slots(slots),
+                    "services": ["monitor"],
+                    "routes": [],
+                    "ports": [],
+                    "container_names": [],
+                }
+            },
         }),
         encoding="utf-8",
     )
