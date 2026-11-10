@@ -289,6 +289,10 @@ def _silent_handoff(_command: str) -> None:
     return None
 
 
+def _silent_bridge(_project: str) -> None:
+    return None
+
+
 def _producer_tree_sha(self: Image, root: Path) -> str:
     return "tree-producer" if "producer" in root.parts else "tree-consumer"
 
@@ -412,7 +416,9 @@ class TestSelectionLaw:
     ) -> AssemblyRecorder:
         _write_consumer_tree(tmp_path, bundles=bundles)
         recorder = AssemblyRecorder()
+        monkeypatch.setattr(up, "bash", recorder.run)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
+        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
         monkeypatch.chdir(tmp_path)
         return recorder
 
@@ -449,7 +455,9 @@ class TestSelectionLaw:
         _write_workload(tmp_path, "edge.yaml", "edge")
         _write_values_file(tmp_path, {"bundles": ["one-cuda", "two-cuda"]})
         recorder = AssemblyRecorder()
+        monkeypatch.setattr(up, "bash", recorder.run)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
+        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -482,7 +490,9 @@ class TestSelectionLaw:
         _write_lock(tmp_path, bundles={"LIVEKIT_BUNDLE": LIVEKIT_PINNED})
         _write_values_file(tmp_path, {})
         recorder = AssemblyRecorder()
+        monkeypatch.setattr(up, "bash", recorder.run)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
+        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -518,7 +528,9 @@ class TestSelectionLaw:
         _write_workload(tmp_path, "api.yaml", "api")
         _write_values_file(tmp_path, {})
         recorder = AssemblyRecorder()
+        monkeypatch.setattr(up, "bash", recorder.run)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
+        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -615,7 +627,9 @@ class TestUpMaterialization:
     ):
         _write_consumer_tree(tmp_path)
         recorder = AssemblyRecorder()
+        monkeypatch.setattr(up, "bash", recorder.run)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
+        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -658,7 +672,9 @@ class TestUpMaterialization:
     ):
         _write_consumer_tree(tmp_path, bundles="placeframe-cuda")
         recorder = AssemblyRecorder()
+        monkeypatch.setattr(up, "bash", recorder.run)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
+        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -673,7 +689,9 @@ class TestUpMaterialization:
     def test_typed_port_overrides_win_over_the_config_defaults(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_consumer_tree(tmp_path, extra_values={"gateway": 18443, "ports": {"livekit": 16178}})
         recorder = AssemblyRecorder()
+        monkeypatch.setattr(up, "bash", recorder.run)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
+        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -716,7 +734,9 @@ class TestUpMaterialization:
             {"bundles": ["placeframe-rocm"], "ports": {"placeframe-cuda": 19000, "placeframe-rocm": 19777}},
         )
         recorder = AssemblyRecorder()
+        monkeypatch.setattr(up, "bash", recorder.run)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
+        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -762,7 +782,8 @@ class TestUpMaterialization:
 
 class TestUpValidation:
     def _invoke_up(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(up, "bash_handoff", _silent_handoff)
+        monkeypatch.setattr(up, "bash", _silent_handoff)
+        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
         monkeypatch.chdir(tmp_path)
         return runner.invoke(app, ["up"])
 
@@ -917,7 +938,9 @@ class TestSharedNames:
         _write_workload(tmp_path, "api.yaml", "api")
         _write_values_file(tmp_path, {"bundles": ["left-a", "right-b"]})
         recorder = AssemblyRecorder()
+        monkeypatch.setattr(up, "bash", recorder.run)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
+        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -1051,7 +1074,9 @@ class TestLockRequirement:
         _write_workload(tmp_path, "api.yaml", "api")
         _write_values_file(tmp_path, {"bundles": ["apps-core"]})
         monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(up, "bash", HandoffRecorder().run)
         monkeypatch.setattr(up, "bash_handoff", HandoffRecorder().run)
+        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
 
         result = runner.invoke(app, ["up"])
 
@@ -1065,7 +1090,9 @@ class TestLockEnvSynthesis:
     ALPINE_MANIFEST = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + PLATFORM_DIGEST
 
     def _invoke_up_with_lock(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recorder: HandoffRecorder):
+        monkeypatch.setattr(up, "bash", recorder.run)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
+        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
         monkeypatch.chdir(tmp_path)
         return runner.invoke(app, ["up"])
 
@@ -1250,7 +1277,8 @@ class TestLockEnvSynthesis:
             tmp_path,
             bundles={"TUNNEL_BUNDLE": {"reference": LIVEKIT_PINNED, "slots": {"SECRET_TOKEN": {"required": True}}}},
         )
-        monkeypatch.setattr(up, "bash_handoff", _failing_handoff)
+        monkeypatch.setattr(up, "bash", _failing_handoff)
+        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -1290,7 +1318,9 @@ class TestBundleLockEnforcement:
         relocked["TUNNEL_BUNDLE"] = f"ghcr.io/org/livekit:{LIVEKIT_SHA_TAG}@{PLATFORM_DIGEST}"
         _write_lock(tmp_path, entries={}, bundles=relocked)
         recorder = AssemblyRecorder()
+        monkeypatch.setattr(up, "bash", recorder.run)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
+        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -1306,7 +1336,9 @@ OVERRIDE_PATH = "../producer/stack/generated/compose/compose.placeframe-cuda.yam
 class TestBundleOverrides:
     def _invoke_up(self, monkeypatch: pytest.MonkeyPatch, root: Path) -> ProducerEnvRecorder:
         recorder = ProducerEnvRecorder()
+        monkeypatch.setattr(up, "bash", recorder.run)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
+        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
         monkeypatch.chdir(root)
         return recorder
 
@@ -1658,7 +1690,9 @@ class TestValuesFileLaw:
             },
         )
         recorder = HandoffRecorder()
+        monkeypatch.setattr(up, "bash", recorder.run)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
+        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
@@ -1678,7 +1712,9 @@ class TestValuesFileLaw:
         )
         monkeypatch.setenv("LIVEKIT_TOKEN", "shell-value")
         recorder = LockEnvRecorder()
+        monkeypatch.setattr(up, "bash", recorder.run)
         monkeypatch.setattr(up, "bash_handoff", recorder.run)
+        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])

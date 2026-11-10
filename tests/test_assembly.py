@@ -24,6 +24,10 @@ ASSEMBLY_ARGUMENT_PATTERN = re.compile(r"-f (\S*devkit-assembly-\S+\.yaml)")
 runner = CliRunner()
 
 
+def _silent_bridge(_project: str) -> None:
+    return None
+
+
 class AssemblyCapture:
     def __init__(self) -> None:
         self.document: dict[str, Any] | None = None
@@ -107,7 +111,8 @@ def _assembly_document(
 ) -> dict[str, Any]:
     _write_edge_tree(tmp_path, monkeypatch, routes, auth=auth, gateway=gateway, public_url=public_url)
     capture = AssemblyCapture()
-    monkeypatch.setattr(up, "bash_handoff", capture.run)
+    monkeypatch.setattr(up, "bash", capture.run)
+    monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
 
     result = runner.invoke(app, ["up"])
 
