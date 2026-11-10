@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 import yaml
-from bashrun.bash import bash, bash_output
+from bashrun.bash import CalledProcessError, bash, bash_output
 from typer.testing import CliRunner
 
 from boatyard.cli import app
@@ -48,8 +48,72 @@ ALPINE_OWNED = {"ALPINE_IMAGE": MIRROR_PREFIX + "/docker.io/library/alpine:3.20@
 EDGE_BASE_URL_LINE = "EDGE_BASE_URL=http://boatyard-gateway:8443\n"
 PINNED_COMPOSE_VERSION = "5.6.1"
 
-ASSEMBLY_ARGUMENT_PATTERN = re.compile(r"-f (\S*devkit-assembly-\S+\.yaml)")
+ASSEMBLY_ARGUMENT_PATTERN = re.compile(r"-f (\S*devkit-gateway-\S+\.yaml)")
 LOCK_ENV_ARGUMENT_PATTERN = re.compile(r"(\S*devkit-env-\S+\.env)")
+
+KEYCLOAK_TEXT = "services:\n  keycloak:\n    image: demo/keycloak:1\n"
+LIVEKIT_TEXT = "services:\n  livekit:\n    image: demo/livekit:1\n"
+
+
+yaml.SafeLoader.add_constructor("!reset", lambda _loader, _node: None)
+
+
+class StubArtifacts:
+    def __init__(self, texts_by_reference: dict[str, list[str]] | None = None) -> None:
+        self.texts_by_reference = texts_by_reference or {
+            KEYCLOAK_PINNED: [KEYCLOAK_TEXT],
+            LIVEKIT_PINNED: [LIVEKIT_TEXT],
+        }
+        self.fetched: list[str] = []
+
+    def fetch_compose_texts(self, pinned: str) -> list[str]:
+        self.fetched.append(pinned)
+        return self.texts_by_reference[pinned]
+
+
+class UpSpy:
+    # Captures the per-project invocations: command order, project names, the shared env file
+    # content, the gateway document, and each bundle's override document.
+    def __init__(self, texts_by_reference: dict[str, list[str]] | None = None) -> None:
+        self.commands: list[str] = []
+        self.projects: list[str] = []
+        self.env_content: str | None = None
+        self.gateway_documents: list[dict[str, Any]] = []
+        self.override_documents: list[dict[str, Any]] = []
+        self.artifacts = StubArtifacts(texts_by_reference)
+
+    def run(self, command: str) -> None:
+        self.commands.append(command)
+        self.projects.append(command.split(" -p ", 1)[1].split()[0])
+        env_match = LOCK_ENV_ARGUMENT_PATTERN.search(command)
+        if env_match is not None and self.env_content is None:
+            self.env_content = Path(env_match.group(1)).read_text(encoding="utf-8")
+        gateway_match = ASSEMBLY_ARGUMENT_PATTERN.search(command)
+        if gateway_match is not None:
+            self.gateway_documents.append(
+                yaml.safe_load(Path(gateway_match.group(1)).read_text(encoding="utf-8"))
+            )
+        for override in re.finditer(r"-f (\S*devkit-override-\S+\.yaml)", command):
+            self.override_documents.append(
+                yaml.safe_load(Path(override.group(1)).read_text(encoding="utf-8"))
+            )
+
+    def spy_up(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(up, "bash", self.run)
+        monkeypatch.setattr(up, "bash_handoff", self.run)
+        monkeypatch.setattr(up, "bash_check", lambda _command: True)
+        monkeypatch.setattr(up, "install_crane", lambda: None)
+        monkeypatch.setattr(up, "OciArtifactManifest", self.artifacts)
+        return self
+
+    def bundle_command(self, project: str) -> str:
+        return next(command for command in self.commands if f"-p {project} " in command)
+
+    @property
+    def gateway(self) -> dict[str, Any]:
+        [document] = self.gateway_documents
+        return document
+
 
 runner = CliRunner()
 
@@ -95,9 +159,13 @@ def _write_ref_tree(root: Path, base_images: dict[str, str] | None = None) -> No
     _write_lock(root, entries={}, bundles=TUNNEL_BUNDLES)
 
 
-def _normalize(command: str, root: Path) -> str:
-    command = re.sub(r"\S*devkit-assembly-\S+\.yaml", "ASSEMBLY", command)
+def _normalize(command: str, root: Path, producer: Path | None = None) -> str:
+    command = re.sub(r"\S*devkit-gateway-\S+\.yaml", "GATEWAY", command)
+    command = re.sub(r"\S*devkit-override-\S+\.yaml", "OVERRIDE", command)
+    command = re.sub(r"\S*devkit-bundle-\S+\.yaml", "BUNDLE", command)
     command = re.sub(r"\S*devkit-env-\S+\.env", "LOCKENV", command)
+    if producer is not None:
+        command = command.replace(producer.resolve().as_posix(), "PRODUCER")
     return command.replace(str(root), "ROOT")
 
 
@@ -171,17 +239,9 @@ def _write_producer(
     # A sibling producer checkout carrying the fixed stack/generated/compose/ output layout.
     output = root / "producer" / "stack" / "generated" / "compose" / "compose.placeframe-cuda.yaml"
     output.parent.mkdir(parents=True, exist_ok=True)
-    network = "placeframe-cuda-net"
     output.write_text(
         yaml.safe_dump({
-            "services": {
-                f"placeframe-cuda-{service}": {
-                    "image": f"demo/{service}:1",
-                    "networks": {network: {"aliases": [service]}},
-                }
-                for service in services
-            },
-            "networks": {network: None},
+            "services": {service: {"image": f"demo/{service}:1"} for service in services},
         }),
         encoding="utf-8",
     )
@@ -310,16 +370,8 @@ def _silent_handoff(_command: str) -> None:
     return None
 
 
-def _silent_bridge(_project: str) -> None:
-    return None
-
-
 def _producer_tree_sha(self: Image, root: Path) -> str:
     return "tree-producer" if "producer" in root.parts else "tree-consumer"
-
-
-def _failing_handoff(_command: str) -> None:
-    raise RuntimeError("compose failed")
 
 
 class HandoffRecorder:
@@ -340,27 +392,6 @@ class AssemblyRecorder(HandoffRecorder):
         match = ASSEMBLY_ARGUMENT_PATTERN.search(command)
         if match is not None:
             self.documents.append(yaml.safe_load(Path(match.group(1)).read_text(encoding="utf-8")))
-
-
-class LockEnvRecorder(HandoffRecorder):
-    def __init__(self) -> None:
-        super().__init__()
-        self.env_contents: list[str] = []
-
-    def run(self, command: str) -> None:
-        super().run(command)
-        match = LOCK_ENV_ARGUMENT_PATTERN.search(command)
-        if match is not None:
-            self.env_contents.append(Path(match.group(1)).read_text(encoding="utf-8"))
-
-
-class ProducerEnvRecorder(AssemblyRecorder):
-    def __init__(self) -> None:
-        super().__init__()
-        self.env_contents: list[str] = []
-
-    def run(self, command: str) -> None:
-        super().run(command)
         match = LOCK_ENV_ARGUMENT_PATTERN.search(command)
         if match is not None:
             self.env_contents.append(Path(match.group(1)).read_text(encoding="utf-8"))
@@ -434,27 +465,24 @@ class TestSelectionLaw:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         bundles: str | None = "placeframe-cuda,auth-keycloak",
-    ) -> AssemblyRecorder:
+    ) -> UpSpy:
         _write_consumer_tree(tmp_path, bundles=bundles)
-        recorder = AssemblyRecorder()
-        monkeypatch.setattr(up, "bash", recorder.run)
-        monkeypatch.setattr(up, "bash_handoff", recorder.run)
-        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
+        spy = UpSpy().spy_up(monkeypatch)
         monkeypatch.chdir(tmp_path)
-        return recorder
+        return spy
 
     def test_options_of_different_groups_select_together(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        recorder = self._invoke_up(tmp_path, monkeypatch)
+        spy = self._invoke_up(tmp_path, monkeypatch)
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        [document] = recorder.documents
-        assert sorted(document["include"]) == sorted([
-            "oci://" + KEYCLOAK_PINNED,
-            (tmp_path / "stack/generated/compose/compose.placeframe-cuda.yaml").resolve().as_posix(),
-            "oci://" + LIVEKIT_PINNED,
-        ])
+        assert spy.projects == ["demo-auth-keycloak", "demo-placeframe-cuda", "demo-livekit", "demo"]
+        cuda_command = spy.bundle_command("demo-placeframe-cuda")
+        assert (tmp_path / "stack/generated/compose/compose.placeframe-cuda.yaml").resolve().as_posix() in (
+            cuda_command
+        )
+        assert spy.artifacts.fetched == sorted([KEYCLOAK_PINNED, LIVEKIT_PINNED])
 
     def test_same_named_options_in_two_groups_select_together(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_config(
@@ -475,20 +503,17 @@ class TestSelectionLaw:
         _write_workload(tmp_path, "api.yaml", "api")
         _write_workload(tmp_path, "edge.yaml", "edge")
         _write_values_file(tmp_path, {"bundles": ["one-cuda", "two-cuda"]})
-        recorder = AssemblyRecorder()
-        monkeypatch.setattr(up, "bash", recorder.run)
-        monkeypatch.setattr(up, "bash_handoff", recorder.run)
-        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
+        spy = UpSpy().spy_up(monkeypatch)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        [document] = recorder.documents
-        assert document["include"] == [
-            one_cuda.resolve().as_posix(),
-            (tmp_path / "stack/generated/compose/compose.two-cuda.yaml").resolve().as_posix(),
-        ]
+        assert spy.projects == ["demo-one-cuda", "demo-two-cuda", "demo"]
+        assert one_cuda.resolve().as_posix() in spy.bundle_command("demo-one-cuda")
+        assert (tmp_path / "stack/generated/compose/compose.two-cuda.yaml").resolve().as_posix() in (
+            spy.bundle_command("demo-two-cuda")
+        )
 
     def test_zero_selection_is_legal_when_bare_entries_and_routes_carry_the_assembly(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -510,17 +535,15 @@ class TestSelectionLaw:
         )
         _write_lock(tmp_path, bundles={"LIVEKIT_BUNDLE": dict(LIVEKIT_BUNDLE_ENTRY)})
         _write_values_file(tmp_path, {})
-        recorder = AssemblyRecorder()
-        monkeypatch.setattr(up, "bash", recorder.run)
-        monkeypatch.setattr(up, "bash_handoff", recorder.run)
-        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
+        spy = UpSpy().spy_up(monkeypatch)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        [document] = recorder.documents
-        assert document["include"] == ["oci://" + LIVEKIT_PINNED]
+        assert spy.projects == ["demo-livekit", "demo"]
+        assert spy.artifacts.fetched == [LIVEKIT_PINNED]
+        assert "devkit-bundle-" in spy.bundle_command("demo-livekit")
 
     def test_an_options_only_repo_with_an_empty_selection_hands_compose_an_edge_only_root(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -548,20 +571,20 @@ class TestSelectionLaw:
         _write_bundle_output(tmp_path, "placeframe-cuda", ["api"])
         _write_workload(tmp_path, "api.yaml", "api")
         _write_values_file(tmp_path, {})
-        recorder = AssemblyRecorder()
-        monkeypatch.setattr(up, "bash", recorder.run)
-        monkeypatch.setattr(up, "bash_handoff", recorder.run)
-        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
+        spy = UpSpy().spy_up(monkeypatch)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        [document] = recorder.documents
-        assert document["name"] == "demo"
-        assert list(document) == ["name", "configs", "services"]
-        assert document["services"]["boatyard-gateway"]["ports"] == [{"target": 8443, "published": 8080, "protocol": "tcp"}]
-        assert document["configs"]["devkit-edge-caddyfile"]["content"] == ":8443 {\n}\n"
+        assert spy.projects == ["demo"]
+        gateway = spy.gateway
+        assert gateway["name"] == "demo"
+        assert gateway["networks"] == {"demo-shared": {"external": True}}
+        assert gateway["services"]["boatyard-gateway"]["ports"] == [
+            {"target": 8443, "published": 8080, "protocol": "tcp"}
+        ]
+        assert gateway["configs"]["devkit-edge-caddyfile"]["content"] == ":8443 {\n}\n"
 
     def test_unknown_bundle_name_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._invoke_up(tmp_path, monkeypatch, bundles="placeframe-cuda,ghost")
@@ -591,14 +614,13 @@ class TestSelectionLaw:
         assert "are two options of one group (placeframe)" in str(result.exception)
 
     def test_a_shell_selection_is_ignored(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        recorder = self._invoke_up(tmp_path, monkeypatch)
+        spy = self._invoke_up(tmp_path, monkeypatch)
         monkeypatch.setenv("BUNDLES", "placeframe-rocm,auth-keycloak")
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        [document] = recorder.documents
-        assert "placeframe-cuda-net" in document["services"]["boatyard-gateway"]["networks"]
+        assert spy.projects == ["demo-auth-keycloak", "demo-placeframe-cuda", "demo-livekit", "demo"]
 
     def test_stray_selection_in_an_undeclaring_repo_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_values_file(tmp_path, {"bundles": ["cuda"]})
@@ -643,85 +665,58 @@ class TestSelectionLaw:
 
 
 class TestUpMaterialization:
-    def test_root_file_carries_name_includes_edge_and_port_stanzas(
+    def test_the_gateway_and_override_documents_carry_the_assembly(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
+    ) -> None:
         _write_consumer_tree(tmp_path)
-        recorder = AssemblyRecorder()
-        monkeypatch.setattr(up, "bash", recorder.run)
-        monkeypatch.setattr(up, "bash_handoff", recorder.run)
-        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
+        spy = UpSpy().spy_up(monkeypatch)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        [document] = recorder.documents
-        assert document["name"] == "demo"
-        assert sorted(document["include"]) == sorted([
-            "oci://" + KEYCLOAK_PINNED,
-            (tmp_path / "stack/generated/compose/compose.placeframe-cuda.yaml").resolve().as_posix(),
-            "oci://" + LIVEKIT_PINNED,
-        ])
-        edge = document["services"]["boatyard-gateway"]
-        assert edge["image"] == MIRROR_PREFIX + "/docker.io/library/caddy:2.8.4-alpine@" + FAKE_DIGEST
-        assert edge["ports"] == [{"target": 8443, "published": 58080, "protocol": "tcp"}]
-        assert edge["networks"] == {
-            "auth-keycloak-net": None,
-            "placeframe-cuda-net": None,
-            "livekit-net": None,
-        }
-        assert edge["environment"] == {
-            "FORWARDED_PROTO": "http",
-            "FORWARDED_PORT": "58080",
-        }
-        assert document["services"]["livekit-livekit"]["ports"] == [
-            {
-                "target": 6178,
-                "published": 6178,
-                "protocol": "tcp",
-            }
-        ]
-        content = document["configs"]["devkit-edge-caddyfile"]["content"]
+        assert spy.projects == ["demo-auth-keycloak", "demo-placeframe-cuda", "demo-livekit", "demo"]
+        gateway_service = spy.gateway["services"]["boatyard-gateway"]
+        assert gateway_service["image"] == MIRROR_PREFIX + "/docker.io/library/caddy:2.8.4-alpine@" + FAKE_DIGEST
+        assert gateway_service["ports"] == [{"target": 8443, "published": 58080, "protocol": "tcp"}]
+        assert gateway_service["networks"] == {"demo-shared": None}
+        assert "environment" not in gateway_service
+        livekit_override = spy.override_documents[2]["services"]["livekit"]
+        assert livekit_override["networks"] == {"demo-shared": {"aliases": ["livekit-livekit"]}}
+        assert livekit_override["ports"] == [{"published": 6178, "target": 6178}]
+        content = spy.gateway["configs"]["devkit-edge-caddyfile"]["content"]
         assert "handle_path /auth/*" in content
-        assert "header_up X-Forwarded-Proto {$$FORWARDED_PROTO}" in content
+        assert "header_up X-Forwarded-Proto http" in content
+        assert "header_up X-Forwarded-Port 58080" in content
         assert "reverse_proxy placeframe-cuda-grafana:3000" in content
         assert content.rstrip().endswith("\thandle {\n\t\treverse_proxy placeframe-cuda-api:8000\n\t}\n}")
 
-    def test_the_anonymous_edge_omits_the_auth_route_and_auth_env(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_the_anonymous_edge_omits_the_auth_route(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_consumer_tree(tmp_path, bundles="placeframe-cuda")
-        recorder = AssemblyRecorder()
-        monkeypatch.setattr(up, "bash", recorder.run)
-        monkeypatch.setattr(up, "bash_handoff", recorder.run)
-        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
+        spy = UpSpy().spy_up(monkeypatch)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        [document] = recorder.documents
-        edge = document["services"]["boatyard-gateway"]
-        assert "environment" not in edge
-        content = document["configs"]["devkit-edge-caddyfile"]["content"]
+        gateway_service = spy.gateway["services"]["boatyard-gateway"]
+        assert "environment" not in gateway_service
+        content = spy.gateway["configs"]["devkit-edge-caddyfile"]["content"]
         assert "/auth/*" not in content
 
     def test_typed_port_overrides_win_over_the_config_defaults(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_consumer_tree(tmp_path, extra_values={"gateway_port": 18443, "ports": {"livekit": 16178}})
-        recorder = AssemblyRecorder()
-        monkeypatch.setattr(up, "bash", recorder.run)
-        monkeypatch.setattr(up, "bash_handoff", recorder.run)
-        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
+        spy = UpSpy().spy_up(monkeypatch)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        [document] = recorder.documents
-        assert document["services"]["boatyard-gateway"]["ports"] == [{"target": 8443, "published": 18443, "protocol": "tcp"}]
-        assert document["services"]["livekit-livekit"]["ports"] == [
-            {"target": 6178, "published": 16178, "protocol": "tcp"}
+        assert spy.gateway["services"]["boatyard-gateway"]["ports"] == [
+            {"target": 8443, "published": 18443, "protocol": "tcp"}
+        ]
+        assert spy.override_documents[2]["services"]["livekit"]["ports"] == [
+            {"published": 16178, "target": 6178}
         ]
 
     def test_an_unselected_port_declaring_entry_sits_inert(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -754,19 +749,15 @@ class TestUpMaterialization:
             tmp_path,
             {"bundles": ["placeframe-rocm"], "ports": {"api": 19777}},
         )
-        recorder = AssemblyRecorder()
-        monkeypatch.setattr(up, "bash", recorder.run)
-        monkeypatch.setattr(up, "bash_handoff", recorder.run)
-        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
+        spy = UpSpy().spy_up(monkeypatch)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        [document] = recorder.documents
-        assert "placeframe-cuda-api" not in document["services"]
-        assert document["services"]["placeframe-rocm-api"]["ports"] == [
-            {"target": 8000, "published": 19777, "protocol": "tcp"}
+        assert "demo-placeframe-cuda" not in spy.projects
+        assert spy.override_documents[0]["services"]["api"]["ports"] == [
+            {"published": 19777, "target": 8000}
         ]
 
     def test_the_edge_refuses_without_the_caddy_lock_entry(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -815,8 +806,7 @@ class TestUpMaterialization:
 
 class TestUpValidation:
     def _invoke_up(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(up, "bash", _silent_handoff)
-        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
+        UpSpy().spy_up(monkeypatch)
         monkeypatch.chdir(tmp_path)
         return runner.invoke(app, ["up"])
 
@@ -970,21 +960,20 @@ class TestSharedNames:
         _write_bundle_output(tmp_path, "right-b", ["api"])
         _write_workload(tmp_path, "api.yaml", "api")
         _write_values_file(tmp_path, {"bundles": ["left-a", "right-b"]})
-        recorder = AssemblyRecorder()
-        monkeypatch.setattr(up, "bash", recorder.run)
-        monkeypatch.setattr(up, "bash_handoff", recorder.run)
-        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
+        spy = UpSpy().spy_up(monkeypatch)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        [document] = recorder.documents
-        assert sorted(document["include"]) == sorted([
-            (tmp_path / "stack/generated/compose/compose.left-a.yaml").resolve().as_posix(),
-            (tmp_path / "stack/generated/compose/compose.right-b.yaml").resolve().as_posix(),
-        ])
-        content = document["configs"]["devkit-edge-caddyfile"]["content"]
+        assert spy.projects == ["demo-left-a", "demo-right-b", "demo"]
+        assert spy.override_documents[0]["services"]["api"]["networks"] == {
+            "demo-shared": {"aliases": ["left-a-api"]}
+        }
+        assert spy.override_documents[1]["services"]["api"]["networks"] == {
+            "demo-shared": {"aliases": ["right-b-api"]}
+        }
+        content = spy.gateway["configs"]["devkit-edge-caddyfile"]["content"]
         assert "reverse_proxy left-a-api:8000" in content
 
     def test_the_same_overlap_stays_legal_at_down(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -1106,9 +1095,7 @@ class TestLockRequirement:
         _write_workload(tmp_path, "api.yaml", "api")
         _write_values_file(tmp_path, {"bundles": ["apps-core"]})
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr(up, "bash", HandoffRecorder().run)
         monkeypatch.setattr(up, "bash_handoff", HandoffRecorder().run)
-        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
 
         result = runner.invoke(app, ["up"])
 
@@ -1121,12 +1108,10 @@ class TestLockEnvSynthesis:
     ALPINE_INDEX = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST
     ALPINE_MANIFEST = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + PLATFORM_DIGEST
 
-    def _invoke_up_with_lock(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recorder: HandoffRecorder):
-        monkeypatch.setattr(up, "bash", recorder.run)
-        monkeypatch.setattr(up, "bash_handoff", recorder.run)
-        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
+    def _invoke_up_with_lock(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> UpSpy:
+        spy = UpSpy().spy_up(monkeypatch)
         monkeypatch.chdir(tmp_path)
-        return runner.invoke(app, ["up"])
+        return spy
 
     def test_the_attached_env_file_carries_the_platform_manifest_not_the_index(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1143,13 +1128,12 @@ class TestLockEnvSynthesis:
         _write_workload(tmp_path, "api.yaml", "api")
         _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST})
         _write_values_file(tmp_path, {"bundles": ["apps-core"]})
-        recorder = LockEnvRecorder()
+        spy = self._invoke_up_with_lock(tmp_path, monkeypatch)
 
-        result = self._invoke_up_with_lock(tmp_path, monkeypatch, recorder)
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        [content] = recorder.env_contents
-        assert content == (
+        assert spy.env_content == (
             f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
             f"APPS_CORE__BOATYARD_LOCK__CADDY_IMAGE={self.ALPINE_MANIFEST}\n" + EDGE_BASE_URL_LINE
         )
@@ -1170,15 +1154,14 @@ class TestLockEnvSynthesis:
         _write_workload(tmp_path, "api.yaml", "api")
         _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST})
         _write_values_file(tmp_path, {"bundles": ["apps-core"]})
-        recorder = LockEnvRecorder()
+        spy = self._invoke_up_with_lock(tmp_path, monkeypatch)
 
-        result = self._invoke_up_with_lock(tmp_path, monkeypatch, recorder)
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        [content] = recorder.env_contents
-        assert content == (
-            f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={self.ALPINE_MANIFEST}\nAPPS_CORE__BOATYARD_LOCK__CADDY_IMAGE={self.ALPINE_MANIFEST}\n"
-            + EDGE_BASE_URL_LINE
+        assert spy.env_content == (
+            f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
+            f"APPS_CORE__BOATYARD_LOCK__CADDY_IMAGE={self.ALPINE_MANIFEST}\n" + EDGE_BASE_URL_LINE
         )
 
     def test_a_selected_local_entry_carries_its_tree_tags_under_the_entry_prefix(
@@ -1210,31 +1193,31 @@ class TestLockEnvSynthesis:
         _write_lock(tmp_path, {"ALPINE_IMAGE": self.ALPINE_INDEX}, {"linux/amd64": self.ALPINE_MANIFEST})
         _write_values_file(tmp_path, {"bundles": ["apps-core"]})
         monkeypatch.setattr(Image, "compute_sha", _producer_tree_sha)
-        recorder = LockEnvRecorder()
+        spy = self._invoke_up_with_lock(tmp_path, monkeypatch)
 
-        result = self._invoke_up_with_lock(tmp_path, monkeypatch, recorder)
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        [content] = recorder.env_contents
-        assert content == (
+        assert spy.env_content == (
             f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
             f"APPS_CORE__BOATYARD_LOCK__CADDY_IMAGE={self.ALPINE_MANIFEST}\n"
             "APPS_CORE__BOATYARD_TREE__API_SHA=tree-consumer\n" + EDGE_BASE_URL_LINE
         )
-        assert " -u APPS_CORE__BOATYARD_TREE__API_SHA " in recorder.commands[0]
+        assert " -u APPS_CORE__BOATYARD_TREE__API_SHA " in spy.commands[0]
 
     def test_two_consecutive_syntheses_are_byte_identical(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)
         _write_values_file(tmp_path, {})
         _write_lock(tmp_path, bundles=TUNNEL_BUNDLES)
-        recorder = LockEnvRecorder()
+        first_spy = self._invoke_up_with_lock(tmp_path, monkeypatch)
 
-        first = self._invoke_up_with_lock(tmp_path, monkeypatch, recorder)
+        first = runner.invoke(app, ["up"])
         assert first.exit_code == 0, first.output
-        self._invoke_up_with_lock(tmp_path, monkeypatch, recorder)
+        second_spy = self._invoke_up_with_lock(tmp_path, monkeypatch)
+        second = runner.invoke(app, ["up"])
 
-        assert len(recorder.env_contents) == 2
-        assert recorder.env_contents[0] == recorder.env_contents[1]
+        assert second.exit_code == 0, second.output
+        assert first_spy.env_content is not None and first_spy.env_content == second_spy.env_content
 
     def test_a_multi_platform_repo_selects_the_named_platform(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_config(
@@ -1255,12 +1238,12 @@ class TestLockEnvSynthesis:
             {"linux/amd64": self.ALPINE_MANIFEST, "linux/arm64": arm64_manifest},
         )
         _write_values_file(tmp_path, {"bundles": ["apps-core"], "platform": "linux/arm64"})
-        recorder = LockEnvRecorder()
+        spy = self._invoke_up_with_lock(tmp_path, monkeypatch)
 
-        result = self._invoke_up_with_lock(tmp_path, monkeypatch, recorder)
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        assert recorder.env_contents[0] == (
+        assert spy.env_content == (
             f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={arm64_manifest}\n"
             f"APPS_CORE__BOATYARD_LOCK__CADDY_IMAGE={arm64_manifest}\n" + EDGE_BASE_URL_LINE
         )
@@ -1278,8 +1261,9 @@ class TestLockEnvSynthesis:
         )
         _write_values_file(tmp_path, {})
         _write_lock(tmp_path, platform_entries={"linux/amd64": "", "linux/arm64": ""}, bundles=TUNNEL_BUNDLES)
+        self._invoke_up_with_lock(tmp_path, monkeypatch)
 
-        result = self._invoke_up_with_lock(tmp_path, monkeypatch, HandoffRecorder())
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
@@ -1291,8 +1275,9 @@ class TestLockEnvSynthesis:
         _write_ref_tree(tmp_path)
         _write_values_file(tmp_path, {"platform": "linux/ppc64le"})
         _write_lock(tmp_path, bundles=TUNNEL_BUNDLES)
+        self._invoke_up_with_lock(tmp_path, monkeypatch)
 
-        result = self._invoke_up_with_lock(tmp_path, monkeypatch, HandoffRecorder())
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
@@ -1309,18 +1294,25 @@ class TestLockEnvSynthesis:
             tmp_path,
             bundles={"TUNNEL_BUNDLE": {"reference": LIVEKIT_PINNED, "slots": {"SECRET_TOKEN": {"required": True}}}},
         )
-        monkeypatch.setattr(up, "bash", _failing_handoff)
-        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
+        spy = UpSpy()
+        spy.spy_up(monkeypatch)
         monkeypatch.chdir(tmp_path)
+
+        def fail_first(command: str) -> None:
+            spy.run(command)
+            raise CalledProcessError(1, command)
+
+        monkeypatch.setattr(up, "bash", fail_first)
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
-        kept = [
-            Path(line.split(":", 1)[1].strip()) for line in result.output.splitlines() if "kept for inspection" in line
-        ]
-        assert len(kept) == 1
-        assert kept[0].read_text(encoding="utf-8") == EDGE_BASE_URL_LINE + "SECRET_TOKEN=supersecret\n"
+        assert isinstance(result.exception, SystemExit)
+        report = str(result.exception)
+        assert "the project demo-tunnel failed" in report
+        retained = [Path(path) for path in report.split("kept artifacts for inspection: ", 1)[1].split(", ")]
+        [env_file] = [path for path in retained if path.suffix == ".env"]
+        assert env_file.read_text(encoding="utf-8") == EDGE_BASE_URL_LINE + "SECRET_TOKEN=supersecret\n"
         assert "supersecret" not in result.output
 
 
@@ -1341,7 +1333,7 @@ class TestBundleLockEnforcement:
         assert "TUNNEL_BUNDLE" in message
         assert "boatyard.lock.yml lacks the TUNNEL_BUNDLE entry" in message
 
-    def test_the_bundle_include_carries_the_locks_digest_not_the_yaml_tag(
+    def test_the_bundle_fetch_carries_the_locks_digest_not_the_yaml_tag(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         _write_ref_tree(tmp_path)
@@ -1349,32 +1341,27 @@ class TestBundleLockEnforcement:
         relocked = dict(TUNNEL_BUNDLES)
         relocked["TUNNEL_BUNDLE"] = f"ghcr.io/org/livekit:{LIVEKIT_SHA_TAG}@{PLATFORM_DIGEST}"
         _write_lock(tmp_path, entries={}, bundles=relocked)
-        recorder = AssemblyRecorder()
-        monkeypatch.setattr(up, "bash", recorder.run)
-        monkeypatch.setattr(up, "bash_handoff", recorder.run)
-        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
+        spy = UpSpy(texts_by_reference={
+            f"ghcr.io/org/livekit:{LIVEKIT_SHA_TAG}@{PLATFORM_DIGEST}": [LIVEKIT_TEXT],
+        }).spy_up(monkeypatch)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        [document] = recorder.documents
-        assert document["include"] == ["oci://" + relocked["TUNNEL_BUNDLE"]]
+        assert spy.artifacts.fetched == [f"ghcr.io/org/livekit:{LIVEKIT_SHA_TAG}@{PLATFORM_DIGEST}"]
 
 
 OVERRIDE_PATH = "../producer/stack/generated/compose/compose.placeframe-cuda.yaml"
 
 
 class TestBundleOverrides:
-    def _invoke_up(self, monkeypatch: pytest.MonkeyPatch, root: Path) -> ProducerEnvRecorder:
-        recorder = ProducerEnvRecorder()
-        monkeypatch.setattr(up, "bash", recorder.run)
-        monkeypatch.setattr(up, "bash_handoff", recorder.run)
-        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
+    def _invoke_up(self, monkeypatch: pytest.MonkeyPatch, root: Path) -> UpSpy:
+        spy = UpSpy().spy_up(monkeypatch)
         monkeypatch.chdir(root)
-        return recorder
+        return spy
 
-    def test_the_path_form_replaces_the_include_and_fills_from_the_producer_lock(
+    def test_the_path_form_replaces_the_registry_source_and_fills_from_the_producer_lock(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         consumer = tmp_path / "consumer"
@@ -1385,27 +1372,33 @@ class TestBundleOverrides:
             {"path_overrides": {"placeframe-cuda": OVERRIDE_PATH}},
             platforms=["linux/amd64"],
         )
-        recorder = self._invoke_up(monkeypatch, consumer)
+        spy = self._invoke_up(monkeypatch, consumer)
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        [document] = recorder.documents
-        assert document["include"] == [output.resolve().as_posix()]
-        assert [_normalize(command, consumer) for command in recorder.commands] == [
+        assert spy.projects == ["demo-placeframe-cuda", "demo"]
+        assert output.resolve().as_posix() in spy.bundle_command("demo-placeframe-cuda")
+        assert [_normalize(command, consumer, output) for command in spy.commands] == [
             (
                 "env -u EDGE_BASE_URL -u PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE "
                 "-u PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE "
-                "docker compose -p demo -f ASSEMBLY --project-directory ROOT --env-file LOCKENV up --pull missing -d"
-            )
+                "docker compose -p demo-placeframe-cuda -f PRODUCER -f OVERRIDE "
+                "--project-directory ROOT --env-file LOCKENV up --pull missing -d"
+            ),
+            (
+                "env -u EDGE_BASE_URL -u PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE "
+                "-u PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE "
+                "docker compose -p demo -f GATEWAY --project-directory ROOT --env-file LOCKENV up --pull missing -d"
+            ),
         ]
-        assert recorder.env_contents == [
+        assert spy.env_content == (
             EDGE_BASE_URL_LINE
             + (
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
             )
-        ]
+        )
 
     def test_the_producer_lock_fills_the_overridden_entrys_fan(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         consumer = tmp_path / "consumer"
@@ -1417,18 +1410,18 @@ class TestBundleOverrides:
             platforms=["linux/amd64"],
             lock_images={"LOKI_IMAGE": MIRROR_PREFIX + "/docker.io/library/loki:3.0@" + CONSUMER_ALPINE_DIGEST},
         )
-        recorder = self._invoke_up(monkeypatch, consumer)
+        spy = self._invoke_up(monkeypatch, consumer)
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        assert recorder.env_contents == [
+        assert spy.env_content == (
             EDGE_BASE_URL_LINE
             + (
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
             )
-        ]
+        )
 
     def test_the_producer_tree_fills_the_overridden_entrys_fan(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         consumer = tmp_path / "consumer"
@@ -1440,12 +1433,12 @@ class TestBundleOverrides:
             platforms=["linux/amd64"],
         )
         monkeypatch.setattr(Image, "compute_sha", _producer_tree_sha)
-        recorder = self._invoke_up(monkeypatch, consumer)
+        spy = self._invoke_up(monkeypatch, consumer)
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        assert recorder.env_contents == [
+        assert spy.env_content == (
             EDGE_BASE_URL_LINE
             + (
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
@@ -1453,7 +1446,7 @@ class TestBundleOverrides:
                 "PLACEFRAME_CUDA__BOATYARD_TREE__API_SHA=tree-producer\n"
                 "PLACEFRAME_CUDA__BOATYARD_TREE__GRAFANA_SHA=tree-producer\n"
             )
-        ]
+        )
 
     def test_the_producer_lock_selects_the_named_platform(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         consumer = tmp_path / "consumer"
@@ -1464,18 +1457,18 @@ class TestBundleOverrides:
             {"path_overrides": {"placeframe-cuda": OVERRIDE_PATH}, "platform": "linux/arm64"},
             platforms=["linux/amd64", "linux/arm64"],
         )
-        recorder = self._invoke_up(monkeypatch, consumer)
+        spy = self._invoke_up(monkeypatch, consumer)
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        assert recorder.env_contents == [
+        assert spy.env_content == (
             EDGE_BASE_URL_LINE
             + (
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_ARM64_DIGEST}\n"
             )
-        ]
+        )
 
     def test_a_multi_platform_producer_lock_without_a_selection_refuses(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1563,20 +1556,20 @@ class TestBundleOverrides:
                 }
             },
         )
-        recorder = self._invoke_up(monkeypatch, consumer)
+        spy = self._invoke_up(monkeypatch, consumer)
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        [document] = recorder.documents
-        assert document["include"] == [output.resolve().as_posix()]
-        assert recorder.env_contents == [
+        assert spy.projects == ["demo-placeframe-cuda", "demo"]
+        assert output.resolve().as_posix() in spy.bundle_command("demo-placeframe-cuda")
+        assert spy.env_content == (
             EDGE_BASE_URL_LINE
             + (
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE={MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}\n"
                 f"PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE={MIRROR_PREFIX}/docker.io/library/loki:3.0@{LOKI_AMD64_DIGEST}\n"
             )
-        ]
+        )
 
     def test_an_override_with_no_repo_root_above_it_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         consumer = tmp_path / "consumer"
@@ -1646,12 +1639,12 @@ class TestBundleOverrides:
         assert isinstance(result.exception, ValueError)
         assert "reserved service 'boatyard-gateway'" in str(result.exception)
 
-    def test_an_override_sharing_a_service_name_with_another_output_namespaces_apart(
+    def test_an_override_sharing_a_service_name_with_another_output_splits_projects(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         consumer = tmp_path / "consumer"
         consumer.mkdir()
-        _write_producer(tmp_path, ["api", "grafana"], _producer_lock(["linux/amd64"]))
+        producer = _write_producer(tmp_path, ["api", "grafana"], _producer_lock(["linux/amd64"]))
         _write_override_consumer(
             consumer,
             {
@@ -1663,18 +1656,16 @@ class TestBundleOverrides:
         )
         _write_workload(consumer, "grafana.yaml", "grafana")
         _write_bundle_output(consumer, "extra-main", ["api"])
-        recorder = self._invoke_up(monkeypatch, consumer)
+        spy = self._invoke_up(monkeypatch, consumer)
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        [document] = recorder.documents
-        assert sorted(document["include"]) == sorted([
-            (tmp_path / "producer" / "stack" / "generated" / "compose" / "compose.placeframe-cuda.yaml")
-            .resolve()
-            .as_posix(),
-            (consumer / "stack" / "generated" / "compose" / "compose.extra-main.yaml").resolve().as_posix(),
-        ])
+        assert spy.projects == ["demo-placeframe-cuda", "demo-extra-main", "demo"]
+        assert producer.resolve().as_posix() in spy.bundle_command("demo-placeframe-cuda")
+        assert (consumer / "stack/generated/compose/compose.extra-main.yaml").resolve().as_posix() in (
+            spy.bundle_command("demo-extra-main")
+        )
 
 
 class TestComposePortMergeOverIncludes:
@@ -1721,16 +1712,13 @@ class TestValuesFileLaw:
                 "LIVEKIT_BUNDLE": {"reference": LIVEKIT_PINNED, "services": ["livekit"], "slots": {"LIVEKIT_TOKEN": {"required": True}}},
             },
         )
-        recorder = HandoffRecorder()
-        monkeypatch.setattr(up, "bash", recorder.run)
-        monkeypatch.setattr(up, "bash_handoff", recorder.run)
-        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
+        spy = UpSpy().spy_up(monkeypatch)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        assert " -u LIVEKIT_TOKEN " in recorder.commands[0]
+        assert " -u LIVEKIT_TOKEN " in spy.commands[0]
 
     def test_the_scrub_defeats_a_shell_set_unfilled_optional(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_consumer_tree(tmp_path)
@@ -1743,17 +1731,15 @@ class TestValuesFileLaw:
             },
         )
         monkeypatch.setenv("LIVEKIT_TOKEN", "shell-value")
-        recorder = LockEnvRecorder()
-        monkeypatch.setattr(up, "bash", recorder.run)
-        monkeypatch.setattr(up, "bash_handoff", recorder.run)
-        monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
+        spy = UpSpy().spy_up(monkeypatch)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        assert " -u LIVEKIT_TOKEN " in recorder.commands[0]
-        assert "LIVEKIT_TOKEN=\n" in recorder.env_contents[0]
+        assert " -u LIVEKIT_TOKEN " in spy.commands[0]
+        assert spy.env_content is not None
+        assert "LIVEKIT_TOKEN=\n" in spy.env_content
 
     def test_a_values_key_spelling_the_lock_marker_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_ref_tree(tmp_path)

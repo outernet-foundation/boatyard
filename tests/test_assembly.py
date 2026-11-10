@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 import yaml
+from bashrun.bash import CalledProcessError
 from typer.testing import CliRunner
 
 from boatyard.cli import app
@@ -16,26 +17,63 @@ from boatyard.resolve import resolve
 FAKE_DIGEST = "sha256:" + "a" * 64
 LIVEKIT_SHA_TAG = "a" * 40
 LIVEKIT_REF = "oci://ghcr.io/org/livekit:" + LIVEKIT_SHA_TAG
+LIVEKIT_PINNED = f"ghcr.io/org/livekit:{LIVEKIT_SHA_TAG}@{FAKE_DIGEST}"
 KEYCLOAK_REF = "oci://ghcr.io/org/keycloak:0.3.1"
+KEYCLOAK_PINNED = f"ghcr.io/org/keycloak:0.3.1@{FAKE_DIGEST}"
 CADDY_LOCK_ENTRY = "ghcr.io/outernet-foundation/mirror/docker.io/library/caddy:2.8.4-alpine@" + FAKE_DIGEST
 
-ASSEMBLY_ARGUMENT_PATTERN = re.compile(r"-f (\S*devkit-assembly-\S+\.yaml)")
+LIVEKIT_TEXT = "services:\n  livekit:\n    image: demo/livekit:1\n"
+KEYCLOAK_TEXT = "services:\n  keycloak:\n    image: demo/keycloak:1\n"
 
 runner = CliRunner()
 
 
-def _silent_bridge(_project: str) -> None:
-    return None
+yaml.SafeLoader.add_constructor("!reset", lambda _loader, _node: None)
 
 
-class AssemblyCapture:
+def _load_override(text: str) -> dict[str, Any]:
+    return yaml.safe_load(text)
+
+
+class StubArtifacts:
+    def __init__(self, texts_by_reference: dict[str, list[str]]) -> None:
+        self.texts_by_reference = texts_by_reference
+        self.fetched: list[str] = []
+
+    def fetch_compose_texts(self, pinned: str) -> list[str]:
+        self.fetched.append(pinned)
+        return self.texts_by_reference[pinned]
+
+
+class UpSpy:
+    # Captures the per-project invocations: command order, project names, the shared env file
+    # content, the gateway document, and each bundle's override document.
     def __init__(self) -> None:
-        self.document: dict[str, Any] | None = None
+        self.commands: list[str] = []
+        self.projects: list[str] = []
+        self.env_content: str | None = None
+        self.gateway_documents: list[dict[str, Any]] = []
+        self.override_documents: list[dict[str, Any]] = []
 
     def run(self, command: str) -> None:
-        match = ASSEMBLY_ARGUMENT_PATTERN.search(command)
-        if match is not None:
-            self.document = yaml.safe_load(Path(match.group(1)).read_text(encoding="utf-8"))
+        self.commands.append(command)
+        self.projects.append(command.split(" -p ", 1)[1].split()[0])
+        env_match = re.search(r"--env-file (\S+)", command)
+        if env_match is not None and self.env_content is None:
+            self.env_content = Path(env_match.group(1)).read_text(encoding="utf-8")
+        gateway_match = re.search(r"-f (\S*devkit-gateway-\S+\.yaml)", command)
+        if gateway_match is not None:
+            self.gateway_documents.append(yaml.safe_load(Path(gateway_match.group(1)).read_text(encoding="utf-8")))
+        for override_match in re.finditer(r"-f (\S*devkit-override-\S+\.yaml)", command):
+            self.override_documents.append(_load_override(Path(override_match.group(1)).read_text(encoding="utf-8")))
+
+
+def _handoff_spy(spy: UpSpy):
+    def run(command: str) -> None:
+        spy.run(command)
+        raise SystemExit
+
+    return run
 
 
 def _write_edge_tree(
@@ -48,10 +86,14 @@ def _write_edge_tree(
     public_host: str | None = "192.168.8.10",
     public_scheme: str | None = None,
     public_port: int | None = 58080,
+    values_extra: dict[str, object] | None = None,
+    entry_ports: list[dict[str, object]] | None = None,
 ) -> None:
     services: dict[str, object] = {
         "livekit": {"ref": LIVEKIT_REF, "routes": routes},
     }
+    if entry_ports is not None:
+        services["livekit"]["ports"] = entry_ports
     if auth:
         services["auth"] = {
             "options": {
@@ -74,20 +116,19 @@ def _write_edge_tree(
         yaml.safe_dump(payload, default_flow_style=False, sort_keys=False),
         encoding="utf-8",
     )
-    bundles: dict[str, object] = {
-        "LIVEKIT_BUNDLE": {
-            "reference": f"ghcr.io/org/livekit:{LIVEKIT_SHA_TAG}@{FAKE_DIGEST}",
-            "services": ["livekit"],
-            "routes": [],
-            "ports": [],
-            "container_names": [],
-        },
+    livekit_bundle: dict[str, object] = {
+        "reference": LIVEKIT_PINNED,
+        "services": ["livekit"],
+        "routes": [],
+        "ports": [],
+        "container_names": [],
     }
+    bundles: dict[str, object] = {"LIVEKIT_BUNDLE": livekit_bundle}
     if auth:
         bundles["AUTH_KEYCLOAK_BUNDLE"] = {
-            "reference": f"ghcr.io/org/keycloak:0.3.1@{FAKE_DIGEST}",
+            "reference": KEYCLOAK_PINNED,
             "services": ["keycloak"],
-            "routes": [{"path": "/auth/*", "upstream": "keycloak:8080", "strip_prefix": True}],
+            "routes": [],
             "ports": [],
             "container_names": [],
         }
@@ -111,6 +152,7 @@ def _write_edge_tree(
     }.items() if value is not None}
     if auth:
         values["bundles"] = ["auth-keycloak"]
+    values.update(values_extra or {})
     (tmp_path / "boatyard.values.yaml").write_text(
         yaml.safe_dump(values, default_flow_style=False, sort_keys=False),
         encoding="utf-8",
@@ -118,7 +160,7 @@ def _write_edge_tree(
     monkeypatch.chdir(tmp_path)
 
 
-def _assembly_document(
+def _invoke_up(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     routes: list[dict[str, object]],
@@ -128,7 +170,11 @@ def _assembly_document(
     public_host: str | None = "192.168.8.10",
     public_scheme: str | None = None,
     public_port: int | None = 58080,
-) -> dict[str, Any]:
+    attached: bool = False,
+    values_extra: dict[str, object] | None = None,
+    entry_ports: list[dict[str, object]] | None = None,
+    livekit_text: str = LIVEKIT_TEXT,
+) -> UpSpy:
     _write_edge_tree(
         tmp_path,
         monkeypatch,
@@ -138,145 +184,225 @@ def _assembly_document(
         public_host=public_host,
         public_scheme=public_scheme,
         public_port=public_port,
+        values_extra=values_extra,
+        entry_ports=entry_ports,
     )
-    capture = AssemblyCapture()
-    monkeypatch.setattr(up, "bash", capture.run)
-    monkeypatch.setattr(up, "bridge_project_networks", _silent_bridge)
+    spy = UpSpy()
+    monkeypatch.setattr(up, "bash", spy.run)
+    monkeypatch.setattr(up, "bash_check", lambda _command: True)
+    monkeypatch.setattr(up, "install_crane", lambda: None)
+    monkeypatch.setattr(up, "OciArtifactManifest", StubArtifacts({
+        LIVEKIT_PINNED: [livekit_text],
+        KEYCLOAK_PINNED: [KEYCLOAK_TEXT],
+    }))
+    if attached:
+        monkeypatch.setattr(up, "bash_handoff", _handoff_spy(spy))
+    return spy
 
-    result = runner.invoke(app, ["up"])
 
+def _up(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    routes: list[dict[str, object]],
+    *,
+    auth: bool = False,
+    gateway_port: int | None = 58080,
+    public_host: str | None = "192.168.8.10",
+    public_scheme: str | None = None,
+    public_port: int | None = 58080,
+    attached: bool = False,
+    values_extra: dict[str, object] | None = None,
+    entry_ports: list[dict[str, object]] | None = None,
+    livekit_text: str = LIVEKIT_TEXT,
+) -> UpSpy:
+    spy = _invoke_up(
+        tmp_path,
+        monkeypatch,
+        routes,
+        auth=auth,
+        gateway_port=gateway_port,
+        public_host=public_host,
+        public_scheme=public_scheme,
+        public_port=public_port,
+        attached=attached,
+        values_extra=values_extra,
+        entry_ports=entry_ports,
+        livekit_text=livekit_text,
+    )
+    result = runner.invoke(app, ["up", *(["--attached"] if attached else [])])
     assert result.exit_code == 0, result.output
-    assert capture.document is not None
-    return capture.document
+    return spy
 
 
-def _caddyfile(document: dict[str, Any]) -> str:
-    return document["configs"]["devkit-edge-caddyfile"]["content"]
+def _gateway_document(spy: UpSpy) -> dict[str, Any]:
+    [document] = spy.gateway_documents
+    return document
 
 
-class TestRenderCaddyfile:
-    def test_the_site_listens_on_the_edge_port(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        document = _assembly_document(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
-
-        assert _caddyfile(document).startswith(":8443 {\n")
-
-    def test_the_catch_all_renders_as_a_bare_handle(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        document = _assembly_document(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
-
-        assert "\thandle {\n\t\treverse_proxy livekit-livekit:8000\n\t}\n}" in _caddyfile(document)
-
-    def test_wildcard_paths_render_as_handle_matchers(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        document = _assembly_document(tmp_path, monkeypatch, [{"path": "/grafana/*", "upstream": "grafana:3000"}])
-
-        assert "\thandle /grafana/* {\n\t\treverse_proxy livekit-grafana:3000\n\t}" in _caddyfile(document)
-
-    def test_strip_prefix_renders_as_handle_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        document = _assembly_document(
-            tmp_path, monkeypatch, [{"path": "/grafana/*", "upstream": "grafana:3000", "strip_prefix": True}]
-        )
-
-        assert "\thandle_path /grafana/* {\n\t\treverse_proxy livekit-grafana:3000\n\t}" in _caddyfile(document)
-
-    def test_the_auth_route_carries_the_forwarded_headers(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        document = _assembly_document(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], auth=True)
-
-        caddyfile = _caddyfile(document)
-        assert "\t\t\treverse_proxy auth-keycloak-keycloak:8080 {" in caddyfile.replace(
-            "\t\treverse_proxy", "\t\t\treverse_proxy"
-        )
-        assert "header_up X-Forwarded-Proto {$$FORWARDED_PROTO}" in caddyfile
-        assert "header_up X-Forwarded-Port {$$FORWARDED_PORT}" in caddyfile
-
-    def test_plain_routes_carry_no_forwarded_headers(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        document = _assembly_document(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], auth=True)
-
-        assert "header_up" not in _caddyfile(document).split("handle {", 1)[1]
-
-    def test_a_raw_route_renders_verbatim_under_its_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        document = _assembly_document(
-            tmp_path,
-            monkeypatch,
-            [{"path": "/x/*", "upstream": "x:1", "raw": 'respond "raw" 200'}],
-        )
-
-        assert '\thandle /x/* {\n\t\trespond "raw" 200\n\t}' in _caddyfile(document)
-
-    def test_blocks_render_in_declaration_order(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        document = _assembly_document(
-            tmp_path,
-            monkeypatch,
-            [
-                {"path": "/*", "upstream": "livekit:8000"},
-                {"path": "/grafana/*", "upstream": "grafana:3000"},
-            ],
-        )
-
-        caddyfile = _caddyfile(document)
-        assert caddyfile.index("reverse_proxy livekit-livekit:8000") < caddyfile.index(
-            "reverse_proxy livekit-grafana:3000"
-        )
+def _caddyfile(spy: UpSpy) -> str:
+    return _gateway_document(spy)["configs"]["devkit-edge-caddyfile"]["content"]
 
 
-class TestPublicUrlDerivation:
-    @pytest.mark.parametrize(
-        ("public_host", "public_scheme", "public_port", "gateway_port", "expected"),
-        [
-            ("192.168.8.10", None, 58080, 58080, ("http", "58080")),
-            ("example.dev", "https", 8443, 8443, ("https", "8443")),
-            ("example.dev", "https", None, 8443, ("https", "8443")),
-            ("example.dev", None, None, 8080, ("http", "8080")),
-        ],
+def _resolve_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    gateway_port: int | None = 58080,
+    public_host: str | None = None,
+    livekit_routes: list[dict[str, object]] | None = None,
+    livekit_ports: list[dict[str, object]] | None = None,
+    lock_livekit_routes: list[dict[str, object]] | None = None,
+    lock_livekit_ports: list[dict[str, object]] | None = None,
+    lock_livekit_slots: dict[str, object] | None = None,
+    values_extra: dict[str, object] | None = None,
+):
+    routes = livekit_routes if livekit_routes is not None else []
+    livekit_entry: dict[str, object] = {"ref": LIVEKIT_REF, "routes": routes}
+    if livekit_ports is not None:
+        livekit_entry["ports"] = livekit_ports
+    payload: dict[str, object] = {
+        "requires": ">=0.0",
+        "project_name": "edge-demo",
+        "platforms": ["linux/amd64"],
+        "services": {"livekit": livekit_entry},
+    }
+    if gateway_port is not None:
+        payload["gateway_port"] = gateway_port
+    (tmp_path / "boatyard.yml").write_text(
+        yaml.safe_dump(payload, default_flow_style=False, sort_keys=False),
+        encoding="utf-8",
     )
-    def test_the_forwarded_pair_derives_from_the_public_face(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        public_host: str,
-        public_scheme: str | None,
-        public_port: int | None,
-        gateway_port: int | None,
-        expected: tuple[str, str],
-    ) -> None:
-        document = _assembly_document(
+    livekit_bundle: dict[str, object] = {
+        "reference": LIVEKIT_PINNED,
+        "services": ["livekit"],
+        "routes": lock_livekit_routes or [],
+        "ports": lock_livekit_ports or [],
+        "container_names": [],
+    }
+    if lock_livekit_slots is not None:
+        livekit_bundle["slots"] = lock_livekit_slots
+    lock_images: dict[str, object] = {}
+    if gateway_port is not None:
+        lock_images["CADDY_IMAGE"] = {
+            "index": CADDY_LOCK_ENTRY,
+            "platforms": {"linux/amd64": CADDY_LOCK_ENTRY},
+        }
+    tmp_path.joinpath(*LOCK_PATH.parts).write_text(
+        yaml.safe_dump({
+            "platforms": ["linux/amd64"],
+            "images": lock_images,
+            "bundles": {"LIVEKIT_BUNDLE": livekit_bundle},
+        }),
+        encoding="utf-8",
+    )
+    values: dict[str, object] = dict(values_extra or {})
+    if public_host is not None:
+        values["public_host"] = public_host
+    (tmp_path / "boatyard.values.yaml").write_text(
+        yaml.safe_dump(values, default_flow_style=False, sort_keys=False),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    config = ConfigFile.load(tmp_path / "boatyard.yml")
+    lock = LockFile.load(tmp_path / LOCK_PATH, config)
+    return resolve(config, lock, values_file.ValuesFile.load(tmp_path / "boatyard.values.yaml"))
+
+
+class TestPublicFaceMinting:
+    def test_the_four_keys_compose_the_slots(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        plan = _resolve_tree(
             tmp_path,
             monkeypatch,
-            [{"path": "/*", "upstream": "livekit:8000"}],
-            auth=True,
-            gateway_port=gateway_port,
-            public_host=public_host,
-            public_scheme=public_scheme,
-            public_port=public_port,
+            public_host="example.dev",
+            values_extra={"public_scheme": "https", "public_port": 8443, "public_url_path": "/makeitsing"},
         )
 
-        assert document["services"]["boatyard-gateway"]["environment"] == {
-            "FORWARDED_PROTO": expected[0],
-            "FORWARDED_PORT": expected[1],
-        }
+        assert plan.gateway is not None and plan.gateway.public_face is not None
+        assert plan.gateway.public_face == ("example.dev", "https", 8443, "/makeitsing")
+        assert plan.env["PUBLIC_HOST"] == "example.dev"
+        assert plan.env["PUBLIC_SCHEME"] == "https"
+        assert plan.env["PUBLIC_PORT"] == "8443"
+        assert plan.env["PUBLIC_URL_PATH"] == "/makeitsing"
+        assert plan.env["PUBLIC_URL"] == "https://example.dev:8443/makeitsing"
 
+    def test_the_scheme_default_port_elides_from_the_url(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        plan = _resolve_tree(
+            tmp_path, monkeypatch, gateway_port=None, public_host="example.dev", values_extra={"public_scheme": "https"}
+        )
 
-class TestEdgeStanza:
-    def test_the_stanza_carries_the_caddy_slot_config_mount_and_port(
+        assert plan.env["PUBLIC_PORT"] == "443"
+        assert plan.env["PUBLIC_URL"] == "https://example.dev"
+
+    def test_public_port_is_always_concrete(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        plan = _resolve_tree(tmp_path, monkeypatch, gateway_port=None, public_host="example.dev")
+
+        assert plan.gateway is None
+        assert plan.env["PUBLIC_PORT"] == "80"
+        assert plan.env["PUBLIC_URL"] == "http://example.dev"
+
+    def test_the_minted_slots_refuse_as_hand_set_keys(self, tmp_path: Path) -> None:
+        for name in ("PUBLIC_HOST", "PUBLIC_SCHEME", "PUBLIC_PORT", "PUBLIC_URL_PATH", "PUBLIC_URL", "EDGE_BASE_URL"):
+            document = {"values": {name: "x"}}
+            with pytest.raises(ValueError, match=f"{name} is not hand-settable"):
+                values_file.ValuesFile.model_validate(document, context={"path": "boatyard.values.yaml"})
+
+    def test_a_public_slot_consumption_without_public_host_refuses(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        document = _assembly_document(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
+        case = tmp_path / "case"
+        case.mkdir()
+        with pytest.raises(ValueError, match="consumes PUBLIC_HOST, which requires public_host"):
+            _resolve_tree(
+                case,
+                monkeypatch,
+                public_host=None,
+                lock_livekit_slots={"PUBLIC_HOST": {"required": True}},
+            )
 
+    def test_the_edge_base_url_mints_from_the_gateway_declaration(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        plan = _resolve_tree(tmp_path, monkeypatch)
+
+        assert plan.env["EDGE_BASE_URL"] == "http://boatyard-gateway:8443"
+
+
+class TestGatewayProject:
+    def test_the_gateway_service_carries_the_shared_net_only(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spy = _up(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
+
+        document = _gateway_document(spy)
+        assert document["name"] == "edge-demo"
+        assert document["networks"] == {"edge-demo-shared": {"external": True}}
         assert document["services"]["boatyard-gateway"] == {
             "image": CADDY_LOCK_ENTRY,
             "configs": [{"source": "devkit-edge-caddyfile", "target": "/etc/caddy/Caddyfile"}],
             "ports": [{"target": 8443, "published": 58080, "protocol": "tcp"}],
-            "networks": {"livekit-net": None},
+            "networks": {"edge-demo-shared": None},
         }
 
-    def test_the_published_port_uses_a_literal_gateway(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        document = _assembly_document(
-            tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], gateway_port=8080, public_port=8080
+    def test_the_published_port_follows_the_values_gateway_port(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spy = _up(
+            tmp_path,
+            monkeypatch,
+            [{"path": "/*", "upstream": "livekit:8000"}],
+            gateway_port=8080,
+            public_port=8080,
+            values_extra={"gateway_port": 18443},
         )
 
-        assert document["services"]["boatyard-gateway"]["ports"] == [
-            {"target": 8443, "published": 8080, "protocol": "tcp"}
+        assert _gateway_document(spy)["services"]["boatyard-gateway"]["ports"] == [
+            {"target": 8443, "published": 18443, "protocol": "tcp"}
         ]
+
+    def test_the_gateway_carries_no_environment_stanza(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        spy = _up(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], auth=True)
+
+        assert "environment" not in _gateway_document(spy)["services"]["boatyard-gateway"]
 
     def test_routes_without_a_gateway_refuse_at_load(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _write_edge_tree(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], gateway_port=None)
@@ -286,6 +412,353 @@ class TestEdgeStanza:
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
         assert "routes require a gateway declaration" in str(result.exception)
+
+
+class TestOverrideDocument:
+    def test_each_service_joins_the_shared_network_under_its_entry_prefixed_alias(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spy = _up(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], auth=True)
+
+        assert spy.override_documents == [
+            {
+                "networks": {"edge-demo-shared": {"external": True}},
+                "services": {
+                    "keycloak": {"networks": {"edge-demo-shared": {"aliases": ["auth-keycloak-keycloak"]}}},
+                },
+            },
+            {
+                "networks": {"edge-demo-shared": {"external": True}},
+                "services": {
+                    "livekit": {"networks": {"edge-demo-shared": {"aliases": ["livekit-livekit"]}}},
+                },
+            },
+        ]
+
+    def test_effective_ports_ride_except_what_the_bundle_text_declares(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ports = [{"service": "livekit", "published": 6178, "target": 6178}]
+        spy = _up(
+            tmp_path,
+            monkeypatch,
+            [{"path": "/*", "upstream": "livekit:8000"}],
+            entry_ports=ports,
+            values_extra={"ports": {"livekit": 16178}},
+        )
+        declaring = "services:\n  livekit:\n    image: demo/livekit:1\n    ports:\n      - 6178:6178\n"
+        (tmp_path / "declared").mkdir()
+        declared_spy = _up(
+            tmp_path / "declared",
+            monkeypatch,
+            [{"path": "/*", "upstream": "livekit:8000"}],
+            entry_ports=ports,
+            livekit_text=declaring,
+        )
+
+        assert spy.override_documents[0]["services"]["livekit"]["ports"] == [
+            {"published": 16178, "target": 6178},
+        ]
+        assert "ports" not in declared_spy.override_documents[0]["services"]["livekit"]
+
+    def test_container_name_resets_only_where_the_bundle_declares_one(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _write_edge_tree(tmp_path, monkeypatch, [])
+        lock = yaml.safe_load((tmp_path / LOCK_PATH).read_text(encoding="utf-8"))
+        lock["bundles"]["LIVEKIT_BUNDLE"]["container_names"] = ["livekit"]
+        (tmp_path / LOCK_PATH).write_text(yaml.safe_dump(lock), encoding="utf-8")
+        spy = UpSpy()
+        monkeypatch.setattr(up, "bash", spy.run)
+        monkeypatch.setattr(up, "bash_check", lambda _command: True)
+        monkeypatch.setattr(up, "install_crane", lambda: None)
+        monkeypatch.setattr(up, "OciArtifactManifest", StubArtifacts({LIVEKIT_PINNED: [LIVEKIT_TEXT]}))
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code == 0, result.output
+        [override] = spy.override_documents
+        assert override["services"]["livekit"]["container_name"] is None
+
+
+class TestUpProjects:
+    def test_bundles_then_gateway_in_declaration_order(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        spy = _up(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], auth=True)
+
+        assert spy.projects == ["edge-demo-auth-keycloak", "edge-demo-livekit", "edge-demo"]
+
+    def test_every_bundle_invocation_carries_its_compose_files_and_the_shared_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spy = _up(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
+
+        [bundle_command, gateway_command] = spy.commands
+        assert bundle_command.startswith(
+            "env -u EDGE_BASE_URL -u PUBLIC_HOST -u PUBLIC_PORT -u PUBLIC_SCHEME -u PUBLIC_URL "
+            "-u PUBLIC_URL_PATH docker compose -p edge-demo-livekit -f "
+        )
+        assert "devkit-bundle-" in bundle_command
+        assert "devkit-override-" in bundle_command
+        assert bundle_command.endswith("up --pull missing -d")
+        assert gateway_command.startswith(
+            "env -u EDGE_BASE_URL -u PUBLIC_HOST -u PUBLIC_PORT -u PUBLIC_SCHEME -u PUBLIC_URL "
+            "-u PUBLIC_URL_PATH docker compose -p edge-demo -f "
+        )
+        assert "devkit-gateway-" in gateway_command
+        assert spy.env_content is not None and spy.env_content.startswith("EDGE_BASE_URL=")
+
+    def test_a_failing_project_stops_the_run_and_reports_the_retained_artifacts(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spy = _invoke_up(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
+
+        def fail_from_second(command: str) -> None:
+            spy.run(command)
+            if len(spy.commands) == 2:
+                raise CalledProcessError(1, command)
+
+        monkeypatch.setattr(up, "bash", fail_from_second)
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, SystemExit)
+        report = str(result.exception)
+        assert "the project edge-demo failed" in report
+        assert "kept artifacts for inspection:" in report
+
+    def test_attached_mode_hands_off_only_on_the_gateway_invocation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spy = _up(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], attached=True)
+
+        assert spy.projects == ["edge-demo-livekit", "edge-demo"]
+        assert spy.commands[-1].startswith(
+            "env -u EDGE_BASE_URL -u PUBLIC_HOST -u PUBLIC_PORT -u PUBLIC_SCHEME -u PUBLIC_URL "
+            "-u PUBLIC_URL_PATH docker compose -p edge-demo -f "
+        )
+        assert "-d" not in spy.commands[-1].rsplit(" up ", 1)[1]
+
+    def test_zero_selection_renders_the_gateway_project_alone(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        payload = {
+            "requires": ">=0.0",
+            "project_name": "edge-demo",
+            "platforms": ["linux/amd64"],
+            "gateway_port": 58080,
+            "services": {
+                "core": {
+                    "options": {
+                        "cuda": {
+                            "ref": LIVEKIT_REF,
+                            "routes": [{"path": "/*", "upstream": "livekit:8000"}],
+                        }
+                    }
+                }
+            },
+        }
+        (tmp_path / "boatyard.yml").write_text(
+            yaml.safe_dump(payload, default_flow_style=False, sort_keys=False), encoding="utf-8"
+        )
+        tmp_path.joinpath(*LOCK_PATH.parts).write_text(
+            yaml.safe_dump({
+                "platforms": ["linux/amd64"],
+                "images": {
+                    "CADDY_IMAGE": {
+                        "index": CADDY_LOCK_ENTRY,
+                        "platforms": {"linux/amd64": CADDY_LOCK_ENTRY},
+                    }
+                },
+                "bundles": {
+                    "CORE_CUDA_BUNDLE": {
+                        "reference": LIVEKIT_PINNED,
+                        "services": ["livekit"],
+                        "routes": [],
+                        "ports": [],
+                        "container_names": [],
+                    }
+                },
+            }),
+            encoding="utf-8",
+        )
+        (tmp_path / "boatyard.values.yaml").write_text("public_host: 192.168.8.10\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+        spy = UpSpy()
+        monkeypatch.setattr(up, "bash", spy.run)
+        monkeypatch.setattr(up, "bash_check", lambda _command: True)
+        monkeypatch.setattr(up, "install_crane", lambda: None)
+        monkeypatch.setattr(up, "OciArtifactManifest", StubArtifacts({LIVEKIT_PINNED: [LIVEKIT_TEXT]}))
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code == 0, result.output
+        assert spy.projects == ["edge-demo"]
+        assert _caddyfile(spy) == ":8443 {\n}\n"
+
+
+class TestRenderCaddyfile:
+    def test_the_site_listens_on_the_edge_port(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        spy = _up(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
+
+        assert _caddyfile(spy).startswith(":8443 {\n")
+
+    def test_the_catch_all_renders_as_a_bare_handle(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        spy = _up(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
+
+        assert "\thandle {\n\t\treverse_proxy livekit-livekit:8000\n\t}\n}" in _caddyfile(spy)
+
+    def test_wildcard_paths_render_as_handle_matchers(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        spy = _up(tmp_path, monkeypatch, [{"path": "/grafana/*", "upstream": "grafana:3000"}])
+
+        assert "\thandle /grafana/* {\n\t\treverse_proxy livekit-grafana:3000\n\t}" in _caddyfile(spy)
+
+    def test_strip_prefix_renders_as_handle_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        spy = _up(
+            tmp_path, monkeypatch, [{"path": "/grafana/*", "upstream": "grafana:3000", "strip_prefix": True}]
+        )
+
+        assert "\thandle_path /grafana/* {\n\t\treverse_proxy livekit-grafana:3000\n\t}" in _caddyfile(spy)
+
+    def test_the_auth_route_bakes_the_forwarded_literals(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spy = _up(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], auth=True)
+
+        caddyfile = _caddyfile(spy)
+        assert "reverse_proxy auth-keycloak-keycloak:8080 {" in caddyfile
+        assert "header_up X-Forwarded-Proto http" in caddyfile
+        assert "header_up X-Forwarded-Port 58080" in caddyfile
+
+    def test_plain_routes_carry_no_forwarded_headers(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        spy = _up(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], auth=True)
+
+        assert "header_up" not in _caddyfile(spy).split("handle {", 1)[1]
+
+    def test_a_raw_route_renders_verbatim_under_its_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        spy = _up(
+            tmp_path,
+            monkeypatch,
+            [{"path": "/x/*", "upstream": "x:1", "raw": 'respond "raw" 200'}],
+        )
+
+        assert '\thandle /x/* {\n\t\trespond "raw" 200\n\t}' in _caddyfile(spy)
+
+    def test_blocks_render_in_declaration_order(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        spy = _up(
+            tmp_path,
+            monkeypatch,
+            [
+                {"path": "/*", "upstream": "livekit:8000"},
+                {"path": "/grafana/*", "upstream": "grafana:3000"},
+            ],
+        )
+
+        caddyfile = _caddyfile(spy)
+        assert caddyfile.index("reverse_proxy livekit-livekit:8000") < caddyfile.index(
+            "reverse_proxy livekit-grafana:3000"
+        )
+
+
+class TestAdoption:
+    def test_authored_declarations_replace_the_adopted_set(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        plan = _resolve_tree(
+            tmp_path,
+            monkeypatch,
+            livekit_routes=[{"path": "/*", "upstream": "livekit:8000"}],
+            lock_livekit_routes=[{"path": "/adopted/*", "upstream": "livekit:9000"}],
+        )
+
+        [bundle] = plan.bundles
+        assert [(route.path, route.upstream) for route in bundle.effective_routes] == [("/*", "livekit:8000")]
+
+    def test_the_adopted_set_stands_without_authored_declarations(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        plan = _resolve_tree(
+            tmp_path,
+            monkeypatch,
+            livekit_routes=[],
+            lock_livekit_routes=[{"path": "/adopted/*", "upstream": "livekit:9000"}],
+        )
+
+        [bundle] = plan.bundles
+        assert [(route.path, route.upstream) for route in bundle.effective_routes] == [("/adopted/*", "livekit:9000")]
+
+    def test_two_adopted_claims_on_one_path_refuse(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        tree = tmp_path / "case"
+        tree.mkdir()
+        with pytest.raises(ValueError, match="route path /x/\\* is claimed by both"):
+            _write_two_claim_tree(tree, monkeypatch)
+
+    def test_the_values_ports_single_port_rule(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        plan = _resolve_tree(
+            tmp_path,
+            monkeypatch,
+            livekit_ports=[{"service": "livekit", "published": 6178, "target": 6178}],
+            values_extra={"ports": {"livekit": 16178}},
+        )
+
+        [bundle] = plan.bundles
+        assert [(port.service, port.published) for port in bundle.effective_ports] == [("livekit", 6178)]
+
+    def test_an_unknown_values_ports_service_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        with pytest.raises(ValueError, match="are services of no selected bundle"):
+            _resolve_tree(
+                tmp_path,
+                monkeypatch,
+                livekit_ports=[{"service": "livekit", "published": 6178, "target": 6178}],
+                values_extra={"ports": {"ghost": 1234}},
+            )
+
+
+def _write_two_claim_tree(tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = {
+        "requires": ">=0.0",
+        "project_name": "edge-demo",
+        "platforms": ["linux/amd64"],
+        "gateway_port": 58080,
+        "services": {
+            "one": {"ref": LIVEKIT_REF},
+            "two": {"ref": KEYCLOAK_REF},
+        },
+    }
+    (tree / "boatyard.yml").write_text(yaml.safe_dump(payload), encoding="utf-8")
+    (tree / LOCK_PATH).write_text(
+        yaml.safe_dump({
+            "platforms": ["linux/amd64"],
+            "images": {
+                "CADDY_IMAGE": {
+                    "index": CADDY_LOCK_ENTRY,
+                    "platforms": {"linux/amd64": CADDY_LOCK_ENTRY},
+                }
+            },
+            "bundles": {
+                "ONE_BUNDLE": {
+                    "reference": LIVEKIT_PINNED,
+                    "services": ["one-a"],
+                    "routes": [{"path": "/x/*", "upstream": "one-a:8000"}],
+                    "ports": [],
+                    "container_names": [],
+                },
+                "TWO_BUNDLE": {
+                    "reference": KEYCLOAK_PINNED,
+                    "services": ["two-b"],
+                    "routes": [{"path": "/x/*", "upstream": "two-b:8000"}],
+                    "ports": [],
+                    "container_names": [],
+                },
+            },
+        }),
+        encoding="utf-8",
+    )
+    (tree / "boatyard.values.yaml").write_text("public_host: 192.168.8.10\n", encoding="utf-8")
+    monkeypatch.chdir(tree)
+    config = ConfigFile.load(tree / "boatyard.yml")
+    lock = LockFile.load(tree / LOCK_PATH, config)
+    resolve(config, lock, values_file.ValuesFile.load(tree / "boatyard.values.yaml"))
 
 
 class TestValuesLoad:

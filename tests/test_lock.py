@@ -1040,6 +1040,23 @@ class TestBundleRecording:
             LockFile.load(tmp_path / LOCK_PATH, config)
 
 
+def test_extract_bundle_records_collects_declared_ports_in_both_spellings() -> None:
+    from boatyard.lock import extract_bundle_records
+
+    text = (
+        "services:\n"
+        "  livekit:\n"
+        "    image: demo/livekit:1\n"
+        "    ports:\n"
+        "      - 6178:6178\n"
+        "      - {published: 5957, target: 5957, protocol: udp}\n"
+    )
+
+    records = extract_bundle_records([text])
+
+    assert records.declared_ports == {"livekit": [(6178, 6178, "tcp"), (5957, 5957, "udp")]}
+
+
 def _skip_crane_install() -> None:
     return None
 
