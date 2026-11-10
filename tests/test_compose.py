@@ -999,35 +999,40 @@ class TestSharedNames:
         _write_bundle_output(tmp_path, "right-b", ["api"])
         _write_workload(tmp_path, "api.yaml", "api")
         _write_values_file(tmp_path, {"bundles": ["left-a", "right-b"]})
-        recorder = AssemblyRecorder()
-        monkeypatch.setattr(down, "bash_handoff", recorder.run)
+        recorder = HandoffRecorder()
+        monkeypatch.setattr(down, "bash", recorder.run)
+        monkeypatch.setattr(down, "bash_check", lambda _command: True)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["down"])
 
         assert result.exit_code == 0, result.output
         assert recorder.commands == [
-            f"docker compose -p demo --project-directory {tmp_path} down --remove-orphans"
+            f"docker compose -p demo-left-a --project-directory {tmp_path} down --remove-orphans",
+            f"docker compose -p demo-right-b --project-directory {tmp_path} down --remove-orphans",
+            f"docker compose -p demo --project-directory {tmp_path} down --remove-orphans",
+            "docker network rm demo-shared",
         ]
 
 
 class TestDownTeardown:
-    def test_down_spells_a_file_less_name_only_invocation(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_down_spells_file_less_per_project_invocations(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_consumer_tree(tmp_path)
-        recorder = AssemblyRecorder()
-        monkeypatch.setattr(down, "bash_handoff", recorder.run)
+        recorder = HandoffRecorder()
+        monkeypatch.setattr(down, "bash", recorder.run)
+        monkeypatch.setattr(down, "bash_check", lambda _command: True)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["down"])
 
         assert result.exit_code == 0, result.output
-        assert len(recorder.commands) == 1
-        command = recorder.commands[0]
-        assert command.startswith("docker compose -p demo ")
-        assert " -f " not in command
-        assert "--env-file" not in command
-        assert command.endswith("down --remove-orphans")
-        assert recorder.documents == []
+        assert len(recorder.commands) == 6
+        for command in recorder.commands[:5]:
+            assert command.startswith("docker compose -p ")
+            assert " -f " not in command
+            assert "--env-file" not in command
+            assert command.endswith("down --remove-orphans")
+        assert recorder.commands[-1] == "docker network rm demo-shared"
 
     def test_down_is_identical_under_every_selection(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         commands: list[str] = []
@@ -1035,8 +1040,9 @@ class TestDownTeardown:
             tree = tmp_path / f"tree-{len(commands)}"
             tree.mkdir()
             _write_consumer_tree(tree, bundles=bundles)
-            recorder = AssemblyRecorder()
-            monkeypatch.setattr(down, "bash_handoff", recorder.run)
+            recorder = HandoffRecorder()
+            monkeypatch.setattr(down, "bash", recorder.run)
+            monkeypatch.setattr(down, "bash_check", lambda _command: True)
             monkeypatch.chdir(tree)
 
             result = runner.invoke(app, ["down"])
@@ -1049,13 +1055,15 @@ class TestDownTeardown:
     def test_down_forwards_the_volumes_flag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_consumer_tree(tmp_path)
         recorder = HandoffRecorder()
-        monkeypatch.setattr(down, "bash_handoff", recorder.run)
+        monkeypatch.setattr(down, "bash", recorder.run)
+        monkeypatch.setattr(down, "bash_check", lambda _command: True)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["down", "--volumes"])
 
         assert result.exit_code == 0, result.output
-        assert recorder.commands[0].endswith("down --remove-orphans -v")
+        assert len(recorder.commands) == 6
+        assert all(command.endswith("down --remove-orphans -v") for command in recorder.commands[:5])
 
     def test_down_without_config_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_values_file(tmp_path, {"public_host": "example.dev"})
@@ -1066,17 +1074,21 @@ class TestDownTeardown:
         assert result.exit_code != 0
         assert isinstance(result.exception, FileNotFoundError)
 
-    def test_down_tears_down_by_name(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_down_skips_the_network_removal_when_absent(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_config(tmp_path)
         _write_values_file(tmp_path, {"public_host": "example.dev"})
         recorder = HandoffRecorder()
-        monkeypatch.setattr(down, "bash_handoff", recorder.run)
+        monkeypatch.setattr(down, "bash", recorder.run)
+        monkeypatch.setattr(down, "bash_check", lambda _command: False)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["down"])
 
         assert result.exit_code == 0, result.output
-        assert recorder.commands == [f"docker compose -p demo --project-directory {tmp_path} down --remove-orphans"]
+        assert recorder.commands == [
+            f"docker compose -p demo-ext --project-directory {tmp_path} down --remove-orphans",
+            f"docker compose -p demo --project-directory {tmp_path} down --remove-orphans",
+        ]
 
 
 class TestLockRequirement:
