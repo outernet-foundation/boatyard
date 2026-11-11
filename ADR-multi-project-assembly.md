@@ -236,7 +236,7 @@ values: { ...slots... }
   - `outernet.internal/route: <path>=<host>:<port>[,strip]` — comma-separated for multiples
     (e.g. `/grafana/*=grafana:3000,/loki/*=loki:3100,/*=api:8000`); `,strip` sets
     `strip_prefix` (keycloak's `/auth/*=keycloak:8080,strip`).
-  - `outernet.internal/publish: <published>:<target>[/<protocol>]` — comma-separated (e.g.
+  - `outernet.internal/publish-port: <published>:<target>[/<protocol>]` — comma-separated (e.g.
     `6178:6178,5957:5957/udp`).
 - Annotations ride score's `metadata.annotations` passthrough onto the service stanzas in the
   artifact text; relock extracts them into the lock record (paths, hosts, ports, strip flags,
@@ -276,7 +276,7 @@ values: { ...slots... }
   `livekit:5957`) are already correct under collapsed naming.
 - **placeframe**: respell the ngrok bundle's baked `http://edge:8443` →
   `http://boatyard-gateway:8443`; author annotations (`/auth/*=keycloak:8080,strip` on
-  keycloak; `/grafana/*=grafana:3000,/loki/*=loki:3100,/*=api:8000` on api; no publishes —
+  keycloak; `/grafana/*=grafana:3000,/loki/*=loki:3100,/*=api:8000` on api; no published ports —
   debug/admin ports stay consumer-side); author slot dev-defaults (`DEPLOYMENT_ENVIRONMENT`,
   dev S3/postgres/database values as `:-` defaults); regenerate bare; republish. Its own
   consumer surface also updates: `gateway:` → `gateway_port:`, its values sample to the
