@@ -1,7 +1,7 @@
 # Precision cluster: attribution-based tree tags (boatyard)
 
-Pre-implementation design. Prerequisite: the closeout critical path has
-landed (consumers compute disk-state tree tags). Precedes the semver
+Pre-implementation design. Prerequisite, landed: consumers compute
+disk-state tree tags. Precedes the semver
 image/bundle lines by construction: that change gate compares tree tags, and
 tags are a trustworthy change signal only once this makes them source-precise
 — every over-inclusion is a spurious version bump.
