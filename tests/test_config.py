@@ -1250,11 +1250,11 @@ class TestWorkloadLensAnnotations:
 
     def test_a_bad_protocol_refuses(self) -> None:
         with pytest.raises(ValidationError, match=r"protocol 'sctp' must be one of"):
-            self._document({"outernet.internal/publish": "6178:6178/sctp"})
+            self._document({"outernet.internal/publish-port": "6178:6178/sctp"})
 
     def test_an_out_of_range_port_refuses(self) -> None:
         with pytest.raises(ValidationError, match=r"port '65536' outside 1-65535"):
-            self._document({"outernet.internal/publish": "6178:65536"})
+            self._document({"outernet.internal/publish-port": "6178:65536"})
 
     def test_strip_without_a_wildcard_path_refuses(self) -> None:
         with pytest.raises(ValidationError, match=r"strip requires the path to end in /\*"):
@@ -1281,17 +1281,17 @@ class TestWorkloadLensAnnotations:
         with pytest.raises(ValidationError, match=r"must be a service name and a literal port"):
             self._document({"outernet.internal/route": "/*=grafana:three"})
 
-    def test_publishes_parse_with_defaults_and_protocols(self) -> None:
-        document = self._document({"outernet.internal/publish": "6178:6178,5957:5957/udp"})
+    def test_published_ports_parse_with_defaults_and_protocols(self) -> None:
+        document = self._document({"outernet.internal/publish-port": "6178:6178,5957:5957/udp"})
 
-        assert document.publishes == [
+        assert document.published_ports == [
             (6178, 6178, "tcp"),
             (5957, 5957, "udp"),
         ]
 
-    def test_a_pairless_publish_entry_refuses(self) -> None:
+    def test_a_pairless_publish_port_entry_refuses(self) -> None:
         with pytest.raises(ValidationError, match=r"must be a published:target pair"):
-            self._document({"outernet.internal/publish": "6178"})
+            self._document({"outernet.internal/publish-port": "6178"})
 
 
 class TestRoutes:
@@ -1557,7 +1557,7 @@ class TestPorts:
         )
         write_lock(tmp_path)
 
-        with pytest.raises(ValidationError, match="Input should be a valid dictionary or instance of PortDeclaration"):
+        with pytest.raises(ValidationError, match="Input should be a valid dictionary or instance of PublishedPort"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_an_empty_group_options_map_refuses(self, tmp_path: Path) -> None:

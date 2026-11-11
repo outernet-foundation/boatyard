@@ -19,13 +19,13 @@ CONSUMER_INTERPOLATED_ANNOTATION = "outernet.internal/consumer-interpolated"
 DOCKERFILE_ANNOTATION = "outernet.internal/dockerfile"
 LOCK_ANNOTATION = "outernet.internal/lock"
 ROUTE_ANNOTATION = "outernet.internal/route"
-PUBLISH_ANNOTATION = "outernet.internal/publish"
+PUBLISH_PORT_ANNOTATION = "outernet.internal/publish-port"
 
 ROUTE_PATH_PATTERN = re.compile(r"(?:/\*|/(?:[^/\s*]+(?:/[^/\s*]+)*)?(?:/\*)?)")
 
 ROUTE_UPSTREAM_PATTERN = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*:[0-9]+")
 
-PUBLISH_PROTOCOLS: tuple[Literal["tcp", "udp"], ...] = ("tcp", "udp")
+PUBLISH_PORT_PROTOCOLS: tuple[Literal["tcp", "udp"], ...] = ("tcp", "udp")
 
 
 def _default_metadata() -> WorkloadMetadata:
@@ -64,9 +64,9 @@ class WorkloadDocument(BaseModel):
         if route is not None:
             parse_route_annotation(route)
 
-        publish = annotations.get(PUBLISH_ANNOTATION)
-        if publish is not None:
-            parse_publish_annotation(publish)
+        publish_port = annotations.get(PUBLISH_PORT_ANNOTATION)
+        if publish_port is not None:
+            parse_publish_port_annotation(publish_port)
 
         restart = annotations.get(RESTART_ANNOTATION)
         if restart is not None and restart not in COMPOSE_RESTART_POLICIES:
@@ -125,9 +125,9 @@ class WorkloadDocument(BaseModel):
         return parse_route_annotation(annotation) if annotation is not None else []
 
     @property
-    def publishes(self) -> list[WorkloadPublish]:
-        annotation = self.metadata.annotations.get(PUBLISH_ANNOTATION)
-        return parse_publish_annotation(annotation) if annotation is not None else []
+    def published_ports(self) -> list[WorkloadPublishedPort]:
+        annotation = self.metadata.annotations.get(PUBLISH_PORT_ANNOTATION)
+        return parse_publish_port_annotation(annotation) if annotation is not None else []
 
     def container_sources(self) -> dict[str, tuple[str, str]]:
         dockerfiles = _parse_source_annotation(self.metadata.annotations, DOCKERFILE_ANNOTATION)
@@ -250,7 +250,7 @@ class WorkloadRoute(NamedTuple):
     strip_prefix: bool = False
 
 
-class WorkloadPublish(NamedTuple):
+class WorkloadPublishedPort(NamedTuple):
     published: int
     target: int
     protocol: Literal["tcp", "udp"] = "tcp"
@@ -312,30 +312,32 @@ def parse_route_annotation(value: str) -> list[WorkloadRoute]:
     return routes
 
 
-def parse_publish_annotation(value: str) -> list[WorkloadPublish]:
-    publishes: list[WorkloadPublish] = []
+def parse_publish_port_annotation(value: str) -> list[WorkloadPublishedPort]:
+    published_ports: list[WorkloadPublishedPort] = []
     for entry in value.split(","):
         if not entry or entry != entry.strip():
-            raise ValueError(f"{PUBLISH_ANNOTATION} entry {entry!r} must be non-empty and unpadded")
+            raise ValueError(f"{PUBLISH_PORT_ANNOTATION} entry {entry!r} must be non-empty and unpadded")
         ports, separator, protocol = entry.partition("/")
         if not separator:
             protocol = "tcp"
-        if protocol not in PUBLISH_PROTOCOLS:
-            raise ValueError(f"{PUBLISH_ANNOTATION} protocol {protocol!r} must be one of {list(PUBLISH_PROTOCOLS)}")
+        if protocol not in PUBLISH_PORT_PROTOCOLS:
+            raise ValueError(
+                f"{PUBLISH_PORT_ANNOTATION} protocol {protocol!r} must be one of {list(PUBLISH_PORT_PROTOCOLS)}"
+            )
         published, port_separator, target = ports.partition(":")
         if not port_separator:
-            raise ValueError(f"{PUBLISH_ANNOTATION} entry {entry!r} must be a published:target pair")
-        publishes.append(
-            WorkloadPublish(
+            raise ValueError(f"{PUBLISH_PORT_ANNOTATION} entry {entry!r} must be a published:target pair")
+        published_ports.append(
+            WorkloadPublishedPort(
                 published=_publish_port(entry, published),
                 target=_publish_port(entry, target),
                 protocol=protocol,
             )
         )
-    return publishes
+    return published_ports
 
 
 def _publish_port(entry: str, value: str) -> int:
     if value.isdigit() and 1 <= int(value) <= 65535:
         return int(value)
-    raise ValueError(f"{PUBLISH_ANNOTATION} entry {entry!r} carries the port {value!r} outside 1-65535")
+    raise ValueError(f"{PUBLISH_PORT_ANNOTATION} entry {entry!r} carries the port {value!r} outside 1-65535")

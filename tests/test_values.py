@@ -206,7 +206,7 @@ def test_a_remote_winners_records_come_from_the_lock(tmp_path: Path) -> None:
 def test_authored_declarations_replace_the_adopted_set_wholesale(tmp_path: Path) -> None:
     adopting = BUNDLE.replace(
         "      TOKEN: ${API_TOKEN:?err}\n",
-        "      TOKEN: ${API_TOKEN:?err}\n    labels:\n      outernet.internal/publish: 7000:7000\n",
+        "      TOKEN: ${API_TOKEN:?err}\n    labels:\n      outernet.internal/publish-port: 7000:7000\n",
     )
     authored: list[dict[str, object]] = [{"service": "api", "published": 5678, "target": 5678}]
 
