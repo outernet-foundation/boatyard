@@ -607,6 +607,64 @@ class TestUpProjects:
             "BOATYARD_BARRIER_IMAGE=docker.io/library/alpine:3.20\nEDGE_BASE_URL="
         )
 
+    def test_the_serial_switch_converges_one_bundle_at_a_time_with_composes_own_output(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _write_edge_tree(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], auth=True)
+        spy = UpSpy()
+        monkeypatch.setattr(up, "bash", spy.run)
+        monkeypatch.setattr(up, "bash_check", _bash_check_true)
+        monkeypatch.setattr(up, "install_crane", lambda: None)
+        monkeypatch.setattr(
+            up,
+            "OciArtifactManifest",
+            StubArtifacts({
+                LIVEKIT_PINNED: [LIVEKIT_TEXT],
+                KEYCLOAK_PINNED: [KEYCLOAK_TEXT],
+            }),
+        )
+        monkeypatch.setattr(up, "_direct_runner", CaptureSpy(spy))
+
+        result = runner.invoke(app, ["up", "--serial"])
+
+        assert result.exit_code == 0, result.output
+        assert spy.projects == ["edge-demo-auth-keycloak", "edge-demo-livekit", "edge-demo"]
+        bundle_commands = [command for command, project in zip(spy.commands, spy.projects) if project != "edge-demo"]
+        assert len(bundle_commands) == 2
+        for bundle_command in bundle_commands:
+            assert "--progress plain" not in bundle_command
+            assert bundle_command.endswith("up --pull missing -d")
+        assert "auth-keycloak: up started" in result.output
+        assert "livekit: up started" in result.output
+        assert ": ready in" in result.output
+
+    def test_the_serial_switch_reports_a_failed_bundle_and_skips_the_gateway(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _write_edge_tree(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], auth=True)
+        spy = UpSpy()
+        monkeypatch.setattr(up, "bash", spy.run)
+        monkeypatch.setattr(up, "bash_check", _bash_check_true)
+        monkeypatch.setattr(up, "install_crane", lambda: None)
+        monkeypatch.setattr(
+            up,
+            "OciArtifactManifest",
+            StubArtifacts({
+                LIVEKIT_PINNED: [LIVEKIT_TEXT],
+                KEYCLOAK_PINNED: [KEYCLOAK_TEXT],
+            }),
+        )
+        monkeypatch.setattr(up, "_direct_runner", FailingRunner(spy, {"edge-demo-livekit"}))
+
+        result = runner.invoke(app, ["up", "--serial"])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, SystemExit)
+        report = str(result.exception)
+        assert "the project edge-demo-livekit failed" in report
+        assert set(spy.projects) == {"edge-demo-auth-keycloak", "edge-demo-livekit"}
+        assert "livekit: FAILED in" in result.output
+
     def test_a_single_bundle_rides_the_wall(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         spy = _invoke_up(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
         monkeypatch.setattr(up, "bash", GatewayOnlyBash(spy))

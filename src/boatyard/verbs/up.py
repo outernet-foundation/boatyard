@@ -90,6 +90,10 @@ def up(
         bool,
         typer.Option("--build", help="Build all images locally before bringing the stack up"),
     ] = False,
+    serial: Annotated[
+        bool,
+        typer.Option("--serial", help="Converge bundle projects one at a time, letting compose print its own output"),
+    ] = False,
 ) -> None:
     # Load the config, lock, and the typed machine values from the working directory
     root = Path.cwd()
@@ -117,6 +121,7 @@ def up(
             attached=attached,
             quiet_pull=quiet_pull,
             build=build,
+            serial=serial,
             materialized=materialized,
             results=results,
         )
@@ -170,6 +175,7 @@ def _orchestrate_up(
     attached: bool,
     quiet_pull: bool,
     build: bool,
+    serial: bool,
     materialized: list[Path],
     results: list[WorkerResult],
 ) -> None:
@@ -186,9 +192,11 @@ def _orchestrate_up(
     if build:
         run_build(config=config)
 
-    # Every bundle converges on the wall; the gateway waits for the drained wall
+    # Every bundle converges on the wall (or one at a time under --serial); the gateway waits
+    # for the drained bundles
     if up_context.bundles:
-        _run_wall(
+        converge = _run_serial if serial else _run_wall
+        converge(
             root,
             plan,
             up_context,
@@ -215,6 +223,36 @@ def _orchestrate_up(
             attached=attached,
             quiet_pull=quiet_pull,
             materialized=materialized,
+        )
+
+
+def _run_serial(
+    root: Path,
+    plan: AssemblyPlan,
+    up_context: UpContext,
+    *,
+    values: ValuesFile,
+    shared_network_name: str,
+    quiet_pull: bool,
+    results: list[WorkerResult],
+) -> None:
+    # Compose owns the terminal one project at a time; the milestones delimit the invocations
+    report = MilestoneReport()
+    display = WallDisplay([bundle.project_name for bundle in up_context.bundles], active=False)
+    for bundle in up_context.bundles:
+        _up_bundle_project(
+            bundle,
+            root,
+            up_context.env_file,
+            list(plan.env),
+            values,
+            shared_network_name,
+            quiet_pull,
+            _direct_runner,
+            report,
+            display,
+            results,
+            plain_progress=False,
         )
 
 
@@ -325,6 +363,8 @@ def _up_bundle_project(
     report: MilestoneReport,
     display: WallDisplay,
     collect: list[WorkerResult],
+    *,
+    plain_progress: bool = True,
 ) -> None:
     started = time.monotonic()
     report.started(bundle.entry_name)
@@ -341,8 +381,7 @@ def _up_bundle_project(
             compose_command(
                 root,
                 [*compose_files, override_file],
-                "--progress",
-                "plain",
+                *(["--progress", "plain"] if plain_progress else []),
                 "up",
                 "--pull",
                 "missing",
@@ -381,6 +420,10 @@ def _bundle_compose_files(
     texts = OciArtifactManifest.fetch_compose_texts(bundle.pinned_reference or "")
     compose_files = [_materialize(paths, "boatyard-bundle-", text) for text in texts]
     return compose_files, extract_bundle_records(texts).declared_ports
+
+
+def _direct_runner(command: str, _feed: Callable[[str], None]) -> None:
+    bash(command)
 
 
 def _wall_runner(command: str, feed: Callable[[str], None]) -> None:
