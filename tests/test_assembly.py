@@ -117,9 +117,14 @@ class FailingRunner:
         return ""
 
 
-class RefusedThread:
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        raise AssertionError("this invocation must not spawn worker threads")
+class GatewayOnlyBash:
+    # The bundle converged through the capture runner; bash may only carry the gateway
+    def __init__(self, spy: UpSpy) -> None:
+        self.spy = spy
+
+    def __call__(self, command: str) -> None:
+        assert "boatyard-override-" not in command, command
+        self.spy.run(command)
 
 
 class GatewayFailBash:
@@ -534,6 +539,7 @@ class TestOverrideDocument:
         (tmp_path / LOCK_PATH).write_text(yaml.safe_dump(lock), encoding="utf-8")
         spy = UpSpy()
         monkeypatch.setattr(up, "bash", spy.run)
+        monkeypatch.setattr(up, "bash_output", CaptureSpy(spy))
         monkeypatch.setattr(up, "bash_check", _bash_check_true)
         monkeypatch.setattr(up, "install_crane", lambda: None)
         monkeypatch.setattr(up, "OciArtifactManifest", StubArtifacts({LIVEKIT_PINNED: [LIVEKIT_TEXT]}))
@@ -570,6 +576,9 @@ class TestUpProjects:
 
         assert result.exit_code == 0, result.output
         assert set(spy.projects) == {"edge-demo-auth-keycloak", "edge-demo-livekit", "edge-demo"}
+        assert "auth-keycloak: up started" in result.output
+        assert "livekit: up started" in result.output
+        assert ": ready in" in result.output
 
     def test_every_bundle_invocation_carries_its_compose_files_and_the_shared_env(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -593,14 +602,14 @@ class TestUpProjects:
             "BOATYARD_BARRIER_IMAGE=docker.io/library/alpine:3.20\nEDGE_BASE_URL="
         )
 
-    def test_a_single_bundle_runs_inline_without_threads(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_a_single_bundle_rides_the_wall(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         spy = _invoke_up(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
-        monkeypatch.setattr(up.threading, "Thread", RefusedThread)
+        monkeypatch.setattr(up, "bash", GatewayOnlyBash(spy))
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        assert spy.projects == ["edge-demo-livekit", "edge-demo"]
+        assert set(spy.projects) == {"edge-demo-livekit", "edge-demo"}
 
     def test_a_failing_bundle_skips_the_gateway_and_retains_only_failed_paths(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -116,6 +116,16 @@ class UpSpy:
         return document
 
 
+class FailFirstCapture:
+    # The wall's capture seam failing on its first (and only) invocation
+    def __init__(self, spy: UpSpy) -> None:
+        self.spy = spy
+
+    def __call__(self, command: str) -> str:
+        self.spy.run(command)
+        raise CalledProcessError(1, command)
+
+
 runner = CliRunner()
 
 
@@ -1327,12 +1337,7 @@ class TestLockEnvSynthesis:
         spy = UpSpy()
         spy.spy_up(monkeypatch)
         monkeypatch.chdir(tmp_path)
-
-        def fail_first(command: str) -> None:
-            spy.run(command)
-            raise CalledProcessError(1, command)
-
-        monkeypatch.setattr(up, "bash", fail_first)
+        monkeypatch.setattr(up, "bash_output", FailFirstCapture(spy))
 
         result = runner.invoke(app, ["up"])
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -27,6 +28,7 @@ from boatyard.models.lock_file import LockFile
 from boatyard.models.values_file import ValuesFile
 from boatyard.paths import DEFAULT_CONFIG_PATH, LOCK_PATH, VALUES_FILE
 from boatyard.resolve import AssemblyPlan, BundleProject, GatewayPlan, resolve
+from boatyard.up_display import WallDisplay
 from boatyard.yaml import Yaml
 
 # Name the gateway's Caddyfile configs key
@@ -45,26 +47,30 @@ class WorkerResult(NamedTuple):
 
 
 class MilestoneReport:
-    # The one terminal-writing surface workers may use; every milestone prints under the lock
-    def __init__(self) -> None:
+    # The one terminal-writing surface workers may use; every milestone prints under the lock.
+    # Disabled while the interactive tree owns the terminal (non-TTY keeps the milestones).
+    def __init__(self, enabled: bool = True) -> None:
+        self.enabled = enabled
         self.lock = threading.Lock()
 
+    def _emit(self, message: str) -> None:
+        if self.enabled:
+            with self.lock:
+                print(message)
+
     def started(self, entry_name: str) -> None:
-        with self.lock:
-            print(f"{entry_name}: up started")
+        self._emit(f"{entry_name}: up started")
 
     def ready(self, entry_name: str, elapsed: float) -> None:
-        with self.lock:
-            print(f"{entry_name}: ready in {elapsed:.1f}s")
+        self._emit(f"{entry_name}: ready in {elapsed:.1f}s")
 
     def failed(self, entry_name: str, elapsed: float, error: CalledProcessError | ValueError) -> None:
-        with self.lock:
-            print(f"{entry_name}: FAILED in {elapsed:.1f}s")
-            if isinstance(error, CalledProcessError):
-                for line in (error.output or "").splitlines():
-                    print(f"  {line}")
-            else:
-                print(f"  error: {error}")
+        self._emit(f"{entry_name}: FAILED in {elapsed:.1f}s")
+        if isinstance(error, CalledProcessError):
+            for line in (error.output or "").splitlines():
+                self._emit(f"  {line}")
+        else:
+            self._emit(f"  error: {error}")
 
 
 class UpContext(NamedTuple):
@@ -222,21 +228,9 @@ def _run_wall(
     quiet_pull: bool,
     results: list[WorkerResult],
 ) -> None:
-    report = MilestoneReport()
-    if len(up_context.bundles) == 1:
-        _up_bundle_project(
-            up_context.bundles[0],
-            root,
-            up_context.env_file,
-            list(plan.env),
-            values,
-            shared_network_name,
-            quiet_pull,
-            _live_runner,
-            report,
-            results,
-        )
-        return
+    interactive = sys.stdout.isatty()
+    report = MilestoneReport(enabled=not interactive)
+    display = WallDisplay([bundle.project_name for bundle in up_context.bundles], active=interactive)
     threads = [
         threading.Thread(
             target=_up_bundle_project,
@@ -250,6 +244,7 @@ def _run_wall(
                 quiet_pull,
                 _wall_runner,
                 report,
+                display,
                 results,
             ),
         )
@@ -258,12 +253,25 @@ def _run_wall(
     for thread in threads:
         thread.start()
     try:
+        display.run(threads)
         for thread in threads:
             thread.join()
     except BaseException:
         for thread in threads:
             thread.join(timeout=10)
         raise
+    _replay_failures(results, enabled=interactive)
+
+
+def _replay_failures(results: list[WorkerResult], *, enabled: bool) -> None:
+    # Below the final tree: every failed project's captured stdout, two-space indented
+    if not enabled:
+        return
+    for result in results:
+        if not result.ok:
+            print(f"{result.bundle.project_name}: failed")
+            for line in result.output.splitlines():
+                print(f"  {line}")
 
 
 def _run_gateway(
@@ -315,6 +323,7 @@ def _up_bundle_project(
     quiet_pull: bool,
     runner: Callable[[str], str],
     report: MilestoneReport,
+    display: WallDisplay,
     collect: list[WorkerResult],
 ) -> None:
     started = time.monotonic()
@@ -347,11 +356,17 @@ def _up_bundle_project(
         elapsed = time.monotonic() - started
         report.failed(bundle.entry_name, elapsed, error)
         captured = (error.output or "") if isinstance(error, CalledProcessError) else ""
+        for line in captured.splitlines():
+            display.feed(bundle.project_name, line)
+        display.finish(bundle.project_name, False, elapsed)
         collect.append(
             WorkerResult(bundle=bundle, ok=False, elapsed=elapsed, output=captured, error=error, paths=paths)
         )
         return
     elapsed = time.monotonic() - started
+    for line in output.splitlines():
+        display.feed(bundle.project_name, line)
+    display.finish(bundle.project_name, True, elapsed)
     report.ready(bundle.entry_name, elapsed)
     collect.append(WorkerResult(bundle=bundle, ok=True, elapsed=elapsed, output=output, error=None, paths=paths))
 
@@ -364,11 +379,6 @@ def _bundle_compose_files(bundle: BundleProject, paths: list[Path]) -> tuple[lis
     texts = OciArtifactManifest.fetch_compose_texts(bundle.pinned_reference or "")
     compose_files = [_materialize(paths, "boatyard-bundle-", text) for text in texts]
     return compose_files, extract_bundle_records(texts).declared_ports
-
-
-def _live_runner(command: str) -> str:
-    bash(command)
-    return ""
 
 
 def _wall_runner(command: str) -> str:

@@ -9,6 +9,7 @@ dependencies = [
     "packaging>=24.1",
     "pydantic>=2.11.7",
     "pyyaml>=6.0",
+    "rich>=13",
     "typer>=0.17.4",
 ]
 
