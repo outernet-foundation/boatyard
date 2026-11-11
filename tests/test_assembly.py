@@ -1,5 +1,6 @@
 import re
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -69,13 +70,13 @@ class UpSpy:
 
 
 class CaptureSpy:
-    # The wall's bash_output seam: records through the spy and answers with captured-empty output
+    # The wall's streaming runner seam: records through the spy and feeds one lifecycle line
     def __init__(self, spy: UpSpy) -> None:
         self.spy = spy
 
-    def __call__(self, command: str) -> str:
+    def __call__(self, command: str, feed: Callable[[str], None]) -> None:
         self.spy.run(command)
-        return ""
+        feed(" Container edge-demo-livekit-livekit-1 Started ")
 
 
 class HandoffSpy:
@@ -93,10 +94,10 @@ class BarrierRunner:
         self.barrier = threading.Barrier(parties)
         self.spy = spy
 
-    def __call__(self, command: str) -> str:
+    def __call__(self, command: str, feed: Callable[[str], None]) -> None:
         self.barrier.wait(timeout=10)
         self.spy.run(command)
-        return ""
+        feed(" Container edge-demo-auth-keycloak-keycloak-1 Started ")
 
 
 class FailingRunner:
@@ -110,11 +111,11 @@ class FailingRunner:
                 return project
         return None
 
-    def __call__(self, command: str) -> str:
+    def __call__(self, command: str, feed: Callable[[str], None]) -> None:
         self.spy.run(command)
         if self._selected(command) is not None:
-            raise CalledProcessError(1, command, output="compose: simulated failure output")
-        return ""
+            feed(" Image docker.io/library/definitely-missing-image-xyz:1 Error pull access denied")
+            raise CalledProcessError(1, command)
 
 
 class GatewayOnlyBash:
@@ -257,7 +258,7 @@ def _invoke_up(
     )
     spy = UpSpy()
     monkeypatch.setattr(up, "bash", spy.run)
-    monkeypatch.setattr(up, "bash_output", CaptureSpy(spy))
+    monkeypatch.setattr(up, "_wall_runner", CaptureSpy(spy))
     monkeypatch.setattr(up, "bash_check", _bash_check_true)
     monkeypatch.setattr(up, "install_crane", lambda: None)
     monkeypatch.setattr(
@@ -539,7 +540,7 @@ class TestOverrideDocument:
         (tmp_path / LOCK_PATH).write_text(yaml.safe_dump(lock), encoding="utf-8")
         spy = UpSpy()
         monkeypatch.setattr(up, "bash", spy.run)
-        monkeypatch.setattr(up, "bash_output", CaptureSpy(spy))
+        monkeypatch.setattr(up, "_wall_runner", CaptureSpy(spy))
         monkeypatch.setattr(up, "bash_check", _bash_check_true)
         monkeypatch.setattr(up, "install_crane", lambda: None)
         monkeypatch.setattr(up, "OciArtifactManifest", StubArtifacts({LIVEKIT_PINNED: [LIVEKIT_TEXT]}))
@@ -614,6 +615,28 @@ class TestUpProjects:
 
         assert result.exit_code == 0, result.output
         assert set(spy.projects) == {"edge-demo-livekit", "edge-demo"}
+
+    def test_worker_lines_stream_into_the_wall_report(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _write_edge_tree(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], auth=True)
+        spy = UpSpy()
+        monkeypatch.setattr(up, "bash", spy.run)
+        monkeypatch.setattr(up, "bash_check", _bash_check_true)
+        monkeypatch.setattr(up, "install_crane", lambda: None)
+        monkeypatch.setattr(
+            up,
+            "OciArtifactManifest",
+            StubArtifacts({
+                LIVEKIT_PINNED: [LIVEKIT_TEXT],
+                KEYCLOAK_PINNED: [KEYCLOAK_TEXT],
+            }),
+        )
+        monkeypatch.setattr(up, "_wall_runner", FailingRunner(spy, {"edge-demo-livekit", "edge-demo-auth-keycloak"}))
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code != 0
+        assert "pull access denied" in result.output
+        assert result.output.count("FAILED in") == 2
 
     def test_a_failing_bundle_skips_the_gateway_and_retains_only_failed_paths(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

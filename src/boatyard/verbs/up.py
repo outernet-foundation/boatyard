@@ -4,13 +4,14 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Mapping
+from functools import partial
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Annotated, NamedTuple
 
 import typer
 import yaml
-from bashrun.bash import CalledProcessError, bash, bash_check, bash_handoff, bash_output
+from bashrun.bash import CalledProcessError, bash, bash_check, bash_handoff, bash_output_lines
 
 from boatyard.build import run_build
 from boatyard.compose import compose_command
@@ -64,13 +65,12 @@ class MilestoneReport:
     def ready(self, entry_name: str, elapsed: float) -> None:
         self._emit(f"{entry_name}: ready in {elapsed:.1f}s")
 
-    def failed(self, entry_name: str, elapsed: float, error: CalledProcessError | ValueError) -> None:
+    def failed(self, entry_name: str, elapsed: float, error: CalledProcessError | ValueError, output: str) -> None:
         self._emit(f"{entry_name}: FAILED in {elapsed:.1f}s")
-        if isinstance(error, CalledProcessError):
-            for line in (error.output or "").splitlines():
-                self._emit(f"  {line}")
-        else:
+        if isinstance(error, ValueError):
             self._emit(f"  error: {error}")
+        for line in output.splitlines():
+            self._emit(f"  {line}")
 
 
 class UpContext(NamedTuple):
@@ -321,7 +321,7 @@ def _up_bundle_project(
     values: ValuesFile,
     shared_network_name: str,
     quiet_pull: bool,
-    runner: Callable[[str], str],
+    runner: Callable[[str, Callable[[str], None]], None],
     report: MilestoneReport,
     display: WallDisplay,
     collect: list[WorkerResult],
@@ -329,6 +329,7 @@ def _up_bundle_project(
     started = time.monotonic()
     report.started(bundle.entry_name)
     paths: list[Path] = []
+    lines: list[str] = []
     try:
         compose_files, declared_ports = _bundle_compose_files(bundle, paths)
         override_file = _materialize(
@@ -336,7 +337,7 @@ def _up_bundle_project(
             "boatyard-override-",
             render_override_document(shared_network_name, bundle, values, declared_ports),
         )
-        output = runner(
+        runner(
             compose_command(
                 root,
                 [*compose_files, override_file],
@@ -350,25 +351,24 @@ def _up_bundle_project(
                 project_name=bundle.project_name,
                 env_file=env_file,
                 slot_names=slot_names,
-            )
+            ),
+            partial(_record_line, lines, display, bundle.project_name),
         )
     except (CalledProcessError, ValueError) as error:
         elapsed = time.monotonic() - started
-        report.failed(bundle.entry_name, elapsed, error)
-        captured = (error.output or "") if isinstance(error, CalledProcessError) else ""
-        for line in captured.splitlines():
-            display.feed(bundle.project_name, line)
+        captured = "\n".join(lines)
+        report.failed(bundle.entry_name, elapsed, error, captured)
         display.finish(bundle.project_name, False, elapsed)
         collect.append(
-            WorkerResult(bundle=bundle, ok=False, elapsed=elapsed, output=captured, error=error, paths=paths)
+            WorkerResult(bundle=bundle, ok=False, elapsed=elapsed, output="\n".join(lines), error=error, paths=paths)
         )
         return
     elapsed = time.monotonic() - started
-    for line in output.splitlines():
-        display.feed(bundle.project_name, line)
     display.finish(bundle.project_name, True, elapsed)
     report.ready(bundle.entry_name, elapsed)
-    collect.append(WorkerResult(bundle=bundle, ok=True, elapsed=elapsed, output=output, error=None, paths=paths))
+    collect.append(
+        WorkerResult(bundle=bundle, ok=True, elapsed=elapsed, output="\n".join(lines), error=None, paths=paths)
+    )
 
 
 def _bundle_compose_files(
@@ -383,8 +383,14 @@ def _bundle_compose_files(
     return compose_files, extract_bundle_records(texts).declared_ports
 
 
-def _wall_runner(command: str) -> str:
-    return bash_output(command)
+def _wall_runner(command: str, feed: Callable[[str], None]) -> None:
+    for line in bash_output_lines(command):
+        feed(line)
+
+
+def _record_line(lines: list[str], display: WallDisplay, project_name: str, line: str) -> None:
+    lines.append(line)
+    display.feed(project_name, line)
 
 
 def _materialize(materialized: list[Path], prefix: str, text: str) -> Path:

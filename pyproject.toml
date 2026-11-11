@@ -4,7 +4,7 @@ version = "0.8.0"
 description = "Deploy-files definition language and compiler, plus a runtime for the compose target"
 requires-python = ">=3.13"
 dependencies = [
-    "bashrun>=0.1.0",
+    "bashrun>=0.8.2",
     "build-artifact-registry>=0.2.2",
     "packaging>=24.1",
     "pydantic>=2.11.7",
@@ -33,6 +33,7 @@ boatyard = "boatyard.cli:app"
 packages = ["src/boatyard"]
 
 [tool.uv.sources]
+bashrun = { path = "../bashrun" }
 
 [tool.basedpyright]
 venvPath = "."

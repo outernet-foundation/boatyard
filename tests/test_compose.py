@@ -1,6 +1,6 @@
 import platform
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -94,13 +94,13 @@ class UpSpy:
         for override in re.finditer(r"-f (\S*boatyard-override-\S+\.yaml)", command):
             self.override_documents.append(yaml.safe_load(Path(override.group(1)).read_text(encoding="utf-8")))
 
-    def capture(self, command: str) -> str:
+    def capture(self, command: str, feed: Callable[[str], None]) -> None:
         self.run(command)
-        return ""
+        feed(" Container demo-livekit-livekit-1 Started ")
 
     def spy_up(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(up, "bash", self.run)
-        monkeypatch.setattr(up, "bash_output", self.capture)
+        monkeypatch.setattr(up, "_wall_runner", self.capture)
         monkeypatch.setattr(up, "bash_handoff", self.run)
         monkeypatch.setattr(up, "bash_check", _bash_check_true)
         monkeypatch.setattr(up, "install_crane", lambda: None)
@@ -117,11 +117,11 @@ class UpSpy:
 
 
 class FailFirstCapture:
-    # The wall's capture seam failing on its first (and only) invocation
+    # The wall's streaming runner failing on its first (and only) invocation
     def __init__(self, spy: UpSpy) -> None:
         self.spy = spy
 
-    def __call__(self, command: str) -> str:
+    def __call__(self, command: str, feed: Callable[[str], None]) -> None:
         self.spy.run(command)
         raise CalledProcessError(1, command)
 
@@ -1334,7 +1334,7 @@ class TestLockEnvSynthesis:
         spy = UpSpy()
         spy.spy_up(monkeypatch)
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr(up, "bash_output", FailFirstCapture(spy))
+        monkeypatch.setattr(up, "_wall_runner", FailFirstCapture(spy))
 
         result = runner.invoke(app, ["up"])
 

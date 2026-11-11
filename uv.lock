@@ -34,11 +34,16 @@ wheels = [
 
 [[package]]
 name = "bashrun"
-version = "0.8.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/09/26/498509232207b2dc6af9e67f2fe27152611b4e87bf4a1317a71d8bb918ad/bashrun-0.8.0.tar.gz", hash = "sha256:05837243762259743464142fc77a823b059d5d04ee6628f3e00873a08100ce47", size = 31063, upload-time = "2026-10-11T03:34:48.093Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c4/7a/28e2e8962449d61209a3b79c2671f4992589ff9a7e90d82aed7aa5b6338a/bashrun-0.8.0-py3-none-any.whl", hash = "sha256:bfeaf482cfaeee2ccd654fc282b8005e66f7cb2c78555bf8f6c57931f3a07896", size = 7795, upload-time = "2026-10-11T03:34:47.028Z" },
+version = "0.8.2"
+source = { directory = "../bashrun" }
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "basedpyright", specifier = ">=1.39.10" },
+    { name = "pytest", specifier = ">=8.0.0" },
+    { name = "ruff", specifier = ">=0.14.11" },
 ]
 
 [[package]]
@@ -66,7 +71,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "bashrun", specifier = ">=0.1.0" },
+    { name = "bashrun", directory = "../bashrun" },
     { name = "build-artifact-registry", specifier = ">=0.2.2" },
     { name = "packaging", specifier = ">=24.1" },
     { name = "pydantic", specifier = ">=2.11.7" },
