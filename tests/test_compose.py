@@ -886,7 +886,7 @@ class TestUpValidation:
         _write_consumer_tree(tmp_path)
         _write_lock(
             tmp_path,
-                bundles={
+            bundles={
                 "AUTH_KEYCLOAK_BUNDLE": KEYCLOAK_PINNED,
                 "LIVEKIT_BUNDLE": {
                     "reference": LIVEKIT_PINNED,
@@ -921,7 +921,7 @@ class TestUpValidation:
         )
         _write_lock(
             tmp_path,
-                bundles={
+            bundles={
                 "AUTH_KEYCLOAK_BUNDLE": KEYCLOAK_PINNED,
                 "LIVEKIT_BUNDLE": {
                     "reference": LIVEKIT_PINNED,
@@ -1146,9 +1146,7 @@ class TestLockEnvSynthesis:
 
         assert result.exit_code == 0, result.output
         assert spy.env_content == (
-            f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
-            + BARRIER_MINT_LINE
-            + EDGE_BASE_URL_LINE
+            f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={self.ALPINE_MANIFEST}\n" + BARRIER_MINT_LINE + EDGE_BASE_URL_LINE
         )
 
     def test_a_selected_local_entry_reads_its_lock_keys_under_the_entry_prefix(
@@ -1174,9 +1172,7 @@ class TestLockEnvSynthesis:
 
         assert result.exit_code == 0, result.output
         assert spy.env_content == (
-            f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
-            + BARRIER_MINT_LINE
-            + EDGE_BASE_URL_LINE
+            f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={self.ALPINE_MANIFEST}\n" + BARRIER_MINT_LINE + EDGE_BASE_URL_LINE
         )
 
     def test_a_selected_local_entry_carries_its_tree_tags_under_the_entry_prefix(
@@ -1217,9 +1213,7 @@ class TestLockEnvSynthesis:
         assert result.exit_code == 0, result.output
         assert spy.env_content == (
             f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
-            "APPS_CORE__BOATYARD_TREE__API_SHA=tree-consumer\n"
-            + BARRIER_MINT_LINE
-            + EDGE_BASE_URL_LINE
+            "APPS_CORE__BOATYARD_TREE__API_SHA=tree-consumer\n" + BARRIER_MINT_LINE + EDGE_BASE_URL_LINE
         )
         assert " -u APPS_CORE__BOATYARD_TREE__API_SHA " in spy.commands[0]
 
@@ -1555,7 +1549,7 @@ class TestBundleOverrides:
         _write_override_consumer(
             consumer,
             {"path_overrides": {"extra-main": "../producer/stack/generated/compose/compose.extra.yaml"}},
-            services_extra={"extra": {"options": {"main": {"workloads": ["extra.yaml"]}}}}
+            services_extra={"extra": {"options": {"main": {"workloads": ["extra.yaml"]}}}},
         )
         _write_workload(consumer, "extra.yaml", "extra")
         self._invoke_up(monkeypatch, consumer)
@@ -1679,7 +1673,7 @@ class TestBundleOverrides:
                 "path_overrides": {"placeframe-cuda": OVERRIDE_PATH},
                 "bundles": ["placeframe-cuda", "extra-main"],
             },
-            services_extra={"extra": {"options": {"main": {"workloads": ["grafana.yaml"]}}}}
+            services_extra={"extra": {"options": {"main": {"workloads": ["grafana.yaml"]}}}},
         )
         _write_workload(consumer, "grafana.yaml", "grafana")
         _write_bundle_output(consumer, "extra-main", ["api"])
@@ -1733,7 +1727,7 @@ class TestValuesFileLaw:
         )
         _write_lock(
             tmp_path,
-                bundles={
+            bundles={
                 "AUTH_KEYCLOAK_BUNDLE": KEYCLOAK_PINNED,
                 "LIVEKIT_BUNDLE": {
                     "reference": LIVEKIT_PINNED,
@@ -1754,7 +1748,7 @@ class TestValuesFileLaw:
         _write_consumer_tree(tmp_path)
         _write_lock(
             tmp_path,
-                bundles={
+            bundles={
                 "AUTH_KEYCLOAK_BUNDLE": KEYCLOAK_PINNED,
                 "LIVEKIT_BUNDLE": {
                     "reference": LIVEKIT_PINNED,
