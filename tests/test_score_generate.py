@@ -318,12 +318,7 @@ class TestMarkerSubstrateResolution:
     def _compose_seam(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, platforms: list[str]) -> str:
         (tmp_path / "stack" / "score").mkdir(parents=True)
         (tmp_path / "stack" / "score" / "api.yaml").write_text(
-            "metadata:\n"
-            "  name: api\n"
-            "  annotations:\n"
-            "    outernet.internal/lock: api=LOKI_IMAGE\n"
-            "containers:\n"
-            "  api: {}\n",
+            "metadata:\n  name: api\n  annotations:\n    boatyard/lock: api=LOKI_IMAGE\ncontainers:\n  api: {}\n",
             encoding="utf-8",
         )
         loki_platforms = {
@@ -460,7 +455,7 @@ def _generate_compose(
         "metadata:\n"
         f"  name: {workload}\n"
         "  annotations:\n"
-        f"    outernet.internal/lock: {container_name}=ALPINE_IMAGE\n"
+        f"    boatyard/lock: {container_name}=ALPINE_IMAGE\n"
         "containers:\n"
         f"  {container_name}: {{}}\n",
         encoding="utf-8",
@@ -572,7 +567,7 @@ def test_generate_compose_renames_the_barrier_and_keeps_its_references_bare(
 def test_generate_compose_barrier_names_are_one_global_slot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "api.yaml").write_text(
-        "metadata:\n  name: api\n  annotations:\n    outernet.internal/lock: api=API_IMAGE\ncontainers:\n  api: {}\n",
+        "metadata:\n  name: api\n  annotations:\n    boatyard/lock: api=API_IMAGE\ncontainers:\n  api: {}\n",
         encoding="utf-8",
     )
     (tmp_path / "stack" / "score" / "edge.yaml").write_text(
@@ -623,7 +618,7 @@ class WorkloadContentsRecorder:
 
 
 LOCK_ANNOTATION_API = (
-    "metadata:\n  name: api\n  annotations:\n    outernet.internal/lock: api=LOCK_KEY\ncontainers:\n  api: {}\n"
+    "metadata:\n  name: api\n  annotations:\n    boatyard/lock: api=LOCK_KEY\ncontainers:\n  api: {}\n"
 )
 
 
@@ -677,7 +672,7 @@ DOCKERFILE_ANNOTATION_API = (
     "metadata:\n"
     "  name: api\n"
     "  annotations:\n"
-    "    outernet.internal/dockerfile: api=workloads/api/Dockerfile\n"
+    "    boatyard/dockerfile: api=workloads/api/Dockerfile\n"
     "containers:\n"
     "  api: {}\n"
 )
@@ -782,7 +777,7 @@ def _generate_compose_multi(
         document: dict[str, object] = {
             "metadata": {
                 "name": workload_name,
-                "annotations": {"outernet.internal/lock": ",".join(f"{name}=ALPINE_IMAGE" for name in containers)},
+                "annotations": {"boatyard/lock": ",".join(f"{name}=ALPINE_IMAGE" for name in containers)},
             },
             "containers": {name: {} for name in containers},
         }
@@ -1046,7 +1041,7 @@ WORKLOAD_WITH_LIVENESS = """
 metadata:
   name: api
   annotations:
-    outernet.internal/lock: api=API_IMAGE
+    boatyard/lock: api=API_IMAGE
 containers:
   api:
     livenessProbe:
@@ -1059,8 +1054,8 @@ WORKLOAD_WITH_READINESS = """
 metadata:
   name: api
   annotations:
-    outernet.internal/probe-adapter: python-urllib
-    outernet.internal/lock: api=API_IMAGE
+    boatyard/probe-adapter: python-urllib
+    boatyard/lock: api=API_IMAGE
 containers:
   api:
     readinessProbe:
@@ -1073,7 +1068,7 @@ WORKLOAD_WITH_UNADAPTED_READINESS = """
 metadata:
   name: api
   annotations:
-    outernet.internal/lock: api=API_IMAGE
+    boatyard/lock: api=API_IMAGE
 containers:
   api:
     readinessProbe:
@@ -1111,7 +1106,7 @@ def test_httpget_probe_without_the_adapter_annotation_refuses(tmp_path: Path, mo
 def test_unknown_probe_adapter_values_refuse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "api.yaml").write_text(
-        "metadata:\n  name: api\n  annotations:\n    outernet.internal/probe-adapter: curl\ncontainers: {}\n",
+        "metadata:\n  name: api\n  annotations:\n    boatyard/probe-adapter: curl\ncontainers: {}\n",
         encoding="utf-8",
     )
 
@@ -1130,7 +1125,7 @@ def test_workload_resources_parse_typed() -> None:
 DOCKERFILE_SOURCES_API: dict[str, Yaml] = {
     "metadata": {
         "name": "api",
-        "annotations": {"outernet.internal/dockerfile": "api=workloads/api/Dockerfile"},
+        "annotations": {"boatyard/dockerfile": "api=workloads/api/Dockerfile"},
     },
     "containers": {"api": {}},
 }
@@ -1148,8 +1143,8 @@ class TestSourceAnnotations:
                 "metadata": {
                     "name": "api",
                     "annotations": {
-                        "outernet.internal/dockerfile": "api=workloads/api/Dockerfile",
-                        "outernet.internal/lock": "sidecar=KEYCLOAK_IMAGE",
+                        "boatyard/dockerfile": "api=workloads/api/Dockerfile",
+                        "boatyard/lock": "sidecar=KEYCLOAK_IMAGE",
                     },
                 },
                 "containers": {"api": {}, "sidecar": {}},
@@ -1168,7 +1163,7 @@ class TestSourceAnnotations:
                 {
                     "metadata": {
                         "name": "api",
-                        "annotations": {"outernet.internal/dockerfile": "api=workloads/api/Dockerfile"},
+                        "annotations": {"boatyard/dockerfile": "api=workloads/api/Dockerfile"},
                     },
                     "containers": {"api": {}, "sidecar": {}},
                 },
@@ -1182,8 +1177,8 @@ class TestSourceAnnotations:
                     "metadata": {
                         "name": "api",
                         "annotations": {
-                            "outernet.internal/dockerfile": "api=workloads/api/Dockerfile",
-                            "outernet.internal/lock": "api=KEYCLOAK_IMAGE",
+                            "boatyard/dockerfile": "api=workloads/api/Dockerfile",
+                            "boatyard/lock": "api=KEYCLOAK_IMAGE",
                         },
                     },
                     "containers": {"api": {}},
@@ -1197,7 +1192,7 @@ class TestSourceAnnotations:
                 {
                     "metadata": {
                         "name": "api",
-                        "annotations": {"outernet.internal/lock": "ghost=KEYCLOAK_IMAGE"},
+                        "annotations": {"boatyard/lock": "ghost=KEYCLOAK_IMAGE"},
                     },
                     "containers": {},
                 },
@@ -1211,7 +1206,7 @@ class TestSourceAnnotations:
                     {
                         "metadata": {
                             "name": "api",
-                            "annotations": {"outernet.internal/dockerfile": value},
+                            "annotations": {"boatyard/dockerfile": value},
                         },
                         "containers": {},
                     },
@@ -1225,7 +1220,7 @@ class TestSourceAnnotations:
                     "metadata": {
                         "name": "api",
                         "annotations": {
-                            "outernet.internal/dockerfile": "api=workloads/api/Dockerfile,api=workloads/other/Dockerfile"
+                            "boatyard/dockerfile": "api=workloads/api/Dockerfile,api=workloads/other/Dockerfile"
                         },
                     },
                     "containers": {"api": {}},
@@ -1259,7 +1254,7 @@ def test_adapted_probe_bearing_workloads_register_the_healthcheck_template(
 def test_restart_values_outside_the_compose_enum_refuse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "api.yaml").write_text(
-        "metadata:\n  name: api\n  annotations:\n    outernet.internal/restart: always-please\ncontainers: {}\n",
+        "metadata:\n  name: api\n  annotations:\n    boatyard/restart: always-please\ncontainers: {}\n",
         encoding="utf-8",
     )
 
@@ -1275,7 +1270,7 @@ def test_restart_annotation_with_an_enum_value_passes(tmp_path: Path, monkeypatc
         {},
         {
             "stack/score/api.yaml": (
-                "metadata:\n  name: api\n  annotations:\n    outernet.internal/restart: on-failure\ncontainers: {}\n"
+                "metadata:\n  name: api\n  annotations:\n    boatyard/restart: on-failure\ncontainers: {}\n"
             ),
         },
     )
@@ -1327,7 +1322,7 @@ def test_consumer_interpolated_names_must_match_declared_files(tmp_path: Path, m
         "metadata:\n"
         "  name: api\n"
         "  annotations:\n"
-        "    outernet.internal/consumer-interpolated: /etc/rathole/client.toml\n"
+        "    boatyard/consumer-interpolated: /etc/rathole/client.toml\n"
         "containers: {}\n",
         encoding="utf-8",
     )
@@ -1340,8 +1335,8 @@ WORKLOAD_WITH_INTERPOLATED_FILE = """\
 metadata:
   name: rathole-client
   annotations:
-    outernet.internal/consumer-interpolated: /etc/rathole/client.toml
-    outernet.internal/lock: rathole-client=ALPINE_IMAGE
+    boatyard/consumer-interpolated: /etc/rathole/client.toml
+    boatyard/lock: rathole-client=ALPINE_IMAGE
 containers:
   rathole-client:
     files:
@@ -1536,7 +1531,7 @@ def test_k8s_generation_refuses_a_workload_sha_slot_no_pin_covers(
         "metadata:\n"
         "  name: api\n"
         "  annotations:\n"
-        "    outernet.internal/dockerfile: api=workloads/api/Dockerfile,sidecar=workloads/worker/Dockerfile\n"
+        "    boatyard/dockerfile: api=workloads/api/Dockerfile,sidecar=workloads/worker/Dockerfile\n"
         "containers:\n"
         "  api: {}\n"
         "  sidecar: {}\n"
@@ -1565,7 +1560,7 @@ WORKLOAD_WITH_ISSUER = (
     "metadata:\n"
     "  name: api\n"
     "  annotations:\n"
-    "    outernet.internal/dockerfile: api=workloads/api/Dockerfile\n"
+    "    boatyard/dockerfile: api=workloads/api/Dockerfile\n"
     "resources:\n"
     "  issuer:\n"
     "    type: example-issuer\n"
@@ -1752,7 +1747,7 @@ def test_variable_placeholders_refuse_or_stay_escaped(tmp_path: Path) -> None:
 def _verb_repo(tmp_path: Path) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "api.yaml").write_text(
-        "metadata:\n  name: api\n  annotations:\n    outernet.internal/lock: api=LOKI_IMAGE\ncontainers:\n  api: {}\n",
+        "metadata:\n  name: api\n  annotations:\n    boatyard/lock: api=LOKI_IMAGE\ncontainers:\n  api: {}\n",
         encoding="utf-8",
     )
     (tmp_path / "boatyard.lock.yml").write_text(

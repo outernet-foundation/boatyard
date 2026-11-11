@@ -29,7 +29,7 @@ from boatyard.resolve import AssemblyPlan, BundleProject, GatewayPlan, resolve
 from boatyard.yaml import Yaml
 
 # Name the gateway's Caddyfile configs key
-EDGE_CONFIG_NAME = "devkit-edge-caddyfile"
+GATEWAY_CONFIG_NAME = "boatyard-gateway-caddyfile"
 
 app = typer.Typer()
 
@@ -101,7 +101,7 @@ def _materialize_up(
     materialized: list[Path],
 ) -> UpContext:
     # Materialize the env file every invocation shares
-    with NamedTemporaryFile("w", suffix=".env", prefix="devkit-env-", delete=False, encoding="utf-8") as handle:
+    with NamedTemporaryFile("w", suffix=".env", prefix="boatyard-env-", delete=False, encoding="utf-8") as handle:
         handle.write(render_env_entries(plan.env))
     env_file = Path(handle.name)
     materialized.append(env_file)
@@ -110,7 +110,7 @@ def _materialize_up(
     gateway_file = (
         _materialize(
             materialized,
-            "devkit-gateway-",
+            "boatyard-gateway-",
             render_gateway_document(config.project_name, shared_network_name, plan, auth_entries),
         )
         if plan.gateway is not None
@@ -127,11 +127,11 @@ def _materialize_up(
         else:
             install_crane()
             texts = OciArtifactManifest.fetch_compose_texts(bundle.pinned_reference or "")
-            compose_files = [_materialize(materialized, "devkit-bundle-", text) for text in texts]
+            compose_files = [_materialize(materialized, "boatyard-bundle-", text) for text in texts]
             declared_ports = extract_bundle_records(texts).declared_ports
         override_file = _materialize(
             materialized,
-            "devkit-override-",
+            "boatyard-override-",
             render_override_document(shared_network_name, bundle, config_values, declared_ports),
         )
         invocations.append(BundleInvocation(bundle=bundle, compose_files=[*compose_files, override_file]))
@@ -291,12 +291,12 @@ def render_gateway_document(
         "services": {
             GATEWAY_SERVICE_NAME: {
                 "image": EDGE_IMAGE,
-                "configs": [{"source": EDGE_CONFIG_NAME, "target": "/etc/caddy/Caddyfile"}],
+                "configs": [{"source": GATEWAY_CONFIG_NAME, "target": "/etc/caddy/Caddyfile"}],
                 "ports": [{"target": EDGE_LISTEN_PORT, "published": gateway.port, "protocol": "tcp"}],
                 "networks": {shared_network_name: None},
             }
         },
-        "configs": {EDGE_CONFIG_NAME: {"content": double_dollars(render_caddyfile(plan, gateway, auth_entries))}},
+        "configs": {GATEWAY_CONFIG_NAME: {"content": double_dollars(render_caddyfile(plan, gateway, auth_entries))}},
     }
     return yaml.safe_dump(document, sort_keys=False, default_flow_style=False)
 

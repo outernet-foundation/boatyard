@@ -2,7 +2,7 @@
 # supported compose concept), so the generated compose would gate nothing on
 # workload health while the k8s rendering emits real probes. This patch-template
 # class closes that drift for workloads declaring a probe adapter
-# (outernet.internal/probe-adapter): it converts the workload's readinessProbe,
+# (boatyard/probe-adapter): it converts the workload's readinessProbe,
 # else livenessProbe, into a compose healthcheck against the computed
 # <workload>-<container> service name. The adapter picks the exec spell the
 # image runtime can run — python-urllib (python-based workloads shipping
@@ -12,7 +12,7 @@
 # data).
 {{- $matched := false }}
 {{- range $workloadName, $workload := .Workloads }}
-{{- $adapter := dig "metadata" "annotations" "outernet.internal/probe-adapter" "" $workload }}
+{{- $adapter := dig "metadata" "annotations" "boatyard/probe-adapter" "" $workload }}
 {{- if or (eq $adapter "python-urllib") (eq $adapter "bash-http") }}
 {{- range $containerName, $container := $workload.containers }}
 {{- $probe := $container.readinessProbe.httpGet }}

@@ -69,9 +69,9 @@ class BumpHarness:
         score.mkdir(parents=True, exist_ok=True)
         for directory in ("api", "worker"):
             annotation = (
-                f"outernet.internal/dockerfile: {directory}=workloads/{directory}/Dockerfile"
+                f"boatyard/dockerfile: {directory}=workloads/{directory}/Dockerfile"
                 if self.image_shas
-                else f"outernet.internal/lock: {directory}=PY_IMAGE"
+                else f"boatyard/lock: {directory}=PY_IMAGE"
             )
             (score / f"{directory}.yaml").write_text(
                 f"metadata:\n  name: {directory}\n  annotations:\n    {annotation}\ncontainers:\n  {directory}: {{}}\n",

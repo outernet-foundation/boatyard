@@ -244,7 +244,7 @@ class TestPublishComposeVerb:
             "metadata:\n"
             "  name: livekit-token\n"
             "  annotations:\n"
-            "    outernet.internal/dockerfile: livekit-token=workloads/livekit-token/Dockerfile\n"
+            "    boatyard/dockerfile: livekit-token=workloads/livekit-token/Dockerfile\n"
             "containers:\n"
             "  livekit-token: {}\n",
             encoding="utf-8",

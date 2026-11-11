@@ -1,11 +1,11 @@
 # ROCm device access for GPU-marked workloads (metadata annotation
-# outernet.internal/gpu): the render/video device nodes plus the groups allowed
+# boatyard/gpu): the render/video device nodes plus the groups allowed
 # to open them (score-compose's output schema wants DeviceMapping objects and
 # string group ids). Per-variant twin of gpu-cuda.tpl — the devkit registers
 # this file exactly when the compose rendering's gpu variant is rocm.
 {{- $matched := false }}
 {{- range $workloadName, $workload := .Workloads }}
-{{- if eq (dig "metadata" "annotations" "outernet.internal/gpu" "" $workload) "true" }}
+{{- if eq (dig "metadata" "annotations" "boatyard/gpu" "" $workload) "true" }}
 {{- range $containerName, $_ := $workload.containers }}
 {{- $matched = true }}
 - op: set

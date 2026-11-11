@@ -60,10 +60,10 @@ class UpSpy:
         env_match = re.search(r"--env-file (\S+)", command)
         if env_match is not None and self.env_content is None:
             self.env_content = Path(env_match.group(1)).read_text(encoding="utf-8")
-        gateway_match = re.search(r"-f (\S*devkit-gateway-\S+\.yaml)", command)
+        gateway_match = re.search(r"-f (\S*boatyard-gateway-\S+\.yaml)", command)
         if gateway_match is not None:
             self.gateway_documents.append(yaml.safe_load(Path(gateway_match.group(1)).read_text(encoding="utf-8")))
-        for override_match in re.finditer(r"-f (\S*devkit-override-\S+\.yaml)", command):
+        for override_match in re.finditer(r"-f (\S*boatyard-override-\S+\.yaml)", command):
             self.override_documents.append(_load_override(Path(override_match.group(1)).read_text(encoding="utf-8")))
 
 
@@ -246,7 +246,7 @@ def _gateway_document(spy: UpSpy) -> dict[str, Any]:
 
 
 def _caddyfile(spy: UpSpy) -> str:
-    return _gateway_document(spy)["configs"]["devkit-edge-caddyfile"]["content"]
+    return _gateway_document(spy)["configs"]["boatyard-gateway-caddyfile"]["content"]
 
 
 def _resolve_tree(
@@ -379,7 +379,7 @@ class TestGatewayProject:
         assert document["networks"] == {"edge-demo-shared": {"external": True}}
         assert document["services"]["boatyard-gateway"] == {
             "image": "docker.io/library/caddy:2.8.4-alpine",
-            "configs": [{"source": "devkit-edge-caddyfile", "target": "/etc/caddy/Caddyfile"}],
+            "configs": [{"source": "boatyard-gateway-caddyfile", "target": "/etc/caddy/Caddyfile"}],
             "ports": [{"target": 8443, "published": 58080, "protocol": "tcp"}],
             "networks": {"edge-demo-shared": None},
         }
@@ -498,14 +498,14 @@ class TestUpProjects:
             "env -u BOATYARD_BARRIER_IMAGE -u EDGE_BASE_URL -u PUBLIC_HOST -u PUBLIC_PORT -u PUBLIC_SCHEME "
             "-u PUBLIC_URL -u PUBLIC_URL_PATH docker compose -p edge-demo-livekit -f "
         )
-        assert "devkit-bundle-" in bundle_command
-        assert "devkit-override-" in bundle_command
+        assert "boatyard-bundle-" in bundle_command
+        assert "boatyard-override-" in bundle_command
         assert bundle_command.endswith("up --pull missing -d")
         assert gateway_command.startswith(
             "env -u BOATYARD_BARRIER_IMAGE -u EDGE_BASE_URL -u PUBLIC_HOST -u PUBLIC_PORT -u PUBLIC_SCHEME "
             "-u PUBLIC_URL -u PUBLIC_URL_PATH docker compose -p edge-demo -f "
         )
-        assert "devkit-gateway-" in gateway_command
+        assert "boatyard-gateway-" in gateway_command
         assert spy.env_content is not None and spy.env_content.startswith(
             "BOATYARD_BARRIER_IMAGE=docker.io/library/alpine:3.20\nEDGE_BASE_URL="
         )
