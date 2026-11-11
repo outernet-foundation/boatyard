@@ -43,7 +43,7 @@ DIGEST_TAIL_PATTERN = re.compile(rf"@{SHA256_DIGEST_REGEX}$")
 COMPOSE_FILE_MEDIA_TYPE = "application/vnd.docker.compose.file+yaml"
 
 
-# Model the OCI shapes crane answers with: index children and artifact layers.
+# Model the OCI shapes crane answers with: index children and artifact layers
 class OciPlatform(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -74,11 +74,11 @@ class OciArtifactManifest(BaseModel):
 
     @classmethod
     def fetch_compose_texts(cls, pinned: str) -> list[str]:
-        # Read the bundle's compose files as inline base64 layer data, with crane blob as the fallback.
+        # Read the bundle's compose files from the artifact's layers
         print(f"Reading bundle content for: {pinned}")
         artifact = cls.model_validate(json.loads(bash_output(f"crane manifest {shlex.quote(pinned)}")))
 
-        # Strip the tag, treating a colon as a tag only when no slash follows it.
+        # Strip the tag only when no slash follows the colon
         repository = pinned.rpartition("@")[0]
         slash = repository.rfind("/")
         colon = repository.rfind(":")
@@ -91,7 +91,7 @@ class OciArtifactManifest(BaseModel):
             if layer.media_type == COMPOSE_FILE_MEDIA_TYPE
         ]
 
-        # Refuse a bundle that carries no compose file layer.
+        # Refuse a bundle that carries no compose file layer
         if not compose_texts:
             raise ValueError(f"{pinned}: the compose bundle carries no compose file layer")
         return compose_texts
@@ -106,28 +106,28 @@ class BundleRecords(NamedTuple):
 
 
 def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) -> LockFile:
-    # Install the pinned crane and derive the mirror prefix.
+    # Install the pinned crane
     install_crane()
     prefix = config.mirror_prefix
-    # Read the committed lock schema-only; drift is relock's input, never refused.
+
+    # Read the committed lock schema-only
     committed_path = config.root / LOCK_PATH
     committed = load_yaml_model(LockFile, committed_path) if committed_path.is_file() else LockFile()
 
-    # Resolve first-party bundles direct, recording the slot demands from the pinned content and
-    # validating declared references against it.
+    # Resolve the declared remote bundles direct
     bundles: dict[str, ConfigLockBundle] = {}
     for name, reference, entry in config.remote_declared_entries():
         key = bundle_lock_key(name)
         committed_entry = committed.bundles.get(key)
 
-        # Pin the frozen reference or resolve the declaration's fresh digest.
+        # Pin the frozen reference or resolve a fresh digest
         pinned = (
             committed_entry.reference
             if committed_entry is not None and not upgrade and committed_entry.reference.startswith(reference + "@")
             else f"{reference}@{resolve_remote_digest(reference)}"
         )
 
-        # Record the pinned reference with the bundle's slot demands and extracted records.
+        # Record the bundle's lock entry
         texts = OciArtifactManifest.fetch_compose_texts(pinned)
         refuse_unresolved_references(name, entry.routes, entry.ports, texts)
         records = extract_bundle_records(texts)
@@ -142,18 +142,21 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
             container_names=records.container_names,
         )
 
+    # Refuse committed entries for local base_images keys
     images: dict[str, ConfigLockEntry] = {}
     refuse_local_lock_entries(committed, config, committed_path.as_posix())
+
+    # Resolve each remote base image under the mirror prefix
     for name, reference in config.remote_base_images.items():
         base = mirrored_ref(reference, prefix)
         committed_entry = committed.images.get(name)
 
-        # Record a digest-pinned declaration as-is under the mirror prefix.
+        # Record a digest-pinned declaration as-is under the mirror prefix
         if DIGEST_TAIL_PATTERN.search(reference):
             images[name] = ConfigLockEntry(index=base, platforms=dict.fromkeys(config.platforms, base))
             continue
 
-        # Freeze the committed entry forward while its pinned tag and platform set hold.
+        # If the committed pin still matches the tag and platforms, freeze it forward
         if (
             committed_entry is not None
             and not upgrade
@@ -163,18 +166,18 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
             images[name] = committed_entry
             continue
 
-        # Resolve the reference into an index digest and its child manifests.
+        # Resolve the reference into its index and child manifests
         print(f"Resolving digests for: {reference}")
         index_digest = resolve_remote_digest(reference)
         children = OciIndex.model_validate(
             json.loads(bash_output(f"crane manifest {shlex.quote(reference)}"))
         ).manifests
 
+        # If the answer is a plain manifest, it is every platform's sole manifest
         if not children:
-            # Treat a manifest answer as every platform's sole manifest.
             matches = {platform: [OciDescriptor(digest=index_digest)] for platform in config.platforms}
         else:
-            # Match each declared platform against its concrete, non-attestation children.
+            # Match each platform against its concrete, non-attestation children
             matches = {
                 platform: [
                     child
@@ -185,7 +188,7 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
                 for platform in config.platforms
             }
 
-        # Refuse any platform without exactly one match and record the survivor's digest.
+        # Refuse any platform without exactly one match
         selected: dict[str, str] = {}
         for platform in config.platforms:
             if len(matches[platform]) != 1:
@@ -198,13 +201,13 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
                 raise ValueError(f"image pin {name}: upstream index child must carry a digest ({child!r})")
             selected[platform] = child.digest
 
-        # Record the mirror-prefixed index and one reference per platform.
+        # Record the mirror-prefixed index and one reference per platform
         images[name] = ConfigLockEntry(
             index=f"{base}@{index_digest}",
             platforms={platform: f"{base}@{digest}" for platform, digest in selected.items()},
         )
 
-    # Freeze unchanged charts and resolve fresh tags to mirror-pinned digests.
+    # Freeze or resolve each declared chart
     charts: dict[str, str] = {}
     for name, reference in config.declared_charts.items():
         key = chart_lock_key(name)
@@ -212,29 +215,30 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
         base = mirrored_ref(reference, prefix)
         committed_entry = committed.charts.get(key)
 
-        # Record a digest-pinned declaration as-is under the mirror prefix.
+        # Record a digest-pinned declaration as-is under the mirror prefix
         if DIGEST_TAIL_PATTERN.search(reference):
             charts[key] = base
             continue
 
-        # Freeze the committed entry forward while its pinned tag holds.
+        # If the committed pin still matches the tag, freeze it forward
         if committed_entry is not None and not upgrade and committed_entry.startswith(base + "@"):
             charts[key] = committed_entry
             continue
 
         charts[key] = f"{base}@{resolve_remote_digest(reference)}"
 
-    # Assemble the lock and render its canonical form: sections in field order, nested keys sorted.
+    # Assemble the lock and render its canonical form
     lock = LockFile(platforms=list(config.platforms), images=images, charts=charts, bundles=bundles)
     document = {key: _canonical(value) for key, value in lock.model_dump(exclude_defaults=True).items()}
     rendered = (
         yaml.safe_dump(document, sort_keys=False, default_flow_style=False, width=10_000_000) if document else "{}\n"
     )
-    # Write the rendered lock over the committed file.
+    # If not checking, write the rendered lock over the committed file
     if not check:
         committed_path.write_text(rendered, encoding="utf-8")
         return lock
-    # Refuse staleness when the committed lock is not the computed canonical bytes.
+
+    # If the committed lock is not the canonical bytes, refuse staleness
     committed_text = committed_path.read_text(encoding="utf-8") if committed_path.is_file() else ""
     if committed_text != rendered:
         raise SystemExit("image lock is stale. Run 'boatyard lock' and commit the result.")
@@ -242,7 +246,7 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
 
 
 def resolve_remote_digest(reference: str) -> str:
-    # Refuse crane digest output that is not one sha256 digest.
+    # Refuse crane digest output that is not one sha256 digest
     print(f"Resolving digest for: {reference}")
     output = bash_output(f"crane digest {shlex.quote(reference)}").strip()
     if re.fullmatch(SHA256_DIGEST_REGEX, output) is None:
@@ -251,8 +255,7 @@ def resolve_remote_digest(reference: str) -> str:
 
 
 def extract_bundle_records(texts: list[str]) -> BundleRecords:
-    # Two passes: every stanza's name lands before any annotation reference is checked, so
-    # a route may name a service defined later in the artifact or in another text.
+    # Collect every stanza before any reference is checked
     services: list[str] = []
     container_names: set[str] = set()
     declared_ports: dict[str, list[tuple[int, int, str]]] = {}
@@ -273,6 +276,7 @@ def extract_bundle_records(texts: list[str]) -> BundleRecords:
             _collect_declared_ports(declared_ports, service_name, stanza.get("ports"))
             stanzas.append((service_name, stanza, _stanza_annotations(stanza)))
 
+    # Read the routes and ports from the annotations
     routes: list[Route] = []
     ports: list[PublishedPort] = []
     for service_name, _stanza, stanza_annotations in stanzas:
@@ -334,7 +338,7 @@ def _declared_port_record(entry: Yaml) -> tuple[int, int, str] | None:
             protocol = entry.get("protocol", "tcp")
             return (published, target, str(protocol))
         if len(entry) == 1:
-            # The short syntax lands here as a single-pair mapping (6178:6178 parses as {6178: 6178})
+            # Treat the short syntax as a single-pair mapping (6178:6178 parses as {6178: 6178})
             [(short_published, short_target)] = entry.items()
             if isinstance(short_target, int) and str(short_published).isdigit():
                 return (int(short_published), short_target, "tcp")
@@ -348,7 +352,7 @@ def _declared_port_record(entry: Yaml) -> tuple[int, int, str] | None:
 
 
 def _canonical(value: Yaml) -> Yaml:
-    # Return the value with every nested dict's keys sorted.
+    # Return the value with every nested dict's keys sorted
     if is_mapping(value):
         return {key: _canonical(item) for key, item in sorted(value.items())}
     if is_list(value):

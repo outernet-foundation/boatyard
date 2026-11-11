@@ -45,20 +45,20 @@ ENTRY_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9-]*$")
 
 PLATFORM_KEY = "platform"
 
-# Match ${ALL_CAPS} placeholder slots in workload files.
+# Match ${ALL_CAPS} placeholder slots in workload files
 PLACEHOLDER = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
 
-# Match a compose brace slot with its preceding dollar run.
+# Match a compose brace slot with its preceding dollar run
 COMPOSE_SLOT = re.compile(r"(\$+)\{([A-Z][A-Z0-9_]*)(:[^{}]*)?\}")
 
-# Match path:tag or path@digest.
+# Match path:tag or path@digest
 DECLARED_REFERENCE_PATTERN = re.compile(
     rf"^(?P<path>[^:@\s$]+)(?::(?P<tag>[^@\s$]+))?(?:@(?P<digest>{SHA256_DIGEST_REGEX}))?$"
 )
 
 TEMPLATE_KEY_PATTERN = re.compile(r"\{([a-z][a-z0-9_]*)\}")
 
-# Match the range operators a ref tag must never carry; exact tags only.
+# Match the range operators a ref tag must never carry; exact tags only
 REF_TAG_OPERATOR_PATTERN = re.compile(r"[<>=!~^*]")
 
 OCI_REFERENCE_PREFIX = "oci://"
@@ -68,8 +68,7 @@ GATEWAY_SERVICE_NAME = "boatyard-gateway"
 EDGE_LISTEN_PORT = 8443
 BARRIER_SERVICE = "wait-for-resources"
 
-# Boatyard machinery pins: moved by boatyard releases, never authored, locked, or mirrored
-# by consumers; pulled by tag from upstream until boatyard hosts its own mirror.
+# Pin boatyard's own machinery: never authored, locked, or mirrored by consumers
 BARRIER_IMAGE = "docker.io/library/alpine:3.20"
 EDGE_IMAGE = "docker.io/library/caddy:2.8.4-alpine"
 BARRIER_IMAGE_SLOT = "BOATYARD_BARRIER_IMAGE"
@@ -126,15 +125,14 @@ class ConfigFile(BaseModel):
 
     @property
     def service_entries(self) -> list[FlattenedServiceEntry]:
-        # The flattened selection vocabulary; the load-time variant derivation populates the options first
+        # Flatten the selection vocabulary
         return flatten_service_entries(self.services)
 
     def local_service_entries(self) -> list[tuple[str, ServiceEntry]]:
         return [(row.name, row.entry) for row in self.service_entries if not row.entry.remote]
 
     def local_workload_names(self) -> list[str]:
-        # The lexical local set: options' workloads, variant groups' group-level workloads, and
-        # bare entries' workloads — complete before the variant derivation populates options
+        # Collect the local workload names before the variant derivation
         names: list[str] = []
         for member in self.services.values():
             if isinstance(member, ServiceGroup):
@@ -157,13 +155,12 @@ class ConfigFile(BaseModel):
 
     @property
     def variant_axes(self) -> dict[str, list[str]]:
-        # The declared axes over the image set; equal axis names carry equal value sets by the
-        # axis-equality law at load
+        # Derive the axes over the image set
         return {image.axis: list(image.variants) for image in self.images.values() if image.axis is not None}
 
     @property
     def tree_sentinels(self) -> dict[str, str]:
-        # The compose barrier pre-images over the build-set slot supply; TREE_SENTINEL_PATTERN finds them
+        # Spell the tree sentinels for the build-set slots
         return {slot: f"{TREE_SLOT_MARKER}{slot}__" for slot in (image.sha_env for image in self.images.values())}
 
     @field_validator("requires")
@@ -215,8 +212,7 @@ class ConfigFile(BaseModel):
     def _validate_services(
         cls, services: dict[str, ServiceGroup | ServiceEntry], info: ValidationInfo
     ) -> dict[str, ServiceGroup | ServiceEntry]:
-        # Entry names feed compose project names and the shared network name, so every
-        # services key, options key, and project_name must match the one pattern.
+        # Require compose-safe names of every services and options key
         for name, member in services.items():
             if ENTRY_NAME_PATTERN.fullmatch(name) is None:
                 raise ValueError(f"services.{name}: names match ^[a-z][a-z0-9-]*$")
@@ -227,7 +223,8 @@ class ConfigFile(BaseModel):
         project_name = info.data.get("project_name")
         if isinstance(project_name, str) and ENTRY_NAME_PATTERN.fullmatch(project_name) is None:
             raise ValueError(f"project_name {project_name!r} must match ^[a-z][a-z0-9-]*$")
-        # Collect every route with its declaration site; paths are edge-wide unique.
+
+        # Collect every route with its declaration site
         route_sites = [
             (where, route)
             for name, entry in services.items()
@@ -248,6 +245,7 @@ class ConfigFile(BaseModel):
                 raise ValueError(f"{where}: route path {route.path} is already declared at {owner[route.path]}")
             owner[route.path] = where
 
+        # If the reserved auth group is declared, cap its options at one route
         if AUTH_GROUP_NAME in services:
             auth = services[AUTH_GROUP_NAME]
             if not isinstance(auth, ServiceGroup):
@@ -263,16 +261,22 @@ class ConfigFile(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> Self:
-        # Compose is unconditional; k8s is the optional substrate.
+        # Require the compose surface unconditionally
         if not self.services:
             raise ValueError("services is required")
         any_local = bool(self.local_workload_names())
+
+        # If local entries exist, require a repository
         if any_local and not self.repository:
             raise ValueError("repository is required by the local entries (workloads:)")
+
+        # If images are declared, require platforms
         if self.base_images and not self.platforms:
             raise ValueError(
                 "platforms is required when images are declared (an amd64-only repo declares [linux/amd64])"
             )
+
+        # Find any declared route across entries and options
         declares_routes = any(
             routes
             for member in self.services.values()
@@ -282,6 +286,7 @@ class ConfigFile(BaseModel):
                 else [member.routes]
             )
         )
+        # If routes are declared, require a gateway
         if declares_routes and self.gateway_port is None:
             raise ValueError("routes require a gateway declaration")
         upstream_sites: list[tuple[str, str]] = [
@@ -292,6 +297,8 @@ class ConfigFile(BaseModel):
                 (f"k8s.charts.{name}", reference.removeprefix(OCI_REFERENCE_PREFIX))
                 for name, reference in self.k8s.charts.items()
             )
+
+        # Refuse any declaration that carries the mirror prefix
         for site, reference in upstream_sites:
             if reference.startswith(f"{self.mirror_prefix}/"):
                 raise ValueError(
@@ -339,8 +346,7 @@ class ServiceGroup(BaseModel):
 
     @model_validator(mode="after")
     def _require_one_spelling(self) -> Self:
-        # options: spells an authored group; group-level workloads: spells a variant group whose
-        # options the load-time derivation publishes from the image closure
+        # If a group declares both or neither of options: and workloads:, refuse
         if bool(self.options) == bool(self.workloads):
             raise ValueError("a group declares exactly one of options: or workloads:")
         for name in self.workloads:
@@ -363,6 +369,7 @@ class ServiceEntry(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> Self:
+        # If the entry is remote, require an exact tagged OCI reference
         if self.ref is not None:
             if not self.ref.startswith(OCI_REFERENCE_PREFIX):
                 raise ValueError(f"ref {self.ref!r} must be an OCI include ({OCI_REFERENCE_PREFIX}host/path:tag)")
@@ -376,10 +383,15 @@ class ServiceEntry(BaseModel):
                 raise ValueError(f"ref {self.ref!r} must not carry the mutable tag 'latest'")
             if REF_TAG_OPERATOR_PATTERN.search(tag) or any(part in ("x", "X") for part in tag.split(".")):
                 raise ValueError(f"ref {self.ref!r}: the tag {tag!r} must be an exact tag, not a range")
+        # If both ref: and workloads: are declared, refuse
         if self.ref is not None and self.workloads:
             raise ValueError("an entry declares ref: or workloads:, not both")
+
+        # If neither ref: nor workloads: is declared, refuse
         if self.ref is None and not self.workloads:
             raise ValueError("ref: or workloads: is required")
+
+        # If vars: rides a remote ref:, refuse
         if self.ref is not None and self.vars:
             raise ValueError("vars is not allowed with ref:")
         for name in self.workloads:
@@ -473,6 +485,8 @@ class FlattenedServiceEntry(NamedTuple):
 def _derive(config: ConfigFile, root: Path) -> None:
     # Derive the load-time facts
     installed = importlib.metadata.version("boatyard")
+
+    # If the installed boatyard violates requires, refuse
     if installed != DEV_SENTINEL and not SpecifierSet(config.requires).contains(installed, prereleases=True):
         raise ValueError(f"boatyard {installed} does not satisfy requires={config.requires!r}")
     config.root = root
@@ -483,6 +497,7 @@ def _derive(config: ConfigFile, root: Path) -> None:
         if not values.is_file():
             raise ValueError(f"the chart {chart} requires {values.as_posix()}")
 
+    # Collect the local base entries
     local_bases = {name: entry for name, entry in config.base_images.items() if isinstance(entry, LocalBaseEntry)}
 
     # Raise if one axis name carries two value sets
@@ -637,6 +652,7 @@ def _toolchain_pins(root: Path, remote_bases: dict[str, str]) -> dict[str, str]:
             python_version = root / PYTHON_VERSION_PATH
             if not python_version.is_file():
                 raise ValueError(f"the {{python}} template requires {PYTHON_VERSION_PATH.as_posix()}")
+
             # Take the first non-empty line
             version = next(
                 (line.strip() for line in python_version.read_text(encoding="utf-8").splitlines() if line.strip()),
@@ -651,8 +667,7 @@ def _toolchain_pins(root: Path, remote_bases: dict[str, str]) -> dict[str, str]:
 
 
 def flatten_service_entries(services: dict[str, ServiceGroup | ServiceEntry]) -> list[FlattenedServiceEntry]:
-    # Options appear under their qualified name; bare entries are their own root. The effective
-    # surface is the entry's own declarations beside its group's.
+    # Flatten options under qualified names, bare entries as their own root
     flattened: list[FlattenedServiceEntry] = []
     for root_name, member in services.items():
         if isinstance(member, ServiceGroup):
@@ -709,7 +724,7 @@ def lock_key_prefix(name: str) -> str:
 
 
 def env_lock_slot(entry_name: str, lock_key: str) -> str:
-    # The marker reserves the slot spelling against values-file keys; the values parse refuses it
+    # Embed the marker so the values parse refuses the spelling
     return entry_name.upper().replace("-", "_") + LOCK_SLOT_MARKER + lock_key
 
 
@@ -726,12 +741,11 @@ def bundle_lock_key(name: str) -> str:
 
 
 def artifact_slots(texts: list[str]) -> dict[str, Slot]:
-    # Artifact text: odd-$ slots are the consumer surface; marker-bearing slot spellings are
-    # machine-filled and a :- default spells optional (compose takes the default for
-    # set-to-empty and unset alike, so unfilled optionals ride as env-file empties).
+    # Read odd-$ slots as the consumer surface of the artifact text
     slots: dict[str, Slot] = {}
     for text in texts:
         for match in COMPOSE_SLOT.finditer(text):
+            # If the slot is machine-filled or an even-dollar literal, skip it
             if len(match.group(1)) % 2 != 1 or any(marker in match.group(2) for marker in RESERVED_SLOT_MARKERS):
                 continue
             slots[match.group(2)] = Slot(required=not (match.group(3) or "").startswith(":-"))
@@ -744,7 +758,7 @@ def refuse_unresolved_references(
     ports: list[PublishedPort],
     texts: list[str],
 ) -> set[str]:
-    # Union the services keys across the compose texts; a document without a services mapping contributes none.
+    # Union the services keys across the texts
     service_names: set[str] = set()
     for text in texts:
         document = yaml.safe_load(text)

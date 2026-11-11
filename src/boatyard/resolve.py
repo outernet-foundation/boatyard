@@ -76,7 +76,7 @@ class BundleSources(NamedTuple):
 
 
 def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyPlan:
-    # Combine the config, the lock, and the values file into the assembly plan that `up` renders
+    # Fold the config, lock, and values into the assembly plan
     source = values.source
     hand = values.values
     public_face = _public_face(config, values)
@@ -85,22 +85,23 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
     service_entries = config.service_entries
     root = config.root
 
+    # If the values file sets a gateway port the config does not declare, refuse
     if values.gateway_port is not None and config.gateway_port is None:
         raise ValueError(f"{source}: gateway_port is set but boatyard.yml declares no gateway")
 
-    # Raise if a name in the bundles section of the values file is not a declared option of any service group
+    # Raise if a bundles name is not a declared option of any group
     qualified_options = {row.name: (row.root, row.option) for row in service_entries if row.option is not None}
     unknown = sorted(set(values.bundles) - set(qualified_options))
     if unknown:
         raise ValueError(f"{source}: bundles: names {unknown} are not among the selectable options")
 
-    # Raise if a name in the path_overrides section of the values file does not name a ref entry
+    # Raise if a path_overrides name is no ref entry
     ref_entry_names = {row.name for row in service_entries if row.entry.remote}
     unknown = sorted(set(values.path_overrides) - ref_entry_names)
     if unknown:
         raise ValueError(f"{source}: path_overrides: names {unknown} are not among the ref entries")
 
-    # Fold the selection into one option per group, raising when two options of one group are selected
+    # Fold the selection into one option per group
     choices: dict[str, str] = {}
     for name in values.bundles:
         group, option_name = qualified_options[name]
@@ -111,7 +112,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
             )
         choices[group] = option_name
 
-    # The selection's winners, and the overrides active on them
+    # Adopt the winners and their active overrides
     winners = {row.name for row in service_entries if _in_assembly(row, choices)}
     overrides = {name for name in values.path_overrides if name in winners}
 
@@ -119,7 +120,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
     texts: dict[str, str] = {}
     paths: dict[str, Path] = {}
 
-    # Derive every declared entry's slot vocabulary.
+    # Derive every declared entry's slot vocabulary
     for row in service_entries:
         name = row.name
 
@@ -132,7 +133,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
                 slots_by_entry[name] = dict(locked.slots)
             continue
 
-        # If a local entry is declared, its slots come from the artifact generate-score rendered
+        # If the entry is local, its slots come from the generated artifact
         if row.entry.ref is None:
             bundle_path = compose_bundle_output_path(root, name).resolve()
 
@@ -144,7 +145,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
             slots_by_entry[name] = artifact_slots([texts[name]])
             continue
 
-        # If a winner's override is active, its slots come from the bundle its producer rendered
+        # If an override is active, its slots come from the producer's bundle
         candidate = values.path_overrides[name]
         override_path = candidate if candidate.is_absolute() else root / candidate
 
@@ -160,7 +161,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
     env: dict[str, str] = dict(minted)
     shas_by_root: dict[Path, dict[str, str]] = {}
 
-    # Render each winner into a bundle project, adopting records and folding the env fans.
+    # Render each winner into a bundle project
     for row in service_entries:
         name = row.name
 
@@ -168,7 +169,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
         if name not in winners:
             continue
 
-        # If a remote ref won without an active override, its records come from the lock
+        # If a remote ref won without an override, its records come from the lock
         if row.entry.ref is not None and name not in overrides:
             locked = lock.require_bundle(bundle_lock_key(name), f"bundle {name!r}")
             adopted_services = list(locked.services)
@@ -178,6 +179,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
             bundle_path = None
             pinned_reference = locked.reference
         else:
+            # Otherwise adopt the records from the rendered bundle text
             records = extract_bundle_records([texts[name]])
             adopted_services = records.services
             adopted_routes = records.routes
@@ -186,7 +188,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
             bundle_path = paths[name]
             pinned_reference = None
 
-        # Config-authored declarations replace the adopted set wholesale when non-empty
+        # If config declarations exist, they replace the adopted set wholesale
         effective_routes = list(row.effective_routes) if row.effective_routes else adopted_routes
         effective_ports = list(row.effective_ports) if row.effective_ports else adopted_ports
 
@@ -203,8 +205,9 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
             )
         )
 
-        # The lock and tree fans ride for local and override entries only
+        # If the winner is local or an override, the lock and tree fans ride
         if bundle_path is not None:
+            # If the entry is local, the consumer's lock and tree feed it
             if row.entry.ref is None:
                 sources = BundleSources(
                     bundle_path=bundle_path,
@@ -215,7 +218,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
                 _entry_env(env, shas_by_root, sources)
                 continue
 
-            # The producer root sits four levels above a stack/generated/compose/ output
+            # Take the producer root four levels above the output
             producer_root = bundle_path.parents[3]
 
             # If no boatyard.yml-bearing repo root sits above the bundle, refuse
@@ -233,38 +236,45 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
             )
             _entry_env(env, shas_by_root, sources)
 
-    # Raise if a local or override artifact defines the reserved gateway service or an unresolved reference
+    # Raise if an artifact references a service it does not define
     for bundle in bundles:
         if bundle.bundle_path is None:
             continue
         service_names = refuse_unresolved_references(
             bundle.entry_name, bundle.effective_routes, bundle.effective_ports, [texts[bundle.entry_name]]
         )
+
+        # If the bundle defines the reserved gateway service, refuse
         if GATEWAY_SERVICE_NAME in service_names:
             raise ValueError(
                 f"{bundle.bundle_path.as_posix()}: the included bundle defines the reserved service "
                 f"{GATEWAY_SERVICE_NAME!r}"
             )
 
-    # Combined-set validations over every winner's effective declarations
+    # Validate the combined declarations across winners
     path_claims: dict[str, str] = {}
     for bundle in bundles:
         for route in bundle.effective_routes:
+            # If two winners claim one route path, refuse
             if route.path in path_claims:
                 raise ValueError(
                     f"{source}: route path {route.path} is claimed by both {path_claims[route.path]} "
                     f"and {bundle.entry_name}"
                 )
             path_claims[route.path] = bundle.entry_name
+
+    # Require the selected auth option to carry exactly one effective route
     for row in service_entries:
         if row.name in winners and row.auth:
             selected = next(bundle for bundle in bundles if bundle.entry_name == row.name)
             if len(selected.effective_routes) != 1:
                 raise ValueError(f"{source}: the selected auth option {row.name!r} carries exactly one effective route")
+
+    # If routes exist but no gateway is declared, refuse
     if path_claims and config.gateway_port is None:
         raise ValueError(f"{source}: effective routes require a gateway declaration")
 
-    # A values ports key names a service of a selected bundle carrying exactly one effective port
+    # Require each ports key to name a single-port service of a winner
     services_by_project = {service: bundle for bundle in bundles for service in bundle.services}
     port_counts = {port.service: 0 for bundle in bundles for port in bundle.effective_ports}
     for bundle in bundles:
@@ -280,7 +290,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
     if ambiguous:
         raise ValueError(f"{source}: ports: {ambiguous} carry a count of effective ports a scalar cannot disambiguate")
 
-    # Raise if no declared surface consumes a value from the values section
+    # Raise if no declared surface consumes a values key
     consumers: dict[str, set[str]] = {}
     for entry_name, slots in slots_by_entry.items():
         for name in slots:
@@ -289,14 +299,14 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
         if name not in consumers:
             raise ValueError(f"{source}: {name} is consumed by no surface")
 
-    # Raise if a reference in the values section resolves to neither a hand-set value nor a minted slot
+    # Raise if a reference resolves to no hand-set value or minted slot
     roots = set(hand) | set(minted)
     unresolvable = sorted({reference for referenced in values.references.values() for reference in referenced} - roots)
     if unresolvable:
         name = min(name for name, referenced in values.references.items() if referenced & set(unresolvable))
         raise ValueError(f"{source}: {name}: ${{{unresolvable[0]}}} resolves to no root")
 
-    # With no public face, no selected surface may consume one of the minted PUBLIC_* slots
+    # If no public face exists, no surface may consume a PUBLIC_* slot
     if public_face is None:
         for entry_name in sorted(bundle.entry_name for bundle in bundles):
             public_slots = sorted(name for name in slots_by_entry.get(entry_name, {}) if name in PUBLIC_SLOTS)
@@ -305,7 +315,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
                     f"{source}: {entry_name} consumes {public_slots[0]}, which requires public_host in the values file"
                 )
 
-    # Raise if no declared source fills a required slot of an assembled entry
+    # Raise if no source fills a required slot of a winner
     filled = set(hand) | set(minted)
     missing: dict[str, list[str]] = {}
     for entry_name in sorted(bundle.entry_name for bundle in bundles):
@@ -318,14 +328,16 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
         entry_name, absent = min(missing.items())
         raise ValueError(f"{source}: {entry_name} requires {absent}, which no declared source fills")
 
-    # Unfilled optionals ride as env-file empties; compose takes the :- default for set-to-empty
-    # and unset alike
+    # Leave unfilled optionals as env-file empties
     for name in sorted({name for bundle in bundles for name in slots_by_entry.get(bundle.entry_name, {})}):
         env.setdefault(name, "")
+
+    # Interpolate the hand-set values over the env table
     for name in values.reference_order:
         parts = PLACEHOLDER.split(hand[name])
         env[name] = "".join(part if index % 2 == 0 else env[part] for index, part in enumerate(parts))
 
+    # If a gateway is declared, plan it over the winners' routes
     gateway = None
     if config.gateway_port is not None:
         routes = [(bundle.entry_name, route) for bundle in bundles for route in bundle.effective_routes]
@@ -343,11 +355,14 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
 
 
 def _public_face(config: ConfigFile, values: ValuesFile) -> PublicFace | None:
+    # Derive the public face with its defaults
     if values.public_host is None:
         return None
     scheme = values.public_scheme if values.public_scheme is not None else "http"
     effective_gateway = values.gateway_port if values.gateway_port is not None else config.gateway_port
     port = values.public_port
+
+    # If no port is set, take the gateway port or the scheme default
     if port is None:
         port = effective_gateway if effective_gateway is not None else (443 if scheme == "https" else 80)
     return PublicFace(
@@ -359,6 +374,7 @@ def _public_face(config: ConfigFile, values: ValuesFile) -> PublicFace | None:
 
 
 def _minted(config: ConfigFile, values: ValuesFile) -> dict[str, str]:
+    # Mint the machine slots
     minted: dict[str, str] = {BARRIER_IMAGE_SLOT: BARRIER_IMAGE}
     face = _public_face(config, values)
     if face is not None:
@@ -379,11 +395,11 @@ def _in_assembly(row: FlattenedServiceEntry, choices: dict[str, str]) -> bool:
 
 
 def _entry_env(env: dict[str, str], shas_by_root: dict[Path, dict[str, str]], sources: BundleSources) -> None:
-    # Machine slots are spelled after the producer's own entry name — the artifact
-    # file and its slots derive from the same generation — which an override may
-    # name differently from the consumer entry selecting it.
+    # Spell machine slots after the producer's entry name, not the consumer's
     entry = sources.bundle_path.stem.removeprefix("compose.")
     env.update({env_lock_slot(entry, key): value for key, value in sources.lock_references.items()})
+
+    # Compute each root's tree shas once
     if sources.tree_root not in shas_by_root:
         shas_by_root[sources.tree_root] = {
             image.sha_env: image.compute_sha(sources.tree_root) for image in sources.images.values()

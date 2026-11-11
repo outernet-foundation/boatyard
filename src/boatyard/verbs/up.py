@@ -56,15 +56,17 @@ def up(
         typer.Option("--build", help="Build all images locally before bringing the stack up"),
     ] = False,
 ) -> None:
-    # Load the config, lock, and the typed machine values from the working directory
+    # Load the config, lock, and machine values from the working directory
     root = Path.cwd()
     config = ConfigFile.load(root / DEFAULT_CONFIG_PATH)
+
+    # If the values file is missing, refuse
     if not (root / VALUES_FILE).exists():
         raise ValueError(f"{VALUES_FILE.as_posix()} is required")
     lock = LockFile.load(config.root / LOCK_PATH, config)
     config_values = ValuesFile.load(root / VALUES_FILE)
 
-    # One resolve answers the bundle projects, the gateway plan, the env table, and the edge image
+    # Resolve the assembly plan
     plan = resolve(config, lock, config_values)
     auth_entries = {row.name for row in config.service_entries if row.auth}
     shared_network_name = f"{config.project_name}-shared"
@@ -81,11 +83,14 @@ def up(
             build=build,
         )
     except CalledProcessError as error:
+        # Exit naming the failing project, keeping the artifacts
         raise SystemExit(_retained_report(_failing_project(error), materialized)) from None
     except BaseException:
+        # Print the kept artifacts, then re-raise
         print(_retained_report(None, materialized))
         raise
 
+    # Remove the materialized files
     for path in materialized:
         path.unlink(missing_ok=True)
 
@@ -104,7 +109,7 @@ def _materialize_up(
     env_file = Path(handle.name)
     materialized.append(env_file)
 
-    # Materialize the gateway document when a gateway is declared, before any fetch
+    # If a gateway is declared, materialize its document first
     gateway_file = (
         _materialize(
             materialized,
@@ -115,14 +120,15 @@ def _materialize_up(
         else None
     )
 
-    # Materialize each bundle's compose files (fetching a remote bundle's texts once) and
-    # its override document
+    # Materialize each bundle's compose files and its override document
     invocations: list[BundleInvocation] = []
     for bundle in plan.bundles:
+        # If the bundle is local, read its committed compose file
         if bundle.bundle_path is not None:
             compose_files = [bundle.bundle_path]
             declared_ports = extract_bundle_records([bundle.bundle_path.read_text(encoding="utf-8")]).declared_ports
         else:
+            # Otherwise fetch the remote bundle's texts via crane
             install_crane()
             texts = OciArtifactManifest.fetch_compose_texts(bundle.pinned_reference or "")
             compose_files = [_materialize(materialized, "boatyard-bundle-", text) for text in texts]
@@ -145,12 +151,13 @@ def _orchestrate_up(
     quiet_pull: bool,
     build: bool,
 ) -> None:
-    # Create the shared network before any project when at least one project exists
+    # If any project exists, create the shared network first
     if up_context.invocations or up_context.gateway_file is not None:
+        # If the network does not exist, create it
         if not bash_check(f"docker network inspect {config.project_name}-shared"):
             bash(f"docker network create {config.project_name}-shared")
 
-    # Build local images
+    # If build is set, build the local images first
     if build:
         run_build(config=config)
 
@@ -168,6 +175,7 @@ def _orchestrate_up(
             )
         )
 
+    # If a gateway is declared, bring it up last
     if up_context.gateway_file is not None:
         bash(
             compose_command(
@@ -190,12 +198,13 @@ def _materialize(materialized: list[Path], prefix: str, text: str) -> Path:
 
 
 def _failing_project(error: CalledProcessError) -> str | None:
-    # Every compose invocation names its project with -p; a non-compose failure names none
+    # Read the project from the failing command's -p flag
     match = re.search(r"-p (\S+)", error.cmd if isinstance(error.cmd, str) else "")
     return match.group(1) if match is not None else None
 
 
 def _retained_report(project: str | None, materialized: list[Path]) -> str:
+    # Report the failure and the kept artifacts
     named = f"the project {project} failed; " if project is not None else "up failed; "
     return named + "kept artifacts for inspection: " + ", ".join(str(path) for path in materialized)
 
@@ -211,7 +220,7 @@ def render_override_document(
     values: ValuesFile,
     declared_ports: dict[str, list[tuple[int, int, str]]],
 ) -> str:
-    # Hand-rendered because the document carries the !reset spelling safe_dump cannot write.
+    # Hand-render the !reset spelling safe_dump cannot write
     lines = ["networks:", f"  {shared_network_name}:", "    external: true"]
     if bundle.services:
         lines.append("services:")
@@ -237,8 +246,7 @@ def _override_ports(
     values: ValuesFile,
     declared_ports: dict[str, list[tuple[int, int, str]]],
 ) -> list[PublishedPort]:
-    # A declared port rides in the bundle's own text; the override re-publishes only the rest,
-    # with the values scalar (single-port services only, validated at resolve) moving the host port.
+    # Re-publish only the ports the bundle text does not declare
     declared = set(declared_ports.get(service_name, []))
     return [
         port.model_copy(update={"published": values.ports.get(service_name, port.published)})
@@ -264,6 +272,8 @@ def render_gateway_document(
     auth_entries: set[str],
 ) -> str:
     gateway = _require_gateway(plan)
+
+    # If an auth option is selected without a public face, refuse
     if any(bundle.entry_name in auth_entries for bundle in plan.bundles) and gateway.public_face is None:
         raise ValueError("an auth option is selected; public_host is required in boatyard.values.yaml")
     document: dict[str, Yaml] = {
@@ -283,8 +293,7 @@ def render_gateway_document(
 
 
 def render_caddyfile(plan: AssemblyPlan, gateway: GatewayPlan, auth_entries: set[str]) -> str:
-    # One handle block per route in declaration order; the auth route's first block bakes the
-    # effective public face as literals, never compose slots.
+    # Render one handle block per route in declaration order
     lines = [f":{EDGE_LISTEN_PORT} {{"]
     for bundle, index, route in (
         (bundle, index, route) for bundle in plan.bundles for index, route in enumerate(bundle.effective_routes)
@@ -295,10 +304,12 @@ def render_caddyfile(plan: AssemblyPlan, gateway: GatewayPlan, auth_entries: set
             + ("" if route.path == "/*" else f" {route.path}")
             + " {"
         )
+        # If the route carries a raw stanza, emit it verbatim
         if route.raw is not None:
             lines.extend((opener, *["\t\t" + line for line in route.raw.splitlines()], "\t}"))
             continue
 
+        # If this is the auth route's first block, bake the public face as literals
         if bundle.entry_name in auth_entries and index == 0 and gateway.public_face is not None:
             face = gateway.public_face
             lines.extend((
