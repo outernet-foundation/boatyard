@@ -47,8 +47,8 @@ Design intent and silent-failure traps, one fact per bullet.
   it (`options:`); the axis lives on the local `base_images` entry — the one spelling across
   the Dockerfile ARG and the k8s selection, never re-described by hand.
 - Plain score-compose silently drops `httpGet` probes; boatyard's lens makes the omission loud
-  instead via the workload's `outernet.internal/probe-adapter` annotation.
-- Substrate needs live in workload files as `outernet.internal/*` annotations — `boatyard.yml`
+  instead via the workload's `boatyard/probe-adapter` annotation.
+- Substrate needs live in workload files as `boatyard/*` annotations — `boatyard.yml`
   holds no per-workload runtime fact. The shipped `score_patch_templates` are the reader; the
   lens is `WorkloadDocument.parse(raw, file_name)`.
 

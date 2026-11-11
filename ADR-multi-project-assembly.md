@@ -54,7 +54,7 @@ Two further defects surfaced during diagnosis:
    literals in the Caddyfile, derived from the public face.
 6. The port knob `gateway:` becomes `gateway_port:` in both config and values.
 7. Producers author route and publish-port declarations on their workloads as
-   `outernet.internal/*` annotations; consumers adopt them as defaults and may override per
+   `boatyard/*` annotations; consumers adopt them as defaults and may override per
    entry in `boatyard.yml` or per machine in `boatyard.values.yaml`.
 8. The lock records each bundle's service names, adopted routes, adopted ports, and any
    `container_name` declarations — all as required fields so a pre-change lock refuses at
@@ -232,11 +232,11 @@ values: { ...slots... }
 ## Producer-authored routes and ports
 
 - Workload files declare them as annotations (treaty: substrate needs live in workload files
-  as `outernet.internal/*`; `boatyard.yml` holds no per-workload runtime fact):
-  - `outernet.internal/route: <path>=<host>:<port>[,strip]` — comma-separated for multiples
+  as `boatyard/*`; `boatyard.yml` holds no per-workload runtime fact):
+  - `boatyard/route: <path>=<host>:<port>[,strip]` — comma-separated for multiples
     (e.g. `/grafana/*=grafana:3000,/loki/*=loki:3100,/*=api:8000`); `,strip` sets
     `strip_prefix` (keycloak's `/auth/*=keycloak:8080,strip`).
-  - `outernet.internal/publish-port: <published>:<target>[/<protocol>]` — comma-separated (e.g.
+  - `boatyard/publish-port: <published>:<target>[/<protocol>]` — comma-separated (e.g.
     `6178:6178,5957:5957/udp`).
 - Annotations ride score's `metadata.annotations` passthrough onto the service stanzas in the
   artifact text; relock extracts them into the lock record (paths, hosts, ports, strip flags,
@@ -333,7 +333,7 @@ and new boatyard does not need to consume baked ones; every artifact is republis
 - **Native `oci://` includes + accept same-name bundle failures**: compose include refuses
   duplicate resource names in the merged project, and include-level override files cannot
   rename; the limitation is structural, and multi-project removes it for less machinery.
-- **`outernet.internal/edge-peer` annotation** ("wire the tunnel like the gateway"):
+- **`boatyard/edge-peer` annotation** ("wire the tunnel like the gateway"):
   superseded — bare names on the shared net make the tunnel's authored defaults resolve with
   no wiring concept at all.
 - **`FORWARDED_*` env delivery**: its only robustness justification was dodging the compose

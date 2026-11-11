@@ -1,6 +1,6 @@
 # Open drill: GPU template collapse [LOW, operator's lead]
 
-The cuda/rocm pair: one annotation (`outernet.internal/gpu`), two compose
+The cuda/rocm pair: one annotation (`boatyard/gpu`), two compose
 templates (`gpu-cuda.tpl`, `gpu-rocm.tpl`), one registered, selected by the
 `GPU_VARIANT` build axis; the k8s analog (`gpu-pod.tpl`) is one template —
 proof the one-template shape is natural. The operator believes a consolidation
