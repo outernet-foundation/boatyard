@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-import re
-from collections.abc import Mapping
+import threading
+import time
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Annotated, NamedTuple
 
 import typer
 import yaml
-from bashrun.bash import CalledProcessError, bash, bash_check, bash_handoff
+from bashrun.bash import CalledProcessError, bash, bash_check, bash_handoff, bash_output
 
 from boatyard.build import run_build
 from boatyard.compose import compose_command
@@ -34,14 +35,41 @@ GATEWAY_CONFIG_NAME = "boatyard-gateway-caddyfile"
 app = typer.Typer()
 
 
-class BundleInvocation(NamedTuple):
+class WorkerResult(NamedTuple):
     bundle: BundleProject
-    compose_files: list[Path]
+    ok: bool
+    elapsed: float
+    output: str
+    error: CalledProcessError | ValueError | None
+    paths: list[Path]
+
+
+class MilestoneReport:
+    # The one terminal-writing surface workers may use; every milestone prints under the lock
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+
+    def started(self, entry_name: str) -> None:
+        with self.lock:
+            print(f"{entry_name}: up started")
+
+    def ready(self, entry_name: str, elapsed: float) -> None:
+        with self.lock:
+            print(f"{entry_name}: ready in {elapsed:.1f}s")
+
+    def failed(self, entry_name: str, elapsed: float, error: CalledProcessError | ValueError) -> None:
+        with self.lock:
+            print(f"{entry_name}: FAILED in {elapsed:.1f}s")
+            if isinstance(error, CalledProcessError):
+                for line in (error.output or "").splitlines():
+                    print(f"  {line}")
+            else:
+                print(f"  error: {error}")
 
 
 class UpContext(NamedTuple):
     env_file: Path
-    invocations: list[BundleInvocation]
+    bundles: list[BundleProject]
     gateway_file: Path | None
 
 
@@ -70,22 +98,28 @@ def up(
     auth_entries = {row.name for row in config.service_entries if row.auth}
     shared_network_name = f"{config.project_name}-shared"
     materialized: list[Path] = []
+    results: list[WorkerResult] = []
 
     try:
-        up_context = _materialize_up(config, config_values, plan, auth_entries, shared_network_name, materialized)
+        up_context = _materialize_up(config, plan, auth_entries, shared_network_name, materialized)
         _orchestrate_up(
             root,
             config,
             plan,
             up_context,
+            values=config_values,
             attached=attached,
             quiet_pull=quiet_pull,
             build=build,
+            materialized=materialized,
+            results=results,
         )
-    except CalledProcessError as error:
-        raise SystemExit(_retained_report(_failing_project(error), materialized)) from None
+    except SystemExit:
+        raise
+    except CalledProcessError:
+        raise SystemExit(_retained_report(None, materialized)) from None
     except BaseException:
-        print(_retained_report(None, materialized))
+        print(_retained_report(None, [*materialized, *_worker_paths(results)]))
         raise
 
     for path in materialized:
@@ -94,7 +128,6 @@ def up(
 
 def _materialize_up(
     config: ConfigFile,
-    config_values: ValuesFile,
     plan: AssemblyPlan,
     auth_entries: set[str],
     shared_network_name: str,
@@ -106,7 +139,8 @@ def _materialize_up(
     env_file = Path(handle.name)
     materialized.append(env_file)
 
-    # Materialize the gateway document when a gateway is declared, before any fetch
+    # Materialize the gateway document when a gateway is declared, before any convergence starts
+    # (the render's auth/public-face refusal must fire before anything is brought up)
     gateway_file = (
         _materialize(
             materialized,
@@ -117,25 +151,7 @@ def _materialize_up(
         else None
     )
 
-    # Materialize each bundle's compose files (fetching a remote bundle's texts once) and
-    # its override document
-    invocations: list[BundleInvocation] = []
-    for bundle in plan.bundles:
-        if bundle.bundle_path is not None:
-            compose_files = [bundle.bundle_path]
-            declared_ports = extract_bundle_records([bundle.bundle_path.read_text(encoding="utf-8")]).declared_ports
-        else:
-            install_crane()
-            texts = OciArtifactManifest.fetch_compose_texts(bundle.pinned_reference or "")
-            compose_files = [_materialize(materialized, "boatyard-bundle-", text) for text in texts]
-            declared_ports = extract_bundle_records(texts).declared_ports
-        override_file = _materialize(
-            materialized,
-            "boatyard-override-",
-            render_override_document(shared_network_name, bundle, config_values, declared_ports),
-        )
-        invocations.append(BundleInvocation(bundle=bundle, compose_files=[*compose_files, override_file]))
-    return UpContext(env_file=env_file, invocations=invocations, gateway_file=gateway_file)
+    return UpContext(env_file=env_file, bundles=list(plan.bundles), gateway_file=gateway_file)
 
 
 def _orchestrate_up(
@@ -144,12 +160,19 @@ def _orchestrate_up(
     plan: AssemblyPlan,
     up_context: UpContext,
     *,
+    values: ValuesFile,
     attached: bool,
     quiet_pull: bool,
     build: bool,
+    materialized: list[Path],
+    results: list[WorkerResult],
 ) -> None:
+    # Crane installed once on the main thread; N workers racing the installer's binary write
+    if any(bundle.bundle_path is None for bundle in up_context.bundles):
+        install_crane()
+
     # Create the shared network before any project when at least one project exists
-    if up_context.invocations or up_context.gateway_file is not None:
+    if up_context.bundles or up_context.gateway_file is not None:
         if not bash_check(f"docker network inspect {config.project_name}-shared"):
             bash(f"docker network create {config.project_name}-shared")
 
@@ -157,47 +180,199 @@ def _orchestrate_up(
     if build:
         run_build(config=config)
 
-    # Bring every bundle up as its own project, then the gateway project last
-    for invocation in up_context.invocations:
-        bash(
-            compose_command(
-                root,
-                invocation.compose_files,
-                "up",
-                "--pull",
-                "missing",
-                *(["--quiet-pull"] if quiet_pull else []),
-                "-d",
-                project_name=invocation.bundle.project_name,
-                env_file=up_context.env_file,
-                slot_names=list(plan.env),
-            )
+    # Every bundle converges on the wall; the gateway waits for the drained wall
+    if up_context.bundles:
+        _run_wall(
+            root,
+            plan,
+            up_context,
+            values=values,
+            shared_network_name=f"{config.project_name}-shared",
+            quiet_pull=quiet_pull,
+            results=results,
         )
+        failures = [result for result in results if not result.ok]
+        for result in results:
+            if result.ok:
+                for path in result.paths:
+                    path.unlink(missing_ok=True)
+        if failures:
+            raise SystemExit(_wall_report(failures, materialized))
 
     if up_context.gateway_file is not None:
-        arguments = ["up", "--pull", "missing", *(["--quiet-pull"] if quiet_pull else [])]
+        _run_gateway(
+            root,
+            config,
+            plan,
+            up_context.gateway_file,
+            up_context.env_file,
+            attached=attached,
+            quiet_pull=quiet_pull,
+            materialized=materialized,
+        )
+
+
+def _run_wall(
+    root: Path,
+    plan: AssemblyPlan,
+    up_context: UpContext,
+    *,
+    values: ValuesFile,
+    shared_network_name: str,
+    quiet_pull: bool,
+    results: list[WorkerResult],
+) -> None:
+    report = MilestoneReport()
+    if len(up_context.bundles) == 1:
+        _up_bundle_project(
+            up_context.bundles[0],
+            root,
+            up_context.env_file,
+            list(plan.env),
+            values,
+            shared_network_name,
+            quiet_pull,
+            _live_runner,
+            report,
+            results,
+        )
+        return
+    threads = [
+        threading.Thread(
+            target=_up_bundle_project,
+            args=(
+                bundle,
+                root,
+                up_context.env_file,
+                list(plan.env),
+                values,
+                shared_network_name,
+                quiet_pull,
+                _wall_runner,
+                report,
+                results,
+            ),
+        )
+        for bundle in up_context.bundles
+    ]
+    for thread in threads:
+        thread.start()
+    try:
+        for thread in threads:
+            thread.join()
+    except BaseException:
+        for thread in threads:
+            thread.join(timeout=10)
+        raise
+
+
+def _run_gateway(
+    root: Path,
+    config: ConfigFile,
+    plan: AssemblyPlan,
+    gateway_file: Path,
+    env_file: Path,
+    *,
+    attached: bool,
+    quiet_pull: bool,
+    materialized: list[Path],
+) -> None:
+    arguments = ["up", "--pull", "missing", *(["--quiet-pull"] if quiet_pull else [])]
+    try:
         if attached:
             bash_handoff(
                 compose_command(
                     root,
-                    [up_context.gateway_file],
+                    [gateway_file],
                     *arguments,
                     project_name=config.project_name,
-                    env_file=up_context.env_file,
+                    env_file=env_file,
                     slot_names=list(plan.env),
                 )
             )
         bash(
             compose_command(
                 root,
-                [up_context.gateway_file],
+                [gateway_file],
                 *arguments,
                 "-d",
                 project_name=config.project_name,
-                env_file=up_context.env_file,
+                env_file=env_file,
                 slot_names=list(plan.env),
             )
         )
+    except CalledProcessError as error:
+        raise SystemExit(_retained_report(config.project_name, materialized)) from error
+
+
+def _up_bundle_project(
+    bundle: BundleProject,
+    root: Path,
+    env_file: Path,
+    slot_names: list[str],
+    values: ValuesFile,
+    shared_network_name: str,
+    quiet_pull: bool,
+    runner: Callable[[str], str],
+    report: MilestoneReport,
+    collect: list[WorkerResult],
+) -> None:
+    started = time.monotonic()
+    report.started(bundle.entry_name)
+    paths: list[Path] = []
+    try:
+        compose_files, declared_ports = _bundle_compose_files(bundle, paths)
+        override_file = _materialize(
+            paths,
+            "boatyard-override-",
+            render_override_document(shared_network_name, bundle, values, declared_ports),
+        )
+        output = runner(
+            compose_command(
+                root,
+                [*compose_files, override_file],
+                "--progress",
+                "plain",
+                "up",
+                "--pull",
+                "missing",
+                *(["--quiet-pull"] if quiet_pull else []),
+                "-d",
+                project_name=bundle.project_name,
+                env_file=env_file,
+                slot_names=slot_names,
+            )
+        )
+    except (CalledProcessError, ValueError) as error:
+        elapsed = time.monotonic() - started
+        report.failed(bundle.entry_name, elapsed, error)
+        captured = (error.output or "") if isinstance(error, CalledProcessError) else ""
+        collect.append(
+            WorkerResult(bundle=bundle, ok=False, elapsed=elapsed, output=captured, error=error, paths=paths)
+        )
+        return
+    elapsed = time.monotonic() - started
+    report.ready(bundle.entry_name, elapsed)
+    collect.append(WorkerResult(bundle=bundle, ok=True, elapsed=elapsed, output=output, error=None, paths=paths))
+
+
+def _bundle_compose_files(bundle: BundleProject, paths: list[Path]) -> tuple[list[Path], dict[str, list[tuple[int, int, str]]]]:
+    # A local path override rides its file directly; a remote bundle fetches its texts into temp files
+    if bundle.bundle_path is not None:
+        declared_ports = extract_bundle_records([bundle.bundle_path.read_text(encoding="utf-8")]).declared_ports
+        return [bundle.bundle_path], declared_ports
+    texts = OciArtifactManifest.fetch_compose_texts(bundle.pinned_reference or "")
+    compose_files = [_materialize(paths, "boatyard-bundle-", text) for text in texts]
+    return compose_files, extract_bundle_records(texts).declared_ports
+
+
+def _live_runner(command: str) -> str:
+    bash(command)
+    return ""
+
+
+def _wall_runner(command: str) -> str:
+    return bash_output(command)
 
 
 def _materialize(materialized: list[Path], prefix: str, text: str) -> Path:
@@ -208,15 +383,21 @@ def _materialize(materialized: list[Path], prefix: str, text: str) -> Path:
     return path
 
 
-def _failing_project(error: CalledProcessError) -> str | None:
-    # Every compose invocation names its project with -p; a non-compose failure names none
-    match = re.search(r"-p (\S+)", error.cmd if isinstance(error.cmd, str) else "")
-    return match.group(1) if match is not None else None
+def _wall_report(failures: list[WorkerResult], materialized: list[Path]) -> str:
+    # Completion-order failure lines; failed workers retain their paths alongside the shared artifacts
+    lines = [f"the project {failure.bundle.project_name} failed" for failure in failures]
+    retained = [*(path for failure in failures for path in failure.paths), *materialized]
+    lines.append("kept artifacts for inspection: " + ", ".join(str(path) for path in retained))
+    return "\n".join(lines)
 
 
 def _retained_report(project: str | None, materialized: list[Path]) -> str:
     named = f"the project {project} failed; " if project is not None else "up failed; "
     return named + "kept artifacts for inspection: " + ", ".join(str(path) for path in materialized)
+
+
+def _worker_paths(results: list[WorkerResult]) -> list[Path]:
+    return [path for result in results for path in result.paths]
 
 
 def render_env_entries(entries: Mapping[str, str]) -> str:

@@ -1,4 +1,5 @@
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -67,16 +68,76 @@ class UpSpy:
             self.override_documents.append(_load_override(Path(override_match.group(1)).read_text(encoding="utf-8")))
 
 
-def _handoff_spy(spy: UpSpy):
-    def run(command: str) -> None:
-        spy.run(command)
+class CaptureSpy:
+    # The wall's bash_output seam: records through the spy and answers with captured-empty output
+    def __init__(self, spy: UpSpy) -> None:
+        self.spy = spy
+
+    def __call__(self, command: str) -> str:
+        self.spy.run(command)
+        return ""
+
+
+class HandoffSpy:
+    def __init__(self, spy: UpSpy) -> None:
+        self.spy = spy
+
+    def __call__(self, command: str) -> None:
+        self.spy.run(command)
         raise SystemExit
 
-    return run
+
+class BarrierRunner:
+    # Passes only when wall invocations truly overlap; a serial wall times out and records nothing
+    def __init__(self, parties: int, spy: UpSpy) -> None:
+        self.barrier = threading.Barrier(parties)
+        self.spy = spy
+
+    def __call__(self, command: str) -> str:
+        self.barrier.wait(timeout=10)
+        self.spy.run(command)
+        return ""
+
+
+class FailingRunner:
+    def __init__(self, spy: UpSpy, failing_projects: set[str]) -> None:
+        self.spy = spy
+        self.failing_projects = failing_projects
+
+    def _selected(self, command: str) -> str | None:
+        for project in self.failing_projects:
+            if f"-p {project} " in command:
+                return project
+        return None
+
+    def __call__(self, command: str) -> str:
+        self.spy.run(command)
+        if self._selected(command) is not None:
+            raise CalledProcessError(1, command, output="compose: simulated failure output")
+        return ""
+
+
+class RefusedThread:
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        raise AssertionError("this invocation must not spawn worker threads")
+
+
+class GatewayFailBash:
+    def __init__(self, spy: UpSpy) -> None:
+        self.spy = spy
+
+    def __call__(self, command: str) -> None:
+        self.spy.run(command)
+        if "boatyard-gateway-" in command:
+            raise CalledProcessError(1, command)
 
 
 def _bash_check_true(_command: str) -> bool:
     return True
+
+
+def _first_service_name(document: dict[str, Any]) -> str:
+    return next(iter(document["services"]))
 
 
 def _write_edge_tree(
@@ -191,6 +252,7 @@ def _invoke_up(
     )
     spy = UpSpy()
     monkeypatch.setattr(up, "bash", spy.run)
+    monkeypatch.setattr(up, "bash_output", CaptureSpy(spy))
     monkeypatch.setattr(up, "bash_check", _bash_check_true)
     monkeypatch.setattr(up, "install_crane", lambda: None)
     monkeypatch.setattr(
@@ -202,7 +264,7 @@ def _invoke_up(
         }),
     )
     if attached:
-        monkeypatch.setattr(up, "bash_handoff", _handoff_spy(spy))
+        monkeypatch.setattr(up, "bash_handoff", HandoffSpy(spy))
     return spy
 
 
@@ -421,7 +483,8 @@ class TestOverrideDocument:
     ) -> None:
         spy = _up(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], auth=True)
 
-        assert spy.override_documents == [
+        documents = sorted(spy.override_documents, key=_first_service_name)
+        assert documents == [
             {
                 "networks": {"edge-demo-shared": {"external": True}},
                 "services": {
@@ -483,10 +546,30 @@ class TestOverrideDocument:
 
 
 class TestUpProjects:
-    def test_bundles_then_gateway_in_declaration_order(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_the_gateway_runs_after_a_drained_wall(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         spy = _up(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], auth=True)
 
-        assert spy.projects == ["edge-demo-auth-keycloak", "edge-demo-livekit", "edge-demo"]
+        assert spy.projects[-1] == "edge-demo"
+        assert set(spy.projects[:-1]) == {"edge-demo-auth-keycloak", "edge-demo-livekit"}
+
+    def test_the_wall_runs_bundle_invocations_concurrently(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _write_edge_tree(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], auth=True)
+        spy = UpSpy()
+        monkeypatch.setattr(up, "bash", spy.run)
+        monkeypatch.setattr(up, "bash_check", _bash_check_true)
+        monkeypatch.setattr(up, "install_crane", lambda: None)
+        monkeypatch.setattr(up, "OciArtifactManifest", StubArtifacts({
+            LIVEKIT_PINNED: [LIVEKIT_TEXT],
+            KEYCLOAK_PINNED: [KEYCLOAK_TEXT],
+        }))
+        monkeypatch.setattr(up, "_wall_runner", BarrierRunner(2, spy))
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code == 0, result.output
+        assert set(spy.projects) == {"edge-demo-auth-keycloak", "edge-demo-livekit", "edge-demo"}
 
     def test_every_bundle_invocation_carries_its_compose_files_and_the_shared_env(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -500,7 +583,7 @@ class TestUpProjects:
         )
         assert "boatyard-bundle-" in bundle_command
         assert "boatyard-override-" in bundle_command
-        assert bundle_command.endswith("up --pull missing -d")
+        assert bundle_command.endswith("--progress plain up --pull missing -d")
         assert gateway_command.startswith(
             "env -u BOATYARD_BARRIER_IMAGE -u EDGE_BASE_URL -u PUBLIC_HOST -u PUBLIC_PORT -u PUBLIC_SCHEME "
             "-u PUBLIC_URL -u PUBLIC_URL_PATH docker compose -p edge-demo -f "
@@ -510,25 +593,77 @@ class TestUpProjects:
             "BOATYARD_BARRIER_IMAGE=docker.io/library/alpine:3.20\nEDGE_BASE_URL="
         )
 
-    def test_a_failing_project_stops_the_run_and_reports_the_retained_artifacts(
+    def test_a_single_bundle_runs_inline_without_threads(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        spy = _invoke_up(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
+        monkeypatch.setattr(up.threading, "Thread", RefusedThread)
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code == 0, result.output
+        assert spy.projects == ["edge-demo-livekit", "edge-demo"]
+
+    def test_a_failing_bundle_skips_the_gateway_and_retains_only_failed_paths(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        spy = _invoke_up(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
-
-        def fail_from_second(command: str) -> None:
-            spy.run(command)
-            if len(spy.commands) == 2:
-                raise CalledProcessError(1, command)
-
-        monkeypatch.setattr(up, "bash", fail_from_second)
+        _write_edge_tree(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], auth=True)
+        spy = UpSpy()
+        monkeypatch.setattr(up, "bash", spy.run)
+        monkeypatch.setattr(up, "bash_check", _bash_check_true)
+        monkeypatch.setattr(up, "install_crane", lambda: None)
+        monkeypatch.setattr(up, "OciArtifactManifest", StubArtifacts({
+            LIVEKIT_PINNED: [LIVEKIT_TEXT],
+            KEYCLOAK_PINNED: [KEYCLOAK_TEXT],
+        }))
+        monkeypatch.setattr(up, "_wall_runner", FailingRunner(spy, {"edge-demo-livekit"}))
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, SystemExit)
         report = str(result.exception)
-        assert "the project edge-demo failed" in report
-        assert "kept artifacts for inspection:" in report
+        assert "the project edge-demo-livekit failed" in report
+        assert "edge-demo-auth-keycloak" not in report
+        assert set(spy.projects) == {"edge-demo-auth-keycloak", "edge-demo-livekit"}
+        retained = report.split("kept artifacts for inspection: ", 1)[1].split(", ")
+        prefixes = sorted(Path(path).name.split("-", 2)[:2] for path in retained)
+        assert prefixes == [["boatyard", "bundle"], ["boatyard", "env"], ["boatyard", "gateway"], ["boatyard", "override"]]
+        assert all(Path(path).exists() for path in retained)
+
+    def test_two_failing_bundles_are_both_reported(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _write_edge_tree(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], auth=True)
+        spy = UpSpy()
+        monkeypatch.setattr(up, "bash", spy.run)
+        monkeypatch.setattr(up, "bash_check", _bash_check_true)
+        monkeypatch.setattr(up, "install_crane", lambda: None)
+        monkeypatch.setattr(up, "OciArtifactManifest", StubArtifacts({
+            LIVEKIT_PINNED: [LIVEKIT_TEXT],
+            KEYCLOAK_PINNED: [KEYCLOAK_TEXT],
+        }))
+        monkeypatch.setattr(up, "_wall_runner", FailingRunner(spy, {"edge-demo-livekit", "edge-demo-auth-keycloak"}))
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, SystemExit)
+        report = str(result.exception)
+        assert "the project edge-demo-livekit failed" in report
+        assert "the project edge-demo-auth-keycloak failed" in report
+        assert set(spy.projects) == {"edge-demo-livekit", "edge-demo-auth-keycloak"}
+        retained = report.split("kept artifacts for inspection: ", 1)[1].split(", ")
+        assert len(retained) == 6
+        assert all(Path(path).exists() for path in retained)
+
+    def test_a_gateway_failure_names_the_gateway_project(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spy = _invoke_up(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
+        monkeypatch.setattr(up, "bash", GatewayFailBash(spy))
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, SystemExit)
+        assert "the project edge-demo failed" in str(result.exception)
 
     def test_attached_mode_hands_off_only_on_the_gateway_invocation(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -94,8 +94,13 @@ class UpSpy:
         for override in re.finditer(r"-f (\S*boatyard-override-\S+\.yaml)", command):
             self.override_documents.append(yaml.safe_load(Path(override.group(1)).read_text(encoding="utf-8")))
 
+    def capture(self, command: str) -> str:
+        self.run(command)
+        return ""
+
     def spy_up(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(up, "bash", self.run)
+        monkeypatch.setattr(up, "bash_output", self.capture)
         monkeypatch.setattr(up, "bash_handoff", self.run)
         monkeypatch.setattr(up, "bash_check", _bash_check_true)
         monkeypatch.setattr(up, "install_crane", lambda: None)
@@ -475,7 +480,8 @@ class TestSelectionLaw:
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        assert spy.projects == ["demo-auth-keycloak", "demo-placeframe-cuda", "demo-livekit", "demo"]
+        assert spy.projects[-1] == "demo"
+        assert set(spy.projects[:-1]) == {"demo-auth-keycloak", "demo-placeframe-cuda", "demo-livekit"}
         cuda_command = spy.bundle_command("demo-placeframe-cuda")
         assert (tmp_path / "stack/generated/compose/compose.placeframe-cuda.yaml").resolve().as_posix() in (
             cuda_command
@@ -507,7 +513,8 @@ class TestSelectionLaw:
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        assert spy.projects == ["demo-one-cuda", "demo-two-cuda", "demo"]
+        assert spy.projects[-1] == "demo"
+        assert set(spy.projects[:-1]) == {"demo-one-cuda", "demo-two-cuda"}
         assert one_cuda.resolve().as_posix() in spy.bundle_command("demo-one-cuda")
         assert (tmp_path / "stack/generated/compose/compose.two-cuda.yaml").resolve().as_posix() in (
             spy.bundle_command("demo-two-cuda")
@@ -618,7 +625,8 @@ class TestSelectionLaw:
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        assert spy.projects == ["demo-auth-keycloak", "demo-placeframe-cuda", "demo-livekit", "demo"]
+        assert spy.projects[-1] == "demo"
+        assert set(spy.projects[:-1]) == {"demo-auth-keycloak", "demo-placeframe-cuda", "demo-livekit"}
 
     def test_stray_selection_in_an_undeclaring_repo_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_values_file(tmp_path, {"bundles": ["cuda"]})
@@ -673,13 +681,16 @@ class TestUpMaterialization:
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        assert spy.projects == ["demo-auth-keycloak", "demo-placeframe-cuda", "demo-livekit", "demo"]
+        assert spy.projects[-1] == "demo"
+        assert set(spy.projects[:-1]) == {"demo-auth-keycloak", "demo-placeframe-cuda", "demo-livekit"}
         gateway_service = spy.gateway["services"]["boatyard-gateway"]
         assert gateway_service["image"] == "docker.io/library/caddy:2.8.4-alpine"
         assert gateway_service["ports"] == [{"target": 8443, "published": 58080, "protocol": "tcp"}]
         assert gateway_service["networks"] == {"demo-shared": None}
         assert "environment" not in gateway_service
-        livekit_override = spy.override_documents[2]["services"]["livekit"]
+        livekit_override = next(
+            document for document in spy.override_documents if "livekit" in document["services"]
+        )["services"]["livekit"]
         assert livekit_override["networks"] == {"demo-shared": {"aliases": ["livekit-livekit"]}}
         assert livekit_override["ports"] == [{"published": 6178, "target": 6178}]
         content = spy.gateway["configs"]["boatyard-gateway-caddyfile"]["content"]
@@ -713,7 +724,10 @@ class TestUpMaterialization:
         assert spy.gateway["services"]["boatyard-gateway"]["ports"] == [
             {"target": 8443, "published": 18443, "protocol": "tcp"}
         ]
-        assert spy.override_documents[2]["services"]["livekit"]["ports"] == [{"published": 16178, "target": 6178}]
+        livekit_document = next(
+            document for document in spy.override_documents if "livekit" in document["services"]
+        )
+        assert livekit_document["services"]["livekit"]["ports"] == [{"published": 16178, "target": 6178}]
 
     def test_an_unselected_port_declaring_entry_sits_inert(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_config(
@@ -968,9 +982,13 @@ class TestSharedNames:
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        assert spy.projects == ["demo-left-a", "demo-right-b", "demo"]
-        assert spy.override_documents[0]["services"]["api"]["networks"] == {"demo-shared": {"aliases": ["left-a-api"]}}
-        assert spy.override_documents[1]["services"]["api"]["networks"] == {"demo-shared": {"aliases": ["right-b-api"]}}
+        assert spy.projects[-1] == "demo"
+        assert set(spy.projects[:-1]) == {"demo-left-a", "demo-right-b"}
+        api_aliases = sorted(
+            document["services"]["api"]["networks"]["demo-shared"]["aliases"][0]
+            for document in spy.override_documents
+        )
+        assert api_aliases == ["left-a-api", "right-b-api"]
         content = spy.gateway["configs"]["boatyard-gateway-caddyfile"]["content"]
         assert "reverse_proxy left-a-api:8000" in content
 
@@ -1400,7 +1418,7 @@ class TestBundleOverrides:
                 "env -u BOATYARD_BARRIER_IMAGE -u EDGE_BASE_URL -u PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE "
                 "-u PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE "
                 "docker compose -p demo-placeframe-cuda -f PRODUCER -f OVERRIDE "
-                "--project-directory ROOT --env-file LOCKENV up --pull missing -d"
+                "--project-directory ROOT --env-file LOCKENV --progress plain up --pull missing -d"
             ),
             (
                 "env -u BOATYARD_BARRIER_IMAGE -u EDGE_BASE_URL -u PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE "
@@ -1682,7 +1700,8 @@ class TestBundleOverrides:
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
-        assert spy.projects == ["demo-placeframe-cuda", "demo-extra-main", "demo"]
+        assert spy.projects[-1] == "demo"
+        assert set(spy.projects[:-1]) == {"demo-placeframe-cuda", "demo-extra-main"}
         assert producer.resolve().as_posix() in spy.bundle_command("demo-placeframe-cuda")
         assert (consumer / "stack/generated/compose/compose.extra-main.yaml").resolve().as_posix() in (
             spy.bundle_command("demo-extra-main")
