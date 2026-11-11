@@ -111,10 +111,10 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
 - `up_display.py` — the up wall's owning renderer: the compose `--progress plain` line parser
   and the rich per-project tree; milestone prints are the non-TTY fallback.
 - `yaml.py` — strict YAML load + model load; `Yaml` and the `is_mapping`/`is_list` guards.
-- `verbs/up.py` — per-bundle compose projects converging concurrently (one worker thread per
-  bundle, piped compose output) or one at a time under `--serial` (compose's own terminal
-  output, unpiped) with the gateway project strictly last over the shared network, the
-  override documents, the per-run dotenv, unwind on failure.
+- `verbs/up.py` — per-bundle compose projects converging one at a time with compose's own
+  terminal output (the default) or concurrently under `--concurrent` (one worker thread per
+  bundle, piped compose output) with the gateway project strictly last over the shared
+  network, the override documents, the per-run dotenv, unwind on failure.
 
 ## This file
 
