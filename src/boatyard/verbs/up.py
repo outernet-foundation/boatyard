@@ -8,7 +8,7 @@ from typing import Annotated, NamedTuple
 
 import typer
 import yaml
-from bashrun.bash import CalledProcessError, bash, bash_check, bash_handoff
+from bashrun.bash import CalledProcessError, bash, bash_check
 
 from boatyard.build import run_build
 from boatyard.compose import compose_command
@@ -47,7 +47,6 @@ class UpContext(NamedTuple):
 
 @app.command()
 def up(
-    attached: Annotated[bool, typer.Option("--attached", "-a", help="Run in foreground (not detached)")] = False,
     quiet_pull: Annotated[
         bool,
         typer.Option("--quiet-pull", "-q", help="Suppress per-layer pull progress (still shows pull/push totals)."),
@@ -78,7 +77,6 @@ def up(
             config,
             plan,
             up_context,
-            attached=attached,
             quiet_pull=quiet_pull,
             build=build,
         )
@@ -144,7 +142,6 @@ def _orchestrate_up(
     plan: AssemblyPlan,
     up_context: UpContext,
     *,
-    attached: bool,
     quiet_pull: bool,
     build: bool,
 ) -> None:
@@ -158,16 +155,13 @@ def _orchestrate_up(
         run_build(config=config)
 
     # Bring every bundle up as its own project, then the gateway project last
+    up_arguments = ["up", "--pull", "missing", *(["--quiet-pull"] if quiet_pull else []), "-d"]
     for invocation in up_context.invocations:
         bash(
             compose_command(
                 root,
                 invocation.compose_files,
-                "up",
-                "--pull",
-                "missing",
-                *(["--quiet-pull"] if quiet_pull else []),
-                "-d",
+                *up_arguments,
                 project_name=invocation.bundle.project_name,
                 env_file=up_context.env_file,
                 slot_names=list(plan.env),
@@ -175,24 +169,11 @@ def _orchestrate_up(
         )
 
     if up_context.gateway_file is not None:
-        arguments = ["up", "--pull", "missing", *(["--quiet-pull"] if quiet_pull else [])]
-        if attached:
-            bash_handoff(
-                compose_command(
-                    root,
-                    [up_context.gateway_file],
-                    *arguments,
-                    project_name=config.project_name,
-                    env_file=up_context.env_file,
-                    slot_names=list(plan.env),
-                )
-            )
         bash(
             compose_command(
                 root,
                 [up_context.gateway_file],
-                *arguments,
-                "-d",
+                *up_arguments,
                 project_name=config.project_name,
                 env_file=up_context.env_file,
                 slot_names=list(plan.env),

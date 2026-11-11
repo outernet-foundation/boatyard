@@ -67,14 +67,6 @@ class UpSpy:
             self.override_documents.append(_load_override(Path(override_match.group(1)).read_text(encoding="utf-8")))
 
 
-def _handoff_spy(spy: UpSpy):
-    def run(command: str) -> None:
-        spy.run(command)
-        raise SystemExit
-
-    return run
-
-
 def _bash_check_true(_command: str) -> bool:
     return True
 
@@ -172,7 +164,6 @@ def _invoke_up(
     public_host: str | None = "192.168.8.10",
     public_scheme: str | None = None,
     public_port: int | None = 58080,
-    attached: bool = False,
     values_extra: dict[str, object] | None = None,
     entry_ports: list[dict[str, object]] | None = None,
     livekit_text: str = LIVEKIT_TEXT,
@@ -201,8 +192,6 @@ def _invoke_up(
             KEYCLOAK_PINNED: [KEYCLOAK_TEXT],
         }),
     )
-    if attached:
-        monkeypatch.setattr(up, "bash_handoff", _handoff_spy(spy))
     return spy
 
 
@@ -216,7 +205,6 @@ def _up(
     public_host: str | None = "192.168.8.10",
     public_scheme: str | None = None,
     public_port: int | None = 58080,
-    attached: bool = False,
     values_extra: dict[str, object] | None = None,
     entry_ports: list[dict[str, object]] | None = None,
     livekit_text: str = LIVEKIT_TEXT,
@@ -230,12 +218,11 @@ def _up(
         public_host=public_host,
         public_scheme=public_scheme,
         public_port=public_port,
-        attached=attached,
         values_extra=values_extra,
         entry_ports=entry_ports,
         livekit_text=livekit_text,
     )
-    result = runner.invoke(app, ["up", *(["--attached"] if attached else [])])
+    result = runner.invoke(app, ["up"])
     assert result.exit_code == 0, result.output
     return spy
 
@@ -529,18 +516,6 @@ class TestUpProjects:
         report = str(result.exception)
         assert "the project edge-demo failed" in report
         assert "kept artifacts for inspection:" in report
-
-    def test_attached_mode_hands_off_only_on_the_gateway_invocation(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        spy = _up(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], attached=True)
-
-        assert spy.projects == ["edge-demo-livekit", "edge-demo"]
-        assert spy.commands[-1].startswith(
-            "env -u BOATYARD_BARRIER_IMAGE -u EDGE_BASE_URL -u PUBLIC_HOST -u PUBLIC_PORT -u PUBLIC_SCHEME "
-            "-u PUBLIC_URL -u PUBLIC_URL_PATH docker compose -p edge-demo -f "
-        )
-        assert "-d" not in spy.commands[-1].rsplit(" up ", 1)[1]
 
     def test_zero_selection_renders_the_gateway_project_alone(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

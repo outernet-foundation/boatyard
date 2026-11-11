@@ -96,7 +96,6 @@ class UpSpy:
 
     def spy_up(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(up, "bash", self.run)
-        monkeypatch.setattr(up, "bash_handoff", self.run)
         monkeypatch.setattr(up, "bash_check", _bash_check_true)
         monkeypatch.setattr(up, "install_crane", lambda: None)
         monkeypatch.setattr(up, "OciArtifactManifest", self.artifacts)
@@ -1105,7 +1104,6 @@ class TestLockRequirement:
         _write_workload(tmp_path, "api.yaml", "api")
         _write_values_file(tmp_path, {"bundles": ["apps-core"]})
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr(up, "bash_handoff", HandoffRecorder().run)
 
         result = runner.invoke(app, ["up"])
 
