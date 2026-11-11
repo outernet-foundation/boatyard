@@ -33,7 +33,7 @@ def _write_image(root: Path, name: str, text: str = "ARG PY_IMAGE\nFROM ${PY_IMA
         "metadata:\n"
         f"  name: {name}\n"
         "  annotations:\n"
-        f"    outernet.internal/dockerfile: {name}=workloads/{name}/Dockerfile\n"
+        f"    boatyard/dockerfile: {name}=workloads/{name}/Dockerfile\n"
         "containers:\n"
         f"  {name}: {{}}\n",
         encoding="utf-8",

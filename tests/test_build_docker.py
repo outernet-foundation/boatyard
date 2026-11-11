@@ -48,7 +48,7 @@ def _write_repo(
             "metadata:\n"
             f"  name: {service}\n"
             "  annotations:\n"
-            f"    outernet.internal/dockerfile: {service}=workloads/{service}/Dockerfile\n"
+            f"    boatyard/dockerfile: {service}=workloads/{service}/Dockerfile\n"
             "containers:\n"
             f"  {service}: {{}}\n",
             encoding="utf-8",

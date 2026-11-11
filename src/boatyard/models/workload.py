@@ -11,15 +11,15 @@ from boatyard.markers import declared_dockerfile_paths
 from boatyard.models.image import dockerfile_stem, require_dockerfile_spelling
 from boatyard.yaml import Yaml, is_list, is_mapping
 
-PROBE_ADAPTER_ANNOTATION = "outernet.internal/probe-adapter"
+PROBE_ADAPTER_ANNOTATION = "boatyard/probe-adapter"
 PROBE_ADAPTERS = ("python-urllib", "bash-http")
-RESTART_ANNOTATION = "outernet.internal/restart"
+RESTART_ANNOTATION = "boatyard/restart"
 COMPOSE_RESTART_POLICIES = ("no", "always", "on-failure", "unless-stopped")
-CONSUMER_INTERPOLATED_ANNOTATION = "outernet.internal/consumer-interpolated"
-DOCKERFILE_ANNOTATION = "outernet.internal/dockerfile"
-LOCK_ANNOTATION = "outernet.internal/lock"
-ROUTE_ANNOTATION = "outernet.internal/route"
-PUBLISH_PORT_ANNOTATION = "outernet.internal/publish-port"
+CONSUMER_INTERPOLATED_ANNOTATION = "boatyard/consumer-interpolated"
+DOCKERFILE_ANNOTATION = "boatyard/dockerfile"
+LOCK_ANNOTATION = "boatyard/lock"
+ROUTE_ANNOTATION = "boatyard/route"
+PUBLISH_PORT_ANNOTATION = "boatyard/publish-port"
 
 ROUTE_PATH_PATTERN = re.compile(r"(?:/\*|/(?:[^/\s*]+(?:/[^/\s*]+)*)?(?:/\*)?)")
 

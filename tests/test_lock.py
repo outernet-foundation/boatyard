@@ -256,7 +256,7 @@ def _write_built_images(root: Path) -> None:
         "metadata:\n"
         "  name: localizer\n"
         "  annotations:\n"
-        "    outernet.internal/dockerfile: localizer=workloads/localizer/Dockerfile\n"
+        "    boatyard/dockerfile: localizer=workloads/localizer/Dockerfile\n"
         "containers:\n"
         "  localizer: {}\n",
         encoding="utf-8",
@@ -996,14 +996,14 @@ class TestBundleRecording:
             "  api:\n"
             "    image: demo/api:1\n"
             "    labels:\n"
-            "      outernet.internal/route: /grafana/*=grafana:3000,/*=api:8000\n"
+            "      boatyard/route: /grafana/*=grafana:3000,/*=api:8000\n"
             "  grafana:\n"
             "    image: demo/grafana:1\n"
             "    container_name: demo-grafana\n"
             "  livekit:\n"
             "    image: demo/livekit:1\n"
             "    labels:\n"
-            "      outernet.internal/publish-port: 6178:6178,5957:5957/udp\n"
+            "      boatyard/publish-port: 6178:6178,5957:5957/udp\n"
         )
 
         result, _, _ = self._invoke(monkeypatch, tmp_path, [], bundle_text=bundle_text)
@@ -1022,14 +1022,12 @@ class TestBundleRecording:
         assert entry["container_names"] == ["grafana"]
 
     def test_a_route_referencing_no_bundle_service_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        bundle_text = (
-            "services:\n  api:\n    image: demo/api:1\n    labels:\n      outernet.internal/route: /*=ghost:8000\n"
-        )
+        bundle_text = "services:\n  api:\n    image: demo/api:1\n    labels:\n      boatyard/route: /*=ghost:8000\n"
 
         result, _, _ = self._invoke(monkeypatch, tmp_path, [], bundle_text=bundle_text)
 
         assert result.exit_code != 0
-        assert "outernet.internal/route: the route /* references the service 'ghost'" in str(result.exception)
+        assert "boatyard/route: the route /* references the service 'ghost'" in str(result.exception)
 
     def test_a_committed_lock_without_the_bundle_records_refuses(self, tmp_path: Path) -> None:
         _write_repo(tmp_path, ref_services={"livekit": {"ref": "oci://ghcr.io/org/repo/livekit:0.4.0-dev.3"}})

@@ -48,8 +48,8 @@ EDGE_BASE_URL_LINE = "EDGE_BASE_URL=http://boatyard-gateway:8443\n"
 BARRIER_MINT_LINE = "BOATYARD_BARRIER_IMAGE=docker.io/library/alpine:3.20\n"
 PINNED_COMPOSE_VERSION = "5.6.1"
 
-ASSEMBLY_ARGUMENT_PATTERN = re.compile(r"-f (\S*devkit-gateway-\S+\.yaml)")
-LOCK_ENV_ARGUMENT_PATTERN = re.compile(r"(\S*devkit-env-\S+\.env)")
+ASSEMBLY_ARGUMENT_PATTERN = re.compile(r"-f (\S*boatyard-gateway-\S+\.yaml)")
+LOCK_ENV_ARGUMENT_PATTERN = re.compile(r"(\S*boatyard-env-\S+\.env)")
 
 KEYCLOAK_TEXT = "services:\n  keycloak:\n    image: demo/keycloak:1\n"
 LIVEKIT_TEXT = "services:\n  livekit:\n    image: demo/livekit:1\n"
@@ -91,7 +91,7 @@ class UpSpy:
         gateway_match = ASSEMBLY_ARGUMENT_PATTERN.search(command)
         if gateway_match is not None:
             self.gateway_documents.append(yaml.safe_load(Path(gateway_match.group(1)).read_text(encoding="utf-8")))
-        for override in re.finditer(r"-f (\S*devkit-override-\S+\.yaml)", command):
+        for override in re.finditer(r"-f (\S*boatyard-override-\S+\.yaml)", command):
             self.override_documents.append(yaml.safe_load(Path(override.group(1)).read_text(encoding="utf-8")))
 
     def spy_up(self, monkeypatch: pytest.MonkeyPatch):
@@ -156,10 +156,10 @@ def _write_ref_tree(root: Path, base_images: dict[str, str] | None = None) -> No
 
 
 def _normalize(command: str, root: Path, producer: Path | None = None) -> str:
-    command = re.sub(r"\S*devkit-gateway-\S+\.yaml", "GATEWAY", command)
-    command = re.sub(r"\S*devkit-override-\S+\.yaml", "OVERRIDE", command)
-    command = re.sub(r"\S*devkit-bundle-\S+\.yaml", "BUNDLE", command)
-    command = re.sub(r"\S*devkit-env-\S+\.env", "LOCKENV", command)
+    command = re.sub(r"\S*boatyard-gateway-\S+\.yaml", "GATEWAY", command)
+    command = re.sub(r"\S*boatyard-override-\S+\.yaml", "OVERRIDE", command)
+    command = re.sub(r"\S*boatyard-bundle-\S+\.yaml", "BUNDLE", command)
+    command = re.sub(r"\S*boatyard-env-\S+\.env", "LOCKENV", command)
     if producer is not None:
         command = command.replace(producer.resolve().as_posix(), "PRODUCER")
     return command.replace(str(root), "ROOT")
@@ -249,7 +249,7 @@ def _write_producer(
                     "metadata:\n"
                     f"  name: {service}\n"
                     "  annotations:\n"
-                    f"    outernet.internal/dockerfile: {service}=workloads/{service}/Dockerfile\n"
+                    f"    boatyard/dockerfile: {service}=workloads/{service}/Dockerfile\n"
                     "containers:\n"
                     f"  {service}: {{}}\n",
                     encoding="utf-8",
@@ -541,7 +541,7 @@ class TestSelectionLaw:
         assert result.exit_code == 0, result.output
         assert spy.projects == ["demo-livekit", "demo"]
         assert spy.artifacts.fetched == [LIVEKIT_PINNED]
-        assert "devkit-bundle-" in spy.bundle_command("demo-livekit")
+        assert "boatyard-bundle-" in spy.bundle_command("demo-livekit")
 
     def test_an_options_only_repo_with_an_empty_selection_hands_compose_an_edge_only_root(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -582,7 +582,7 @@ class TestSelectionLaw:
         assert gateway["services"]["boatyard-gateway"]["ports"] == [
             {"target": 8443, "published": 8080, "protocol": "tcp"}
         ]
-        assert gateway["configs"]["devkit-edge-caddyfile"]["content"] == ":8443 {\n}\n"
+        assert gateway["configs"]["boatyard-gateway-caddyfile"]["content"] == ":8443 {\n}\n"
 
     def test_unknown_bundle_name_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._invoke_up(tmp_path, monkeypatch, bundles="placeframe-cuda,ghost")
@@ -682,7 +682,7 @@ class TestUpMaterialization:
         livekit_override = spy.override_documents[2]["services"]["livekit"]
         assert livekit_override["networks"] == {"demo-shared": {"aliases": ["livekit-livekit"]}}
         assert livekit_override["ports"] == [{"published": 6178, "target": 6178}]
-        content = spy.gateway["configs"]["devkit-edge-caddyfile"]["content"]
+        content = spy.gateway["configs"]["boatyard-gateway-caddyfile"]["content"]
         assert "handle_path /auth/*" in content
         assert "header_up X-Forwarded-Proto http" in content
         assert "header_up X-Forwarded-Port 58080" in content
@@ -699,7 +699,7 @@ class TestUpMaterialization:
         assert result.exit_code == 0, result.output
         gateway_service = spy.gateway["services"]["boatyard-gateway"]
         assert "environment" not in gateway_service
-        content = spy.gateway["configs"]["devkit-edge-caddyfile"]["content"]
+        content = spy.gateway["configs"]["boatyard-gateway-caddyfile"]["content"]
         assert "/auth/*" not in content
 
     def test_typed_port_overrides_win_over_the_config_defaults(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -971,7 +971,7 @@ class TestSharedNames:
         assert spy.projects == ["demo-left-a", "demo-right-b", "demo"]
         assert spy.override_documents[0]["services"]["api"]["networks"] == {"demo-shared": {"aliases": ["left-a-api"]}}
         assert spy.override_documents[1]["services"]["api"]["networks"] == {"demo-shared": {"aliases": ["right-b-api"]}}
-        content = spy.gateway["configs"]["devkit-edge-caddyfile"]["content"]
+        content = spy.gateway["configs"]["boatyard-gateway-caddyfile"]["content"]
         assert "reverse_proxy left-a-api:8000" in content
 
     def test_the_same_overlap_stays_legal_at_down(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -1198,7 +1198,7 @@ class TestLockEnvSynthesis:
             "metadata:\n"
             "  name: api\n"
             "  annotations:\n"
-            "    outernet.internal/dockerfile: api=workloads/api/Dockerfile\n"
+            "    boatyard/dockerfile: api=workloads/api/Dockerfile\n"
             "containers:\n"
             "  api: {}\n",
             encoding="utf-8",
