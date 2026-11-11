@@ -698,9 +698,9 @@ class TestUpMaterialization:
         assert gateway_service["ports"] == [{"target": 8443, "published": 58080, "protocol": "tcp"}]
         assert gateway_service["networks"] == {"demo-shared": None}
         assert "environment" not in gateway_service
-        livekit_override = next(
-            document for document in spy.override_documents if "livekit" in document["services"]
-        )["services"]["livekit"]
+        livekit_override = next(document for document in spy.override_documents if "livekit" in document["services"])[
+            "services"
+        ]["livekit"]
         assert livekit_override["networks"] == {"demo-shared": {"aliases": ["livekit-livekit"]}}
         assert livekit_override["ports"] == [{"published": 6178, "target": 6178}]
         content = spy.gateway["configs"]["boatyard-gateway-caddyfile"]["content"]
@@ -734,9 +734,7 @@ class TestUpMaterialization:
         assert spy.gateway["services"]["boatyard-gateway"]["ports"] == [
             {"target": 8443, "published": 18443, "protocol": "tcp"}
         ]
-        livekit_document = next(
-            document for document in spy.override_documents if "livekit" in document["services"]
-        )
+        livekit_document = next(document for document in spy.override_documents if "livekit" in document["services"])
         assert livekit_document["services"]["livekit"]["ports"] == [{"published": 16178, "target": 6178}]
 
     def test_an_unselected_port_declaring_entry_sits_inert(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -995,8 +993,7 @@ class TestSharedNames:
         assert spy.projects[-1] == "demo"
         assert set(spy.projects[:-1]) == {"demo-left-a", "demo-right-b"}
         api_aliases = sorted(
-            document["services"]["api"]["networks"]["demo-shared"]["aliases"][0]
-            for document in spy.override_documents
+            document["services"]["api"]["networks"]["demo-shared"]["aliases"][0] for document in spy.override_documents
         )
         assert api_aliases == ["left-a-api", "right-b-api"]
         content = spy.gateway["configs"]["boatyard-gateway-caddyfile"]["content"]

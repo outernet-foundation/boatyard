@@ -21,7 +21,14 @@ _LAYER_DOWNLOAD_PATTERN = re.compile(r"^ ([0-9a-f]{6,64}) Downloading (?:\[[^]]*
 PROJECT_GLYPHS = {"working": "⠿", "ready": "✔", "failed": "✖"}
 PROJECT_STYLES = {"working": "yellow", "ready": "green", "failed": "red"}
 ROW_GLYPHS = {"started": "✔", "healthy": "✔", "pulled": "✔", "pulling": "⠿", "error": "✖", "exited": "✖"}
-ROW_STYLES = {"started": "green", "healthy": "green", "pulled": "cyan", "pulling": "yellow", "error": "red", "exited": "red"}
+ROW_STYLES = {
+    "started": "green",
+    "healthy": "green",
+    "pulled": "cyan",
+    "pulling": "yellow",
+    "error": "red",
+    "exited": "red",
+}
 
 
 class ContainerRow:
@@ -157,7 +164,9 @@ def render_tree(states: dict[str, ProjectState]) -> Group:
 
 def _project_tree(state: ProjectState) -> Tree:
     elapsed = state.elapsed if state.elapsed is not None else max(time.monotonic() - state.started, 0.0)
-    header = Text(f"{PROJECT_GLYPHS[state.state]} {state.project_name}  {elapsed:.1f}s", style=PROJECT_STYLES[state.state])
+    header = Text(
+        f"{PROJECT_GLYPHS[state.state]} {state.project_name}  {elapsed:.1f}s", style=PROJECT_STYLES[state.state]
+    )
     tree = Tree(header, guide_style="dim")
     for row in state.rows.values():
         tree.add(_row_text(row))

@@ -566,10 +566,14 @@ class TestUpProjects:
         monkeypatch.setattr(up, "bash", spy.run)
         monkeypatch.setattr(up, "bash_check", _bash_check_true)
         monkeypatch.setattr(up, "install_crane", lambda: None)
-        monkeypatch.setattr(up, "OciArtifactManifest", StubArtifacts({
-            LIVEKIT_PINNED: [LIVEKIT_TEXT],
-            KEYCLOAK_PINNED: [KEYCLOAK_TEXT],
-        }))
+        monkeypatch.setattr(
+            up,
+            "OciArtifactManifest",
+            StubArtifacts({
+                LIVEKIT_PINNED: [LIVEKIT_TEXT],
+                KEYCLOAK_PINNED: [KEYCLOAK_TEXT],
+            }),
+        )
         monkeypatch.setattr(up, "_wall_runner", BarrierRunner(2, spy))
 
         result = runner.invoke(app, ["up"])
@@ -619,10 +623,14 @@ class TestUpProjects:
         monkeypatch.setattr(up, "bash", spy.run)
         monkeypatch.setattr(up, "bash_check", _bash_check_true)
         monkeypatch.setattr(up, "install_crane", lambda: None)
-        monkeypatch.setattr(up, "OciArtifactManifest", StubArtifacts({
-            LIVEKIT_PINNED: [LIVEKIT_TEXT],
-            KEYCLOAK_PINNED: [KEYCLOAK_TEXT],
-        }))
+        monkeypatch.setattr(
+            up,
+            "OciArtifactManifest",
+            StubArtifacts({
+                LIVEKIT_PINNED: [LIVEKIT_TEXT],
+                KEYCLOAK_PINNED: [KEYCLOAK_TEXT],
+            }),
+        )
         monkeypatch.setattr(up, "_wall_runner", FailingRunner(spy, {"edge-demo-livekit"}))
 
         result = runner.invoke(app, ["up"])
@@ -635,7 +643,12 @@ class TestUpProjects:
         assert set(spy.projects) == {"edge-demo-auth-keycloak", "edge-demo-livekit"}
         retained = report.split("kept artifacts for inspection: ", 1)[1].split(", ")
         prefixes = sorted(Path(path).name.split("-", 2)[:2] for path in retained)
-        assert prefixes == [["boatyard", "bundle"], ["boatyard", "env"], ["boatyard", "gateway"], ["boatyard", "override"]]
+        assert prefixes == [
+            ["boatyard", "bundle"],
+            ["boatyard", "env"],
+            ["boatyard", "gateway"],
+            ["boatyard", "override"],
+        ]
         assert all(Path(path).exists() for path in retained)
 
     def test_two_failing_bundles_are_both_reported(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -644,10 +657,14 @@ class TestUpProjects:
         monkeypatch.setattr(up, "bash", spy.run)
         monkeypatch.setattr(up, "bash_check", _bash_check_true)
         monkeypatch.setattr(up, "install_crane", lambda: None)
-        monkeypatch.setattr(up, "OciArtifactManifest", StubArtifacts({
-            LIVEKIT_PINNED: [LIVEKIT_TEXT],
-            KEYCLOAK_PINNED: [KEYCLOAK_TEXT],
-        }))
+        monkeypatch.setattr(
+            up,
+            "OciArtifactManifest",
+            StubArtifacts({
+                LIVEKIT_PINNED: [LIVEKIT_TEXT],
+                KEYCLOAK_PINNED: [KEYCLOAK_TEXT],
+            }),
+        )
         monkeypatch.setattr(up, "_wall_runner", FailingRunner(spy, {"edge-demo-livekit", "edge-demo-auth-keycloak"}))
 
         result = runner.invoke(app, ["up"])
@@ -662,9 +679,7 @@ class TestUpProjects:
         assert len(retained) == 6
         assert all(Path(path).exists() for path in retained)
 
-    def test_a_gateway_failure_names_the_gateway_project(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_a_gateway_failure_names_the_gateway_project(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         spy = _invoke_up(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
         monkeypatch.setattr(up, "bash", GatewayFailBash(spy))
 

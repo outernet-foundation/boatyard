@@ -371,7 +371,9 @@ def _up_bundle_project(
     collect.append(WorkerResult(bundle=bundle, ok=True, elapsed=elapsed, output=output, error=None, paths=paths))
 
 
-def _bundle_compose_files(bundle: BundleProject, paths: list[Path]) -> tuple[list[Path], dict[str, list[tuple[int, int, str]]]]:
+def _bundle_compose_files(
+    bundle: BundleProject, paths: list[Path]
+) -> tuple[list[Path], dict[str, list[tuple[int, int, str]]]]:
     # A local path override rides its file directly; a remote bundle fetches its texts into temp files
     if bundle.bundle_path is not None:
         declared_ports = extract_bundle_records([bundle.bundle_path.read_text(encoding="utf-8")]).declared_ports
