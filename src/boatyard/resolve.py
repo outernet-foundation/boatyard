@@ -13,8 +13,8 @@ from boatyard.models.config_file import (
     ConfigFile,
     FlattenedServiceEntry,
     Image,
-    PortDeclaration,
-    RouteConfig,
+    PublishedPort,
+    Route,
     Slot,
     artifact_slots,
     bundle_lock_key,
@@ -44,8 +44,8 @@ class BundleProject(NamedTuple):
     bundle_path: Path | None
     pinned_reference: str | None
     services: list[str]
-    effective_routes: list[RouteConfig]
-    effective_ports: list[PortDeclaration]
+    effective_routes: list[Route]
+    effective_ports: list[PublishedPort]
     container_names: list[str]
 
 
@@ -59,7 +59,7 @@ class PublicFace(NamedTuple):
 class GatewayPlan(NamedTuple):
     port: int
     public_face: PublicFace | None
-    routes: list[tuple[str, RouteConfig]]
+    routes: list[tuple[str, Route]]
 
 
 class AssemblyPlan(NamedTuple):

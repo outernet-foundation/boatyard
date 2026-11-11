@@ -1003,7 +1003,7 @@ class TestBundleRecording:
             "  livekit:\n"
             "    image: demo/livekit:1\n"
             "    labels:\n"
-            "      outernet.internal/publish: 6178:6178,5957:5957/udp\n"
+            "      outernet.internal/publish-port: 6178:6178,5957:5957/udp\n"
         )
 
         result, _, _ = self._invoke(monkeypatch, tmp_path, [], bundle_text=bundle_text)

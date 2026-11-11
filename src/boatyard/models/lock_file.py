@@ -9,8 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validat
 from boatyard.models.config_file import (
     PLATFORM_KEY,
     ConfigFile,
-    PortDeclaration,
-    RouteConfig,
+    PublishedPort,
+    Route,
     Slot,
     bundle_lock_key,
     chart_lock_key,
@@ -147,8 +147,8 @@ class ConfigLockBundle(BaseModel):
     reference: str
     slots: dict[str, Slot] = Field(default_factory=dict)
     services: list[str]
-    routes: list[RouteConfig]
-    ports: list[PortDeclaration]
+    routes: list[Route]
+    ports: list[PublishedPort]
     container_names: list[str]
 
     @model_validator(mode="after")

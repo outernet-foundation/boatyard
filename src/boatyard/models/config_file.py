@@ -334,8 +334,8 @@ class ServiceGroup(BaseModel):
 
     options: dict[str, ServiceEntry] = Field(default_factory=dict)
     workloads: list[str] = Field(default_factory=list)
-    routes: list[RouteConfig] = Field(default_factory=list)
-    ports: list[PortDeclaration] = Field(default_factory=list)
+    routes: list[Route] = Field(default_factory=list)
+    ports: list[PublishedPort] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _require_one_spelling(self) -> Self:
@@ -354,8 +354,8 @@ class ServiceEntry(BaseModel):
     ref: str | None = None
     workloads: list[str] = Field(default_factory=list)
     vars: VarsMap = Field(default_factory=dict)
-    routes: list[RouteConfig] = Field(default_factory=list)
-    ports: list[PortDeclaration] = Field(default_factory=list)
+    routes: list[Route] = Field(default_factory=list)
+    ports: list[PublishedPort] = Field(default_factory=list)
 
     @property
     def remote(self) -> bool:
@@ -397,7 +397,7 @@ ServiceMember = Annotated[
 ]
 
 
-class RouteConfig(BaseModel):
+class Route(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     path: str
@@ -418,7 +418,7 @@ class RouteConfig(BaseModel):
         return self
 
 
-class PortDeclaration(BaseModel):
+class PublishedPort(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     service: str
@@ -465,8 +465,8 @@ class FlattenedServiceEntry(NamedTuple):
     name: str
     site: str
     entry: ServiceEntry
-    effective_routes: list[RouteConfig]
-    effective_ports: list[PortDeclaration]
+    effective_routes: list[Route]
+    effective_ports: list[PublishedPort]
     auth: bool
 
 
@@ -740,8 +740,8 @@ def artifact_slots(texts: list[str]) -> dict[str, Slot]:
 
 def refuse_unresolved_references(
     entry_name: str,
-    routes: list[RouteConfig],
-    ports: list[PortDeclaration],
+    routes: list[Route],
+    ports: list[PublishedPort],
     texts: list[str],
 ) -> set[str]:
     # Union the services keys across the compose texts; a document without a services mapping contributes none.

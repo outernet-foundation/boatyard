@@ -13,8 +13,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from boatyard.models.config_file import (
     GATEWAY_SERVICE_NAME,
     OCI_REFERENCE_PREFIX,
-    PortDeclaration,
-    RouteConfig,
+    PublishedPort,
+    Route,
     ConfigFile,
     artifact_slots,
     bundle_lock_key,
@@ -31,9 +31,9 @@ from boatyard.models.lock_file import (
     refuse_local_lock_entries,
 )
 from boatyard.models.workload import (
-    PUBLISH_ANNOTATION,
+    PUBLISH_PORT_ANNOTATION,
     ROUTE_ANNOTATION,
-    parse_publish_annotation,
+    parse_publish_port_annotation,
     parse_route_annotation,
 )
 from boatyard.temp import SHA256_DIGEST_REGEX
@@ -99,8 +99,8 @@ class OciArtifactManifest(BaseModel):
 
 class BundleRecords(NamedTuple):
     services: list[str]
-    routes: list[RouteConfig]
-    ports: list[PortDeclaration]
+    routes: list[Route]
+    ports: list[PublishedPort]
     container_names: list[str]
     declared_ports: dict[str, list[tuple[int, int, str]]]
 
@@ -273,8 +273,8 @@ def extract_bundle_records(texts: list[str]) -> BundleRecords:
             _collect_declared_ports(declared_ports, service_name, stanza.get("ports"))
             stanzas.append((service_name, stanza, _stanza_annotations(stanza)))
 
-    routes: list[RouteConfig] = []
-    ports: list[PortDeclaration] = []
+    routes: list[Route] = []
+    ports: list[PublishedPort] = []
     for service_name, _stanza, stanza_annotations in stanzas:
         route_value = stanza_annotations.get(ROUTE_ANNOTATION)
         if route_value is not None:
@@ -285,17 +285,17 @@ def extract_bundle_records(texts: list[str]) -> BundleRecords:
                         f"{ROUTE_ANNOTATION}: the route {route.path} references the service {upstream!r}, "
                         f"which the bundle defines no stanza for"
                     )
-                routes.append(RouteConfig(path=route.path, upstream=route.upstream, strip_prefix=route.strip_prefix))
-        publish_value = stanza_annotations.get(PUBLISH_ANNOTATION)
+                routes.append(Route(path=route.path, upstream=route.upstream, strip_prefix=route.strip_prefix))
+        publish_value = stanza_annotations.get(PUBLISH_PORT_ANNOTATION)
         if publish_value is not None:
             ports.extend(
-                PortDeclaration(
+                PublishedPort(
                     service=service_name,
-                    published=publish.published,
-                    target=publish.target,
-                    protocol=publish.protocol,
+                    published=published_port.published,
+                    target=published_port.target,
+                    protocol=published_port.protocol,
                 )
-                for publish in parse_publish_annotation(publish_value)
+                for published_port in parse_publish_port_annotation(publish_value)
             )
     return BundleRecords(
         services=services,

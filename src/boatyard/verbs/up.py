@@ -19,7 +19,7 @@ from boatyard.models.config_file import (
     EDGE_LISTEN_PORT,
     GATEWAY_SERVICE_NAME,
     ConfigFile,
-    PortDeclaration,
+    PublishedPort,
     double_dollars,
 )
 from boatyard.models.lock_file import LockFile
@@ -255,7 +255,7 @@ def _override_ports(
     service_name: str,
     values: ValuesFile,
     declared_ports: dict[str, list[tuple[int, int, str]]],
-) -> list[PortDeclaration]:
+) -> list[PublishedPort]:
     # A declared port rides in the bundle's own text; the override re-publishes only the rest,
     # with the values scalar (single-port services only, validated at resolve) moving the host port.
     declared = set(declared_ports.get(service_name, []))
@@ -267,7 +267,7 @@ def _override_ports(
     ]
 
 
-def _port_entry(port: PortDeclaration) -> str:
+def _port_entry(port: PublishedPort) -> str:
     fields = [f"published: {port.published}", f"target: {port.target}"]
     if port.protocol != "tcp":
         fields.append(f"protocol: {port.protocol}")
