@@ -100,7 +100,7 @@ class UpSpy:
 
     def spy_up(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(up, "bash", self.run)
-        monkeypatch.setattr(up, "_wall_runner", self.capture)
+        monkeypatch.setattr(up, "_direct_runner", self.capture)
         monkeypatch.setattr(up, "bash_handoff", self.run)
         monkeypatch.setattr(up, "bash_check", _bash_check_true)
         monkeypatch.setattr(up, "install_crane", lambda: None)
@@ -117,7 +117,7 @@ class UpSpy:
 
 
 class FailFirstCapture:
-    # The wall's streaming runner failing on its first (and only) invocation
+    # The direct runner seam failing on its first (and only) invocation
     def __init__(self, spy: UpSpy) -> None:
         self.spy = spy
 
@@ -1334,7 +1334,7 @@ class TestLockEnvSynthesis:
         spy = UpSpy()
         spy.spy_up(monkeypatch)
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr(up, "_wall_runner", FailFirstCapture(spy))
+        monkeypatch.setattr(up, "_direct_runner", FailFirstCapture(spy))
 
         result = runner.invoke(app, ["up"])
 
@@ -1420,7 +1420,7 @@ class TestBundleOverrides:
                 "env -u BOATYARD_BARRIER_IMAGE -u EDGE_BASE_URL -u PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE "
                 "-u PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE "
                 "docker compose -p demo-placeframe-cuda -f PRODUCER -f OVERRIDE "
-                "--project-directory ROOT --env-file LOCKENV --progress plain up --pull missing -d"
+                "--project-directory ROOT --env-file LOCKENV up --pull missing -d"
             ),
             (
                 "env -u BOATYARD_BARRIER_IMAGE -u EDGE_BASE_URL -u PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE "

@@ -243,6 +243,7 @@ def _invoke_up(
     values_extra: dict[str, object] | None = None,
     entry_ports: list[dict[str, object]] | None = None,
     livekit_text: str = LIVEKIT_TEXT,
+    concurrent: bool = False,
 ) -> UpSpy:
     _write_edge_tree(
         tmp_path,
@@ -258,7 +259,8 @@ def _invoke_up(
     )
     spy = UpSpy()
     monkeypatch.setattr(up, "bash", spy.run)
-    monkeypatch.setattr(up, "_wall_runner", CaptureSpy(spy))
+    runner_seam = "_wall_runner" if concurrent else "_direct_runner"
+    monkeypatch.setattr(up, runner_seam, CaptureSpy(spy))
     monkeypatch.setattr(up, "bash_check", _bash_check_true)
     monkeypatch.setattr(up, "install_crane", lambda: None)
     monkeypatch.setattr(
@@ -288,6 +290,7 @@ def _up(
     values_extra: dict[str, object] | None = None,
     entry_ports: list[dict[str, object]] | None = None,
     livekit_text: str = LIVEKIT_TEXT,
+    concurrent: bool = False,
 ) -> UpSpy:
     spy = _invoke_up(
         tmp_path,
@@ -302,8 +305,12 @@ def _up(
         values_extra=values_extra,
         entry_ports=entry_ports,
         livekit_text=livekit_text,
+        concurrent=concurrent,
     )
-    result = runner.invoke(app, ["up", *(["--attached"] if attached else [])])
+    result = runner.invoke(
+        app,
+        ["up", *(["--attached"] if attached else []), *(["--concurrent"] if concurrent else [])],
+    )
     assert result.exit_code == 0, result.output
     return spy
 
@@ -540,7 +547,7 @@ class TestOverrideDocument:
         (tmp_path / LOCK_PATH).write_text(yaml.safe_dump(lock), encoding="utf-8")
         spy = UpSpy()
         monkeypatch.setattr(up, "bash", spy.run)
-        monkeypatch.setattr(up, "_wall_runner", CaptureSpy(spy))
+        monkeypatch.setattr(up, "_direct_runner", CaptureSpy(spy))
         monkeypatch.setattr(up, "bash_check", _bash_check_true)
         monkeypatch.setattr(up, "install_crane", lambda: None)
         monkeypatch.setattr(up, "OciArtifactManifest", StubArtifacts({LIVEKIT_PINNED: [LIVEKIT_TEXT]}))
@@ -553,7 +560,7 @@ class TestOverrideDocument:
 
 
 class TestUpProjects:
-    def test_the_gateway_runs_after_a_drained_wall(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_the_gateway_runs_after_every_bundle(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         spy = _up(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], auth=True)
 
         assert spy.projects[-1] == "edge-demo"
@@ -577,7 +584,7 @@ class TestUpProjects:
         )
         monkeypatch.setattr(up, "_wall_runner", BarrierRunner(2, spy))
 
-        result = runner.invoke(app, ["up"])
+        result = runner.invoke(app, ["up", "--concurrent"])
 
         assert result.exit_code == 0, result.output
         assert set(spy.projects) == {"edge-demo-auth-keycloak", "edge-demo-livekit", "edge-demo"}
@@ -588,7 +595,7 @@ class TestUpProjects:
     def test_every_bundle_invocation_carries_its_compose_files_and_the_shared_env(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        spy = _up(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
+        spy = _up(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], concurrent=True)
 
         [bundle_command, gateway_command] = spy.commands
         assert bundle_command.startswith(
@@ -607,7 +614,7 @@ class TestUpProjects:
             "BOATYARD_BARRIER_IMAGE=docker.io/library/alpine:3.20\nEDGE_BASE_URL="
         )
 
-    def test_the_serial_switch_converges_one_bundle_at_a_time_with_composes_own_output(
+    def test_bundles_converge_one_at_a_time_with_composes_own_output(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _write_edge_tree(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], auth=True)
@@ -625,7 +632,7 @@ class TestUpProjects:
         )
         monkeypatch.setattr(up, "_direct_runner", CaptureSpy(spy))
 
-        result = runner.invoke(app, ["up", "--serial"])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code == 0, result.output
         assert spy.projects == ["edge-demo-auth-keycloak", "edge-demo-livekit", "edge-demo"]
@@ -638,7 +645,7 @@ class TestUpProjects:
         assert "livekit: up started" in result.output
         assert ": ready in" in result.output
 
-    def test_the_serial_switch_reports_a_failed_bundle_and_skips_the_gateway(
+    def test_a_failed_bundle_is_reported_and_the_gateway_skipped(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _write_edge_tree(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], auth=True)
@@ -656,7 +663,7 @@ class TestUpProjects:
         )
         monkeypatch.setattr(up, "_direct_runner", FailingRunner(spy, {"edge-demo-livekit"}))
 
-        result = runner.invoke(app, ["up", "--serial"])
+        result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, SystemExit)
@@ -665,7 +672,9 @@ class TestUpProjects:
         assert set(spy.projects) == {"edge-demo-auth-keycloak", "edge-demo-livekit"}
         assert "livekit: FAILED in" in result.output
 
-    def test_a_single_bundle_rides_the_wall(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_a_single_bundle_converges_as_its_own_project(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         spy = _invoke_up(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
         monkeypatch.setattr(up, "bash", GatewayOnlyBash(spy))
 
@@ -690,7 +699,7 @@ class TestUpProjects:
         )
         monkeypatch.setattr(up, "_wall_runner", FailingRunner(spy, {"edge-demo-livekit", "edge-demo-auth-keycloak"}))
 
-        result = runner.invoke(app, ["up"])
+        result = runner.invoke(app, ["up", "--concurrent"])
 
         assert result.exit_code != 0
         assert "pull access denied" in result.output
@@ -712,7 +721,7 @@ class TestUpProjects:
                 KEYCLOAK_PINNED: [KEYCLOAK_TEXT],
             }),
         )
-        monkeypatch.setattr(up, "_wall_runner", FailingRunner(spy, {"edge-demo-livekit"}))
+        monkeypatch.setattr(up, "_direct_runner", FailingRunner(spy, {"edge-demo-livekit"}))
 
         result = runner.invoke(app, ["up"])
 
@@ -746,7 +755,7 @@ class TestUpProjects:
                 KEYCLOAK_PINNED: [KEYCLOAK_TEXT],
             }),
         )
-        monkeypatch.setattr(up, "_wall_runner", FailingRunner(spy, {"edge-demo-livekit", "edge-demo-auth-keycloak"}))
+        monkeypatch.setattr(up, "_direct_runner", FailingRunner(spy, {"edge-demo-livekit", "edge-demo-auth-keycloak"}))
 
         result = runner.invoke(app, ["up"])
 

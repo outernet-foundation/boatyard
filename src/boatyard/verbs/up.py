@@ -90,9 +90,9 @@ def up(
         bool,
         typer.Option("--build", help="Build all images locally before bringing the stack up"),
     ] = False,
-    serial: Annotated[
+    concurrent: Annotated[
         bool,
-        typer.Option("--serial", help="Converge bundle projects one at a time, letting compose print its own output"),
+        typer.Option("--concurrent", help="Converge bundle projects concurrently on the interactive wall"),
     ] = False,
 ) -> None:
     # Load the config, lock, and the typed machine values from the working directory
@@ -121,7 +121,7 @@ def up(
             attached=attached,
             quiet_pull=quiet_pull,
             build=build,
-            serial=serial,
+            concurrent=concurrent,
             materialized=materialized,
             results=results,
         )
@@ -175,7 +175,7 @@ def _orchestrate_up(
     attached: bool,
     quiet_pull: bool,
     build: bool,
-    serial: bool,
+    concurrent: bool,
     materialized: list[Path],
     results: list[WorkerResult],
 ) -> None:
@@ -192,10 +192,10 @@ def _orchestrate_up(
     if build:
         run_build(config=config)
 
-    # Every bundle converges on the wall (or one at a time under --serial); the gateway waits
-    # for the drained bundles
+    # Every bundle converges one at a time by default (or on the wall under --concurrent);
+    # the gateway waits for the drained bundles
     if up_context.bundles:
-        converge = _run_serial if serial else _run_wall
+        converge = _run_wall if concurrent else _run_serial
         converge(
             root,
             plan,
@@ -223,36 +223,6 @@ def _orchestrate_up(
             attached=attached,
             quiet_pull=quiet_pull,
             materialized=materialized,
-        )
-
-
-def _run_serial(
-    root: Path,
-    plan: AssemblyPlan,
-    up_context: UpContext,
-    *,
-    values: ValuesFile,
-    shared_network_name: str,
-    quiet_pull: bool,
-    results: list[WorkerResult],
-) -> None:
-    # Compose owns the terminal one project at a time; the milestones delimit the invocations
-    report = MilestoneReport()
-    display = WallDisplay([bundle.project_name for bundle in up_context.bundles], active=False)
-    for bundle in up_context.bundles:
-        _up_bundle_project(
-            bundle,
-            root,
-            up_context.env_file,
-            list(plan.env),
-            values,
-            shared_network_name,
-            quiet_pull,
-            _direct_runner,
-            report,
-            display,
-            results,
-            plain_progress=False,
         )
 
 
@@ -299,6 +269,36 @@ def _run_wall(
             thread.join(timeout=10)
         raise
     _replay_failures(results, enabled=interactive)
+
+
+def _run_serial(
+    root: Path,
+    plan: AssemblyPlan,
+    up_context: UpContext,
+    *,
+    values: ValuesFile,
+    shared_network_name: str,
+    quiet_pull: bool,
+    results: list[WorkerResult],
+) -> None:
+    # Compose owns the terminal one project at a time; the milestones delimit the invocations
+    report = MilestoneReport()
+    display = WallDisplay([bundle.project_name for bundle in up_context.bundles], active=False)
+    for bundle in up_context.bundles:
+        _up_bundle_project(
+            bundle,
+            root,
+            up_context.env_file,
+            list(plan.env),
+            values,
+            shared_network_name,
+            quiet_pull,
+            _direct_runner,
+            report,
+            display,
+            results,
+            plain_progress=False,
+        )
 
 
 def _replay_failures(results: list[WorkerResult], *, enabled: bool) -> None:
@@ -422,13 +422,13 @@ def _bundle_compose_files(
     return compose_files, extract_bundle_records(texts).declared_ports
 
 
-def _direct_runner(command: str, _feed: Callable[[str], None]) -> None:
-    bash(command)
-
-
 def _wall_runner(command: str, feed: Callable[[str], None]) -> None:
     for line in bash_output_lines(command):
         feed(line)
+
+
+def _direct_runner(command: str, _feed: Callable[[str], None]) -> None:
+    bash(command)
 
 
 def _record_line(lines: list[str], display: WallDisplay, project_name: str, line: str) -> None:
