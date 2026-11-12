@@ -17,8 +17,8 @@ WORKLOAD = """\
 metadata:
   name: api
   annotations:
-    outernet.internal/consumer-interpolated: /etc/rathole/client.toml
-    outernet.internal/lock: api=LOKI_IMAGE
+    boatyard/consumer-interpolated: /etc/rathole/client.toml
+    boatyard/lock: api=LOKI_IMAGE
 containers:
   api:
     environment:
@@ -47,7 +47,7 @@ PROVISIONER = """\
 # under the entry marker, and consumer-interpolated content lands un-doubled.
 BUNDLE = (
     "services:\n"
-    "  core-main-api:\n"
+    "  api:\n"
     f"    image: ghcr.io/org/loki:3.0@{FAKE_DIGEST}\n"
     "    environment:\n"
     "      TOKEN: ${API_TOKEN:?err}\n"
@@ -56,7 +56,7 @@ BUNDLE = (
     "    environment:\n"
     "      PROV_TOKEN: ${PROV_TOKEN:?err}\n"
     "configs:\n"
-    "  core-main-client.toml:\n"
+    "  client.toml:\n"
     "    content: |\n"
     '      remote_addr = "${BIND_TOKEN:?err}"\n'
 )
@@ -104,28 +104,28 @@ def _write_repo(
         },
     }
     if gateway is not None:
-        config["gateway"] = gateway
+        config["gateway_port"] = gateway
     (root / "boatyard.yml").write_text(yaml.safe_dump(config), encoding="utf-8")
     lock_images: dict[str, object] = {
         "LOKI_IMAGE": {
             "index": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}",
             "platforms": {"linux/amd64": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}"},
         },
-        "ALPINE_IMAGE": {
-            "index": f"ghcr.io/org/alpine:3.20@{FAKE_DIGEST}",
-            "platforms": {"linux/amd64": f"ghcr.io/org/alpine:3.20@{FAKE_DIGEST}"},
-        },
     }
-    if gateway is not None:
-        lock_images["CADDY_IMAGE"] = {
-            "index": f"ghcr.io/org/caddy:2.8@{FAKE_DIGEST}",
-            "platforms": {"linux/amd64": f"ghcr.io/org/caddy:2.8@{FAKE_DIGEST}"},
-        }
     root.joinpath(*LOCK_PATH.parts).write_text(
         yaml.safe_dump({
             "platforms": ["linux/amd64"],
             "images": lock_images,
-            "bundles": {"MONITOR_BUNDLE": {"reference": MONITOR_PINNED, "slots": _monitor_slots(slots)}},
+            "bundles": {
+                "MONITOR_BUNDLE": {
+                    "reference": MONITOR_PINNED,
+                    "slots": _monitor_slots(slots),
+                    "services": ["monitor"],
+                    "routes": [],
+                    "ports": [],
+                    "container_names": [],
+                }
+            },
         }),
         encoding="utf-8",
     )
@@ -183,7 +183,53 @@ def test_a_filled_values_file_loads_and_resolves(tmp_path: Path) -> None:
         "PROV_TOKEN": "three",
         "MON_TOKEN": "four",
     }
-    assert [service.name for service in _resolve(root).services] == ["core-main", "monitor"]
+    assert [bundle.entry_name for bundle in _resolve(root).bundles] == ["core-main", "monitor"]
+
+
+def test_a_remote_winners_records_come_from_the_lock(tmp_path: Path) -> None:
+    root = _write_repo(tmp_path, _filled_values(), gateway=9443)
+    lock = yaml.safe_load((root / LOCK_PATH).read_text(encoding="utf-8"))
+    assert isinstance(lock, dict)
+    lock["bundles"]["MONITOR_BUNDLE"]["routes"] = [{"path": "/monitor/*", "upstream": "monitor:9000"}]
+    lock["bundles"]["MONITOR_BUNDLE"]["ports"] = [{"service": "monitor", "published": 9000, "target": 9000}]
+    (root / LOCK_PATH).write_text(yaml.safe_dump(lock), encoding="utf-8")
+
+    monitor = next(bundle for bundle in _resolve(root).bundles if bundle.entry_name == "monitor")
+
+    assert monitor.pinned_reference == MONITOR_PINNED
+    assert monitor.bundle_path is None
+    assert monitor.services == ["monitor"]
+    assert [(route.path, route.upstream) for route in monitor.effective_routes] == [("/monitor/*", "monitor:9000")]
+    assert [(port.service, port.published) for port in monitor.effective_ports] == [("monitor", 9000)]
+
+
+def test_authored_declarations_replace_the_adopted_set_wholesale(tmp_path: Path) -> None:
+    adopting = BUNDLE.replace(
+        "      TOKEN: ${API_TOKEN:?err}\n",
+        "      TOKEN: ${API_TOKEN:?err}\n    labels:\n      boatyard/publish-port: 7000:7000\n",
+    )
+    authored: list[dict[str, object]] = [{"service": "api", "published": 5678, "target": 5678}]
+
+    (tmp_path / "adopted").mkdir()
+    (tmp_path / "authored").mkdir()
+    adopted_root = _write_repo(tmp_path / "adopted", _filled_values(), bundle=adopting)
+    authored_root = _write_repo(tmp_path / "authored", _filled_values(), bundle=adopting, ports=authored)
+
+    adopted = next(bundle for bundle in _resolve(adopted_root).bundles if bundle.entry_name == "core-main")
+    authored_bundle = next(bundle for bundle in _resolve(authored_root).bundles if bundle.entry_name == "core-main")
+
+    assert [(port.service, port.published) for port in adopted.effective_ports] == [("api", 7000)]
+    assert [(port.service, port.published) for port in authored_bundle.effective_ports] == [("api", 5678)]
+
+
+def test_a_public_slot_consumption_without_a_public_face_refuses(tmp_path: Path) -> None:
+    bundle = BUNDLE.replace(
+        "      TOKEN: ${API_TOKEN:?err}\n", "      TOKEN: ${API_TOKEN:?err}\n      HOST: ${PUBLIC_HOST:?err}\n"
+    )
+
+    message = _refusal(tmp_path, _filled_values(), bundle=bundle)
+
+    assert "core-main consumes PUBLIC_HOST, which requires public_host in the values file" in message
 
 
 def test_an_orphan_key_refuses(tmp_path: Path) -> None:
@@ -197,28 +243,31 @@ def test_an_orphan_key_refuses(tmp_path: Path) -> None:
     assert "GHOST is consumed by no surface" in message
 
 
-def test_the_minted_public_url_key_refuses(tmp_path: Path) -> None:
-    values = _filled_values({"values": {"PUBLIC_URL": "https://example.dev"}})
+def test_the_minted_public_slots_refuse(tmp_path: Path) -> None:
+    for index, name in enumerate(("PUBLIC_HOST", "PUBLIC_SCHEME", "PUBLIC_PORT", "PUBLIC_URL_PATH", "PUBLIC_URL")):
+        values = _filled_values({"values": {name: "x"}})
+        case = tmp_path / f"case-{index}"
+        case.mkdir()
 
-    message = _refusal(tmp_path, values)
+        message = _refusal(case, values)
 
-    assert "PUBLIC_URL is not hand-settable (minted from public_url)" in message
+        assert f"{name} is not hand-settable (minted from the public face)" in message
 
 
 def test_the_minted_edge_base_url_key_refuses(tmp_path: Path) -> None:
-    values = _filled_values({"values": {"EDGE_BASE_URL": "http://edge:8443"}})
+    values = _filled_values({"values": {"EDGE_BASE_URL": "http://boatyard-gateway:8443"}})
 
     message = _refusal(tmp_path, values, gateway=9443)
 
-    assert "EDGE_BASE_URL is not hand-settable (minted from the gateway declaration)" in message
+    assert "EDGE_BASE_URL is not hand-settable (minted from the public face)" in message
 
 
 def test_the_minted_edge_base_url_key_refuses_without_a_gateway(tmp_path: Path) -> None:
-    values = _filled_values({"values": {"EDGE_BASE_URL": "http://edge:8443"}})
+    values = _filled_values({"values": {"EDGE_BASE_URL": "http://boatyard-gateway:8443"}})
 
     message = _refusal(tmp_path, values)
 
-    assert "EDGE_BASE_URL is not hand-settable (minted from the gateway declaration)" in message
+    assert "EDGE_BASE_URL is not hand-settable (minted from the public face)" in message
 
 
 def test_an_unknown_ports_override_refuses(tmp_path: Path) -> None:
@@ -226,19 +275,34 @@ def test_an_unknown_ports_override_refuses(tmp_path: Path) -> None:
 
     message = _refusal(tmp_path, values, ports=[{"service": "api", "published": 5678, "target": 5678}])
 
-    assert "ports: names ['ghost'] are not among the port-declaring entries" in message
+    assert "ports: names ['ghost'] are services of no selected bundle" in message
+
+
+def test_a_ports_override_on_a_multi_port_service_refuses(tmp_path: Path) -> None:
+    values = _filled_values({"ports": {"api": 1234}})
+
+    message = _refusal(
+        tmp_path,
+        values,
+        ports=[
+            {"service": "api", "published": 5678, "target": 5678},
+            {"service": "api", "published": 5679, "target": 5679, "protocol": "udp"},
+        ],
+    )
+
+    assert "ports: ['api'] carry a count of effective ports a scalar cannot disambiguate" in message
 
 
 def test_a_gateway_override_without_a_declared_gateway_refuses(tmp_path: Path) -> None:
-    values = _filled_values({"gateway": 9000})
+    values = _filled_values({"gateway_port": 9000})
 
     message = _refusal(tmp_path, values)
 
-    assert "gateway is set but boatyard.yml declares no gateway" in message
+    assert "gateway_port is set but boatyard.yml declares no gateway" in message
 
 
 def test_typed_port_and_gateway_overrides_load(tmp_path: Path) -> None:
-    values = _filled_values({"gateway": 9000, "ports": {"core-main": 1234}})
+    values = _filled_values({"gateway_port": 9000, "ports": {"core-main": 1234}})
 
     parsed = _load(
         _write_repo(
@@ -249,7 +313,7 @@ def test_typed_port_and_gateway_overrides_load(tmp_path: Path) -> None:
         )
     )
 
-    assert parsed.gateway == 9000
+    assert parsed.gateway_port == 9000
     assert parsed.ports == {"core-main": 1234}
 
 
@@ -301,7 +365,7 @@ def test_a_marker_lock_key_spelling_leaves_the_surface(tmp_path: Path) -> None:
     root = _write_repo(tmp_path, values, bundle=bundle)
 
     assert "LOKI_IMAGE" not in _load(root).values
-    assert [service.name for service in _resolve(root).services] == ["core-main", "monitor"]
+    assert [bundle.entry_name for bundle in _resolve(root).bundles] == ["core-main", "monitor"]
 
 
 def test_a_key_parked_on_an_unselected_option_resolves(tmp_path: Path) -> None:
@@ -319,7 +383,7 @@ def test_a_key_parked_on_an_unselected_option_resolves(tmp_path: Path) -> None:
     values["values"]["PF_SETTING"] = "x"
     (root / VALUES_FILE).write_text(yaml.safe_dump(values), encoding="utf-8")
 
-    assert [service.name for service in _resolve(root).services] == ["monitor"]
+    assert [bundle.entry_name for bundle in _resolve(root).bundles] == ["monitor"]
     assert _resolve(root).env["PF_SETTING"] == "x"
 
 
@@ -359,6 +423,51 @@ def test_an_override_demands_from_its_artifact_text(tmp_path: Path) -> None:
     assert "monitor requires ['OVR_TOKEN']" in message
 
 
+def test_an_override_mints_machine_slots_under_the_producer_entry_name(tmp_path: Path) -> None:
+    values = _filled_values({
+        "path_overrides": {"monitor": "../producer/stack/generated/compose/compose.monitor-tier.yaml"}
+    })
+    root = _write_repo(tmp_path, values)
+    producer = tmp_path / "producer"
+    override = producer / "stack" / "generated" / "compose" / "compose.monitor-tier.yaml"
+    override.parent.mkdir(parents=True)
+    (producer / "boatyard.yml").write_text(
+        yaml.safe_dump({
+            "requires": ">=0",
+            "project_name": "producer",
+            "platforms": ["linux/amd64"],
+            "base_images": {"STUB_IMAGE": "docker.io/org/stub:1.0"},
+            "services": {"monitor-tier": {"ref": "oci://ghcr.io/org/stub:0.0.1"}},
+        }),
+        encoding="utf-8",
+    )
+    (producer / "boatyard.lock.yml").write_text(
+        yaml.safe_dump({
+            "platforms": ["linux/amd64"],
+            "images": {
+                "STUB_IMAGE": {
+                    "index": f"docker.io/org/stub:1.0@{FAKE_DIGEST}",
+                    "platforms": {"linux/amd64": f"docker.io/org/stub:1.0@{FAKE_DIGEST}"},
+                }
+            },
+        }),
+        encoding="utf-8",
+    )
+    override.write_text(
+        "services:\n"
+        "  monitor-monitor:\n"
+        "    image: ${MONITOR_TIER__BOATYARD_LOCK__STUB_IMAGE:?err}\n"
+        "    environment:\n"
+        "      TOKEN: ${MON_TOKEN:-}\n",
+        encoding="utf-8",
+    )
+
+    resolved = _resolve(root)
+
+    assert resolved.env["MONITOR_TIER__BOATYARD_LOCK__STUB_IMAGE"] == f"docker.io/org/stub:1.0@{FAKE_DIGEST}"
+    assert "MONITOR__BOATYARD_LOCK__STUB_IMAGE" not in resolved.env
+
+
 def test_a_reference_to_a_sibling_key_resolves_at_render(tmp_path: Path) -> None:
     values = _filled_values()
     values["values"] = _core_values(API_TOKEN="${PROV_TOKEN}-token")
@@ -375,7 +484,7 @@ def test_a_reference_to_a_sibling_key_resolves_at_render(tmp_path: Path) -> None
         "BIND_TOKEN": "two",
         "PROV_TOKEN": "three",
         "MON_TOKEN": "four",
-        "CORE_MAIN__BOATYARD_LOCK__ALPINE_IMAGE": f"ghcr.io/org/alpine:3.20@{FAKE_DIGEST}",
+        "BOATYARD_BARRIER_IMAGE": "docker.io/library/alpine:3.20",
         "CORE_MAIN__BOATYARD_LOCK__LOKI_IMAGE": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}",
     }
 
@@ -390,28 +499,54 @@ def test_a_reference_chains_through_another_reference(tmp_path: Path) -> None:
         "BIND_TOKEN": "threeb",
         "PROV_TOKEN": "three",
         "MON_TOKEN": "four",
-        "CORE_MAIN__BOATYARD_LOCK__ALPINE_IMAGE": f"ghcr.io/org/alpine:3.20@{FAKE_DIGEST}",
+        "BOATYARD_BARRIER_IMAGE": "docker.io/library/alpine:3.20",
         "CORE_MAIN__BOATYARD_LOCK__LOKI_IMAGE": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}",
     }
 
 
 def test_the_minted_public_url_is_a_reference_root(tmp_path: Path) -> None:
-    values = _filled_values({"public_url": "https://example.dev"})
+    values = _filled_values({"public_host": "example.dev", "public_scheme": "https"})
     values["values"] = _core_values(API_TOKEN="${PUBLIC_URL}/token")
     root = _write_repo(tmp_path, values)
 
     assert _resolve(root).env == {
+        "PUBLIC_HOST": "example.dev",
+        "PUBLIC_SCHEME": "https",
+        "PUBLIC_PORT": "443",
+        "PUBLIC_URL_PATH": "",
         "PUBLIC_URL": "https://example.dev",
         "API_TOKEN": "https://example.dev/token",
         "BIND_TOKEN": "two",
         "PROV_TOKEN": "three",
         "MON_TOKEN": "four",
-        "CORE_MAIN__BOATYARD_LOCK__ALPINE_IMAGE": f"ghcr.io/org/alpine:3.20@{FAKE_DIGEST}",
+        "BOATYARD_BARRIER_IMAGE": "docker.io/library/alpine:3.20",
         "CORE_MAIN__BOATYARD_LOCK__LOKI_IMAGE": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}",
     }
 
 
-def test_the_minted_public_url_is_no_root_when_public_url_is_absent(tmp_path: Path) -> None:
+def test_the_minted_public_url_elides_the_scheme_default_port(tmp_path: Path) -> None:
+    values = _filled_values({"public_host": "example.dev"})
+    values["values"] = _core_values(API_TOKEN="${PUBLIC_URL}/token")
+    root = _write_repo(tmp_path, values)
+
+    env = _resolve(root).env
+
+    assert env["PUBLIC_PORT"] == "80"
+    assert env["PUBLIC_URL"] == "http://example.dev"
+
+
+def test_the_minted_public_url_derives_the_port_from_the_gateway(tmp_path: Path) -> None:
+    values = _filled_values({"public_host": "example.dev", "public_url_path": "/makeitsing"})
+    values["values"] = _core_values(API_TOKEN="${PUBLIC_URL}/token")
+    root = _write_repo(tmp_path, values, gateway=58080)
+
+    env = _resolve(root).env
+
+    assert env["PUBLIC_PORT"] == "58080"
+    assert env["PUBLIC_URL"] == "http://example.dev:58080/makeitsing"
+
+
+def test_the_minted_public_url_is_no_root_when_public_host_is_absent(tmp_path: Path) -> None:
     values = _filled_values()
     values["values"] = _core_values(API_TOKEN="${PUBLIC_URL}/token")
 
@@ -426,13 +561,12 @@ def test_the_minted_edge_base_url_is_a_reference_root(tmp_path: Path) -> None:
     root = _write_repo(tmp_path, values, gateway=9443)
 
     assert _resolve(root).env == {
-        "EDGE_BASE_URL": "http://edge:8443",
-        "API_TOKEN": "http://edge:8443/jwks",
+        "EDGE_BASE_URL": "http://boatyard-gateway:8443",
+        "API_TOKEN": "http://boatyard-gateway:8443/jwks",
         "BIND_TOKEN": "two",
         "PROV_TOKEN": "three",
         "MON_TOKEN": "four",
-        "CORE_MAIN__BOATYARD_LOCK__ALPINE_IMAGE": f"ghcr.io/org/alpine:3.20@{FAKE_DIGEST}",
-        "CORE_MAIN__BOATYARD_LOCK__CADDY_IMAGE": f"ghcr.io/org/caddy:2.8@{FAKE_DIGEST}",
+        "BOATYARD_BARRIER_IMAGE": "docker.io/library/alpine:3.20",
         "CORE_MAIN__BOATYARD_LOCK__LOKI_IMAGE": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}",
     }
 
@@ -466,7 +600,7 @@ def test_a_default_spelling_refuses(tmp_path: Path) -> None:
 
 def test_a_lowercase_reference_refuses(tmp_path: Path) -> None:
     values = _filled_values()
-    values["values"] = _core_values(API_TOKEN="${public_url}/token")
+    values["values"] = _core_values(API_TOKEN="${public_host}/token")
 
     message = _refusal(tmp_path, values)
 
@@ -510,19 +644,23 @@ def test_a_self_reference_refuses(tmp_path: Path) -> None:
 
 
 def test_assembly_renders_resolved_values_with_the_minted_slot(tmp_path: Path) -> None:
-    values = _filled_values({"public_url": "https://example.dev"})
+    values = _filled_values({"public_host": "example.dev", "public_scheme": "https"})
     values["values"] = _core_values(API_TOKEN="${PUBLIC_URL}/token")
     root = _write_repo(tmp_path, values)
 
     plan = _resolve(root)
 
     assert plan.env == {
+        "PUBLIC_HOST": "example.dev",
+        "PUBLIC_SCHEME": "https",
+        "PUBLIC_PORT": "443",
+        "PUBLIC_URL_PATH": "",
         "PUBLIC_URL": "https://example.dev",
         "API_TOKEN": "https://example.dev/token",
         "BIND_TOKEN": "two",
         "PROV_TOKEN": "three",
         "MON_TOKEN": "four",
-        "CORE_MAIN__BOATYARD_LOCK__ALPINE_IMAGE": f"ghcr.io/org/alpine:3.20@{FAKE_DIGEST}",
+        "BOATYARD_BARRIER_IMAGE": "docker.io/library/alpine:3.20",
         "CORE_MAIN__BOATYARD_LOCK__LOKI_IMAGE": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}",
     }
 
@@ -535,12 +673,11 @@ def test_assembly_fills_the_minted_edge_base_url(tmp_path: Path) -> None:
     plan = _resolve(root)
 
     assert plan.env == {
-        "EDGE_BASE_URL": "http://edge:8443",
-        "API_TOKEN": "http://edge:8443/jwks",
+        "EDGE_BASE_URL": "http://boatyard-gateway:8443",
+        "API_TOKEN": "http://boatyard-gateway:8443/jwks",
         "BIND_TOKEN": "two",
         "PROV_TOKEN": "three",
         "MON_TOKEN": "four",
-        "CORE_MAIN__BOATYARD_LOCK__ALPINE_IMAGE": f"ghcr.io/org/alpine:3.20@{FAKE_DIGEST}",
-        "CORE_MAIN__BOATYARD_LOCK__CADDY_IMAGE": f"ghcr.io/org/caddy:2.8@{FAKE_DIGEST}",
+        "BOATYARD_BARRIER_IMAGE": "docker.io/library/alpine:3.20",
         "CORE_MAIN__BOATYARD_LOCK__LOKI_IMAGE": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}",
     }

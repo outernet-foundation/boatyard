@@ -56,23 +56,20 @@ class Image(BaseModel):
                 )
             includes.append(path)
 
-        # Collect allowlisted files present on disk
-        disk_files = [
-            path
-            for path in (entry.relative_to(repo_root).as_posix() for entry in repo_root.rglob("*") if entry.is_file())
-            if any(path == include or path.startswith(include + "/") for include in includes)
-        ]
-
         # Keep only git-visible files (tracked and untracked-not-ignored); ignored files never hash.
-        visible = set(
-            bash_output(
-                "git -c core.excludesFile=/dev/null ls-files --cached --others --exclude-standard -z",
-                cwd=repo_root,
-                env={"GIT_CONFIG_NOSYSTEM": "1"},
-            ).split("\0")
-        )
+        visible = bash_output(
+            "git -c core.excludesFile=/dev/null ls-files --cached --others --exclude-standard -z",
+            cwd=repo_root,
+            env={"GIT_CONFIG_NOSYSTEM": "1"},
+        ).split("\0")
 
-        allowed = [path for path in disk_files if path in visible]
+        # The index can list files since deleted from disk; the disk check keeps those out.
+        allowed = [
+            path
+            for path in visible
+            if any(path == include or path.startswith(include + "/") for include in includes)
+            and (repo_root / path).is_file()
+        ]
 
         # The hashed set is everything allowlisted outside the image root plus this image's own directory.
         shared_paths = [path for path in allowed if not path.startswith(image_root_prefix)]

@@ -35,7 +35,7 @@ def _root_config(**sections: object) -> ConfigFile:
     payload: dict[str, object] = {"requires": ">=0.1", "project_name": "example"}
     payload.update(sections)
     if "services" in payload:
-        payload.setdefault("gateway", 8080)
+        payload.setdefault("gateway_port", 8080)
         payload.setdefault("platforms", ["linux/amd64"])
     payload.setdefault("services", {"ext": {"ref": "oci://ghcr.io/org/ext:0.1.0"}})
     return ConfigFile.model_validate(payload)
@@ -318,12 +318,7 @@ class TestMarkerSubstrateResolution:
     def _compose_seam(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, platforms: list[str]) -> str:
         (tmp_path / "stack" / "score").mkdir(parents=True)
         (tmp_path / "stack" / "score" / "api.yaml").write_text(
-            "metadata:\n"
-            "  name: api\n"
-            "  annotations:\n"
-            "    outernet.internal/lock: api=LOKI_IMAGE\n"
-            "containers:\n"
-            "  api: {}\n",
+            "metadata:\n  name: api\n  annotations:\n    boatyard/lock: api=LOKI_IMAGE\ncontainers:\n  api: {}\n",
             encoding="utf-8",
         )
         loki_platforms = {
@@ -342,7 +337,9 @@ class TestMarkerSubstrateResolution:
         )
         platform_lines = "".join(f"  - {platform}\n" for platform in platforms)
         base_image_lines = (
-            "base_images:\n  LOKI_IMAGE: docker.io/grafana/loki:3.5.0\nbarrier_image: docker.io/library/alpine:3.21.0\n"
+            "base_images:\n"
+            "  LOKI_IMAGE: docker.io/grafana/loki:3.5.0\n"
+            "  ALPINE_IMAGE: docker.io/library/alpine:3.21.0\n"
         )
         (tmp_path / "boatyard.yml").write_text(
             "requires: '>=0'\n"
@@ -458,7 +455,7 @@ def _generate_compose(
         "metadata:\n"
         f"  name: {workload}\n"
         "  annotations:\n"
-        f"    outernet.internal/lock: {container_name}=ALPINE_IMAGE\n"
+        f"    boatyard/lock: {container_name}=ALPINE_IMAGE\n"
         "containers:\n"
         f"  {container_name}: {{}}\n",
         encoding="utf-8",
@@ -486,14 +483,14 @@ def test_generate_compose_collapses_doubled_names_and_inlines_binds(
     output = _generate_compose(monkeypatch, tmp_path, GENERATED_COMPOSE)
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
-    assert list(document["services"]) == ["core-main-api", "core-main-pf-postgres"]
-    api = document["services"]["core-main-api"]
+    assert list(document["services"]) == ["api", "pf-postgres"]
+    api = document["services"]["api"]
     assert api["image"] == "ghcr.io/org/api:1"
     assert "volumes" not in api
-    assert api["networks"] == {"core-main-net": {"aliases": ["api"]}}
-    assert api["configs"] == [{"source": "core-main-config.yaml", "target": "/etc/placeframe/config.yaml"}]
-    assert document["configs"] == {"core-main-config.yaml": {"content": "key: $${FOO}\n"}}
-    assert document["networks"] == {"core-main-net": {}}
+    assert "networks" not in api
+    assert api["configs"] == [{"source": "config.yaml", "target": "/etc/placeframe/config.yaml"}]
+    assert document["configs"] == {"config.yaml": {"content": "key: $${FOO}\n"}}
+    assert "networks" not in document
 
 
 def test_generate_compose_collapses_doubled_names_with_no_binds(
@@ -507,10 +504,10 @@ def test_generate_compose_collapses_doubled_names_with_no_binds(
     )
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
-    assert list(document["services"]) == ["core-main-gateway"]
-    assert document["services"]["core-main-gateway"]["image"] == "ghcr.io/org/gateway:1"
+    assert list(document["services"]) == ["gateway"]
+    assert document["services"]["gateway"]["image"] == "ghcr.io/org/gateway:1"
     assert "configs" not in document
-    assert document["networks"] == {"core-main-net": {}}
+    assert "networks" not in document
 
 
 def test_generate_compose_carries_a_coincidentally_prefixed_service_through(
@@ -521,7 +518,7 @@ def test_generate_compose_carries_a_coincidentally_prefixed_service_through(
     output = _generate_compose(monkeypatch, tmp_path, generated)
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
-    assert list(document["services"]) == ["core-main-api", "core-main-pf-postgres", "core-main-api-migrations"]
+    assert list(document["services"]) == ["api", "pf-postgres", "api-migrations"]
 
 
 def test_generate_compose_strips_the_workload_prefix_from_differing_container_names(
@@ -536,8 +533,8 @@ def test_generate_compose_strips_the_workload_prefix_from_differing_container_na
     )
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
-    assert list(document["services"]) == ["core-main-rathole-client"]
-    assert document["services"]["core-main-rathole-client"]["image"] == "ghcr.io/org/rathole-client:1"
+    assert list(document["services"]) == ["rathole-client"]
+    assert document["services"]["rathole-client"]["image"] == "ghcr.io/org/rathole-client:1"
 
 
 COMPOSE_WITH_BARRIER = (
@@ -555,27 +552,22 @@ COMPOSE_WITH_BARRIER = (
 )
 
 
-def test_generate_compose_renames_the_barrier_and_its_references_per_entry(
+def test_generate_compose_renames_the_barrier_and_keeps_its_references_bare(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     output = _generate_compose(monkeypatch, tmp_path, COMPOSE_WITH_BARRIER)
 
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
-    assert list(document["services"]) == ["core-main-api", "core-main-pf-postgres", "core-main-wait-for-resources"]
-    assert document["services"]["core-main-api"]["depends_on"] == {
-        "core-main-wait-for-resources": {"condition": "service_started"}
-    }
-    assert document["services"]["core-main-pf-postgres"]["depends_on"] == ["core-main-wait-for-resources"]
-    assert (
-        document["services"]["core-main-wait-for-resources"]["image"]
-        == "${CORE_MAIN__BOATYARD_LOCK__ALPINE_IMAGE:?err}"
-    )
+    assert list(document["services"]) == ["api", "pf-postgres", "wait-for-resources"]
+    assert document["services"]["api"]["depends_on"] == {"wait-for-resources": {"condition": "service_started"}}
+    assert document["services"]["pf-postgres"]["depends_on"] == ["wait-for-resources"]
+    assert document["services"]["wait-for-resources"]["image"] == "${BOATYARD_BARRIER_IMAGE:?err}"
 
 
-def test_generate_compose_barrier_names_differ_per_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_generate_compose_barrier_names_are_one_global_slot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "api.yaml").write_text(
-        "metadata:\n  name: api\n  annotations:\n    outernet.internal/lock: api=API_IMAGE\ncontainers:\n  api: {}\n",
+        "metadata:\n  name: api\n  annotations:\n    boatyard/lock: api=API_IMAGE\ncontainers:\n  api: {}\n",
         encoding="utf-8",
     )
     (tmp_path / "stack" / "score" / "edge.yaml").write_text(
@@ -602,8 +594,8 @@ def test_generate_compose_barrier_names_differ_per_entry(tmp_path: Path, monkeyp
 
     core = yaml.safe_load((tmp_path / "stack/generated/compose/compose.core-main.yaml").read_text(encoding="utf-8"))
     edge = yaml.safe_load((tmp_path / "stack/generated/compose/compose.edge-main.yaml").read_text(encoding="utf-8"))
-    assert core["services"]["core-main-wait-for-resources"]["image"] == "${CORE_MAIN__BOATYARD_LOCK__ALPINE_IMAGE:?err}"
-    assert edge["services"]["edge-main-wait-for-resources"]["image"] == "${EDGE_MAIN__BOATYARD_LOCK__ALPINE_IMAGE:?err}"
+    assert core["services"]["wait-for-resources"]["image"] == "${BOATYARD_BARRIER_IMAGE:?err}"
+    assert edge["services"]["wait-for-resources"]["image"] == "${BOATYARD_BARRIER_IMAGE:?err}"
 
 
 class WorkloadContentsRecorder:
@@ -626,7 +618,7 @@ class WorkloadContentsRecorder:
 
 
 LOCK_ANNOTATION_API = (
-    "metadata:\n  name: api\n  annotations:\n    outernet.internal/lock: api=LOCK_KEY\ncontainers:\n  api: {}\n"
+    "metadata:\n  name: api\n  annotations:\n    boatyard/lock: api=LOCK_KEY\ncontainers:\n  api: {}\n"
 )
 
 
@@ -680,7 +672,7 @@ DOCKERFILE_ANNOTATION_API = (
     "metadata:\n"
     "  name: api\n"
     "  annotations:\n"
-    "    outernet.internal/dockerfile: api=workloads/api/Dockerfile\n"
+    "    boatyard/dockerfile: api=workloads/api/Dockerfile\n"
     "containers:\n"
     "  api: {}\n"
 )
@@ -785,7 +777,7 @@ def _generate_compose_multi(
         document: dict[str, object] = {
             "metadata": {
                 "name": workload_name,
-                "annotations": {"outernet.internal/lock": ",".join(f"{name}=ALPINE_IMAGE" for name in containers)},
+                "annotations": {"boatyard/lock": ",".join(f"{name}=ALPINE_IMAGE" for name in containers)},
             },
             "containers": {name: {} for name in containers},
         }
@@ -872,7 +864,7 @@ class TestRenderedNameClaims:
 
         output = tmp_path / "stack" / "generated" / "compose" / "compose.core-main.yaml"
         document = yaml.safe_load(output.read_text(encoding="utf-8"))
-        assert list(document["services"]) == ["core-main-api", "core-main-pf-postgres"]
+        assert list(document["services"]) == ["api", "pf-postgres"]
 
 
 SHIPPED_TEMPLATES = {
@@ -962,8 +954,8 @@ def _bundle_config(tmp_path: Path, **bundle: object) -> ConfigFile:
         "repository": "ghcr.io/org/repo",
         "project_name": "example",
         "platforms": ["linux/amd64"],
-        "gateway": 8080,
-        "base_images": {"API_IMAGE": "docker.io/library/api:1"},
+        "gateway_port": 8080,
+        "base_images": {"API_IMAGE": "docker.io/library/api:1", "ALPINE_IMAGE": "docker.io/library/alpine:3.21.0"},
         "services": {"core": {"options": {"main": {"workloads": ["api.yaml"], **bundle}}}},
     }
     (tmp_path / "boatyard.yml").write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
@@ -1022,14 +1014,6 @@ def test_barrier_pin_stays_unregistered_without_provisioner_services(
     assert templates == [["probe-adapter-healthchecks.tpl", "restart.tpl"]]
 
 
-def test_generate_compose_pins_the_barrier_to_the_owned_alpine_slot(tmp_path: Path) -> None:
-    (tmp_path / "stack" / "score").mkdir(parents=True)
-    (tmp_path / "stack" / "score" / "api.yaml").write_text("metadata:\n  name: api\ncontainers: {}\n", encoding="utf-8")
-    config = _bundle_config(tmp_path)
-
-    assert list(config.owned_images) == ["ALPINE_IMAGE", "CADDY_IMAGE"]
-
-
 def test_provisioners_register_by_resource_type_closure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sources = {
         "stack/score/api.yaml": _workload_referencing("state", "api"),
@@ -1057,7 +1041,7 @@ WORKLOAD_WITH_LIVENESS = """
 metadata:
   name: api
   annotations:
-    outernet.internal/lock: api=API_IMAGE
+    boatyard/lock: api=API_IMAGE
 containers:
   api:
     livenessProbe:
@@ -1070,8 +1054,8 @@ WORKLOAD_WITH_READINESS = """
 metadata:
   name: api
   annotations:
-    outernet.internal/probe-adapter: python-urllib
-    outernet.internal/lock: api=API_IMAGE
+    boatyard/probe-adapter: python-urllib
+    boatyard/lock: api=API_IMAGE
 containers:
   api:
     readinessProbe:
@@ -1084,7 +1068,7 @@ WORKLOAD_WITH_UNADAPTED_READINESS = """
 metadata:
   name: api
   annotations:
-    outernet.internal/lock: api=API_IMAGE
+    boatyard/lock: api=API_IMAGE
 containers:
   api:
     readinessProbe:
@@ -1122,7 +1106,7 @@ def test_httpget_probe_without_the_adapter_annotation_refuses(tmp_path: Path, mo
 def test_unknown_probe_adapter_values_refuse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "api.yaml").write_text(
-        "metadata:\n  name: api\n  annotations:\n    outernet.internal/probe-adapter: curl\ncontainers: {}\n",
+        "metadata:\n  name: api\n  annotations:\n    boatyard/probe-adapter: curl\ncontainers: {}\n",
         encoding="utf-8",
     )
 
@@ -1141,7 +1125,7 @@ def test_workload_resources_parse_typed() -> None:
 DOCKERFILE_SOURCES_API: dict[str, Yaml] = {
     "metadata": {
         "name": "api",
-        "annotations": {"outernet.internal/dockerfile": "api=workloads/api/Dockerfile"},
+        "annotations": {"boatyard/dockerfile": "api=workloads/api/Dockerfile"},
     },
     "containers": {"api": {}},
 }
@@ -1159,8 +1143,8 @@ class TestSourceAnnotations:
                 "metadata": {
                     "name": "api",
                     "annotations": {
-                        "outernet.internal/dockerfile": "api=workloads/api/Dockerfile",
-                        "outernet.internal/lock": "sidecar=KEYCLOAK_IMAGE",
+                        "boatyard/dockerfile": "api=workloads/api/Dockerfile",
+                        "boatyard/lock": "sidecar=KEYCLOAK_IMAGE",
                     },
                 },
                 "containers": {"api": {}, "sidecar": {}},
@@ -1179,7 +1163,7 @@ class TestSourceAnnotations:
                 {
                     "metadata": {
                         "name": "api",
-                        "annotations": {"outernet.internal/dockerfile": "api=workloads/api/Dockerfile"},
+                        "annotations": {"boatyard/dockerfile": "api=workloads/api/Dockerfile"},
                     },
                     "containers": {"api": {}, "sidecar": {}},
                 },
@@ -1193,8 +1177,8 @@ class TestSourceAnnotations:
                     "metadata": {
                         "name": "api",
                         "annotations": {
-                            "outernet.internal/dockerfile": "api=workloads/api/Dockerfile",
-                            "outernet.internal/lock": "api=KEYCLOAK_IMAGE",
+                            "boatyard/dockerfile": "api=workloads/api/Dockerfile",
+                            "boatyard/lock": "api=KEYCLOAK_IMAGE",
                         },
                     },
                     "containers": {"api": {}},
@@ -1208,7 +1192,7 @@ class TestSourceAnnotations:
                 {
                     "metadata": {
                         "name": "api",
-                        "annotations": {"outernet.internal/lock": "ghost=KEYCLOAK_IMAGE"},
+                        "annotations": {"boatyard/lock": "ghost=KEYCLOAK_IMAGE"},
                     },
                     "containers": {},
                 },
@@ -1222,7 +1206,7 @@ class TestSourceAnnotations:
                     {
                         "metadata": {
                             "name": "api",
-                            "annotations": {"outernet.internal/dockerfile": value},
+                            "annotations": {"boatyard/dockerfile": value},
                         },
                         "containers": {},
                     },
@@ -1236,7 +1220,7 @@ class TestSourceAnnotations:
                     "metadata": {
                         "name": "api",
                         "annotations": {
-                            "outernet.internal/dockerfile": "api=workloads/api/Dockerfile,api=workloads/other/Dockerfile"
+                            "boatyard/dockerfile": "api=workloads/api/Dockerfile,api=workloads/other/Dockerfile"
                         },
                     },
                     "containers": {"api": {}},
@@ -1270,7 +1254,7 @@ def test_adapted_probe_bearing_workloads_register_the_healthcheck_template(
 def test_restart_values_outside_the_compose_enum_refuse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "api.yaml").write_text(
-        "metadata:\n  name: api\n  annotations:\n    outernet.internal/restart: always-please\ncontainers: {}\n",
+        "metadata:\n  name: api\n  annotations:\n    boatyard/restart: always-please\ncontainers: {}\n",
         encoding="utf-8",
     )
 
@@ -1286,7 +1270,7 @@ def test_restart_annotation_with_an_enum_value_passes(tmp_path: Path, monkeypatc
         {},
         {
             "stack/score/api.yaml": (
-                "metadata:\n  name: api\n  annotations:\n    outernet.internal/restart: on-failure\ncontainers: {}\n"
+                "metadata:\n  name: api\n  annotations:\n    boatyard/restart: on-failure\ncontainers: {}\n"
             ),
         },
     )
@@ -1338,7 +1322,7 @@ def test_consumer_interpolated_names_must_match_declared_files(tmp_path: Path, m
         "metadata:\n"
         "  name: api\n"
         "  annotations:\n"
-        "    outernet.internal/consumer-interpolated: /etc/rathole/client.toml\n"
+        "    boatyard/consumer-interpolated: /etc/rathole/client.toml\n"
         "containers: {}\n",
         encoding="utf-8",
     )
@@ -1351,8 +1335,8 @@ WORKLOAD_WITH_INTERPOLATED_FILE = """\
 metadata:
   name: rathole-client
   annotations:
-    outernet.internal/consumer-interpolated: /etc/rathole/client.toml
-    outernet.internal/lock: rathole-client=ALPINE_IMAGE
+    boatyard/consumer-interpolated: /etc/rathole/client.toml
+    boatyard/lock: rathole-client=ALPINE_IMAGE
 containers:
   rathole-client:
     files:
@@ -1411,12 +1395,10 @@ def test_consumer_interpolated_binds_land_undoubled(tmp_path: Path, monkeypatch:
 
     output = tmp_path / "stack" / "generated" / "compose" / "compose.rathole-client.yaml"
     document = yaml.safe_load(output.read_text(encoding="utf-8"))
-    service = document["services"]["rathole-client-rathole-client"]
-    assert service["configs"] == [
-        {"source": "rathole-client-rathole-client-files-client.toml", "target": "/etc/rathole/client.toml"}
-    ]
+    service = document["services"]["rathole-client"]
+    assert service["configs"] == [{"source": "rathole-client-files-client.toml", "target": "/etc/rathole/client.toml"}]
     assert (
-        document["configs"]["rathole-client-rathole-client-files-client.toml"]["content"]
+        document["configs"]["rathole-client-files-client.toml"]["content"]
         == 'remote_addr = "${TUNNEL_CONTROL_ENDPOINT:?err}"\n'
     )
 
@@ -1549,7 +1531,7 @@ def test_k8s_generation_refuses_a_workload_sha_slot_no_pin_covers(
         "metadata:\n"
         "  name: api\n"
         "  annotations:\n"
-        "    outernet.internal/dockerfile: api=workloads/api/Dockerfile,sidecar=workloads/worker/Dockerfile\n"
+        "    boatyard/dockerfile: api=workloads/api/Dockerfile,sidecar=workloads/worker/Dockerfile\n"
         "containers:\n"
         "  api: {}\n"
         "  sidecar: {}\n"
@@ -1578,7 +1560,7 @@ WORKLOAD_WITH_ISSUER = (
     "metadata:\n"
     "  name: api\n"
     "  annotations:\n"
-    "    outernet.internal/dockerfile: api=workloads/api/Dockerfile\n"
+    "    boatyard/dockerfile: api=workloads/api/Dockerfile\n"
     "resources:\n"
     "  issuer:\n"
     "    type: example-issuer\n"
@@ -1765,7 +1747,7 @@ def test_variable_placeholders_refuse_or_stay_escaped(tmp_path: Path) -> None:
 def _verb_repo(tmp_path: Path) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "api.yaml").write_text(
-        "metadata:\n  name: api\n  annotations:\n    outernet.internal/lock: api=LOKI_IMAGE\ncontainers:\n  api: {}\n",
+        "metadata:\n  name: api\n  annotations:\n    boatyard/lock: api=LOKI_IMAGE\ncontainers:\n  api: {}\n",
         encoding="utf-8",
     )
     (tmp_path / "boatyard.lock.yml").write_text(
@@ -1792,6 +1774,7 @@ def _verb_repo(tmp_path: Path) -> None:
             "platforms": ["linux/amd64"],
             "base_images": {
                 "LOKI_IMAGE": "docker.io/grafana/loki:3.5.0",
+                "ALPINE_IMAGE": "docker.io/library/alpine:3.21.0",
             },
             "services": {"core": {"options": {"main": {"workloads": ["api.yaml"]}}}},
         }),

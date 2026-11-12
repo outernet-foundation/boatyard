@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-from contextlib import ExitStack
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 from typing import Annotated
 
 import typer
-import yaml
-from bashrun.bash import bash_handoff
+from bashrun.bash import bash, bash_check
 
 from boatyard.compose import compose_command
 from boatyard.models.config_file import ConfigFile
@@ -23,17 +20,23 @@ def down(
     root = Path.cwd()
     config = ConfigFile.load(root / DEFAULT_CONFIG_PATH)
 
-    # Tear down by project name alone; the name-only root consumes no values, lock, or selection.
-    with ExitStack() as stack:
-        with NamedTemporaryFile(
-            "w", suffix=".yaml", prefix="devkit-assembly-", delete=False, encoding="utf-8"
-        ) as handle:
-            handle.write(yaml.safe_dump({"name": config.project_name}, sort_keys=False, default_flow_style=False))
-            assembly_root = Path(handle.name)
-        stack.callback(assembly_root.unlink, missing_ok=True)
+    # Config only: every declared entry names a candidate project, selected or not, and the
+    # bare project name also removes any legacy single-project assembly.
+    candidates = [*(f"{config.project_name}-{row.name}" for row in config.service_entries), config.project_name]
+    for candidate in candidates:
+        bash(
+            compose_command(
+                root,
+                [],
+                "down",
+                "--remove-orphans",
+                *(["-v"] if volumes else []),
+                project_name=candidate,
+            )
+        )
 
-        command = compose_command(root, assembly_root, "down", "--remove-orphans")
-        if volumes:
-            command += " -v"
-
-        bash_handoff(command)
+    # The shared network comes down last, after every project that could attach to it
+    shared_network_name = f"{config.project_name}-shared"
+    if not bash_check(f"docker network inspect {shared_network_name}"):
+        return
+    bash(f"docker network rm {shared_network_name}")

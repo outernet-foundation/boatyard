@@ -48,7 +48,7 @@ def _write_repo(
             "metadata:\n"
             f"  name: {service}\n"
             "  annotations:\n"
-            f"    outernet.internal/dockerfile: {service}=workloads/{service}/Dockerfile\n"
+            f"    boatyard/dockerfile: {service}=workloads/{service}/Dockerfile\n"
             "containers:\n"
             f"  {service}: {{}}\n",
             encoding="utf-8",
@@ -67,6 +67,8 @@ def _write_repo(
     }
     if base_images:
         payload["base_images"] = base_images
+    payload.setdefault("base_images", {})
+    payload["base_images"].setdefault("ALPINE_IMAGE", "docker.io/library/alpine:3.20")
     if axes is not None:
         payload["base_images"] = {
             **payload.get("base_images", {}),

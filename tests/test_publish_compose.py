@@ -226,7 +226,11 @@ class TestPublishComposeVerb:
                 "repository": REPOSITORY,
                 "project_name": "livekit-tier",
                 "platforms": ["linux/amd64"],
-                "gateway": 18443,
+                "gateway_port": 18443,
+                "base_images": {
+                    "CADDY_IMAGE": "docker.io/library/caddy:2.10",
+                    "ALPINE_IMAGE": "docker.io/library/alpine:3.20",
+                },
                 "services": {"livekit": {"options": {"tier": {"workloads": ["livekit-token.yaml"]}}}},
             },
         )
@@ -240,7 +244,7 @@ class TestPublishComposeVerb:
             "metadata:\n"
             "  name: livekit-token\n"
             "  annotations:\n"
-            "    outernet.internal/dockerfile: livekit-token=workloads/livekit-token/Dockerfile\n"
+            "    boatyard/dockerfile: livekit-token=workloads/livekit-token/Dockerfile\n"
             "containers:\n"
             "  livekit-token: {}\n",
             encoding="utf-8",
@@ -346,6 +350,7 @@ class TestBundleMode:
         merged: dict[str, Any] = {
             **(sections or ROOT_BUNDLE_SECTION),
             "platforms": ["linux/amd64"],
+            "base_images": {"ALPINE_IMAGE": "alpine:3.20"},
         }
         _write_config(tmp_path, merged)
         score = tmp_path / "stack" / "score"

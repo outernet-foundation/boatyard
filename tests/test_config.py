@@ -15,7 +15,8 @@ from boatyard.models.config_file import (
     bundle_lock_key,
 )
 from boatyard.models.lock_file import LOCK_PATH, LockFile
-from boatyard.yaml import load_yaml_model
+from boatyard.models.workload import WorkloadDocument
+from boatyard.yaml import Yaml, load_yaml_model
 
 EDGE_PLATFORMS = ["linux/amd64"]
 
@@ -25,7 +26,14 @@ SHA_TAG = "a" * 40
 
 def bundle_entries(*qualified_names: str) -> dict[str, dict[str, object]]:
     return {
-        bundle_lock_key(name): {"reference": f"ghcr.io/org/repo/{name}:1.0.0@" + DIGEST} for name in qualified_names
+        bundle_lock_key(name): {
+            "reference": f"ghcr.io/org/repo/{name}:1.0.0@" + DIGEST,
+            "services": [],
+            "routes": [],
+            "ports": [],
+            "container_names": [],
+        }
+        for name in qualified_names
     }
 
 
@@ -84,7 +92,7 @@ def write_dockerfile_workload(tmp_path: Path, file_name: str) -> None:
     document: dict[str, object] = {
         "metadata": {
             "name": stem,
-            "annotations": {"outernet.internal/dockerfile": f"{stem}=workloads/{stem}/Dockerfile"},
+            "annotations": {"boatyard/dockerfile": f"{stem}=workloads/{stem}/Dockerfile"},
         },
         "containers": {stem: {}},
     }
@@ -244,7 +252,7 @@ class TestVariants:
             "metadata:\n"
             "  name: gpu\n"
             "  annotations:\n"
-            "    outernet.internal/dockerfile: gpu=workloads/gpu/Dockerfile\n"
+            "    boatyard/dockerfile: gpu=workloads/gpu/Dockerfile\n"
             "containers:\n"
             "  gpu: {}\n",
             encoding="utf-8",
@@ -319,7 +327,7 @@ class TestVariants:
                 "metadata:\n"
                 f"  name: {stem}\n"
                 "  annotations:\n"
-                f"    outernet.internal/dockerfile: {stem}=workloads/{stem}/Dockerfile\n"
+                f"    boatyard/dockerfile: {stem}=workloads/{stem}/Dockerfile\n"
                 "containers:\n"
                 f"  {stem}: {{}}\n",
                 encoding="utf-8",
@@ -406,7 +414,7 @@ class TestVariants:
             "metadata:\n"
             "  name: localizer\n"
             "  annotations:\n"
-            "    outernet.internal/dockerfile: localizer=workloads/localizer/Dockerfile\n"
+            "    boatyard/dockerfile: localizer=workloads/localizer/Dockerfile\n"
             "containers:\n"
             "  localizer: {}\n",
             encoding="utf-8",
@@ -845,7 +853,7 @@ class TestServices:
                 "requires": ">=0.1",
                 "repository": "ghcr.io/org/repo",
                 "project_name": "example",
-                "gateway": 58080,
+                "gateway_port": 58080,
                 "platforms": EDGE_PLATFORMS,
                 "services": {
                     "auth": {
@@ -1067,7 +1075,7 @@ class TestServices:
             {
                 "requires": ">=0.1",
                 "project_name": "example",
-                "gateway": 8080,
+                "gateway_port": 8080,
                 "services": {"core": {"workloads": ["api.yaml"]}},
             },
         )
@@ -1081,7 +1089,7 @@ class TestServices:
             {
                 "requires": ">=0.1",
                 "project_name": "example",
-                "gateway": 8080,
+                "gateway_port": 8080,
                 "platforms": EDGE_PLATFORMS,
                 "services": {
                     "livekit": {
@@ -1165,7 +1173,7 @@ class TestAuthGroup:
         return {
             "requires": ">=0.1",
             "project_name": "example",
-            "gateway": 8080,
+            "gateway_port": 8080,
             "platforms": EDGE_PLATFORMS,
             "services": {"auth": {"options": options}},
         }
@@ -1183,14 +1191,13 @@ class TestAuthGroup:
 
         assert ConfigFile.load(tmp_path / "boatyard.yml") is not None
 
-    def test_an_auth_option_without_a_route_refuses(self, tmp_path: Path) -> None:
+    def test_an_auth_option_without_an_authored_route_loads(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,
             self._auth_config({"keycloak": {"ref": "oci://ghcr.io/org/repo/keycloak:0.3.1"}}),
         )
 
-        with pytest.raises(ValidationError, match="auth option declares exactly one route"):
-            ConfigFile.load(tmp_path / "boatyard.yml")
+        assert ConfigFile.load(tmp_path / "boatyard.yml") is not None
 
     def test_an_auth_option_with_two_routes_refuses(self, tmp_path: Path) -> None:
         write_config(
@@ -1206,7 +1213,7 @@ class TestAuthGroup:
             }),
         )
 
-        with pytest.raises(ValidationError, match="exactly one route"):
+        with pytest.raises(ValidationError, match="at most one route"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_a_bare_entry_named_auth_refuses(self, tmp_path: Path) -> None:
@@ -1223,12 +1230,76 @@ class TestAuthGroup:
             ConfigFile.load(tmp_path / "boatyard.yml")
 
 
+class TestWorkloadLensAnnotations:
+    def _document(self, annotations: dict[str, Yaml]) -> WorkloadDocument:
+        raw: dict[str, Yaml] = {"metadata": {"name": "api", "annotations": annotations}, "containers": {}}
+        return WorkloadDocument.parse(raw, "api.yaml")
+
+    def test_multiple_routes_parse_in_order(self) -> None:
+        document = self._document({"boatyard/route": "/grafana/*=grafana:3000,/*=api:8000"})
+
+        assert document.routes == [
+            ("/grafana/*", "grafana:3000", False),
+            ("/*", "api:8000", False),
+        ]
+
+    def test_strip_attaches_to_the_preceding_route(self) -> None:
+        document = self._document({"boatyard/route": "/auth/*=keycloak:8080,strip"})
+
+        assert document.routes == [("/auth/*", "keycloak:8080", True)]
+
+    def test_a_bad_protocol_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"protocol 'sctp' must be one of"):
+            self._document({"boatyard/publish-port": "6178:6178/sctp"})
+
+    def test_an_out_of_range_port_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"port '65536' outside 1-65535"):
+            self._document({"boatyard/publish-port": "6178:65536"})
+
+    def test_strip_without_a_wildcard_path_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"strip requires the path to end in /\*"):
+            self._document({"boatyard/route": "/auth=keycloak:8080,strip"})
+
+    def test_strip_as_the_first_token_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"'strip' attaches to no preceding route"):
+            self._document({"boatyard/route": "strip"})
+
+    def test_padded_and_empty_entries_refuse(self) -> None:
+        for value in ("", " /x/*=x:1", "/x/*=x:1,"):
+            with pytest.raises(ValidationError, match="non-empty and unpadded"):
+                self._document({"boatyard/route": value})
+
+    def test_inner_padding_refuses_on_the_grammar(self) -> None:
+        with pytest.raises(ValidationError, match=r"must be a service name and a literal port"):
+            self._document({"boatyard/route": "/x/*= x:1"})
+
+    def test_a_malformed_route_path_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"must be a /-rooted segment chain"):
+            self._document({"boatyard/route": "grafana/*=grafana:3000"})
+
+    def test_a_malformed_route_upstream_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"must be a service name and a literal port"):
+            self._document({"boatyard/route": "/*=grafana:three"})
+
+    def test_published_ports_parse_with_defaults_and_protocols(self) -> None:
+        document = self._document({"boatyard/publish-port": "6178:6178,5957:5957/udp"})
+
+        assert document.published_ports == [
+            (6178, 6178, "tcp"),
+            (5957, 5957, "udp"),
+        ]
+
+    def test_a_pairless_publish_port_entry_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"must be a published:target pair"):
+            self._document({"boatyard/publish-port": "6178"})
+
+
 class TestRoutes:
     def _routed(self, routes: list[object]) -> dict[str, object]:
         return {
             "requires": ">=0.1",
             "project_name": "example",
-            "gateway": 8080,
+            "gateway_port": 8080,
             "platforms": EDGE_PLATFORMS,
             "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG, "routes": routes}},
         }
@@ -1239,7 +1310,7 @@ class TestRoutes:
             {
                 "requires": ">=0.1",
                 "project_name": "example",
-                "gateway": 8080,
+                "gateway_port": 8080,
                 "services": {
                     "one": {
                         "options": {
@@ -1347,56 +1418,6 @@ class TestRoutes:
 
 
 class TestGatewayKey:
-    def test_the_barrier_and_edge_names_refuse_in_base_images(self, tmp_path: Path) -> None:
-        write_config(
-            tmp_path,
-            {
-                "requires": ">=0.1",
-                "project_name": "example",
-                "platforms": ["linux/amd64"],
-                "base_images": {"CADDY_IMAGE": "docker.io/library/caddy:2.8.4-alpine"},
-                "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG}},
-            },
-        )
-
-        with pytest.raises(ValidationError, match="barrier and edge pins are boatyard-owned"):
-            ConfigFile.load(tmp_path / "boatyard.yml")
-
-    def test_the_owned_pins_carry_the_tool_pin_shape(self, tmp_path: Path) -> None:
-        write_config(
-            tmp_path,
-            {
-                "requires": ">=0.1",
-                "project_name": "example",
-                "platforms": ["linux/amd64"],
-                "barrier_image": "docker.io/library/alpine",
-                "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG}},
-            },
-        )
-
-        with pytest.raises(
-            ValidationError, match=r"barrier_image: 'docker\.io/library/alpine' must carry a tag or a digest"
-        ):
-            ConfigFile.load(tmp_path / "boatyard.yml")
-
-    def test_a_gateway_owns_the_edge_pin_and_overrides_ship_theirs(self, tmp_path: Path) -> None:
-        write_config(
-            tmp_path,
-            {
-                "requires": ">=0.1",
-                "project_name": "example",
-                "platforms": ["linux/amd64"],
-                "gateway": 8080,
-                "edge_image": "docker.io/library/caddy:2.9.0",
-                "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG}},
-            },
-        )
-
-        config = ConfigFile.load(tmp_path / "boatyard.yml")
-
-        assert config is not None
-        assert config.owned_images == {"CADDY_IMAGE": "docker.io/library/caddy:2.9.0"}
-
     def test_a_routeless_gateway_loads(self, tmp_path: Path) -> None:
         write_lock(tmp_path, bundles=bundle_entries("livekit"))
         write_config(
@@ -1405,7 +1426,7 @@ class TestGatewayKey:
                 "requires": ">=0.1",
                 "project_name": "example",
                 "platforms": ["linux/amd64"],
-                "gateway": 8080,
+                "gateway_port": 8080,
                 "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG}},
             },
         )
@@ -1420,7 +1441,7 @@ class TestGatewayKey:
             {
                 "requires": ">=0.1",
                 "project_name": "example",
-                "gateway": 8443,
+                "gateway_port": 8443,
                 "platforms": EDGE_PLATFORMS,
                 "services": {
                     "livekit": {
@@ -1439,7 +1460,7 @@ class TestGatewayKey:
             {
                 "requires": ">=0.1",
                 "project_name": "example",
-                "gateway": "${gateway port}",
+                "gateway_port": "${gateway port}",
                 "services": {
                     "livekit": {
                         "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
@@ -1459,7 +1480,7 @@ class TestPorts:
             "requires": ">=0.1",
             "repository": "ghcr.io/org/repo",
             "project_name": "example",
-            "gateway": 8080,
+            "gateway_port": 8080,
             "platforms": EDGE_PLATFORMS,
             "services": services,
         }
@@ -1536,7 +1557,7 @@ class TestPorts:
         )
         write_lock(tmp_path)
 
-        with pytest.raises(ValidationError, match="Input should be a valid dictionary or instance of PortDeclaration"):
+        with pytest.raises(ValidationError, match="Input should be a valid dictionary or instance of PublishedPort"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_an_empty_group_options_map_refuses(self, tmp_path: Path) -> None:
@@ -1791,7 +1812,7 @@ class TestImageDerivation:
             "metadata:\n"
             "  name: keycloak\n"
             "  annotations:\n"
-            "    outernet.internal/lock: keycloak=KEYCLOAK_IMAGE\n"
+            "    boatyard/lock: keycloak=KEYCLOAK_IMAGE\n"
             "containers:\n"
             "  keycloak: {}\n",
             encoding="utf-8",
@@ -1823,7 +1844,7 @@ class TestImageDerivation:
             "metadata:\n"
             "  name: gpu\n"
             "  annotations:\n"
-            "    outernet.internal/lock: gpu=NEURAL_NETWORKS_BASE\n"
+            "    boatyard/lock: gpu=NEURAL_NETWORKS_BASE\n"
             "containers:\n"
             "  gpu: {}\n",
             encoding="utf-8",
@@ -1894,7 +1915,7 @@ def test_direct_model_construction_is_valid_for_tests(tmp_path: Path) -> None:
         "requires": ">=0.1",
         "repository": "ghcr.io/org/repo",
         "project_name": "example",
-        "gateway": 8080,
+        "gateway_port": 8080,
         "platforms": ["linux/amd64"],
         "services": {"core": {"options": {"main": {"workloads": ["api.yaml"]}}}},
     })
@@ -2001,9 +2022,13 @@ class TestConfigLockParse:
             self._parse(tmp_path)
 
     def test_a_non_digest_pinned_bundle_refuses(self, tmp_path: Path) -> None:
-        _write_raw_lock(tmp_path, "bundles:\n  LIVEKIT_BUNDLE:\n    reference: ghcr.io/x/livekit:0.3.1\n")
+        _write_raw_lock(
+            tmp_path,
+            "bundles:\n  LIVEKIT_BUNDLE:\n    reference: ghcr.io/x/livekit:0.3.1\n"
+            "    services: []\n    routes: []\n    ports: []\n    container_names: []\n",
+        )
 
-        with pytest.raises(ValueError, match="bundle entry is not digest-pinned"):
+        with pytest.raises(ValidationError, match="bundle entry is not digest-pinned"):
             self._parse(tmp_path)
 
     def test_a_malformed_platform_key_refuses(self, tmp_path: Path) -> None:
@@ -2022,17 +2047,18 @@ class TestConfigLockParse:
             f"images:\n  A_IMAGE:\n    index: ghcr.io/x/a:1@{DIGEST}\ncharts:\n  A_IMAGE: ghcr.io/x/a:1@{DIGEST}\n",
         )
 
-        with pytest.raises(ValueError, match=r"at most one of images, charts, bundles"):
+        with pytest.raises(ValidationError, match=r"at most one of images, charts, bundles"):
             self._parse(tmp_path)
 
     def test_a_bundle_name_colliding_with_base_images_keys_refuses(self, tmp_path: Path) -> None:
         _write_raw_lock(
             tmp_path,
             f"images:\n  LIVEKIT_BUNDLE:\n    index: ghcr.io/x/a:1@{DIGEST}\n"
-            f"bundles:\n  LIVEKIT_BUNDLE:\n    reference: ghcr.io/x/livekit:0.3.1@{DIGEST}\n",
+            f"bundles:\n  LIVEKIT_BUNDLE:\n    reference: ghcr.io/x/livekit:0.3.1@{DIGEST}\n"
+            "    services: []\n    routes: []\n    ports: []\n    container_names: []\n",
         )
 
-        with pytest.raises(ValueError, match=r"at most one of images, charts, bundles"):
+        with pytest.raises(ValidationError, match=r"at most one of images, charts, bundles"):
             self._parse(tmp_path)
 
     def test_require_answers_the_index_for_images_and_the_flat_entry_for_charts(self, tmp_path: Path) -> None:
@@ -2040,7 +2066,8 @@ class TestConfigLockParse:
             tmp_path,
             f"images:\n  A_IMAGE:\n    index: ghcr.io/x/a:1@{DIGEST}\n"
             f"charts:\n  LOKI_CHART: ghcr.io/x/loki:7.3.0@{DIGEST}\n"
-            f"bundles:\n  LIVEKIT_BUNDLE:\n    reference: ghcr.io/x/livekit:0.3.1@{DIGEST}\n",
+            f"bundles:\n  LIVEKIT_BUNDLE:\n    reference: ghcr.io/x/livekit:0.3.1@{DIGEST}\n"
+            "    services: []\n    routes: []\n    ports: []\n    container_names: []\n",
         )
         lock = self._parse(tmp_path)
 

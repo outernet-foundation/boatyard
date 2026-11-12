@@ -15,7 +15,7 @@ from pydantic import (
 )
 
 from boatyard.models.config_file import (
-    ALPINE_IMAGE,
+    BARRIER_IMAGE_SLOT,
     BARRIER_SERVICE,
     COMPOSE_SLOT,
     TREE_SENTINEL_PATTERN,
@@ -49,7 +49,6 @@ class ComposeDocument(BaseModel):
 
     services: dict[str, ComposeService] = Field(default_factory=dict)
     configs: dict[str, ComposeConfig] | None = None
-    networks: dict[str, Yaml] | None = None
 
     @model_validator(mode="after")
     def _reject_colliding_bind_basenames(self) -> Self:
@@ -73,7 +72,6 @@ class ComposeService(BaseModel):
     depends_on: dict[str, Yaml] | list[str] | None = None
     configs: list[ComposeConfigReference] | None = None
     image: str | None = None
-    networks: dict[str, Yaml] | None = None
 
     @property
     def bind_volumes(self) -> list[BindVolume]:
@@ -190,22 +188,19 @@ def generate_compose(config: ConfigFile, lock: LockFile) -> list[Path]:
             if service_name in services_map:
                 continue
 
-            # Pin the barrier image to the lock slot
+            # Pin the barrier image to the boatyard-minted slot
             if service_name == BARRIER_SERVICE:
                 barrier_service = document.services[BARRIER_SERVICE]
-                barrier_service.image = f"${{{ALPINE_IMAGE}:?err}}"
+                barrier_service.image = f"${{{BARRIER_IMAGE_SLOT}:?err}}"
                 services_map[BARRIER_SERVICE] = (barrier_service, None, BARRIER_SERVICE)
                 continue
 
             services_map[service_name] = (service, None, service_name)
 
-        # Namespace every service under the entry with its bare name as a network alias; a
-        # bundle's bare service names are its compose identity, so one name claims one service.
-        network = f"{name}-net"
-        collapsed = {collapsed_name for _service, _workload, collapsed_name in services_map.values()}
+        # Namespace the bundle's bare service names; one collapsed name claims one service, so
+        # two workloads claiming one spelling refuse.
         claim_sites: dict[str, str] = {}
         document.services = {}
-        document.networks = {network: {}}
         for service, workload, collapsed_name in services_map.values():
             site = (
                 f"{workload.file_name}: containers.{collapsed_name}"
@@ -220,20 +215,7 @@ def generate_compose(config: ConfigFile, lock: LockFile) -> list[Path]:
                     f"{claim_sites[collapsed_name]} and {site}"
                 )
             claim_sites[collapsed_name] = site
-            document.services[f"{name}-{collapsed_name}"] = service
-            service.networks = {network: {"aliases": [collapsed_name]}}
-
-            # Namespace dependency keys that name rendered services of this bundle
-            depends_on = service.depends_on
-            if isinstance(depends_on, dict):
-                service.depends_on = {
-                    f"{name}-{dependency}" if dependency in collapsed else dependency: condition
-                    for dependency, condition in depends_on.items()
-                }
-            elif isinstance(depends_on, list):
-                service.depends_on = [
-                    f"{name}-{dependency}" if dependency in collapsed else dependency for dependency in depends_on
-                ]
+            document.services[collapsed_name] = service
 
             # Inline every bind volume as a top-level configs entry
             bind_volumes = service.strip_bind_volumes()
@@ -259,8 +241,8 @@ def generate_compose(config: ConfigFile, lock: LockFile) -> list[Path]:
                 if workload and bind_volume.target not in workload.document.consumer_interpolated_targets:
                     text = double_dollars(text)
 
-                document.configs[f"{name}-{path.name}"] = ComposeConfig(content=text)
-                service.configs.append(ComposeConfigReference(source=f"{name}-{path.name}", target=bind_volume.target))
+                document.configs[path.name] = ComposeConfig(content=text)
+                service.configs.append(ComposeConfigReference(source=path.name, target=bind_volume.target))
 
         # Rewrite the sha sentinels and namespace the lock-key slots
         text = dump_yaml(document.dump())

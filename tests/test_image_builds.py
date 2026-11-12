@@ -36,7 +36,7 @@ def _derive(
             "metadata:\n"
             f"  name: {name}\n"
             "  annotations:\n"
-            f"    outernet.internal/dockerfile: {name}=workloads/{name}/Dockerfile\n"
+            f"    boatyard/dockerfile: {name}=workloads/{name}/Dockerfile\n"
             "containers:\n"
             f"  {name}: {{}}\n",
             encoding="utf-8",
@@ -73,7 +73,7 @@ def _images_from_sources(tmp_path: Path, sources: dict[str, str]) -> dict[str, I
         "metadata:\n"
         "  name: sourced\n"
         "  annotations:\n"
-        f"    outernet.internal/dockerfile: {annotation}\n"
+        f"    boatyard/dockerfile: {annotation}\n"
         "containers:\n" + "".join(f"  {container}: {{}}\n" for container in sources),
         encoding="utf-8",
     )
@@ -162,13 +162,6 @@ class TestDeriveImages:
         assert images["localizer"].bases == {"NEURAL_NETWORKS_BASE": "neural-networks-base"}
         assert images["localizer"].contexts == ["neural-networks-base"]
         assert images["localizer"].sha_args == ["LOCALIZER_SHA"]
-
-    def test_an_owned_image_key_resolves_a_from(self, tmp_path: Path) -> None:
-        write_dockerfile(tmp_path, "api", "ARG ALPINE_IMAGE\nFROM ${ALPINE_IMAGE}\n")
-
-        images = _derive(tmp_path, local=True)
-
-        assert sorted(images) == ["api"]
 
     def test_stage_names_are_not_context_edges(self, tmp_path: Path) -> None:
         write_dockerfile(

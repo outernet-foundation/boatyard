@@ -6,7 +6,15 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 
-from boatyard.models.config_file import PLATFORM_KEY, ConfigFile, Slot, bundle_lock_key, chart_lock_key
+from boatyard.models.config_file import (
+    PLATFORM_KEY,
+    ConfigFile,
+    PublishedPort,
+    Route,
+    Slot,
+    bundle_lock_key,
+    chart_lock_key,
+)
 from boatyard.paths import LOCK_PATH, VALUES_FILE
 from boatyard.temp import PLATFORM_PATTERN, SHA256_DIGEST_REGEX
 from boatyard.yaml import load_yaml_model
@@ -54,7 +62,7 @@ class LockFile(BaseModel):
                     f"but the lock records {recorded}"
                 )
         refuse_local_lock_entries(lock, config, source)
-        effective_images = set(config.mirrored_base_images)
+        effective_images = set(config.remote_base_images)
         missing_images = sorted(effective_images - lock.images.keys())
         if missing_images:
             raise ValueError(f"{source}: lacks the {missing_images} image entries")
@@ -138,6 +146,10 @@ class ConfigLockBundle(BaseModel):
 
     reference: str
     slots: dict[str, Slot] = Field(default_factory=dict)
+    services: list[str]
+    routes: list[Route]
+    ports: list[PublishedPort]
+    container_names: list[str]
 
     @model_validator(mode="after")
     def _require_digest_pin(self, info: ValidationInfo) -> Self:
