@@ -49,8 +49,12 @@ Design intent and silent-failure traps, one fact per bullet.
 - Plain score-compose silently drops `httpGet` probes; boatyard's lens makes the omission loud
   instead via the workload's `boatyard/probe-adapter` annotation.
 - Substrate needs live in workload files as `boatyard/*` annotations — `boatyard.yml`
-  holds no per-workload runtime fact. The shipped `score_patch_templates` are the reader; the
-  lens is `WorkloadDocument.parse(raw, file_name)`.
+  holds no per-workload runtime fact. The gpu annotation (`"true"`) is substrate only
+  and the patch templates are its reader; start behavior is a separate annotation —
+  `boatyard/autostart: "false"` leaves the container created-stopped instead of
+  started by `up`, on any service, gpu or not, recorded in the bundle records as
+  held services (lock-time for remote bundles, resolve-time for local and override
+  bundles). The lens is `WorkloadDocument.parse(raw, file_name)`.
 
 ## Commands
 
@@ -97,9 +101,10 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
   the compose-surface probe-adapter check, plus provisioner-file selection.
 - `models/image.py` — the image and local-base models, the Dockerfile parse, and the tree-tag
   sha machinery.
-- `resolve.py` — the `resolve(config, lock, values)` fold answering the assembly plan `up` renders.
-- `lock.py` — relock engine + crane resolution.
-- `compose.py` — the compose invocation spelling.
+- `resolve.py` — the `resolve(config, lock, values)` fold answering the assembly plan
+  `up` renders; the plan carries the config and every consumed bundle record.
+- `lock.py` — relock engine, crane resolution, and the one bundle-record extraction
+  every consumer of bundle facts reads through.
 - `build.py` — build pipeline.
 - `markers.py` — provisioner and chart-value marker resolution.
 - `score.py` / `score_compose.py` / `score_k8s.py` / `score_generate.py` — shared base / compose
@@ -107,10 +112,13 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
 - `publish.py` — publish preparation.
 - `crane.py` — pinned crane installer.
 - `paths.py` — consumer-repo document paths.
-- `temp.py` — shared digest/platform/tree-tag regex spellings.
+- `temp.py` — shared digest/platform/tree-tag regex spellings and the platform quoting
+  helper for bashrun command tokens.
 - `yaml.py` — strict YAML load + model load; `Yaml` and the `is_mapping`/`is_list` guards.
 - `verbs/up.py` — per-bundle compose projects plus the gateway project over the shared
-  network, the override documents, the per-run dotenv, unwind on failure.
+  network, the override documents, the per-run dotenv, create-stopped then a selective
+  start that skips the plan's held services, unwind on failure; no bundle text is
+  parsed here — every record rides the plan.
 
 ## This file
 
