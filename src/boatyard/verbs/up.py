@@ -104,7 +104,9 @@ def _materialize_up(
     materialized: list[Path],
 ) -> UpContext:
     # Materialize the env file every invocation shares
-    with NamedTemporaryFile("w", suffix=".env", prefix="boatyard-env-", delete=False, encoding="utf-8") as handle:
+    with NamedTemporaryFile(
+        "w", suffix=".env", prefix="boatyard-env-", delete=False, encoding="utf-8", newline="\n"
+    ) as handle:
         handle.write(render_env_entries(plan.env))
     env_file = Path(handle.name)
     materialized.append(env_file)
