@@ -46,25 +46,36 @@ class StubArtifacts:
 
 class UpSpy:
     # Captures the per-project invocations: command order, project names, the shared env file
-    # content, the gateway document, and each bundle's override document.
+    # content, the gateway document, and each bundle's override document. A bundle lands as a
+    # create-stopped command plus a start command over the same files; the recorded lists hold
+    # one entry per project and per document, not one per command.
     def __init__(self) -> None:
         self.commands: list[str] = []
         self.projects: list[str] = []
         self.env_content: str | None = None
         self.gateway_documents: list[dict[str, Any]] = []
         self.override_documents: list[dict[str, Any]] = []
+        self._recorded_documents: set[Path] = set()
 
     def run(self, command: str) -> None:
         self.commands.append(command)
-        self.projects.append(command.split(" -p ", 1)[1].split()[0])
+        project = command.split(" -p ", 1)[1].split()[0]
+        if not self.projects or self.projects[-1] != project:
+            self.projects.append(project)
         env_match = re.search(r"--env-file (\S+)", command)
         if env_match is not None and self.env_content is None:
             self.env_content = Path(env_match.group(1)).read_text(encoding="utf-8")
         gateway_match = re.search(r"-f (\S*boatyard-gateway-\S+\.yaml)", command)
         if gateway_match is not None:
-            self.gateway_documents.append(yaml.safe_load(Path(gateway_match.group(1)).read_text(encoding="utf-8")))
+            self._record_document(Path(gateway_match.group(1)), self.gateway_documents)
         for override_match in re.finditer(r"-f (\S*boatyard-override-\S+\.yaml)", command):
-            self.override_documents.append(_load_override(Path(override_match.group(1)).read_text(encoding="utf-8")))
+            self._record_document(Path(override_match.group(1)), self.override_documents)
+
+    def _record_document(self, path: Path, documents: list[dict[str, Any]]) -> None:
+        if path in self._recorded_documents:
+            return
+        self._recorded_documents.add(path)
+        documents.append(_load_override(path.read_text(encoding="utf-8")))
 
 
 def _bash_check_true(_command: str) -> bool:
@@ -436,13 +447,25 @@ class TestOverrideDocument:
         )
         declaring = "services:\n  livekit:\n    image: demo/livekit:1\n    ports:\n      - 6178:6178\n"
         (tmp_path / "declared").mkdir()
-        declared_spy = _up(
+        _write_edge_tree(
             tmp_path / "declared",
             monkeypatch,
             [{"path": "/*", "upstream": "livekit:8000"}],
             entry_ports=ports,
-            livekit_text=declaring,
         )
+        declared_lock_path = (tmp_path / "declared").joinpath(*LOCK_PATH.parts)
+        lock = yaml.safe_load(declared_lock_path.read_text(encoding="utf-8"))
+        lock["bundles"]["LIVEKIT_BUNDLE"]["declared_ports"] = {"livekit": [[6178, 6178, "tcp"]]}
+        declared_lock_path.write_text(yaml.safe_dump(lock), encoding="utf-8")
+        declared_spy = UpSpy()
+        monkeypatch.setattr(up, "bash", declared_spy.run)
+        monkeypatch.setattr(up, "bash_check", _bash_check_true)
+        monkeypatch.setattr(up, "install_crane", lambda: None)
+        monkeypatch.setattr(up, "OciArtifactManifest", StubArtifacts({LIVEKIT_PINNED: [declaring]}))
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code == 0, result.output
 
         assert spy.override_documents[0]["services"]["livekit"]["ports"] == [
             {"published": 16178, "target": 6178},
@@ -480,22 +503,88 @@ class TestUpProjects:
     ) -> None:
         spy = _up(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
 
-        [bundle_command, gateway_command] = spy.commands
-        assert bundle_command.startswith(
+        [bundle_create, bundle_start, gateway_command] = spy.commands
+        assert bundle_create.startswith(
             "env -u BOATYARD_BARRIER_IMAGE -u EDGE_BASE_URL -u PUBLIC_HOST -u PUBLIC_PORT -u PUBLIC_SCHEME "
             "-u PUBLIC_URL -u PUBLIC_URL_PATH docker compose -p edge-demo-livekit -f "
         )
-        assert "boatyard-bundle-" in bundle_command
-        assert "boatyard-override-" in bundle_command
-        assert bundle_command.endswith("up --pull missing -d")
+        assert "boatyard-bundle-" in bundle_create
+        assert "boatyard-override-" in bundle_create
+        assert bundle_create.endswith("up --pull missing -d --no-start")
+        assert bundle_start.startswith(
+            "env -u BOATYARD_BARRIER_IMAGE -u EDGE_BASE_URL -u PUBLIC_HOST -u PUBLIC_PORT -u PUBLIC_SCHEME "
+            "-u PUBLIC_URL -u PUBLIC_URL_PATH docker compose -p edge-demo-livekit -f "
+        )
+        assert bundle_start.endswith("start livekit")
         assert gateway_command.startswith(
             "env -u BOATYARD_BARRIER_IMAGE -u EDGE_BASE_URL -u PUBLIC_HOST -u PUBLIC_PORT -u PUBLIC_SCHEME "
             "-u PUBLIC_URL -u PUBLIC_URL_PATH docker compose -p edge-demo -f "
         )
         assert "boatyard-gateway-" in gateway_command
+        assert gateway_command.endswith("up --pull missing -d")
         assert spy.env_content is not None and spy.env_content.startswith(
             "BOATYARD_BARRIER_IMAGE=docker.io/library/alpine:3.20\nEDGE_BASE_URL="
         )
+
+    def test_held_services_stay_out_of_the_start_step(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _write_edge_tree(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
+        lock = yaml.safe_load((tmp_path / LOCK_PATH).read_text(encoding="utf-8"))
+        lock["bundles"]["LIVEKIT_BUNDLE"]["held_services"] = ["livekit"]
+        (tmp_path / LOCK_PATH).write_text(yaml.safe_dump(lock), encoding="utf-8")
+        spy = UpSpy()
+        monkeypatch.setattr(up, "bash", spy.run)
+        monkeypatch.setattr(up, "bash_check", _bash_check_true)
+        monkeypatch.setattr(up, "install_crane", lambda: None)
+        monkeypatch.setattr(up, "OciArtifactManifest", StubArtifacts({LIVEKIT_PINNED: [LIVEKIT_TEXT]}))
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code == 0, result.output
+        [bundle_create, gateway_command] = spy.commands
+        assert bundle_create.endswith("up --pull missing -d --no-start")
+        assert gateway_command.endswith("up --pull missing -d")
+
+    def test_gpu_annotation_values_do_not_gate_the_start_step(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        text = "services:\n  livekit:\n    image: demo/livekit:1\n    annotations:\n      boatyard/gpu: managed\n"
+        spy = _up(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], livekit_text=text)
+
+        [bundle_create, bundle_start, gateway_command] = spy.commands
+        assert bundle_create.endswith("up --pull missing -d --no-start")
+        assert bundle_start.endswith("start livekit")
+        assert gateway_command.endswith("up --pull missing -d")
+
+    def test_the_start_step_lists_only_the_unheld_services(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        text = (
+            "services:\n"
+            "  edge:\n"
+            "    image: demo/edge:1\n"
+            "  worker:\n"
+            "    image: demo/worker:1\n"
+            "  livekit:\n"
+            "    image: demo/livekit:1\n"
+        )
+        _write_edge_tree(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}])
+        lock = yaml.safe_load((tmp_path / LOCK_PATH).read_text(encoding="utf-8"))
+        lock["bundles"]["LIVEKIT_BUNDLE"]["services"] = ["edge", "worker", "livekit"]
+        lock["bundles"]["LIVEKIT_BUNDLE"]["held_services"] = ["worker"]
+        (tmp_path / LOCK_PATH).write_text(yaml.safe_dump(lock), encoding="utf-8")
+        spy = UpSpy()
+        monkeypatch.setattr(up, "bash", spy.run)
+        monkeypatch.setattr(up, "bash_check", _bash_check_true)
+        monkeypatch.setattr(up, "install_crane", lambda: None)
+        monkeypatch.setattr(up, "OciArtifactManifest", StubArtifacts({LIVEKIT_PINNED: [text]}))
+
+        result = runner.invoke(app, ["up"])
+
+        assert result.exit_code == 0, result.output
+        [bundle_create, bundle_start, gateway_command] = spy.commands
+        assert bundle_create.endswith("up --pull missing -d --no-start")
+        assert bundle_start.endswith("start edge livekit")
+        assert gateway_command.endswith("up --pull missing -d")
 
     def test_a_failing_project_stops_the_run_and_reports_the_retained_artifacts(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -514,7 +603,7 @@ class TestUpProjects:
         assert result.exit_code != 0
         assert isinstance(result.exception, SystemExit)
         report = str(result.exception)
-        assert "the project edge-demo failed" in report
+        assert "the project edge-demo-livekit failed" in report
         assert "kept artifacts for inspection:" in report
 
     def test_zero_selection_renders_the_gateway_project_alone(

@@ -17,6 +17,7 @@ RESTART_ANNOTATION = "boatyard/restart"
 COMPOSE_RESTART_POLICIES = ("no", "always", "on-failure", "unless-stopped")
 CONSUMER_INTERPOLATED_ANNOTATION = "boatyard/consumer-interpolated"
 DOCKERFILE_ANNOTATION = "boatyard/dockerfile"
+AUTOSTART_ANNOTATION = "boatyard/autostart"
 LOCK_ANNOTATION = "boatyard/lock"
 ROUTE_ANNOTATION = "boatyard/route"
 PUBLISH_PORT_ANNOTATION = "boatyard/publish-port"

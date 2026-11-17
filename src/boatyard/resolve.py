@@ -47,6 +47,8 @@ class BundleProject(NamedTuple):
     effective_routes: list[Route]
     effective_ports: list[PublishedPort]
     container_names: list[str]
+    held_services: list[str]
+    declared_ports: dict[str, list[tuple[int, int, str]]]
 
 
 class PublicFace(NamedTuple):
@@ -63,6 +65,7 @@ class GatewayPlan(NamedTuple):
 
 
 class AssemblyPlan(NamedTuple):
+    config: ConfigFile
     bundles: list[BundleProject]
     gateway: GatewayPlan | None
     env: dict[str, str]
@@ -176,6 +179,8 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
             adopted_routes = list(locked.routes)
             adopted_ports = list(locked.ports)
             adopted_container_names = list(locked.container_names)
+            adopted_held_services = list(locked.held_services)
+            adopted_declared_ports = dict(locked.declared_ports)
             bundle_path = None
             pinned_reference = locked.reference
         else:
@@ -185,6 +190,8 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
             adopted_routes = records.routes
             adopted_ports = records.ports
             adopted_container_names = records.container_names
+            adopted_held_services = records.held_services
+            adopted_declared_ports = records.declared_ports
             bundle_path = paths[name]
             pinned_reference = None
 
@@ -202,6 +209,8 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
                 effective_routes=effective_routes,
                 effective_ports=effective_ports,
                 container_names=adopted_container_names,
+                held_services=adopted_held_services,
+                declared_ports=adopted_declared_ports,
             )
         )
 
@@ -348,6 +357,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
         )
 
     return AssemblyPlan(
+        config=config,
         bundles=bundles,
         gateway=gateway,
         env=env,

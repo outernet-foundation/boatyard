@@ -31,6 +31,7 @@ from boatyard.models.lock_file import (
     refuse_local_lock_entries,
 )
 from boatyard.models.workload import (
+    AUTOSTART_ANNOTATION,
     PUBLISH_PORT_ANNOTATION,
     ROUTE_ANNOTATION,
     parse_publish_port_annotation,
@@ -102,6 +103,7 @@ class BundleRecords(NamedTuple):
     routes: list[Route]
     ports: list[PublishedPort]
     container_names: list[str]
+    held_services: list[str]
     declared_ports: dict[str, list[tuple[int, int, str]]]
 
 
@@ -140,6 +142,8 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
             routes=records.routes,
             ports=records.ports,
             container_names=records.container_names,
+            held_services=records.held_services,
+            declared_ports=records.declared_ports,
         )
 
     # Refuse committed entries for local base_images keys
@@ -258,6 +262,7 @@ def extract_bundle_records(texts: list[str]) -> BundleRecords:
     # Collect every stanza before any reference is checked
     services: list[str] = []
     container_names: set[str] = set()
+    held_services: set[str] = set()
     declared_ports: dict[str, list[tuple[int, int, str]]] = {}
     stanzas: list[tuple[str, Yaml, dict[str, str]]] = []
     for text in texts:
@@ -274,13 +279,15 @@ def extract_bundle_records(texts: list[str]) -> BundleRecords:
             if "container_name" in stanza:
                 container_names.add(service_name)
             _collect_declared_ports(declared_ports, service_name, stanza.get("ports"))
-            stanzas.append((service_name, stanza, _stanza_annotations(stanza)))
+            stanzas.append((service_name, stanza, stanza_annotations(stanza)))
 
     # Read the routes and ports from the annotations
     routes: list[Route] = []
     ports: list[PublishedPort] = []
-    for service_name, _stanza, stanza_annotations in stanzas:
-        route_value = stanza_annotations.get(ROUTE_ANNOTATION)
+    for service_name, _stanza, service_annotations in stanzas:
+        if service_annotations.get(AUTOSTART_ANNOTATION) == "false":
+            held_services.add(service_name)
+        route_value = service_annotations.get(ROUTE_ANNOTATION)
         if route_value is not None:
             for route in parse_route_annotation(route_value):
                 upstream = route.upstream.partition(":")[0]
@@ -290,7 +297,7 @@ def extract_bundle_records(texts: list[str]) -> BundleRecords:
                         f"which the bundle defines no stanza for"
                     )
                 routes.append(Route(path=route.path, upstream=route.upstream, strip_prefix=route.strip_prefix))
-        publish_value = stanza_annotations.get(PUBLISH_PORT_ANNOTATION)
+        publish_value = service_annotations.get(PUBLISH_PORT_ANNOTATION)
         if publish_value is not None:
             ports.extend(
                 PublishedPort(
@@ -306,11 +313,12 @@ def extract_bundle_records(texts: list[str]) -> BundleRecords:
         routes=routes,
         ports=ports,
         container_names=sorted(container_names),
+        held_services=sorted(held_services),
         declared_ports=declared_ports,
     )
 
 
-def _stanza_annotations(stanza: dict[str, Yaml]) -> dict[str, str]:
+def stanza_annotations(stanza: dict[str, Yaml]) -> dict[str, str]:
     annotations: dict[str, str] = {}
     for key in ("annotations", "labels"):
         value = stanza.get(key)

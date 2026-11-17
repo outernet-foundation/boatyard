@@ -1060,6 +1060,23 @@ def test_extract_bundle_records_collects_declared_ports_in_both_spellings() -> N
     assert records.declared_ports == {"livekit": [(6178, 6178, "tcp"), (5957, 5957, "udp")]}
 
 
+def test_extract_bundle_records_holds_services_marked_no_autostart() -> None:
+    from boatyard.lock import extract_bundle_records
+
+    text = (
+        "services:\n"
+        "  livekit:\n"
+        "    image: demo/livekit:1\n"
+        '    annotations:\n      boatyard/autostart: "false"\n'
+        "  edge:\n"
+        "    image: demo/edge:1\n"
+    )
+
+    records = extract_bundle_records([text])
+
+    assert records.held_services == ["livekit"]
+
+
 def _skip_crane_install() -> None:
     return None
 
