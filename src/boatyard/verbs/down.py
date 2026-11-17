@@ -6,9 +6,9 @@ from typing import Annotated
 import typer
 from bashrun.bash import bash, bash_check
 
-from boatyard.compose import compose_command
 from boatyard.models.config_file import ConfigFile
 from boatyard.paths import DEFAULT_CONFIG_PATH
+from boatyard.temp import quote_command_token
 
 app = typer.Typer()
 
@@ -23,16 +23,13 @@ def down(
     # Config only: every declared entry names a candidate project, selected or not, and the
     # bare project name also removes any legacy single-project assembly.
     candidates = [*(f"{config.project_name}-{row.name}" for row in config.service_entries), config.project_name]
+    # Project and entry names match ^[a-z][a-z0-9-]*$; only the directory needs quoting
+    project_directory = quote_command_token(str(root))
+    volumes_argument = " -v" if volumes else ""
     for candidate in candidates:
         bash(
-            compose_command(
-                root,
-                [],
-                "down",
-                "--remove-orphans",
-                *(["-v"] if volumes else []),
-                project_name=candidate,
-            )
+            f"docker compose -p {candidate} --project-directory {project_directory} "
+            f"down --remove-orphans{volumes_argument}"
         )
 
     # The shared network comes down last, after every project that could attach to it

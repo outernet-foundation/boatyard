@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -11,9 +12,8 @@ import yaml
 from bashrun.bash import CalledProcessError, bash, bash_check
 
 from boatyard.build import run_build
-from boatyard.compose import compose_command
 from boatyard.crane import install_crane
-from boatyard.lock import OciArtifactManifest, extract_bundle_records
+from boatyard.lock import OciArtifactManifest
 from boatyard.models.config_file import (
     EDGE_IMAGE,
     EDGE_LISTEN_PORT,
@@ -26,6 +26,7 @@ from boatyard.models.lock_file import LockFile
 from boatyard.models.values_file import ValuesFile
 from boatyard.paths import DEFAULT_CONFIG_PATH, LOCK_PATH, VALUES_FILE
 from boatyard.resolve import AssemblyPlan, BundleProject, GatewayPlan, resolve
+from boatyard.temp import quote_command_token
 from boatyard.yaml import Yaml
 
 # Name the gateway's Caddyfile configs key
@@ -36,13 +37,8 @@ app = typer.Typer()
 
 class BundleInvocation(NamedTuple):
     bundle: BundleProject
-    compose_files: list[Path]
-
-
-class UpContext(NamedTuple):
-    env_file: Path
-    invocations: list[BundleInvocation]
-    gateway_file: Path | None
+    bundle_files: list[Path]
+    override_file: Path
 
 
 @app.command()
@@ -68,20 +64,10 @@ def up(
 
     # Resolve the assembly plan
     plan = resolve(config, lock, config_values)
-    auth_entries = {row.name for row in config.service_entries if row.auth}
-    shared_network_name = f"{config.project_name}-shared"
     materialized: list[Path] = []
 
     try:
-        up_context = _materialize_up(config, config_values, plan, auth_entries, shared_network_name, materialized)
-        _orchestrate_up(
-            root,
-            config,
-            plan,
-            up_context,
-            quiet_pull=quiet_pull,
-            build=build,
-        )
+        _orchestrate_up(plan, config_values, materialized, quiet_pull=quiet_pull, build=build)
     except CalledProcessError as error:
         # Exit naming the failing project, keeping the artifacts
         raise SystemExit(_retained_report(_failing_project(error), materialized)) from None
@@ -95,14 +81,18 @@ def up(
         path.unlink(missing_ok=True)
 
 
-def _materialize_up(
-    config: ConfigFile,
-    config_values: ValuesFile,
+def _orchestrate_up(
     plan: AssemblyPlan,
-    auth_entries: set[str],
-    shared_network_name: str,
+    values: ValuesFile,
     materialized: list[Path],
-) -> UpContext:
+    *,
+    quiet_pull: bool,
+    build: bool,
+) -> None:
+    config = plan.config
+    auth_entries = {row.name for row in config.service_entries if row.auth}
+    shared_network_name = f"{config.project_name}-shared"
+
     # Materialize the env file every invocation shares
     with NamedTemporaryFile(
         "w", suffix=".env", prefix="boatyard-env-", delete=False, encoding="utf-8", newline="\n"
@@ -116,7 +106,7 @@ def _materialize_up(
         _materialize(
             materialized,
             "boatyard-gateway-",
-            render_gateway_document(config.project_name, shared_network_name, plan, auth_entries),
+            render_gateway_document(plan, auth_entries),
         )
         if plan.gateway is not None
         else None
@@ -128,67 +118,75 @@ def _materialize_up(
         # If the bundle is local, read its committed compose file
         if bundle.bundle_path is not None:
             compose_files = [bundle.bundle_path]
-            declared_ports = extract_bundle_records([bundle.bundle_path.read_text(encoding="utf-8")]).declared_ports
         else:
-            # Otherwise fetch the remote bundle's texts via crane
+            # Fetch the remote bundle's texts via crane
             install_crane()
             texts = OciArtifactManifest.fetch_compose_texts(bundle.pinned_reference or "")
             compose_files = [_materialize(materialized, "boatyard-bundle-", text) for text in texts]
-            declared_ports = extract_bundle_records(texts).declared_ports
         override_file = _materialize(
             materialized,
             "boatyard-override-",
-            render_override_document(shared_network_name, bundle, config_values, declared_ports),
+            render_override_document(shared_network_name, bundle, values, bundle.declared_ports),
         )
-        invocations.append(BundleInvocation(bundle=bundle, compose_files=[*compose_files, override_file]))
-    return UpContext(env_file=env_file, invocations=invocations, gateway_file=gateway_file)
+        invocations.append(BundleInvocation(bundle=bundle, bundle_files=compose_files, override_file=override_file))
 
-
-def _orchestrate_up(
-    root: Path,
-    config: ConfigFile,
-    plan: AssemblyPlan,
-    up_context: UpContext,
-    *,
-    quiet_pull: bool,
-    build: bool,
-) -> None:
     # If any project exists, create the shared network first
-    if up_context.invocations or up_context.gateway_file is not None:
+    if invocations or gateway_file is not None:
         # If the network does not exist, create it
-        if not bash_check(f"docker network inspect {config.project_name}-shared"):
-            bash(f"docker network create {config.project_name}-shared")
+        if not bash_check(f"docker network inspect {shared_network_name}"):
+            bash(f"docker network create {shared_network_name}")
 
     # If build is set, build the local images first
     if build:
         run_build(config=config)
 
-    # Bring every bundle up as its own project, then the gateway project last
-    up_arguments = ["up", "--pull", "missing", *(["--quiet-pull"] if quiet_pull else []), "-d"]
-    for invocation in up_context.invocations:
-        bash(
-            compose_command(
-                root,
-                invocation.compose_files,
-                *up_arguments,
-                project_name=invocation.bundle.project_name,
-                env_file=up_context.env_file,
-                slot_names=list(plan.env),
-            )
+    # Create every bundle stopped, then start everything but held services
+    pull_arguments = ["--pull", "missing", *(["--quiet-pull"] if quiet_pull else [])]
+    for invocation in invocations:
+        # Leave held services out of the start step
+        command_files = [*invocation.bundle_files, invocation.override_file]
+        _run_compose(
+            plan,
+            env_file,
+            command_files,
+            invocation.bundle.project_name,
+            ["up", *pull_arguments, "-d", "--no-start"],
         )
+        started = sorted(set(invocation.bundle.services) - set(invocation.bundle.held_services))
+        if started:
+            _run_compose(
+                plan,
+                env_file,
+                command_files,
+                invocation.bundle.project_name,
+                ["start", *started],
+            )
 
-    # If a gateway is declared, bring it up last
-    if up_context.gateway_file is not None:
-        bash(
-            compose_command(
-                root,
-                [up_context.gateway_file],
-                *up_arguments,
-                project_name=config.project_name,
-                env_file=up_context.env_file,
-                slot_names=list(plan.env),
-            )
-        )
+    # If a gateway is declared, bring it up one-shot; boatyard renders carry no annotations
+    if gateway_file is not None:
+        _run_compose(plan, env_file, [gateway_file], config.project_name, ["up", *pull_arguments, "-d"])
+
+
+def _run_compose(
+    plan: AssemblyPlan,
+    env_file: Path,
+    compose_files: list[Path],
+    project_name: str,
+    arguments: list[str],
+) -> None:
+    # Spell the one compose invocation; the scrub defeats env-file precedence
+    root = plan.config.root
+    quoted_arguments = [quote_command_token(argument) for argument in arguments]
+    files_argument = "".join(f" -f {quote_command_token(str(compose_file))}" for compose_file in compose_files)
+    scrub = "".join(f" -u {quote_command_token(name)}" for name in sorted(set(plan.env)))
+    prefix = (
+        f"docker compose -p {quote_command_token(project_name)}{files_argument} "
+        f"--project-directory {quote_command_token(str(root))} --env-file {quote_command_token(str(env_file))}"
+    )
+    # If not on Windows, prefix the env scrub
+    if scrub and sys.platform != "win32":
+        prefix = f"env{scrub} {prefix}"
+    bash(" ".join([prefix, *quoted_arguments]))
 
 
 def _materialize(materialized: list[Path], prefix: str, text: str) -> Path:
@@ -267,13 +265,10 @@ def _port_entry(port: PublishedPort) -> str:
     return "{" + ", ".join(fields) + "}"
 
 
-def render_gateway_document(
-    project_name: str,
-    shared_network_name: str,
-    plan: AssemblyPlan,
-    auth_entries: set[str],
-) -> str:
+def render_gateway_document(plan: AssemblyPlan, auth_entries: set[str]) -> str:
     gateway = _require_gateway(plan)
+    project_name = plan.config.project_name
+    shared_network_name = f"{project_name}-shared"
 
     # If an auth option is selected without a public face, refuse
     if any(bundle.entry_name in auth_entries for bundle in plan.bundles) and gateway.public_face is None:
