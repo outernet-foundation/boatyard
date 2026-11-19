@@ -16,6 +16,7 @@ from boatyard.models.config_file import (
     K8sConfig,
     ConfigFile,
     chart_lock_key,
+    mirrored_ref,
 )
 from boatyard.models.image import dockerfile_stem
 from boatyard.models.k8s_pins import load_pins
@@ -59,7 +60,7 @@ def generate_k8s(
     lock: LockFile,
     local: bool,
 ) -> tuple[Path, set[str]]:
-    index_images = lock.index_references()
+    index_images = lock.index_references(config.mirror_prefix)
     workloads = [config.workloads[name] for name in k8s.workloads]
 
     # The pins demand is the k8s rendering's whole dockerfile closure: the workloads'
@@ -121,7 +122,7 @@ def generate_k8s(
                 split_documents(
                     bash_output(
                         f"helm template {chart_name} oci://"
-                        f"{lock.require(chart_lock_key(chart_name), f'chart {chart_name!r}')}"
+                        f"{mirrored_ref(lock.require(chart_lock_key(chart_name), f'chart {chart_name!r}'), config.mirror_prefix)}"
                         f" --values {values_path.as_posix()}"
                     )
                 )

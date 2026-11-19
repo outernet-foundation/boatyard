@@ -20,7 +20,11 @@ Design intent and silent-failure traps, one fact per bullet.
   From 1.0 on, breaking changes ship with a manually bumped `major_minor`.
 - Third-party images and charts are consumed through the org mirror namespace (upstream
   manifests get GC'd). CI is the single writer — engineers never push, and error text never
-  teaches them to. The one exception is boatyard's own machinery: the barrier and gateway
+  teaches them to. The lock pins each reference at its upstream spelling; the mirror prefix
+  is decoration the lock accessors apply at consumption. The gitignored values file's
+  `bypass_image_mirror: true` is the one machine-local escape: `build` skips the decoration
+  and pulls base images from upstream at the locked digests, for a declaration the mirror
+  job has not copied yet; CI behavior is unchanged (its checkouts carry no values file). The one exception is boatyard's own machinery: the barrier and gateway
   caddy pins live in boatyard's code as upstream tags, never in a consumer lock or mirror
   (the barrier rides the global `BOATYARD_BARRIER_IMAGE` slot, minted at resolve; the
   gateway document renders its pin literally); boatyard hosting its own mirror retires the

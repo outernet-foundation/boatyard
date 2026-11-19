@@ -18,6 +18,8 @@ from build_artifact_registry.setup_oras import install_oras
 from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, model_validator
 
 from boatyard.models.config_file import ConfigFile
+from boatyard.models.values_file import ValuesFile
+from boatyard.paths import VALUES_FILE
 from boatyard.yaml import Yaml
 from boatyard.models.image import Image
 from boatyard.lock import relock
@@ -149,8 +151,11 @@ def run_build(
                 f"other arches require --targets. Images: {_address_vocabulary(config.images)}"
             )
 
-    # The incremental lock write happens on every build run; bake reads the fresh entries as environment.
-    os.environ.update(relock(config).index_references())
+    # Refresh the lock and expose its entries to bake as environment
+    references = relock(config)
+    values_path = config.root / VALUES_FILE
+    bypass_image_mirror = values_path.is_file() and ValuesFile.load(values_path).bypass_image_mirror
+    os.environ.update(references.index_references(None if bypass_image_mirror else config.mirror_prefix))
 
     # Render the bake services for every target.
     namespace = destination if destination is not None else config.repository

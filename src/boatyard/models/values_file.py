@@ -53,6 +53,7 @@ class ValuesFile(BaseModel):
     public_port: PortNumber | None = None
     public_url_path: str | None = None
     platform: str | None = None
+    bypass_image_mirror: bool = False
     gateway_port: PortNumber | None = None
     ports: dict[str, PortNumber] = Field(default_factory=dict)
     values: ValuesMap = Field(default_factory=dict)

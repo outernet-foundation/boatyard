@@ -122,7 +122,7 @@ def _bundle_entry(reference: str, **records: object) -> dict[str, object]:
     }
 
 
-BARRIER_MIRROR_BASE = f"{MIRROR_PREFIX}/docker.io/library/alpine:3.20"
+BARRIER_MIRROR_BASE = "docker.io/library/alpine:3.20"
 
 
 def _barrier_entry(platforms: list[str]) -> dict[str, object]:
@@ -231,7 +231,7 @@ class TestSelfSkip:
         result = runner.invoke(app, ["lock"])
 
         assert result.exit_code == 0, result.output
-        barrier = f"{MIRROR_PREFIX}/docker.io/library/alpine:3.20"
+        barrier = "docker.io/library/alpine:3.20"
         assert _read_lock(tmp_path)["images"]["ALPINE_IMAGE"] == {
             "index": f"{barrier}@{DIGEST_A}",
             "platforms": {"linux/amd64": f"{barrier}@{DIGEST_B}"},
@@ -291,7 +291,7 @@ class TestImageRecording:
                 "platforms": ["linux/amd64"],
                 "images": {
                     "NEURAL_NETWORKS_BASE": _structured_entry(
-                        f"{MIRROR_PREFIX}/ghcr.io/org/demo/neural-networks-base:1",
+                        "ghcr.io/org/demo/neural-networks-base:1",
                         index_digest=DIGEST_A,
                         platforms={"linux/amd64": DIGEST_A},
                     )
@@ -323,7 +323,7 @@ class TestImageRecording:
         )
 
         assert result.exit_code == 0, result.output
-        base = f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.5.0"
+        base = "docker.io/grafana/loki:3.5.0"
         assert _read_lock(tmp_path) == {
             "platforms": ["linux/amd64", "linux/arm64"],
             "images": {
@@ -358,12 +358,12 @@ class TestImageRecording:
             "platforms": ["linux/amd64"],
             "images": {
                 "API_IMAGE": _structured_entry(
-                    f"{MIRROR_PREFIX}/ghcr.io/outernet-foundation/placeframe/api:1.2.3",
+                    "ghcr.io/outernet-foundation/placeframe/api:1.2.3",
                     index_digest=DIGEST_A,
                     platforms={"linux/amd64": DIGEST_B},
                 ),
                 "UV_IMAGE": _structured_entry(
-                    f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15",
+                    "ghcr.io/astral-sh/uv:0.12.15",
                     index_digest=DIGEST_A,
                     platforms={"linux/amd64": DIGEST_B},
                 ),
@@ -382,7 +382,7 @@ class TestImageRecording:
         assert (tmp_path / LOCK_PATH).read_text(encoding="utf-8") == first
 
     def test_digest_pinned_declarations_pass_through_prefixed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        base = f"{MIRROR_PREFIX}/docker.io/library/neural@{DIGEST_A}"
+        base = f"docker.io/library/neural@{DIGEST_A}"
         result = _invoke(
             monkeypatch, tmp_path, [], base_images={"NEURAL_IMAGE": f"docker.io/library/neural@{DIGEST_A}"}
         )
@@ -399,7 +399,7 @@ class TestImageRecording:
     def test_an_unchanged_declaration_freezes_the_whole_structured_entry(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        base = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15"
+        base = "ghcr.io/astral-sh/uv:0.12.15"
         (tmp_path / LOCK_PATH).write_text(
             yaml.safe_dump({
                 "images": {
@@ -429,7 +429,7 @@ class TestImageRecording:
     def test_a_declared_platform_set_change_breaks_the_freeze_and_re_resolves(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        base = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15"
+        base = "ghcr.io/astral-sh/uv:0.12.15"
         (tmp_path / LOCK_PATH).write_text(
             yaml.safe_dump({
                 "images": {
@@ -467,12 +467,12 @@ class TestImageRecording:
             yaml.safe_dump({
                 "images": {
                     "API_IMAGE": _structured_entry(
-                        f"{MIRROR_PREFIX}/ghcr.io/outernet-foundation/placeframe/api:1.2.3",
+                        "ghcr.io/outernet-foundation/placeframe/api:1.2.3",
                         index_digest=DIGEST_A,
                         platforms={"linux/amd64": DIGEST_B},
                     ),
                     "UV_IMAGE": _structured_entry(
-                        f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15",
+                        "ghcr.io/astral-sh/uv:0.12.15",
                         index_digest=DIGEST_A,
                         platforms={"linux/amd64": DIGEST_B},
                     ),
@@ -501,7 +501,7 @@ class TestImageRecording:
             yaml.safe_dump({
                 "images": {
                     "API_IMAGE": _structured_entry(
-                        f"{MIRROR_PREFIX}/ghcr.io/outernet-foundation/placeframe/api:1.2.2",
+                        "ghcr.io/outernet-foundation/placeframe/api:1.2.2",
                         index_digest=DIGEST_A,
                         platforms={"linux/amd64": DIGEST_B},
                     )
@@ -526,12 +526,12 @@ class TestImageRecording:
             yaml.safe_dump({
                 "images": {
                     "DEAD_OPERATOR_IMAGE": _structured_entry(
-                        f"{MIRROR_PREFIX}/quay.io/op/operator:1.0",
+                        "quay.io/op/operator:1.0",
                         index_digest=DIGEST_B,
                         platforms={"linux/amd64": DIGEST_B},
                     ),
                     "RATHOLE_IMAGE": _structured_entry(
-                        f"{MIRROR_PREFIX}/docker.io/x/rathole:0.11.0",
+                        "docker.io/x/rathole:0.11.0",
                         index_digest=DIGEST_B,
                         platforms={"linux/amd64": DIGEST_B},
                     ),
@@ -547,7 +547,7 @@ class TestImageRecording:
             "platforms": ["linux/amd64"],
             "images": {
                 "RATHOLE_IMAGE": _structured_entry(
-                    f"{MIRROR_PREFIX}/docker.io/x/rathole:0.11.0",
+                    "docker.io/x/rathole:0.11.0",
                     index_digest=DIGEST_B,
                     platforms={"linux/amd64": DIGEST_B},
                 ),
@@ -572,7 +572,7 @@ def _lock_against_index(
 
 
 class TestPlatformManifestSelection:
-    ALPINE_BASE = f"{MIRROR_PREFIX}/docker.io/library/alpine:3.20"
+    ALPINE_BASE = "docker.io/library/alpine:3.20"
 
     def test_selects_one_manifest_per_declared_platform(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         manifests = [
@@ -674,7 +674,7 @@ class TestChartRecording:
         assert _read_lock(tmp_path) == {
             "platforms": ["linux/amd64"],
             "images": {"ALPINE_IMAGE": _barrier_entry(["linux/amd64"])},
-            "charts": {"LOKI_CHART": f"{MIRROR_PREFIX}/{LOKI_UPSTREAM}:7.3.0@{DIGEST_A}"},
+            "charts": {"LOKI_CHART": f"{LOKI_UPSTREAM}:7.3.0@{DIGEST_A}"},
         }
 
     def test_digest_declared_chart_passes_through_unresolved(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -684,7 +684,7 @@ class TestChartRecording:
         assert _read_lock(tmp_path) == {
             "platforms": ["linux/amd64"],
             "images": {"ALPINE_IMAGE": _barrier_entry(["linux/amd64"])},
-            "charts": {"LOKI_CHART": f"{MIRROR_PREFIX}/{LOKI_UPSTREAM}@{DIGEST_B}"},
+            "charts": {"LOKI_CHART": f"{LOKI_UPSTREAM}@{DIGEST_B}"},
         }
 
     def test_unchanged_chart_declaration_copies_its_frozen_digest_forward(
@@ -693,7 +693,7 @@ class TestChartRecording:
         (tmp_path / LOCK_PATH).write_text(
             yaml.safe_dump({
                 "images": {"ALPINE_IMAGE": _barrier_entry(["linux/amd64"])},
-                "charts": {"LOKI_CHART": f"{MIRROR_PREFIX}/{LOKI_UPSTREAM}:7.3.0@{DIGEST_B}"},
+                "charts": {"LOKI_CHART": f"{LOKI_UPSTREAM}:7.3.0@{DIGEST_B}"},
             }),
             encoding="utf-8",
         )
@@ -704,14 +704,14 @@ class TestChartRecording:
         assert _read_lock(tmp_path) == {
             "platforms": ["linux/amd64"],
             "images": {"ALPINE_IMAGE": _barrier_entry(["linux/amd64"])},
-            "charts": {"LOKI_CHART": f"{MIRROR_PREFIX}/{LOKI_UPSTREAM}:7.3.0@{DIGEST_B}"},
+            "charts": {"LOKI_CHART": f"{LOKI_UPSTREAM}:7.3.0@{DIGEST_B}"},
         }
 
     def test_chart_tag_bump_re_resolves(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         (tmp_path / LOCK_PATH).write_text(
             yaml.safe_dump({
                 "images": {"ALPINE_IMAGE": _barrier_entry(["linux/amd64"])},
-                "charts": {"LOKI_CHART": f"{MIRROR_PREFIX}/{LOKI_UPSTREAM}:7.3.0@{DIGEST_B}"},
+                "charts": {"LOKI_CHART": f"{LOKI_UPSTREAM}:7.3.0@{DIGEST_B}"},
             }),
             encoding="utf-8",
         )
@@ -722,7 +722,7 @@ class TestChartRecording:
         assert _read_lock(tmp_path) == {
             "platforms": ["linux/amd64"],
             "images": {"ALPINE_IMAGE": _barrier_entry(["linux/amd64"])},
-            "charts": {"LOKI_CHART": f"{MIRROR_PREFIX}/{LOKI_UPSTREAM}:7.3.1@{DIGEST_A}"},
+            "charts": {"LOKI_CHART": f"{LOKI_UPSTREAM}:7.3.1@{DIGEST_A}"},
         }
 
 
@@ -886,7 +886,7 @@ class TestBundleRecording:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         caddy_declaration = "docker.io/library/caddy:2.8.4-alpine@" + DIGEST_B
-        caddy_base = MIRROR_PREFIX + "/" + caddy_declaration
+        caddy_base = caddy_declaration
         committed = yaml.safe_dump({
             "images": {"CADDY_IMAGE": {"index": caddy_base, "platforms": {"linux/amd64": caddy_base}}},
             "bundles": {"TUNNEL_RATHOLE_BUNDLE": _bundle_entry(f"{self.RATHOLE_BASE}@{DIGEST_B}")},
@@ -1127,7 +1127,7 @@ class TestLockCheck:
             yaml.safe_dump({
                 "images": {
                     "UV_IMAGE": _structured_entry(
-                        f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.11.0",
+                        "ghcr.io/astral-sh/uv:0.11.0",
                         index_digest=DIGEST_B,
                         platforms={"linux/amd64": DIGEST_B},
                     )
@@ -1160,46 +1160,52 @@ def _selection_lock(platforms: list[str] | None = None) -> lock_module.LockFile:
         "platforms": platforms if platforms is not None else ["linux/amd64", "linux/arm64"],
         "images": {
             "LOKI_IMAGE": {
-                "index": f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.5.0@{DIGEST_A}",
+                "index": f"docker.io/grafana/loki:3.5.0@{DIGEST_A}",
                 "platforms": {
-                    "linux/amd64": f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.5.0@{DIGEST_B}",
-                    "linux/arm64": f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.5.0@{DIGEST_C}",
+                    "linux/amd64": f"docker.io/grafana/loki:3.5.0@{DIGEST_B}",
+                    "linux/arm64": f"docker.io/grafana/loki:3.5.0@{DIGEST_C}",
                 },
             }
         },
         "charts": {
-            "GRAFANA_CHART": f"{MIRROR_PREFIX}/ghcr.io/grafana/chart@{DIGEST_A}",
+            "GRAFANA_CHART": f"ghcr.io/grafana/chart@{DIGEST_A}",
         },
     })
 
 
 class TestEntrySelection:
     def test_the_projection_carries_no_entry_for_unknown_names(self) -> None:
-        assert "GHOST_IMAGE" not in _selection_lock().index_references()
+        assert "GHOST_IMAGE" not in _selection_lock().index_references(None)
 
 
 class TestIndexReferences:
     def test_the_projection_without_a_platform_carries_index_references(self) -> None:
-        entries = _selection_lock().index_references()
+        entries = _selection_lock().index_references(None)
 
         assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_A}")
         assert entries["GRAFANA_CHART"].endswith(f"@{DIGEST_A}")
 
+    def test_a_mirror_prefix_decorates_the_projection(self) -> None:
+        entries = _selection_lock().index_references(MIRROR_PREFIX)
+
+        assert entries["LOKI_IMAGE"] == f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.5.0@{DIGEST_A}"
+        assert entries["GRAFANA_CHART"] == f"{MIRROR_PREFIX}/ghcr.io/grafana/chart@{DIGEST_A}"
+
 
 class TestManifestReferences:
     def test_manifest_references_select_platform_manifests_over_the_recorded_singleton(self) -> None:
-        entries = _selection_lock(platforms=["linux/amd64"]).manifest_references(None)
+        entries = _selection_lock(platforms=["linux/amd64"]).manifest_references(None, None)
 
         assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_B}")
         assert entries["GRAFANA_CHART"].endswith(f"@{DIGEST_A}")
 
     def test_manifest_references_select_the_platform_the_environment_names(self) -> None:
-        entries = _selection_lock().manifest_references("linux/arm64")
+        entries = _selection_lock().manifest_references("linux/arm64", None)
 
         assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_C}")
 
     def test_the_env_render_is_sorted_and_stable(self) -> None:
-        entries = _selection_lock(platforms=["linux/amd64"]).manifest_references(None)
+        entries = _selection_lock(platforms=["linux/amd64"]).manifest_references(None, None)
 
         rendered = render_env_entries(entries)
 
@@ -1210,12 +1216,12 @@ class TestManifestReferences:
 
 class TestPlatformSelectionLaw:
     def test_a_singleton_selects_itself_without_reading_the_environment(self) -> None:
-        entries = _selection_lock(platforms=["linux/amd64"]).manifest_references(None)
+        entries = _selection_lock(platforms=["linux/amd64"]).manifest_references(None, None)
 
         assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_B}")
 
     def test_a_multi_platform_lock_selects_the_named_platform(self) -> None:
-        entries = _selection_lock().manifest_references("linux/arm64")
+        entries = _selection_lock().manifest_references("linux/arm64", None)
 
         assert entries["LOKI_IMAGE"].endswith(f"@{DIGEST_C}")
 
@@ -1224,23 +1230,21 @@ class TestPlatformSelectionLaw:
             ValueError,
             match=r"platform must be named in boatyard\.values\.yaml \(the lock records \['linux/amd64', 'linux/arm64'\]\)",
         ):
-            _selection_lock().manifest_references(None)
+            _selection_lock().manifest_references(None, None)
 
     def test_a_selection_outside_the_recorded_set_refuses_listing_recorded(self) -> None:
         with pytest.raises(
             ValueError,
             match=r"platform: 'linux/arm64' must be one of the recorded platforms \['linux/amd64'\]",
         ):
-            _selection_lock(platforms=["linux/amd64"]).manifest_references("linux/arm64")
+            _selection_lock(platforms=["linux/amd64"]).manifest_references("linux/arm64", None)
 
     def test_a_platform_less_lock_answers_none(self) -> None:
-        charts_only = lock_module.LockFile(
-            charts={"GRAFANA_CHART": f"{MIRROR_PREFIX}/ghcr.io/grafana/chart@{DIGEST_A}"}
-        )
+        charts_only = lock_module.LockFile(charts={"GRAFANA_CHART": f"ghcr.io/grafana/chart@{DIGEST_A}"})
 
-        entries = charts_only.manifest_references(None)
+        entries = charts_only.manifest_references(None, None)
 
-        assert entries == {"GRAFANA_CHART": f"{MIRROR_PREFIX}/ghcr.io/grafana/chart@{DIGEST_A}"}
+        assert entries == {"GRAFANA_CHART": f"ghcr.io/grafana/chart@{DIGEST_A}"}
 
 
 class TestPairedLoad:
@@ -1252,7 +1256,7 @@ class TestPairedLoad:
 
     def test_a_platform_set_mismatch_refuses_naming_the_lock_verb(self, tmp_path: Path) -> None:
         _write_repo(tmp_path, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
-        base = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15"
+        base = "ghcr.io/astral-sh/uv:0.12.15"
         self._write_committed(
             tmp_path,
             {
@@ -1273,7 +1277,7 @@ class TestPairedLoad:
 
     def test_an_entry_diverging_from_the_recorded_set_refuses(self, tmp_path: Path) -> None:
         _write_repo(tmp_path, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
-        base = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15"
+        base = "ghcr.io/astral-sh/uv:0.12.15"
         self._write_committed(
             tmp_path,
             {
@@ -1301,7 +1305,7 @@ class TestPairedLoad:
                 "platforms": ["linux/amd64"],
                 "images": {
                     "OTHER_IMAGE": _structured_entry(
-                        f"{MIRROR_PREFIX}/docker.io/x/other:1.0",
+                        "docker.io/x/other:1.0",
                         index_digest=DIGEST_A,
                         platforms={"linux/amd64": DIGEST_A},
                     )
@@ -1314,7 +1318,7 @@ class TestPairedLoad:
 
     def test_an_orphan_entry_refuses_naming_the_lock_verb(self, tmp_path: Path) -> None:
         _write_repo(tmp_path, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
-        base = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15"
+        base = "ghcr.io/astral-sh/uv:0.12.15"
         self._write_committed(
             tmp_path,
             {
@@ -1323,7 +1327,7 @@ class TestPairedLoad:
                     "UV_IMAGE": _structured_entry(base, index_digest=DIGEST_A, platforms={"linux/amd64": DIGEST_A}),
                     "ALPINE_IMAGE": _barrier_entry(["linux/amd64"]),
                     "GHOST_IMAGE": _structured_entry(
-                        f"{MIRROR_PREFIX}/docker.io/x/ghost:1.0",
+                        "docker.io/x/ghost:1.0",
                         index_digest=DIGEST_A,
                         platforms={"linux/amd64": DIGEST_A},
                     ),
@@ -1347,7 +1351,7 @@ class TestPairedLoad:
                 "platforms": ["linux/amd64"],
                 "images": {
                     "NEURAL_NETWORKS_BASE": _structured_entry(
-                        f"{MIRROR_PREFIX}/ghcr.io/org/demo/neural-networks-base:1",
+                        "ghcr.io/org/demo/neural-networks-base:1",
                         index_digest=DIGEST_A,
                         platforms={"linux/amd64": DIGEST_A},
                     )
@@ -1365,7 +1369,7 @@ class TestPairedLoad:
             ref_services={"core": {"options": {"main": {"workloads": ["localizer.yaml"]}}}},
         )
         _write_built_images(tmp_path)
-        base = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15"
+        base = "ghcr.io/astral-sh/uv:0.12.15"
         self._write_committed(
             tmp_path,
             {
@@ -1394,7 +1398,7 @@ class TestPairedLoad:
 
     def test_a_committed_lock_with_images_but_no_platforms_refuses(self, tmp_path: Path) -> None:
         _write_repo(tmp_path, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
-        base = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15"
+        base = "ghcr.io/astral-sh/uv:0.12.15"
         self._write_committed(
             tmp_path,
             {
@@ -1433,14 +1437,14 @@ class TestPairedLoad:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _write_repo(tmp_path, base_images={"UV_IMAGE": "ghcr.io/astral-sh/uv:0.12.15"})
-        base = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15"
+        base = "ghcr.io/astral-sh/uv:0.12.15"
         self._write_committed(
             tmp_path,
             {
                 "images": {
                     "UV_IMAGE": _structured_entry(base, index_digest=DIGEST_A, platforms={"linux/amd64": DIGEST_A})
                 },
-                "charts": {"GHOST_CHART": f"{MIRROR_PREFIX}/ghcr.io/x/ghost@{DIGEST_A}"},
+                "charts": {"GHOST_CHART": f"ghcr.io/x/ghost@{DIGEST_A}"},
             },
         )
         monkeypatch.setattr(lock_module, "bash_output", IndexRegistry().bash_output)

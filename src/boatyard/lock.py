@@ -19,7 +19,6 @@ from boatyard.models.config_file import (
     artifact_slots,
     bundle_lock_key,
     chart_lock_key,
-    mirrored_ref,
     refuse_unresolved_references,
 )
 from boatyard.crane import install_crane
@@ -110,7 +109,6 @@ class BundleRecords(NamedTuple):
 def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) -> LockFile:
     # Install the pinned crane
     install_crane()
-    prefix = config.mirror_prefix
 
     # Read the committed lock schema-only
     committed_path = config.root / LOCK_PATH
@@ -150,21 +148,20 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
     images: dict[str, ConfigLockEntry] = {}
     refuse_local_lock_entries(committed, config, committed_path.as_posix())
 
-    # Resolve each remote base image under the mirror prefix
+    # Resolve each remote base image at its upstream spelling
     for name, reference in config.remote_base_images.items():
-        base = mirrored_ref(reference, prefix)
         committed_entry = committed.images.get(name)
 
-        # Record a digest-pinned declaration as-is under the mirror prefix
+        # Record a digest-pinned declaration as-is
         if DIGEST_TAIL_PATTERN.search(reference):
-            images[name] = ConfigLockEntry(index=base, platforms=dict.fromkeys(config.platforms, base))
+            images[name] = ConfigLockEntry(index=reference, platforms=dict.fromkeys(config.platforms, reference))
             continue
 
         # If the committed pin still matches the tag and platforms, freeze it forward
         if (
             committed_entry is not None
             and not upgrade
-            and committed_entry.index.startswith(base + "@")
+            and committed_entry.index.startswith(reference + "@")
             and set(committed_entry.platforms) == set(config.platforms)
         ):
             images[name] = committed_entry
@@ -205,10 +202,10 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
                 raise ValueError(f"image pin {name}: upstream index child must carry a digest ({child!r})")
             selected[platform] = child.digest
 
-        # Record the mirror-prefixed index and one reference per platform
+        # Record the index and one reference per platform
         images[name] = ConfigLockEntry(
-            index=f"{base}@{index_digest}",
-            platforms={platform: f"{base}@{digest}" for platform, digest in selected.items()},
+            index=f"{reference}@{index_digest}",
+            platforms={platform: f"{reference}@{digest}" for platform, digest in selected.items()},
         )
 
     # Freeze or resolve each declared chart
@@ -216,20 +213,19 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
     for name, reference in config.declared_charts.items():
         key = chart_lock_key(name)
         reference = reference.removeprefix(OCI_REFERENCE_PREFIX)
-        base = mirrored_ref(reference, prefix)
         committed_entry = committed.charts.get(key)
 
-        # Record a digest-pinned declaration as-is under the mirror prefix
+        # Record a digest-pinned declaration as-is
         if DIGEST_TAIL_PATTERN.search(reference):
-            charts[key] = base
+            charts[key] = reference
             continue
 
         # If the committed pin still matches the tag, freeze it forward
-        if committed_entry is not None and not upgrade and committed_entry.startswith(base + "@"):
+        if committed_entry is not None and not upgrade and committed_entry.startswith(reference + "@"):
             charts[key] = committed_entry
             continue
 
-        charts[key] = f"{base}@{resolve_remote_digest(reference)}"
+        charts[key] = f"{reference}@{resolve_remote_digest(reference)}"
 
     # Assemble the lock and render its canonical form
     lock = LockFile(platforms=list(config.platforms), images=images, charts=charts, bundles=bundles)

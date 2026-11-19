@@ -14,6 +14,7 @@ from boatyard.models.config_file import (
     Slot,
     bundle_lock_key,
     chart_lock_key,
+    mirrored_ref,
 )
 from boatyard.paths import LOCK_PATH, VALUES_FILE
 from boatyard.temp import PLATFORM_PATTERN, SHA256_DIGEST_REGEX
@@ -93,10 +94,13 @@ class LockFile(BaseModel):
             return self.bundles[name]
         raise ValueError(f"{subject}: {LOCK_PATH.as_posix()} lacks the {name} entry")
 
-    def index_references(self) -> dict[str, str]:
-        return {**{name: entry.index for name, entry in self.images.items()}, **self.charts}
+    def index_references(self, mirror_prefix: str | None) -> dict[str, str]:
+        return {
+            **{name: _decorated(entry.index, mirror_prefix) for name, entry in self.images.items()},
+            **{name: _decorated(reference, mirror_prefix) for name, reference in self.charts.items()},
+        }
 
-    def manifest_references(self, platform: str | None) -> dict[str, str]:
+    def manifest_references(self, platform: str | None, mirror_prefix: str | None) -> dict[str, str]:
         resolved: str | None
         if platform is None:
             if not self.platforms:
@@ -112,11 +116,14 @@ class LockFile(BaseModel):
         else:
             resolved = platform
         if resolved is None:
-            return self.index_references()
+            return self.index_references(mirror_prefix)
         missing = [name for name, entry in self.images.items() if resolved not in entry.platforms]
         if missing:
             raise ValueError(f"image entry {missing[0]} lacks the {resolved} manifest")
-        return {**{name: entry.platforms[resolved] for name, entry in self.images.items()}, **self.charts}
+        return {
+            **{name: _decorated(entry.platforms[resolved], mirror_prefix) for name, entry in self.images.items()},
+            **{name: _decorated(reference, mirror_prefix) for name, reference in self.charts.items()},
+        }
 
 
 class ConfigLockEntry(BaseModel):
@@ -172,6 +179,10 @@ def refuse_local_lock_entries(lock: LockFile, config: ConfigFile, source: str) -
 def _source(info: ValidationInfo) -> str:
     context: dict[str, object] = info.context or {}
     return str(context.get("path", "the image lock"))
+
+
+def _decorated(reference: str, mirror_prefix: str | None) -> str:
+    return mirrored_ref(reference, mirror_prefix) if mirror_prefix is not None else reference
 
 
 def _digest_pinned(reference: str) -> bool:

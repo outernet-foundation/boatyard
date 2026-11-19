@@ -346,22 +346,20 @@ def _write_producer(
 
 def _producer_lock(platforms: list[str]) -> dict[str, object]:
     loki_manifests = {
-        platform: f"{MIRROR_PREFIX}/docker.io/library/loki:3.0@{digest}"
+        platform: f"docker.io/library/loki:3.0@{digest}"
         for platform, digest in (("linux/amd64", LOKI_AMD64_DIGEST), ("linux/arm64", LOKI_ARM64_DIGEST))
         if platform in platforms
     }
-    alpine_manifests = dict.fromkeys(
-        platforms, f"{MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}"
-    )
+    alpine_manifests = dict.fromkeys(platforms, f"docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}")
     return {
         "platforms": list(platforms),
         "images": {
             "LOKI_IMAGE": {
-                "index": f"{MIRROR_PREFIX}/docker.io/library/loki:3.0@{FAKE_DIGEST}",
+                "index": f"docker.io/library/loki:3.0@{FAKE_DIGEST}",
                 "platforms": loki_manifests,
             },
             "ALPINE_IMAGE": {
-                "index": f"{MIRROR_PREFIX}/docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}",
+                "index": f"docker.io/library/alpine:3.20@{PRODUCER_ALPINE_DIGEST}",
                 "platforms": alpine_manifests,
             },
         },
@@ -1178,8 +1176,9 @@ class TestLockRequirement:
 
 
 class TestLockEnvSynthesis:
-    ALPINE_INDEX = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + FAKE_DIGEST
-    ALPINE_MANIFEST = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + PLATFORM_DIGEST
+    ALPINE_INDEX = "docker.io/library/alpine:3.20@" + FAKE_DIGEST
+    ALPINE_MANIFEST = "docker.io/library/alpine:3.20@" + PLATFORM_DIGEST
+    MIRRORED_ALPINE_MANIFEST = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + PLATFORM_DIGEST
 
     def _invoke_up_with_lock(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> UpSpy:
         spy = UpSpy().spy_up(monkeypatch)
@@ -1209,7 +1208,9 @@ class TestLockEnvSynthesis:
 
         assert result.exit_code == 0, result.output
         assert spy.env_content == (
-            f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={self.ALPINE_MANIFEST}\n" + BARRIER_MINT_LINE + EDGE_BASE_URL_LINE
+            f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={self.MIRRORED_ALPINE_MANIFEST}\n"
+            + BARRIER_MINT_LINE
+            + EDGE_BASE_URL_LINE
         )
 
     def test_a_selected_local_entry_reads_its_lock_keys_under_the_entry_prefix(
@@ -1235,7 +1236,9 @@ class TestLockEnvSynthesis:
 
         assert result.exit_code == 0, result.output
         assert spy.env_content == (
-            f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={self.ALPINE_MANIFEST}\n" + BARRIER_MINT_LINE + EDGE_BASE_URL_LINE
+            f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={self.MIRRORED_ALPINE_MANIFEST}\n"
+            + BARRIER_MINT_LINE
+            + EDGE_BASE_URL_LINE
         )
 
     def test_a_selected_local_entry_carries_its_tree_tags_under_the_entry_prefix(
@@ -1275,7 +1278,7 @@ class TestLockEnvSynthesis:
 
         assert result.exit_code == 0, result.output
         assert spy.env_content == (
-            f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={self.ALPINE_MANIFEST}\n"
+            f"APPS_CORE__BOATYARD_LOCK__ALPINE_IMAGE={self.MIRRORED_ALPINE_MANIFEST}\n"
             "APPS_CORE__BOATYARD_TREE__API_SHA=tree-consumer\n" + BARRIER_MINT_LINE + EDGE_BASE_URL_LINE
         )
         assert " -u APPS_CORE__BOATYARD_TREE__API_SHA " in spy.commands[0]
@@ -1307,11 +1310,12 @@ class TestLockEnvSynthesis:
         )
         _write_bundle_output(tmp_path, "apps-core", ["api"])
         _write_workload(tmp_path, "api.yaml", "api")
+        arm64_recorded = "docker.io/library/alpine:3.20@" + PLATFORM_DIGEST
         arm64_manifest = MIRROR_PREFIX + "/docker.io/library/alpine:3.20@" + PLATFORM_DIGEST
         _write_lock(
             tmp_path,
             {"ALPINE_IMAGE": self.ALPINE_INDEX},
-            {"linux/amd64": self.ALPINE_MANIFEST, "linux/arm64": arm64_manifest},
+            {"linux/amd64": self.ALPINE_MANIFEST, "linux/arm64": arm64_recorded},
         )
         _write_values_file(tmp_path, {"bundles": ["apps-core"], "platform": "linux/arm64"})
         spy = self._invoke_up_with_lock(tmp_path, monkeypatch)
@@ -1494,7 +1498,7 @@ class TestBundleOverrides:
             consumer,
             {"path_overrides": {"placeframe-cuda": OVERRIDE_PATH}},
             platforms=["linux/amd64"],
-            lock_images={"LOKI_IMAGE": MIRROR_PREFIX + "/docker.io/library/loki:3.0@" + CONSUMER_ALPINE_DIGEST},
+            lock_images={"LOKI_IMAGE": "docker.io/library/loki:3.0@" + CONSUMER_ALPINE_DIGEST},
         )
         spy = self._invoke_up(monkeypatch, consumer)
 

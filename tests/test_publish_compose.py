@@ -19,7 +19,8 @@ from boatyard.models.lock_file import LOCK_PATH
 REPOSITORY = "ghcr.io/outernet-foundation/lbe-toolkit"
 FAKE_SHA = "a" * 40
 FAKE_DIGEST = "sha256:" + "b" * 64
-CADDY_LOCK_REF = f"ghcr.io/outernet-foundation/mirror/docker.io/library/caddy:2.10@sha256:{'c' * 64}"
+CADDY_LOCK_REF = f"docker.io/library/caddy:2.10@sha256:{'c' * 64}"
+MIRRORED_CADDY_REF = f"ghcr.io/outernet-foundation/mirror/docker.io/library/caddy:2.10@sha256:{'c' * 64}"
 
 runner = CliRunner()
 
@@ -163,7 +164,7 @@ class TestFinalizeBaked:
             "  token:\n"
             f"    image: {REPOSITORY}/livekit-token:tree-abc\n"
             "  ingress:\n"
-            f"    image: {CADDY_LOCK_REF}\n"
+            f"    image: {MIRRORED_CADDY_REF}\n"
             "  other:\n"
             "    image: ghcr.io/other-org/other-service:1.0\n"
             "configs:\n"
@@ -179,7 +180,7 @@ class TestFinalizeBaked:
 
         document = yaml.safe_load(baked.read_text(encoding="utf-8"))
         assert document["services"]["token"]["image"] == f"{REPOSITORY}/livekit-token@{FAKE_DIGEST}"
-        assert document["services"]["ingress"]["image"] == CADDY_LOCK_REF
+        assert document["services"]["ingress"]["image"] == MIRRORED_CADDY_REF
         assert document["services"]["other"]["image"] == "ghcr.io/other-org/other-service:1.0"
         assert document["configs"]["caddyfile"] == {"content": "reverse_proxy {$$UPSTREAM}\n"}
         assert resolver.calls == [f"{REPOSITORY}/livekit-token:tree-abc"]
@@ -301,7 +302,7 @@ class TestPublishComposeVerb:
         assert f"Digest {REPOSITORY}/livekit-tier:feature-tier-bundle {FAKE_DIGEST}" in result.stdout
         document = yaml.safe_load(recorder.baked_snapshots["compose.livekit-tier.yaml"])
         assert document["services"]["livekit-token"]["image"] == f"{REPOSITORY}/livekit-token@{FAKE_DIGEST}"
-        assert document["services"]["ingress"]["image"] == CADDY_LOCK_REF
+        assert document["services"]["ingress"]["image"] == MIRRORED_CADDY_REF
         assert document["services"]["livekit-token"]["environment"]["LIVEKIT_API_KEY"] == "${LIVEKIT_API_KEY:?err}"
         assert document["configs"]["caddyfile"] == {"content": "reverse_proxy {$$UPSTREAM}\n"}
         assert os.environ.get("LIVEKIT_API_KEY") == publish_compose.STUB_VALUE

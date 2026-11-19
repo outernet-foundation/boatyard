@@ -10,6 +10,7 @@ from boatyard.models.values_file import ValuesFile
 from boatyard.paths import VALUES_FILE
 from boatyard.resolve import AssemblyPlan, resolve
 
+MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
 FAKE_DIGEST = "sha256:" + "a" * 64
 MONITOR_PINNED = f"ghcr.io/org/monitor:1.0.0@{FAKE_DIGEST}"
 
@@ -108,8 +109,8 @@ def _write_repo(
     (root / "boatyard.yml").write_text(yaml.safe_dump(config), encoding="utf-8")
     lock_images: dict[str, object] = {
         "LOKI_IMAGE": {
-            "index": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}",
-            "platforms": {"linux/amd64": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}"},
+            "index": f"docker.io/grafana/loki:3.0@{FAKE_DIGEST}",
+            "platforms": {"linux/amd64": f"docker.io/grafana/loki:3.0@{FAKE_DIGEST}"},
         },
     }
     root.joinpath(*LOCK_PATH.parts).write_text(
@@ -317,6 +318,18 @@ def test_typed_port_and_gateway_overrides_load(tmp_path: Path) -> None:
     assert parsed.ports == {"core-main": 1234}
 
 
+def test_bypass_image_mirror_loads(tmp_path: Path) -> None:
+    parsed = _load(_write_repo(tmp_path, _filled_values({"bypass_image_mirror": True})))
+
+    assert parsed.bypass_image_mirror is True
+
+
+def test_bypass_image_mirror_defaults_off(tmp_path: Path) -> None:
+    parsed = _load(_write_repo(tmp_path, _filled_values()))
+
+    assert parsed.bypass_image_mirror is False
+
+
 def test_an_optional_slot_stays_unfilled(tmp_path: Path) -> None:
     parsed = _load(
         _write_repo(
@@ -464,7 +477,10 @@ def test_an_override_mints_machine_slots_under_the_producer_entry_name(tmp_path:
 
     resolved = _resolve(root)
 
-    assert resolved.env["MONITOR_TIER__BOATYARD_LOCK__STUB_IMAGE"] == f"docker.io/org/stub:1.0@{FAKE_DIGEST}"
+    assert (
+        resolved.env["MONITOR_TIER__BOATYARD_LOCK__STUB_IMAGE"]
+        == f"{MIRROR_PREFIX}/docker.io/org/stub:1.0@{FAKE_DIGEST}"
+    )
     assert "MONITOR__BOATYARD_LOCK__STUB_IMAGE" not in resolved.env
 
 
@@ -485,7 +501,7 @@ def test_a_reference_to_a_sibling_key_resolves_at_render(tmp_path: Path) -> None
         "PROV_TOKEN": "three",
         "MON_TOKEN": "four",
         "BOATYARD_BARRIER_IMAGE": "docker.io/library/alpine:3.20",
-        "CORE_MAIN__BOATYARD_LOCK__LOKI_IMAGE": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}",
+        "CORE_MAIN__BOATYARD_LOCK__LOKI_IMAGE": f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.0@{FAKE_DIGEST}",
     }
 
 
@@ -500,7 +516,7 @@ def test_a_reference_chains_through_another_reference(tmp_path: Path) -> None:
         "PROV_TOKEN": "three",
         "MON_TOKEN": "four",
         "BOATYARD_BARRIER_IMAGE": "docker.io/library/alpine:3.20",
-        "CORE_MAIN__BOATYARD_LOCK__LOKI_IMAGE": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}",
+        "CORE_MAIN__BOATYARD_LOCK__LOKI_IMAGE": f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.0@{FAKE_DIGEST}",
     }
 
 
@@ -520,7 +536,7 @@ def test_the_minted_public_url_is_a_reference_root(tmp_path: Path) -> None:
         "PROV_TOKEN": "three",
         "MON_TOKEN": "four",
         "BOATYARD_BARRIER_IMAGE": "docker.io/library/alpine:3.20",
-        "CORE_MAIN__BOATYARD_LOCK__LOKI_IMAGE": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}",
+        "CORE_MAIN__BOATYARD_LOCK__LOKI_IMAGE": f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.0@{FAKE_DIGEST}",
     }
 
 
@@ -567,7 +583,7 @@ def test_the_minted_edge_base_url_is_a_reference_root(tmp_path: Path) -> None:
         "PROV_TOKEN": "three",
         "MON_TOKEN": "four",
         "BOATYARD_BARRIER_IMAGE": "docker.io/library/alpine:3.20",
-        "CORE_MAIN__BOATYARD_LOCK__LOKI_IMAGE": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}",
+        "CORE_MAIN__BOATYARD_LOCK__LOKI_IMAGE": f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.0@{FAKE_DIGEST}",
     }
 
 
@@ -661,7 +677,7 @@ def test_assembly_renders_resolved_values_with_the_minted_slot(tmp_path: Path) -
         "PROV_TOKEN": "three",
         "MON_TOKEN": "four",
         "BOATYARD_BARRIER_IMAGE": "docker.io/library/alpine:3.20",
-        "CORE_MAIN__BOATYARD_LOCK__LOKI_IMAGE": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}",
+        "CORE_MAIN__BOATYARD_LOCK__LOKI_IMAGE": f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.0@{FAKE_DIGEST}",
     }
 
 
@@ -679,5 +695,5 @@ def test_assembly_fills_the_minted_edge_base_url(tmp_path: Path) -> None:
         "PROV_TOKEN": "three",
         "MON_TOKEN": "four",
         "BOATYARD_BARRIER_IMAGE": "docker.io/library/alpine:3.20",
-        "CORE_MAIN__BOATYARD_LOCK__LOKI_IMAGE": f"ghcr.io/org/loki:3.0@{FAKE_DIGEST}",
+        "CORE_MAIN__BOATYARD_LOCK__LOKI_IMAGE": f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.0@{FAKE_DIGEST}",
     }
