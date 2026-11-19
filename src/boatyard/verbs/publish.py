@@ -84,7 +84,7 @@ def publish_compose(
     branch_tag = (branch or bash_output("git rev-parse --abbrev-ref HEAD").strip()).replace("/", "-")
 
     image_shas = {image.sha_env: image.compute_sha(config.root) for image in config.images.values()}
-    lock_entries = LockFile.load(root / LOCK_PATH, config).index_references()
+    lock_entries = LockFile.load(root / LOCK_PATH, config).index_references(config.mirror_prefix)
 
     published: list[PublishedEntry] = []
     for bundle_name, output in bundles:

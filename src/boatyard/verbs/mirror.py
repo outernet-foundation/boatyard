@@ -26,9 +26,11 @@ def mirror() -> None:
     lock = LockFile.load(root / LOCK_PATH, config)
     mirror_targets: list[tuple[str, list[str]]] = []
     for name, reference in sorted(config.remote_base_images.items(), key=lambda item: item[1]):
-        mirror_targets.append((reference, lock.images[name].recorded_digests))
+        probes = [mirrored_ref(recorded, prefix) for recorded in lock.images[name].recorded_digests]
+        mirror_targets.append((reference, probes))
     for chart_name, chart_ref in sorted(config.declared_charts.items()):
-        mirror_targets.append((chart_ref.removeprefix("oci://"), [lock.charts[chart_lock_key(chart_name)]]))
+        probes = [mirrored_ref(lock.charts[chart_lock_key(chart_name)], prefix)]
+        mirror_targets.append((chart_ref.removeprefix("oci://"), probes))
 
     if not mirror_targets:
         raise ValueError("nothing is declared to mirror (base_images and k8s.charts are empty)")

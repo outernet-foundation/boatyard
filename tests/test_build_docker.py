@@ -16,6 +16,7 @@ from boatyard import build as build_module
 from boatyard import lock as lock_module
 from boatyard.models.lock_file import LOCK_PATH
 from boatyard.models.image import Image
+from boatyard.paths import VALUES_FILE
 
 DIGEST_A = "sha256:" + "a" * 64
 HEAD_SHA = "1111111111111111111111111111111111111111"
@@ -195,11 +196,13 @@ class BakeRunner:
         self.extras = extras or {}
         self.commands: list[str] = []
         self.rendered = ""
+        self.bake_env: dict[str, str] = {}
         self.shelve = ShelveRecorder()
 
     def run(self, command: str) -> None:
         self.commands.append(command)
         if command.startswith("docker buildx bake"):
+            self.bake_env = {key: value for key, value in os.environ.items() if key.endswith("_IMAGE")}
             words = command.split()
             bake_file = Path(words[words.index("-f") + 1])
             self.rendered = bake_file.read_text(encoding="utf-8")
@@ -237,6 +240,7 @@ def _prepare(
     base_images: dict[str, Any] | None = None,
     platforms: list[str] | None = None,
     axes: dict[str, list[str]] | None = None,
+    values: dict[str, Any] | None = None,
 ) -> BakeRunner:
     recorder = BakeRunner()
     monkeypatch.setattr(build_module, "bash", recorder.run)
@@ -258,6 +262,8 @@ def _prepare(
         platforms=platforms,
         axes=axes,
     )
+    if values is not None:
+        (tmp_path / VALUES_FILE).write_text(yaml.safe_dump(values), encoding="utf-8")
 
     result = runner.invoke(app, ["build", *arguments])
 
@@ -686,6 +692,22 @@ class TestBakeSeesLockValues:
 
         assert result.exit_code == 0, result.output
         assert probe.uv_image == f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{DIGEST_A}"
+
+
+class TestBypassImageMirror:
+    def test_mirror_refs_ride_the_bake_env_without_the_key(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        recorder = _prepare(monkeypatch, tmp_path, [], dockerfiles={"api": EXTERNAL})
+
+        assert recorder.bake_env["ALPINE_IMAGE"] == f"{MIRROR_PREFIX}/docker.io/library/alpine:3.20@{DIGEST_A}"
+
+    def test_the_values_key_rewrites_the_bake_env_to_upstream_refs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        recorder = _prepare(
+            monkeypatch, tmp_path, [], dockerfiles={"api": EXTERNAL}, values={"bypass_image_mirror": True}
+        )
+
+        assert recorder.bake_env["ALPINE_IMAGE"] == f"docker.io/library/alpine:3.20@{DIGEST_A}"
 
 
 def _rendered_services(rendered: str) -> dict[str, Any]:

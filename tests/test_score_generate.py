@@ -29,6 +29,7 @@ from boatyard.score_k8s import generate_k8s
 from boatyard.yaml import Yaml
 
 DIGEST = "sha256:" + "a" * 64
+PLATFORM_DIGEST = "sha256:" + "b" * 64
 
 
 def _root_config(**sections: object) -> ConfigFile:
@@ -102,13 +103,16 @@ WORKLOAD_MANIFEST = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: workloa
 HELM_RENDERED = "apiVersion: v1\nkind: Secret\nmetadata:\n  name: chart\n"
 MIRROR_PREFIX = "ghcr.io/outernet-foundation/mirror"
 CHART_REF = "oci://ghcr.io/grafana/helm-charts/loki:7.3.0"
+PINNED_CHART = f"ghcr.io/grafana/helm-charts/loki@{DIGEST}"
 MIRRORED_CHART = f"{MIRROR_PREFIX}/ghcr.io/grafana/helm-charts/loki@{DIGEST}"
-PLATFORM_DIGEST = "sha256:" + "b" * 64
-LOKI_INDEX = f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.5.0@{DIGEST}"
-LOKI_MANIFEST = f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.5.0@{PLATFORM_DIGEST}"
+
+LOKI_INDEX = f"docker.io/grafana/loki:3.5.0@{DIGEST}"
+LOKI_MANIFEST = f"docker.io/grafana/loki:3.5.0@{PLATFORM_DIGEST}"
+MIRRORED_LOKI_INDEX = f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.5.0@{DIGEST}"
+MIRRORED_LOKI_MANIFEST = f"{MIRROR_PREFIX}/docker.io/grafana/loki:3.5.0@{PLATFORM_DIGEST}"
 LOCK_IMAGES = {
-    "GRAFANA_IMAGE": "ghcr.io/outernet-foundation/mirror/docker.io/grafana/grafana:11.6.0@" + DIGEST,
-    "LOKI_CHART": MIRRORED_CHART,
+    "GRAFANA_IMAGE": "docker.io/grafana/grafana:11.6.0@" + DIGEST,
+    "LOKI_CHART": PINNED_CHART,
 }
 VALUES_PATH = Path("stack/score/k8s/values/loki.yaml")
 
@@ -312,7 +316,7 @@ class TestMarkerSubstrateResolution:
                     "platforms": {"linux/amd64": LOKI_MANIFEST, "linux/arm64": LOKI_INDEX},
                 }
             },
-            "charts": {"LOKI_CHART": MIRRORED_CHART},
+            "charts": {"LOKI_CHART": PINNED_CHART},
         })
 
     def _compose_seam(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, platforms: list[str]) -> str:
@@ -370,7 +374,7 @@ class TestMarkerSubstrateResolution:
 
         contents = self._compose_seam(monkeypatch, tmp_path, platforms=["linux/amd64"])
 
-        assert f"image: {LOKI_MANIFEST}" in contents
+        assert f"image: {MIRRORED_LOKI_MANIFEST}" in contents
 
     def test_the_score_tool_receives_the_variable_values_as_environment(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -379,8 +383,8 @@ class TestMarkerSubstrateResolution:
 
         generate_env = self.recorder.command_envs["score-compose generate"]
         assert generate_env is not None
-        assert generate_env["LOKI_IMAGE"] == LOKI_MANIFEST
-        assert generate_env["ALPINE_IMAGE"] == ALPINE_LOCK["ALPINE_IMAGE"]
+        assert generate_env["LOKI_IMAGE"] == MIRRORED_LOKI_MANIFEST
+        assert generate_env["ALPINE_IMAGE"] == f"{MIRROR_PREFIX}/" + ALPINE_LOCK["ALPINE_IMAGE"]
         assert self.recorder.command_envs["score-compose init"] == generate_env
 
     def test_compose_generation_selects_the_platform_the_environment_names(
@@ -390,7 +394,7 @@ class TestMarkerSubstrateResolution:
 
         contents = self._compose_seam(monkeypatch, tmp_path, platforms=["linux/amd64", "linux/arm64"])
 
-        assert f"image: {LOKI_INDEX}" in contents
+        assert f"image: {MIRRORED_LOKI_INDEX}" in contents
 
     def test_k8s_marker_resolution_selects_the_index(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _write_values(tmp_path, "image:\n  lock: LOKI_IMAGE\n")
@@ -411,7 +415,7 @@ class TestMarkerSubstrateResolution:
         generate_k8s(config, config.k8s, lock, local=False)
 
         resolved = yaml.safe_load(helm.values_contents[0])
-        assert resolved["image"] == LOKI_INDEX
+        assert resolved["image"] == MIRRORED_LOKI_INDEX
 
 
 class ComposeBashRecorder:
@@ -647,7 +651,7 @@ def test_workload_lock_annotations_inject_the_locked_reference_into_the_rendered
         _lock_for_images({"API_IMAGE": "ghcr.io/org/api@sha256:" + "a" * 64, **ALPINE_LOCK}),
     )
 
-    assert f"image: ghcr.io/org/api@sha256:{'a' * 64}\n" in recorder.workload_contents["api.yaml"]
+    assert f"image: {MIRROR_PREFIX}/ghcr.io/org/api@sha256:{'a' * 64}\n" in recorder.workload_contents["api.yaml"]
 
 
 def test_workload_lock_annotation_with_no_lock_entry_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -934,7 +938,7 @@ PROVISIONER_WITHOUT_SERVICES = """
     key: value
 """
 
-ALPINE_LOCK = {"ALPINE_IMAGE": "ghcr.io/outernet-foundation/mirror/docker.io/library/alpine:3.21.0@" + DIGEST}
+ALPINE_LOCK = {"ALPINE_IMAGE": "docker.io/library/alpine:3.21.0@" + DIGEST}
 
 
 def _lock_for_images(images: dict[str, str]) -> LockFile:
@@ -1788,7 +1792,7 @@ def test_generate_score_writes_the_mint_list_from_the_k8s_rendering(
     (tmp_path / "stack" / "score" / "k8s" / "values").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "k8s" / "values" / "loki.yaml").write_text("chart: {}\n", encoding="utf-8")
     (tmp_path / "boatyard.lock.yml").write_text(
-        yaml.safe_dump({"charts": {"LOKI_CHART": MIRRORED_CHART}}), encoding="utf-8"
+        yaml.safe_dump({"charts": {"LOKI_CHART": PINNED_CHART}}), encoding="utf-8"
     )
     config = _root_config(repository="ghcr.io/org/repo", k8s={"workloads": ["api.yaml"], "charts": {"loki": CHART_REF}})
     config.root = tmp_path
@@ -1841,7 +1845,7 @@ def test_generate_artifacts_on_a_k8s_only_repo_requests_no_compose_tool(
     (tmp_path / "stack" / "score" / "k8s" / "values").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "k8s" / "values" / "loki.yaml").write_text("chart: {}\n", encoding="utf-8")
     (tmp_path / "boatyard.lock.yml").write_text(
-        yaml.safe_dump({"charts": {"LOKI_CHART": MIRRORED_CHART}}), encoding="utf-8"
+        yaml.safe_dump({"charts": {"LOKI_CHART": PINNED_CHART}}), encoding="utf-8"
     )
     config = _root_config(
         repository="ghcr.io/org/repo",

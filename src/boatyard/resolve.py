@@ -84,7 +84,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
     hand = values.values
     public_face = _public_face(config, values)
     minted = _minted(config, values)
-    consumer_manifests = lock.manifest_references(values.platform)
+    consumer_manifests = lock.manifest_references(values.platform, config.mirror_prefix)
     service_entries = config.service_entries
     root = config.root
 
@@ -239,7 +239,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
             producer_lock = LockFile.load(producer_root / LOCK_PATH, producer_config)
             sources = BundleSources(
                 bundle_path=bundle_path,
-                lock_references=producer_lock.manifest_references(values.platform),
+                lock_references=producer_lock.manifest_references(values.platform, producer_config.mirror_prefix),
                 tree_root=producer_root,
                 images=producer_config.images,
             )

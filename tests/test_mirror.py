@@ -97,8 +97,8 @@ class TestMirrorVerb:
         _write_lock(
             tmp_path,
             {
-                "UV_IMAGE": f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{FAKE_DIGEST}",
-                "API_IMAGE": f"{MIRROR_PREFIX}/ghcr.io/outernet-foundation/placeframe/api:1.2.3@{FAKE_DIGEST}",
+                "UV_IMAGE": f"ghcr.io/astral-sh/uv:0.12.15@{FAKE_DIGEST}",
+                "API_IMAGE": f"ghcr.io/outernet-foundation/placeframe/api:1.2.3@{FAKE_DIGEST}",
             },
         )
 
@@ -122,8 +122,8 @@ class TestMirrorVerb:
                 },
             },
         )
-        uv_base = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15"
-        api_base = f"{MIRROR_PREFIX}/ghcr.io/outernet-foundation/placeframe/api:1.2.3"
+        uv_base = "ghcr.io/astral-sh/uv:0.12.15"
+        api_base = "ghcr.io/outernet-foundation/placeframe/api:1.2.3"
         index = f"{uv_base}@{FAKE_DIGEST}"
         amd64 = f"{uv_base}@{DIGEST_AMD64}"
         arm64 = f"{uv_base}@{DIGEST_ARM64}"
@@ -138,13 +138,14 @@ class TestMirrorVerb:
             },
             platforms=["linux/amd64", "linux/arm64"],
         )
-        recorder = CommandRecorder(present_refs={index, amd64, arm64, api_index, api_amd64, api_arm64})
+        recorded = [index, amd64, arm64, api_index, api_amd64, api_arm64]
+        recorder = CommandRecorder(present_refs={mirrored_ref(reference, MIRROR_PREFIX) for reference in recorded})
 
         result = self._invoke(tmp_path, monkeypatch, recorder)
 
         assert result.exit_code == 0
         probes = [command.removeprefix("crane digest ") for command in recorder.commands if "crane digest" in command]
-        assert probes == [index, amd64, arm64, api_index, api_amd64, api_arm64]
+        assert probes == [mirrored_ref(reference, MIRROR_PREFIX) for reference in recorded]
         assert not [command for command in recorder.commands if command.startswith("crane copy")]
         assert "Mirrored references: 0 copied, 2 already present" in result.stdout
 
@@ -161,8 +162,8 @@ class TestMirrorVerb:
                 },
             },
         )
-        uv_base = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15"
-        api_base = f"{MIRROR_PREFIX}/ghcr.io/outernet-foundation/placeframe/api:1.2.3"
+        uv_base = "ghcr.io/astral-sh/uv:0.12.15"
+        api_base = "ghcr.io/outernet-foundation/placeframe/api:1.2.3"
         index = f"{uv_base}@{FAKE_DIGEST}"
         amd64 = f"{uv_base}@{DIGEST_AMD64}"
         missing_arm64 = f"{uv_base}@{DIGEST_ARM64}"
@@ -174,7 +175,9 @@ class TestMirrorVerb:
             },
             platforms=["linux/amd64", "linux/arm64"],
         )
-        recorder = CommandRecorder(present_refs={index, amd64})
+        recorder = CommandRecorder(
+            present_refs={mirrored_ref(index, MIRROR_PREFIX), mirrored_ref(amd64, MIRROR_PREFIX)}
+        )
 
         result = self._invoke(tmp_path, monkeypatch, recorder)
 
@@ -188,20 +191,21 @@ class TestMirrorVerb:
 
     def test_probes_a_digest_once_when_index_and_platform_agree(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         self._write_tree(tmp_path)
-        uv_base = f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{FAKE_DIGEST}"
+        upstream_uv = f"ghcr.io/astral-sh/uv:0.12.15@{FAKE_DIGEST}"
         _write_lock(
             tmp_path,
             {
-                "UV_IMAGE": {"index": uv_base, "platforms": {"linux/amd64": uv_base}},
-                "API_IMAGE": f"{MIRROR_PREFIX}/ghcr.io/outernet-foundation/placeframe/api:1.2.3@{FAKE_DIGEST}",
+                "UV_IMAGE": {"index": upstream_uv, "platforms": {"linux/amd64": upstream_uv}},
+                "API_IMAGE": f"ghcr.io/outernet-foundation/placeframe/api:1.2.3@{FAKE_DIGEST}",
             },
         )
-        recorder = CommandRecorder(present_refs={uv_base})
+        mirrored_uv = mirrored_ref(upstream_uv, MIRROR_PREFIX)
+        recorder = CommandRecorder(present_refs={mirrored_uv})
 
         result = self._invoke(tmp_path, monkeypatch, recorder)
 
         assert result.exit_code == 0
-        assert recorder.commands.count(f"crane digest {uv_base}") == 1
+        assert recorder.commands.count(f"crane digest {mirrored_uv}") == 1
 
     def test_copies_every_declared_reference(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         recorder = CommandRecorder()
@@ -224,8 +228,8 @@ class TestMirrorVerb:
         _write_lock(
             tmp_path,
             {
-                "UV_IMAGE": mirrored_uv,
-                "API_IMAGE": f"{MIRROR_PREFIX}/ghcr.io/outernet-foundation/placeframe/api:1.2.3@{FAKE_DIGEST}",
+                "UV_IMAGE": f"ghcr.io/astral-sh/uv:0.12.15@{FAKE_DIGEST}",
+                "API_IMAGE": f"ghcr.io/outernet-foundation/placeframe/api:1.2.3@{FAKE_DIGEST}",
             },
         )
         recorder = CommandRecorder(present_refs={mirrored_uv})
@@ -245,8 +249,8 @@ class TestMirrorVerb:
         _write_lock(
             tmp_path,
             {
-                "UV_IMAGE": mirrored_uv,
-                "API_IMAGE": f"{MIRROR_PREFIX}/ghcr.io/outernet-foundation/placeframe/api:1.2.3@{FAKE_DIGEST}",
+                "UV_IMAGE": f"ghcr.io/astral-sh/uv:0.12.15@{FAKE_DIGEST}",
+                "API_IMAGE": f"ghcr.io/outernet-foundation/placeframe/api:1.2.3@{FAKE_DIGEST}",
             },
         )
         recorder = CommandRecorder()
@@ -273,8 +277,8 @@ class TestMirrorVerb:
         (tmp_path / "workloads").mkdir()
         _write_lock(
             tmp_path,
-            {"UV_IMAGE": f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{FAKE_DIGEST}"},
-            {"LOKI_CHART": f"{MIRROR_PREFIX}/{upstream_chart}"},
+            {"UV_IMAGE": f"ghcr.io/astral-sh/uv:0.12.15@{FAKE_DIGEST}"},
+            {"LOKI_CHART": upstream_chart},
         )
         values = tmp_path / "stack" / "score" / "k8s" / "values" / "loki.yaml"
         values.parent.mkdir(parents=True)
@@ -323,7 +327,7 @@ class TestMirrorVerb:
         )
         _write_lock(
             tmp_path,
-            {"UV_IMAGE": f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{FAKE_DIGEST}"},
+            {"UV_IMAGE": f"ghcr.io/astral-sh/uv:0.12.15@{FAKE_DIGEST}"},
             bundles={"LIVEKIT_BUNDLE": f"ghcr.io/org/repo/livekit:{'a' * 40}@{FAKE_DIGEST}"},
         )
         recorder = CommandRecorder(present_refs={f"{MIRROR_PREFIX}/ghcr.io/astral-sh/uv:0.12.15@{FAKE_DIGEST}"})
