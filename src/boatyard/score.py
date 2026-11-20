@@ -91,6 +91,7 @@ def render_score(
     config: ConfigFile,
     substrate: Substrate,
     workloads: list[LoadedWorkload],
+    route_exports: dict[str, str],
     variable_values: dict[str, str],
     images: dict[str, str],
     templates: list[str],
@@ -107,7 +108,6 @@ def render_score(
     output.parent.mkdir(parents=True, exist_ok=True)
 
     # The lock images join as bindings underneath the caller's values
-    route_exports = route_path_exports(workloads)
     collisions = sorted(set(route_exports) & ({*images, *variable_values}))
     if collisions:
         raise ValueError(f"the route path export {collisions[0]} collides with an authored rendering value")

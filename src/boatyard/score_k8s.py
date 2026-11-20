@@ -28,6 +28,7 @@ from boatyard.yaml import Yaml, is_list, is_mapping
 from boatyard.score import (
     dump_yaml,
     render_score,
+    route_path_exports,
     split_documents,
     write_file,
 )
@@ -84,6 +85,7 @@ def generate_k8s(
         config,
         substrate="k8s",
         workloads=workloads,
+        route_exports=route_path_exports(list(config.workloads.values())),
         variable_values={
             STORAGE_CLASS_VAR: LOCAL_STORAGE_CLASS if local else CLOUD_STORAGE_CLASS,
             **k8s.vars,

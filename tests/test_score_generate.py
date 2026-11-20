@@ -670,14 +670,17 @@ def test_generate_compose_barrier_names_are_one_global_slot(tmp_path: Path, monk
 
 
 class WorkloadContentsRecorder:
-    def __init__(self, generated: str = API_SERVICE_RENDERING) -> None:
+    def __init__(self, generated: str = API_SERVICE_RENDERING, generated_by_name: dict[str, str] | None = None) -> None:
         self.generated = generated
+        self.generated_by_name = generated_by_name
         self.workload_contents: dict[str, str] = {}
         self.command_envs: dict[str, dict[str, str] | None] = {}
+        self.generate_envs: list[dict[str, str] | None] = []
 
     def run(self, command: str, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
         self.command_envs[command.split()[0] + " " + command.split()[1]] = env
         if command.startswith("score-compose generate"):
+            self.generate_envs.append(env)
             for argument in command.split()[2:]:
                 if argument.startswith("--output"):
                     break
@@ -685,7 +688,8 @@ class WorkloadContentsRecorder:
                 self.workload_contents[path.name] = path.read_text(encoding="utf-8")
             output = Path(command.rsplit("--output ", 1)[1].split()[0])
             output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text(self.generated, encoding="utf-8")
+            rendered = self.generated if self.generated_by_name is None else self.generated_by_name[output.name]
+            output.write_text(rendered, encoding="utf-8")
 
 
 LOCK_ANNOTATION_API = (
@@ -1183,6 +1187,48 @@ def test_the_route_path_export_rides_the_tool_environment(tmp_path: Path, monkey
     assert generate_env is not None
     assert generate_env["API_ROUTE_PATH"] == "/auth"
     assert recorder.command_envs["score-compose init"] == generate_env
+
+
+def test_the_route_path_export_crosses_bundle_boundaries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "stack" / "score").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "stack" / "score" / "api.yaml").write_text(ROUTE_CLAIM_WORKLOAD, encoding="utf-8")
+    (tmp_path / "stack" / "score" / "aux.yaml").write_text(
+        "metadata:\n  name: aux\n  annotations:\n    boatyard/lock: aux=AUX_IMAGE\ncontainers:\n  aux: {}\n",
+        encoding="utf-8",
+    )
+    recorder = WorkloadContentsRecorder(
+        generated_by_name={
+            "compose.core-main.yaml": ROUTE_CLAIM_GENERATED,
+            "compose.auxiliary-other.yaml": "services:\n  aux-aux:\n    image: ghcr.io/org/aux:1\n",
+        }
+    )
+    monkeypatch.setattr(score_module, "bash", recorder.run)
+    config = _generated_config(
+        tmp_path,
+        ["api.yaml", "aux.yaml"],
+        repository="ghcr.io/org/repo",
+        project_name="example",
+        platforms=["linux/amd64"],
+        services={
+            "core": {"options": {"main": {"workloads": ["api.yaml"]}}},
+            "auxiliary": {"options": {"other": {"workloads": ["aux.yaml"]}}},
+        },
+    )
+    score_compose_module.generate_compose(
+        config,
+        _lock_for_images({
+            "API_IMAGE": "ghcr.io/org/api:1@" + DIGEST,
+            "AUX_IMAGE": "ghcr.io/org/aux:1@" + DIGEST,
+            **ALPINE_LOCK,
+        }),
+    )
+
+    # A provisioner in one bundle templates a claim authored in another, so every
+    # entry's generate env carries the export, not just the claiming entry's
+    assert len(recorder.generate_envs) == 2
+    for generate_env in recorder.generate_envs:
+        assert generate_env is not None
+        assert generate_env["API_ROUTE_PATH"] == "/auth"
 
 
 def test_two_claiming_workloads_spelling_one_export_refuse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
