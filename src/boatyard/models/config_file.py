@@ -27,7 +27,6 @@ from boatyard.models.pyproject import PYPROJECT_PATH, PyprojectToml
 from boatyard.models.image import Image, LocalBaseEntry, dockerfile_stem, parse_dockerfile
 from boatyard.models.workload import (
     ROUTE_PATH_PATTERN,
-    ROUTE_UPSTREAM_PATTERN,
     LoadedWorkload,
 )
 from boatyard.temp import PLATFORM_PATTERN, SHA256_DIGEST_REGEX
@@ -55,6 +54,9 @@ COMPOSE_SLOT = re.compile(r"(\$+)\{([A-Z][A-Z0-9_]*)(:[^{}]*)?\}")
 DECLARED_REFERENCE_PATTERN = re.compile(
     rf"^(?P<path>[^:@\s$]+)(?::(?P<tag>[^@\s$]+))?(?:@(?P<digest>{SHA256_DIGEST_REGEX}))?$"
 )
+
+# Match a derived route record's upstream: a service name and a literal port
+ROUTE_UPSTREAM_SHAPE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*:[0-9]+")
 
 TEMPLATE_KEY_PATTERN = re.compile(r"\{([a-z][a-z0-9_]*)\}")
 
@@ -224,39 +226,9 @@ class ConfigFile(BaseModel):
         if isinstance(project_name, str) and ENTRY_NAME_PATTERN.fullmatch(project_name) is None:
             raise ValueError(f"project_name {project_name!r} must match ^[a-z][a-z0-9-]*$")
 
-        # Collect every route with its declaration site
-        route_sites = [
-            (where, route)
-            for name, entry in services.items()
-            for where, entry_routes in (
-                [(f"services.{name}", entry.routes)]
-                if not isinstance(entry, ServiceGroup)
-                else [
-                    (f"services.{name}.options.{option_name}", option.routes)
-                    for option_name, option in entry.options.items()
-                ]
-                + [(f"services.{name}", entry.routes)]
-            )
-            for route in entry_routes
-        ]
-        owner: dict[str, str] = {}
-        for where, route in route_sites:
-            if route.path in owner:
-                raise ValueError(f"{where}: route path {route.path} is already declared at {owner[route.path]}")
-            owner[route.path] = where
-
-        # If the reserved auth group is declared, cap its options at one route
-        if AUTH_GROUP_NAME in services:
-            auth = services[AUTH_GROUP_NAME]
-            if not isinstance(auth, ServiceGroup):
-                raise ValueError(f"services.{AUTH_GROUP_NAME} must be a group (the name is reserved)")
-            for option_name, option in auth.options.items():
-                if len(option.routes) > 1:
-                    raise ValueError(
-                        f"services.{AUTH_GROUP_NAME}.options.{option_name}: an auth option declares "
-                        "at most one route; the exactly-one effective-route check runs at resolve "
-                        "over authored plus adopted routes"
-                    )
+        # The reserved auth group is a group like any other for shape purposes
+        if AUTH_GROUP_NAME in services and not isinstance(services[AUTH_GROUP_NAME], ServiceGroup):
+            raise ValueError(f"services.{AUTH_GROUP_NAME} must be a group (the name is reserved)")
         return services
 
     @model_validator(mode="after")
@@ -276,19 +248,6 @@ class ConfigFile(BaseModel):
                 "platforms is required when images are declared (an amd64-only repo declares [linux/amd64])"
             )
 
-        # Find any declared route across entries and options
-        declares_routes = any(
-            routes
-            for member in self.services.values()
-            for routes in (
-                [member.routes, *(option.routes for option in member.options.values())]
-                if isinstance(member, ServiceGroup)
-                else [member.routes]
-            )
-        )
-        # If routes are declared, require a gateway
-        if declares_routes and self.gateway_port is None:
-            raise ValueError("routes require a gateway declaration")
         upstream_sites: list[tuple[str, str]] = [
             (f"base_images.{name}", reference) for name, reference in self.remote_base_images.items()
         ]
@@ -341,7 +300,6 @@ class ServiceGroup(BaseModel):
 
     options: dict[str, ServiceEntry] = Field(default_factory=dict)
     workloads: list[str] = Field(default_factory=list)
-    routes: list[Route] = Field(default_factory=list)
     ports: list[PublishedPort] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -360,7 +318,6 @@ class ServiceEntry(BaseModel):
     ref: str | None = None
     workloads: list[str] = Field(default_factory=list)
     vars: VarsMap = Field(default_factory=dict)
-    routes: list[Route] = Field(default_factory=list)
     ports: list[PublishedPort] = Field(default_factory=list)
 
     @property
@@ -415,13 +372,12 @@ class Route(BaseModel):
     path: str
     upstream: str
     strip_prefix: bool = False
-    raw: str | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> Self:
         if ROUTE_PATH_PATTERN.fullmatch(self.path) is None:
             raise ValueError(f"route path {self.path!r} must be a /-rooted segment chain, optionally wildcarded as …/*")
-        if ROUTE_UPSTREAM_PATTERN.fullmatch(self.upstream) is None:
+        if ROUTE_UPSTREAM_SHAPE.fullmatch(self.upstream) is None:
             raise ValueError(
                 f"route upstream {self.upstream!r} must be a service name and a literal port (grafana:3000)"
             )
@@ -477,7 +433,6 @@ class FlattenedServiceEntry(NamedTuple):
     name: str
     site: str
     entry: ServiceEntry
-    effective_routes: list[Route]
     effective_ports: list[PublishedPort]
     auth: bool
 
@@ -678,7 +633,6 @@ def flatten_service_entries(services: dict[str, ServiceGroup | ServiceEntry]) ->
                     name=qualified_option_name(root_name, option_name),
                     site=f"services.{root_name}.options.{option_name}",
                     entry=option,
-                    effective_routes=option.routes + member.routes,
                     effective_ports=option.ports + member.ports,
                     auth=root_name == AUTH_GROUP_NAME,
                 )
@@ -692,7 +646,6 @@ def flatten_service_entries(services: dict[str, ServiceGroup | ServiceEntry]) ->
                     name=root_name,
                     site=f"services.{root_name}",
                     entry=member,
-                    effective_routes=member.routes,
                     effective_ports=member.ports,
                     auth=root_name == AUTH_GROUP_NAME,
                 )
@@ -752,12 +705,7 @@ def artifact_slots(texts: list[str]) -> dict[str, Slot]:
     return slots
 
 
-def refuse_unresolved_references(
-    entry_name: str,
-    routes: list[Route],
-    ports: list[PublishedPort],
-    texts: list[str],
-) -> set[str]:
+def artifact_service_names(texts: list[str]) -> set[str]:
     # Union the services keys across the texts
     service_names: set[str] = set()
     for text in texts:
@@ -765,6 +713,15 @@ def refuse_unresolved_references(
         services = document.get("services") if is_mapping(document) else None
         if is_mapping(services):
             service_names.update(services)
+    return service_names
+
+
+def refuse_unresolved_references(
+    entry_name: str,
+    routes: list[Route],
+    ports: list[PublishedPort],
+    service_names: set[str],
+) -> None:
     references = {route.upstream.partition(":")[0]: route.path for route in routes}
     references.update({port.service: str(port.published) for port in ports})
     unknown = sorted(name for name in references if name not in service_names)
@@ -774,7 +731,6 @@ def refuse_unresolved_references(
             f"services entry {entry_name!r}: {references[name]!r} references {name!r}, "
             f"which resolves to no service in the bundle (services: {sorted(service_names)})"
         )
-    return service_names
 
 
 def mirrored_ref(reference: str, prefix: str) -> str:

@@ -88,6 +88,7 @@ def _write_edge_tree(
     routes: list[dict[str, object]],
     *,
     auth: bool = False,
+    auth_routes: list[dict[str, object]] | None = None,
     gateway_port: int | None = 58080,
     public_host: str | None = "192.168.8.10",
     public_scheme: str | None = None,
@@ -96,7 +97,7 @@ def _write_edge_tree(
     entry_ports: list[dict[str, object]] | None = None,
 ) -> None:
     services: dict[str, dict[str, object]] = {
-        "livekit": {"ref": LIVEKIT_REF, "routes": routes},
+        "livekit": {"ref": LIVEKIT_REF},
     }
     if entry_ports is not None:
         services["livekit"]["ports"] = entry_ports
@@ -105,7 +106,6 @@ def _write_edge_tree(
             "options": {
                 "keycloak": {
                     "ref": KEYCLOAK_REF,
-                    "routes": [{"path": "/auth/*", "upstream": "keycloak:8080", "strip_prefix": True}],
                 }
             }
         }
@@ -124,17 +124,22 @@ def _write_edge_tree(
     )
     livekit_bundle: dict[str, object] = {
         "reference": LIVEKIT_PINNED,
-        "services": ["livekit"],
-        "routes": [],
+        "services": _record_services(["livekit"], routes),
+        "routes": routes,
         "ports": [],
         "container_names": [],
     }
     bundles: dict[str, object] = {"LIVEKIT_BUNDLE": livekit_bundle}
     if auth:
+        selected_auth_routes: list[dict[str, object]] = (
+            auth_routes
+            if auth_routes is not None
+            else [{"path": "/auth/*", "upstream": "keycloak:8080", "strip_prefix": True}]
+        )
         bundles["AUTH_KEYCLOAK_BUNDLE"] = {
             "reference": KEYCLOAK_PINNED,
-            "services": ["keycloak"],
-            "routes": [],
+            "services": _record_services(["keycloak"], selected_auth_routes),
+            "routes": selected_auth_routes,
             "ports": [],
             "container_names": [],
         }
@@ -165,12 +170,23 @@ def _write_edge_tree(
     monkeypatch.chdir(tmp_path)
 
 
+def _record_services(base: list[str], routes: list[dict[str, object]]) -> list[str]:
+    # The lock's service set must cover every route upstream the records carry
+    services = [*base]
+    for route in routes:
+        upstream = str(route["upstream"]).partition(":")[0]
+        if upstream not in services:
+            services.append(upstream)
+    return services
+
+
 def _invoke_up(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     routes: list[dict[str, object]],
     *,
     auth: bool = False,
+    auth_routes: list[dict[str, object]] | None = None,
     gateway_port: int | None = 58080,
     public_host: str | None = "192.168.8.10",
     public_scheme: str | None = None,
@@ -184,6 +200,7 @@ def _invoke_up(
         monkeypatch,
         routes,
         auth=auth,
+        auth_routes=auth_routes,
         gateway_port=gateway_port,
         public_host=public_host,
         public_scheme=public_scheme,
@@ -212,6 +229,7 @@ def _up(
     routes: list[dict[str, object]],
     *,
     auth: bool = False,
+    auth_routes: list[dict[str, object]] | None = None,
     gateway_port: int | None = 58080,
     public_host: str | None = "192.168.8.10",
     public_scheme: str | None = None,
@@ -225,6 +243,7 @@ def _up(
         monkeypatch,
         routes,
         auth=auth,
+        auth_routes=auth_routes,
         gateway_port=gateway_port,
         public_host=public_host,
         public_scheme=public_scheme,
@@ -253,15 +272,13 @@ def _resolve_tree(
     *,
     gateway_port: int | None = 58080,
     public_host: str | None = None,
-    livekit_routes: list[dict[str, object]] | None = None,
     livekit_ports: list[dict[str, object]] | None = None,
     lock_livekit_routes: list[dict[str, object]] | None = None,
     lock_livekit_ports: list[dict[str, object]] | None = None,
     lock_livekit_slots: dict[str, object] | None = None,
     values_extra: dict[str, object] | None = None,
 ):
-    routes = livekit_routes if livekit_routes is not None else []
-    livekit_entry: dict[str, object] = {"ref": LIVEKIT_REF, "routes": routes}
+    livekit_entry: dict[str, object] = {"ref": LIVEKIT_REF}
     if livekit_ports is not None:
         livekit_entry["ports"] = livekit_ports
     payload: dict[str, object] = {
@@ -403,14 +420,14 @@ class TestGatewayProject:
 
         assert "environment" not in _gateway_document(spy)["services"]["boatyard-gateway"]
 
-    def test_routes_without_a_gateway_refuse_at_load(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_routes_without_a_gateway_refuse_at_resolve(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _write_edge_tree(tmp_path, monkeypatch, [{"path": "/*", "upstream": "livekit:8000"}], gateway_port=None)
 
         result = runner.invoke(app, ["up"])
 
         assert result.exit_code != 0
         assert isinstance(result.exception, ValueError)
-        assert "routes require a gateway declaration" in str(result.exception)
+        assert "effective routes require a gateway declaration" in str(result.exception)
 
 
 class TestOverrideDocument:
@@ -619,7 +636,6 @@ class TestUpProjects:
                     "options": {
                         "cuda": {
                             "ref": LIVEKIT_REF,
-                            "routes": [{"path": "/*", "upstream": "livekit:8000"}],
                         }
                     }
                 }
@@ -636,7 +652,7 @@ class TestUpProjects:
                     "CORE_CUDA_BUNDLE": {
                         "reference": LIVEKIT_PINNED,
                         "services": ["livekit"],
-                        "routes": [],
+                        "routes": [{"path": "/*", "upstream": "livekit:8000"}],
                         "ports": [],
                         "container_names": [],
                     }
@@ -728,57 +744,73 @@ class TestRenderCaddyfile:
 
         assert "header_up" not in _caddyfile(spy).split("handle {", 1)[1]
 
-    def test_a_raw_route_renders_verbatim_under_its_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        spy = _up(
-            tmp_path,
-            monkeypatch,
-            [{"path": "/x/*", "upstream": "x:1", "raw": 'respond "raw" 200'}],
-        )
-
-        assert '\thandle /x/* {\n\t\trespond "raw" 200\n\t}' in _caddyfile(spy)
-
-    def test_blocks_render_in_declaration_order(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_blocks_render_in_specificity_order_regardless_of_record_order(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         spy = _up(
             tmp_path,
             monkeypatch,
             [
                 {"path": "/*", "upstream": "livekit:8000"},
                 {"path": "/grafana/*", "upstream": "grafana:3000"},
+                {"path": "/grafana/datasources/*", "upstream": "datasources:3001"},
             ],
         )
 
         caddyfile = _caddyfile(spy)
-        assert caddyfile.index("reverse_proxy livekit-livekit:8000") < caddyfile.index(
+        assert caddyfile.index("reverse_proxy livekit-datasources:3001") < caddyfile.index(
+            "reverse_proxy livekit-grafana:3000"
+        )
+        assert caddyfile.index("reverse_proxy livekit-grafana:3000") < caddyfile.index(
+            "reverse_proxy livekit-livekit:8000"
+        )
+        assert caddyfile.rstrip().endswith("\thandle {\n\t\treverse_proxy livekit-livekit:8000\n\t}\n}")
+
+    def test_an_exact_path_precedes_its_own_wildcard(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        spy = _up(
+            tmp_path,
+            monkeypatch,
+            [
+                {"path": "/grafana/*", "upstream": "grafana:3000"},
+                {"path": "/grafana", "upstream": "exact:3002"},
+            ],
+        )
+
+        caddyfile = _caddyfile(spy)
+        assert caddyfile.index("reverse_proxy livekit-exact:3002") < caddyfile.index(
             "reverse_proxy livekit-grafana:3000"
         )
 
 
 class TestAdoption:
-    def test_authored_declarations_replace_the_adopted_set(
+    def test_the_locked_records_stand_as_the_bundle_routes(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         plan = _resolve_tree(
             tmp_path,
             monkeypatch,
-            livekit_routes=[{"path": "/*", "upstream": "livekit:8000"}],
             lock_livekit_routes=[{"path": "/adopted/*", "upstream": "livekit:9000"}],
         )
 
         [bundle] = plan.bundles
-        assert [(route.path, route.upstream) for route in bundle.effective_routes] == [("/*", "livekit:8000")]
+        assert [(route.path, route.upstream) for route in bundle.routes] == [("/adopted/*", "livekit:9000")]
 
-    def test_the_adopted_set_stands_without_authored_declarations(
+    def test_a_locked_route_referencing_no_locked_service_refuses(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        plan = _resolve_tree(
-            tmp_path,
-            monkeypatch,
-            livekit_routes=[],
-            lock_livekit_routes=[{"path": "/adopted/*", "upstream": "livekit:9000"}],
-        )
+        with pytest.raises(ValueError, match="'/adopted/\\*' references 'ghost'"):
+            _resolve_tree(
+                tmp_path,
+                monkeypatch,
+                lock_livekit_routes=[{"path": "/adopted/*", "upstream": "ghost:9000"}],
+            )
 
-        [bundle] = plan.bundles
-        assert [(route.path, route.upstream) for route in bundle.effective_routes] == [("/adopted/*", "livekit:9000")]
+    def test_an_auth_option_with_no_routes_selects_cleanly(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spy = _up(tmp_path, monkeypatch, [], auth=True, auth_routes=[])
+
+        assert "header_up" not in _caddyfile(spy)
 
     def test_two_adopted_claims_on_one_path_refuse(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         tree = tmp_path / "case"

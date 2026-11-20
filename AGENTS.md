@@ -38,6 +38,17 @@ Design intent and silent-failure traps, one fact per bullet.
   entry set plus the bare project name, removing the shared network last.
 - The `boatyard-gateway` service does no token validation; re-protection is a bundle-shipped
   oauth2-proxy sidecar treaty.
+- Routes are path claims the serving surface authors: a workload's `boatyard/route: /auth/*`
+  (an optional `@port-name` qualifier when `service.ports` declares several, an optional
+  `, strip` entry) or a provisioner service stanza's `route:`/`port:` keys, which the compile
+  pass re-spells as the same annotations. The upstream is derived — the declaring service at
+  its `service.ports` listen port (`targetPort` else `port`) — so the rendered stanza carries
+  the claim verbatim plus a `boatyard/port` annotation, and adoption composes the two into
+  route records; nothing hand-copies an upstream.
+- The gateway table is compiler output: it orders by path specificity (longest concrete
+  prefix first, the `/*` catch-all last), and each claiming workload exports
+  `<WORKLOAD>_ROUTE_PATH` (the claim's concrete path) into the tool env provisioner
+  templates read via `{{ env }}`.
 - `$`-doubling: a literal `$` in file text placed inside a compose document (edge Caddyfile,
   file-sourced configs, score's bind inlining) is doubled via `double_dollars` in
   `models/config_file.py` — the one home. Text outside a compose document (k8s manifests) never

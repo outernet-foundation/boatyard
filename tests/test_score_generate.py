@@ -441,6 +441,21 @@ class ComposeBashRecorder:
             output.write_text(self.generated, encoding="utf-8")
 
 
+class CompiledProvisionersRecorder(ComposeBashRecorder):
+    def __init__(self, generated: str) -> None:
+        super().__init__(generated)
+        self.compiled: list[list[Yaml]] = []
+
+    def run(self, command: str, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
+        super().run(command, cwd=cwd, env=env)
+        if not command.startswith("score-compose init"):
+            return
+        base = cwd if cwd is not None else Path.cwd()
+        for token in command.split():
+            if "compiled-provisioners-" in token:
+                self.compiled.append(yaml.safe_load((base / token).read_text(encoding="utf-8")))
+
+
 GENERATED_COMPOSE = (
     "services:\n"
     "  api-api:\n"
@@ -983,6 +998,16 @@ PROVISIONER_WITH_SERVICES = """
       image: ${EXAMPLE_IMAGE:?err}
 """
 
+PROVISIONER_WITH_CLAIM = """
+- uri: template://example/config
+  type: example-config
+  services:
+    grafana:
+      image: ${EXAMPLE_IMAGE:?err}
+      route: /grafana/*
+      port: 3000
+"""
+
 PROVISIONER_WITHOUT_SERVICES = """
 - uri: template://example/state
   type: example-state
@@ -1091,6 +1116,225 @@ def test_provisioners_register_by_resource_type_closure(tmp_path: Path, monkeypa
     init = next(command for command in recorder.commands if command.startswith("score-compose init"))
     provisioners = [token for token in init.split() if token.endswith(".yaml")]
     assert [Path(token).name for token in provisioners] == ["config.yaml", "state.yaml"]
+
+
+ROUTE_CLAIM_WORKLOAD = (
+    "metadata:\n"
+    "  name: api\n"
+    "  annotations:\n"
+    "    boatyard/route: /auth/*@web, strip\n"
+    "    boatyard/lock: api=API_IMAGE\n"
+    "service:\n"
+    "  ports:\n"
+    "    web:\n"
+    "      port: 8080\n"
+    "      targetPort: 8081\n"
+    "    admin:\n"
+    "      port: 9090\n"
+    "containers:\n"
+    "  api: {}\n"
+)
+
+ROUTE_CLAIM_GENERATED = (
+    "services:\n  api-api:\n    image: ghcr.io/org/api:1\n    annotations:\n      boatyard/route: /auth/*@web, strip\n"
+)
+
+
+def _generate_claiming_workload(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    generated: str,
+) -> WorkloadContentsRecorder:
+    (tmp_path / "stack" / "score").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "stack" / "score" / "api.yaml").write_text(ROUTE_CLAIM_WORKLOAD, encoding="utf-8")
+    recorder = WorkloadContentsRecorder(generated)
+    monkeypatch.setattr(score_module, "bash", recorder.run)
+    config = _generated_config(
+        tmp_path,
+        ["api.yaml"],
+        repository="ghcr.io/org/repo",
+        project_name="example",
+        platforms=["linux/amd64"],
+        services={"core": {"options": {"main": {"workloads": ["api.yaml"]}}}},
+    )
+    score_compose_module.generate_compose(
+        config,
+        _lock_for_images({"API_IMAGE": "ghcr.io/org/api:1@" + DIGEST, **ALPINE_LOCK}),
+    )
+    return recorder
+
+
+def test_a_workload_claim_spells_the_derived_port_annotation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _generate_claiming_workload(monkeypatch, tmp_path, ROUTE_CLAIM_GENERATED)
+
+    document = yaml.safe_load(
+        (tmp_path / "stack" / "generated" / "compose" / "compose.core-main.yaml").read_text(encoding="utf-8")
+    )
+    assert document["services"]["api"]["annotations"] == {
+        "boatyard/route": "/auth/*@web, strip",
+        "boatyard/port": "8081",
+    }
+
+
+def test_the_route_path_export_rides_the_tool_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    recorder = _generate_claiming_workload(monkeypatch, tmp_path, ROUTE_CLAIM_GENERATED)
+
+    generate_env = recorder.command_envs["score-compose generate"]
+    assert generate_env is not None
+    assert generate_env["API_ROUTE_PATH"] == "/auth"
+    assert recorder.command_envs["score-compose init"] == generate_env
+
+
+def test_two_claiming_workloads_spelling_one_export_refuse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "stack" / "score").mkdir(parents=True)
+    for name in ("api", "API"):
+        (tmp_path / "stack" / "score" / f"{name}.yaml").write_text(
+            ROUTE_CLAIM_WORKLOAD.replace("  name: api\n", f"  name: {name}\n"),
+            encoding="utf-8",
+        )
+    recorder = WorkloadContentsRecorder("services: {}\n")
+    monkeypatch.setattr(score_module, "bash", recorder.run)
+    config = _generated_config(
+        tmp_path,
+        ["API.yaml", "api.yaml"],
+        repository="ghcr.io/org/repo",
+        project_name="example",
+        platforms=["linux/amd64"],
+        services={"core": {"options": {"main": {"workloads": ["API.yaml", "api.yaml"]}}}},
+    )
+
+    with pytest.raises(ValueError, match=r"API\.yaml and api\.yaml spell one route path export API_ROUTE_PATH"):
+        score_compose_module.generate_compose(
+            config,
+            _lock_for_images({"API_IMAGE": "ghcr.io/org/api:1@" + DIGEST, **ALPINE_LOCK}),
+        )
+
+
+def test_the_expanded_workload_copy_carries_the_claim_verbatim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    recorder = _generate_claiming_workload(monkeypatch, tmp_path, ROUTE_CLAIM_GENERATED)
+
+    assert "boatyard/route: /auth/*@web, strip\n" in recorder.workload_contents["api.yaml"]
+
+
+def test_provisioner_claims_translate_into_annotations_under_the_string_form(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sources = {
+        "stack/score/api.yaml": _workload_referencing("config", "api"),
+        "stack/score/compose/config.yaml": PROVISIONER_WITH_CLAIM,
+    }
+    for relative, text in sources.items():
+        source = tmp_path / relative
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text(text, encoding="utf-8")
+    recorder = CompiledProvisionersRecorder("services: {}\n")
+    monkeypatch.setattr(score_module, "bash", recorder.run)
+    config = _bundle_config(tmp_path)
+
+    score_compose_module.generate_compose(
+        config,
+        _lock_for_images({"EXAMPLE_IMAGE": "ghcr.io/org/example:1@" + DIGEST, **ALPINE_LOCK}),
+    )
+
+    [document] = recorder.compiled
+    [entry] = document
+    assert isinstance(entry, dict)
+    services_text = entry["services"]
+    assert isinstance(services_text, str)
+    assert yaml.safe_load(services_text) == {
+        "grafana": {
+            "image": "${EXAMPLE_IMAGE:?err}",
+            "annotations": {"boatyard/route": "/grafana/*", "boatyard/port": "3000"},
+        }
+    }
+
+
+def _invoke_claiming_provisioner(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, provisioner: str) -> None:
+    sources = {
+        "stack/score/api.yaml": _workload_referencing("config", "api"),
+        "stack/score/compose/config.yaml": provisioner,
+    }
+    for relative, text in sources.items():
+        source = tmp_path / relative
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text(text, encoding="utf-8")
+    recorder = CompiledProvisionersRecorder("services: {}\n")
+    monkeypatch.setattr(score_module, "bash", recorder.run)
+    config = _bundle_config(tmp_path)
+    score_compose_module.generate_compose(
+        config,
+        _lock_for_images({"EXAMPLE_IMAGE": "ghcr.io/org/example:1@" + DIGEST, **ALPINE_LOCK}),
+    )
+
+
+def test_a_provisioner_route_without_its_port_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ValueError, match=r"services\.grafana: route: requires the port: key"):
+        _invoke_claiming_provisioner(
+            monkeypatch,
+            tmp_path,
+            """
+- uri: template://example/config
+  type: example-config
+  services:
+    grafana:
+      image: ${EXAMPLE_IMAGE:?err}
+      route: /grafana/*
+""",
+        )
+
+
+def test_a_provisioner_port_without_a_route_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ValueError, match=r"services\.grafana: port: rides a route: claim"):
+        _invoke_claiming_provisioner(
+            monkeypatch,
+            tmp_path,
+            """
+- uri: template://example/config
+  type: example-config
+  services:
+    grafana:
+      image: ${EXAMPLE_IMAGE:?err}
+      port: 3000
+""",
+        )
+
+
+def test_a_provisioner_claim_port_qualifier_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ValueError, match=r"takes no @port qualifier"):
+        _invoke_claiming_provisioner(
+            monkeypatch,
+            tmp_path,
+            """
+- uri: template://example/config
+  type: example-config
+  services:
+    grafana:
+      image: ${EXAMPLE_IMAGE:?err}
+      route: /grafana/*@web
+      port: 3000
+""",
+        )
+
+
+def test_a_provisioner_stanza_annotating_the_claim_directly_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with pytest.raises(ValueError, match=r"annotates boatyard/route directly"):
+        _invoke_claiming_provisioner(
+            monkeypatch,
+            tmp_path,
+            """
+- uri: template://example/config
+  type: example-config
+  services:
+    grafana:
+      image: ${EXAMPLE_IMAGE:?err}
+      route: /grafana/*
+      port: 3000
+      annotations:
+        boatyard/route: /grafana/*
+""",
+        )
 
 
 WORKLOAD_WITH_LIVENESS = """

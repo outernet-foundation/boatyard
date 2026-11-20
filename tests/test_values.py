@@ -200,7 +200,7 @@ def test_a_remote_winners_records_come_from_the_lock(tmp_path: Path) -> None:
     assert monitor.pinned_reference == MONITOR_PINNED
     assert monitor.bundle_path is None
     assert monitor.services == ["monitor"]
-    assert [(route.path, route.upstream) for route in monitor.effective_routes] == [("/monitor/*", "monitor:9000")]
+    assert [(route.path, route.upstream) for route in monitor.routes] == [("/monitor/*", "monitor:9000")]
     assert [(port.service, port.published) for port in monitor.effective_ports] == [("monitor", 9000)]
 
 
