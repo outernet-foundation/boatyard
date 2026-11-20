@@ -10,7 +10,6 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    field_validator,
     model_validator,
 )
 
@@ -75,11 +74,25 @@ class ComposeService(BaseModel):
 
     @property
     def bind_volumes(self) -> list[BindVolume]:
-        return [volume for volume in self.volumes or [] if isinstance(volume, BindVolume)]
+        # Repo-relative sources name repo files the hermetic pass inlines as configs content
+        return [
+            volume
+            for volume in self.volumes or []
+            if isinstance(volume, BindVolume) and not Path(volume.source).is_absolute()
+        ]
+
+    @property
+    def host_bind_volumes(self) -> list[BindVolume]:
+        # Absolute sources name host paths — authored mounts that ride through untouched
+        return [
+            volume
+            for volume in self.volumes or []
+            if isinstance(volume, BindVolume) and Path(volume.source).is_absolute()
+        ]
 
     def strip_bind_volumes(self) -> list[BindVolume]:
         binds = self.bind_volumes
-        self.volumes = [volume for volume in self.volumes or [] if not isinstance(volume, BindVolume)] or None
+        self.volumes = [volume for volume in self.volumes or [] if volume not in binds] or None
         return binds
 
 
@@ -96,13 +109,6 @@ class BindVolume(BaseModel):
     type: Literal["bind"]
     source: str
     target: str
-
-    @field_validator("source")
-    @classmethod
-    def _require_relative(cls, value: str) -> str:
-        if Path(value).is_absolute():
-            raise ValueError(f"bind source {value} must be relative")
-        return value
 
 
 class OtherVolume(BaseModel):
@@ -217,7 +223,8 @@ def generate_compose(config: ConfigFile, lock: LockFile) -> list[Path]:
             claim_sites[collapsed_name] = site
             document.services[collapsed_name] = service
 
-            # Inline every bind volume as a top-level configs entry
+            # Inline every repo-relative bind volume as a top-level configs entry;
+            # absolute-source binds are authored host mounts and stay in place
             bind_volumes = service.strip_bind_volumes()
             if not bind_volumes:
                 continue

@@ -88,6 +88,16 @@ def test_non_bind_volume_kind_passes_through_untyped() -> None:
     assert not isinstance(volume.volumes[0], BindVolume)
 
 
+def test_an_absolute_bind_source_parses_as_an_authored_host_mount() -> None:
+    volume = ComposeService.model_validate({
+        "volumes": [{"type": "bind", "source": "/var/run/docker.sock", "target": "/var/run/docker.sock"}]
+    })
+
+    assert volume.volumes is not None
+    assert volume.bind_volumes == []
+    assert volume.host_bind_volumes == volume.volumes
+
+
 def test_write_normalises_file_mode(tmp_path: Path) -> None:
     path = tmp_path / "state.yaml"
     path.write_text("placeholder", encoding="utf-8")
@@ -443,6 +453,25 @@ GENERATED_COMPOSE = (
     "    image: pg:16\n"
 )
 
+GENERATED_COMPOSE_WITH_HOST_BIND = (
+    "services:\n"
+    "  api-api:\n"
+    "    image: ghcr.io/org/api:1\n"
+    "    volumes:\n"
+    "      - type: bind\n"
+    "        source: workloads/api/config.yaml\n"
+    "        target: /etc/placeframe/config.yaml\n"
+    "      - type: bind\n"
+    "        source: /var/run/docker.sock\n"
+    "        target: /var/run/docker.sock\n"
+    "  pf-postgres:\n"
+    "    image: pg:16\n"
+    "    volumes:\n"
+    "      - type: bind\n"
+    "        source: /var/run/docker.sock\n"
+    "        target: /var/run/docker.sock\n"
+)
+
 API_SERVICE_RENDERING = "services:\n  api-api:\n    image: ghcr.io/org/api:1\n"
 
 
@@ -495,6 +524,29 @@ def test_generate_compose_collapses_doubled_names_and_inlines_binds(
     assert api["configs"] == [{"source": "config.yaml", "target": "/etc/placeframe/config.yaml"}]
     assert document["configs"] == {"config.yaml": {"content": "key: $${FOO}\n"}}
     assert "networks" not in document
+
+
+def test_generate_compose_passes_authored_host_binds_through_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = _generate_compose(monkeypatch, tmp_path, GENERATED_COMPOSE_WITH_HOST_BIND)
+
+    document = yaml.safe_load(output.read_text(encoding="utf-8"))
+    postgres = document["services"]["pf-postgres"]
+    assert postgres["volumes"] == [{"type": "bind", "source": "/var/run/docker.sock", "target": "/var/run/docker.sock"}]
+    assert "configs" not in postgres
+
+
+def test_a_service_with_both_bind_kinds_inlines_only_the_relative_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = _generate_compose(monkeypatch, tmp_path, GENERATED_COMPOSE_WITH_HOST_BIND)
+
+    document = yaml.safe_load(output.read_text(encoding="utf-8"))
+    api = document["services"]["api"]
+    assert api["volumes"] == [{"type": "bind", "source": "/var/run/docker.sock", "target": "/var/run/docker.sock"}]
+    assert api["configs"] == [{"source": "config.yaml", "target": "/etc/placeframe/config.yaml"}]
+    assert document["configs"] == {"config.yaml": {"content": "key: $${FOO}\n"}}
 
 
 def test_generate_compose_collapses_doubled_names_with_no_binds(
