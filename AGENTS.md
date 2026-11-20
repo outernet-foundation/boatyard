@@ -47,8 +47,9 @@ Design intent and silent-failure traps, one fact per bullet.
   route records; nothing hand-copies an upstream.
 - The gateway table is compiler output: it orders by path specificity (longest concrete
   prefix first, the `/*` catch-all last), and each claiming workload exports
-  `<WORKLOAD>_ROUTE_PATH` (the claim's concrete path) into the tool env provisioner
-  templates read via `{{ env }}`.
+  `<WORKLOAD>_ROUTE_PATH` (the claim's concrete path) into every rendering's tool env —
+  assembly-wide, so a provisioner in one bundle templates a claim authored in another —
+  read via `{{ env }}`.
 - `$`-doubling: a literal `$` in file text placed inside a compose document (edge Caddyfile,
   file-sourced configs, score's bind inlining) is doubled via `double_dollars` in
   `models/config_file.py` — the one home. Text outside a compose document (k8s manifests) never
