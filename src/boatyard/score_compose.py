@@ -26,7 +26,7 @@ from boatyard.models.config_file import (
 )
 from boatyard.models.lock_file import LockFile
 from boatyard.models.values_file import ValuesFile
-from boatyard.models.workload import LoadedWorkload, require_compose_probe_adapters
+from boatyard.models.workload import ROUTE_PORT_ANNOTATION, LoadedWorkload, require_compose_probe_adapters
 from boatyard.paths import VALUES_FILE
 from boatyard.yaml import Yaml, load_yaml_model
 from boatyard.score import (
@@ -71,6 +71,7 @@ class ComposeService(BaseModel):
     depends_on: dict[str, Yaml] | list[str] | None = None
     configs: list[ComposeConfigReference] | None = None
     image: str | None = None
+    annotations: dict[str, str] | None = None
 
     @property
     def bind_volumes(self) -> list[BindVolume]:
@@ -222,6 +223,13 @@ def generate_compose(config: ConfigFile, lock: LockFile) -> list[Path]:
                 )
             claim_sites[collapsed_name] = site
             document.services[collapsed_name] = service
+
+            # Spell the resolved claim's port as the derived label the rendered form adopts
+            resolved_route = workload.document.resolved_route if workload is not None else None
+            if resolved_route is not None:
+                annotations = dict(service.annotations or {})
+                annotations[ROUTE_PORT_ANNOTATION] = str(resolved_route.port)
+                service.annotations = annotations
 
             # Inline every repo-relative bind volume as a top-level configs entry;
             # absolute-source binds are authored host mounts and stay in place

@@ -836,31 +836,6 @@ class TestBundleRecording:
         assert result.exit_code != 0
         assert "the included bundle defines the reserved service 'boatyard-gateway'" in str(result.exception)
 
-    def test_an_unresolved_route_upstream_refuses_naming_the_declaration(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        result, _, read_references = self._invoke(
-            monkeypatch,
-            tmp_path,
-            [],
-            declares_routes=True,
-            ref_services={
-                "tunnel": {
-                    "options": {
-                        "rathole": {
-                            "ref": self.TUNNEL_RATHOLE,
-                            "routes": [{"path": "/*", "upstream": "webapp:3000"}],
-                        }
-                    }
-                }
-            },
-        )
-
-        assert result.exit_code == 1
-        assert "references 'webapp'" in str(result.exception) + result.output
-        assert "'/*'" in str(result.exception) + result.output
-        assert read_references == [f"{self.RATHOLE_BASE}@{DIGEST_A}"]
-
     def test_an_unresolved_port_owner_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         result, _, _ = self._invoke(
             monkeypatch,
@@ -882,7 +857,7 @@ class TestBundleRecording:
         assert result.exit_code == 1
         assert "references 'database'" in str(result.exception) + result.output
 
-    def test_a_frozen_digest_with_declared_routes_still_reads_and_validates(
+    def test_a_frozen_digest_with_declared_ports_still_reads_and_validates(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         caddy_declaration = "docker.io/library/caddy:2.8.4-alpine@" + DIGEST_B
@@ -905,7 +880,7 @@ class TestBundleRecording:
                     "options": {
                         "rathole": {
                             "ref": self.TUNNEL_RATHOLE,
-                            "routes": [{"path": "/*", "upstream": "rathole:8000"}],
+                            "ports": [{"service": "rathole", "published": 8000, "target": 8000}],
                         }
                     }
                 }
@@ -990,20 +965,28 @@ class TestBundleRecording:
             }
         }
 
-    def test_annotations_extract_in_artifact_order(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_claims_compose_with_their_port_labels_in_artifact_order(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         bundle_text = (
             "services:\n"
             "  api:\n"
             "    image: demo/api:1\n"
-            "    labels:\n"
-            "      boatyard/route: /grafana/*=grafana:3000,/*=api:8000\n"
+            "    annotations:\n"
+            "      boatyard/route: /*\n"
+            "      boatyard/port: '8000'\n"
             "  grafana:\n"
             "    image: demo/grafana:1\n"
+            "    annotations:\n"
+            "      boatyard/route: /grafana/*, strip\n"
+            "      boatyard/port: '3000'\n"
             "    container_name: demo-grafana\n"
             "  livekit:\n"
             "    image: demo/livekit:1\n"
             "    labels:\n"
             "      boatyard/publish-port: 6178:6178,5957:5957/udp\n"
+            "      boatyard/route: /livekit/*\n"
+            "      boatyard/port: '7880'\n"
         )
 
         result, _, _ = self._invoke(monkeypatch, tmp_path, [], bundle_text=bundle_text)
@@ -1012,8 +995,9 @@ class TestBundleRecording:
         [entry] = _read_lock(tmp_path)["bundles"].values()
         assert entry["services"] == ["api", "grafana", "livekit"]
         assert entry["routes"] == [
-            {"path": "/grafana/*", "upstream": "grafana:3000"},
             {"path": "/*", "upstream": "api:8000"},
+            {"path": "/grafana/*", "upstream": "grafana:3000", "strip_prefix": True},
+            {"path": "/livekit/*", "upstream": "livekit:7880"},
         ]
         assert entry["ports"] == [
             {"service": "livekit", "published": 6178, "target": 6178},
@@ -1021,13 +1005,48 @@ class TestBundleRecording:
         ]
         assert entry["container_names"] == ["grafana"]
 
-    def test_a_route_referencing_no_bundle_service_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        bundle_text = "services:\n  api:\n    image: demo/api:1\n    labels:\n      boatyard/route: /*=ghost:8000\n"
+    def test_the_old_grammar_label_refuses_adoption(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        bundle_text = "services:\n  api:\n    image: demo/api:1\n    labels:\n      boatyard/route: /*=api:8000\n"
 
         result, _, _ = self._invoke(monkeypatch, tmp_path, [], bundle_text=bundle_text)
 
         assert result.exit_code != 0
-        assert "boatyard/route: the route /* references the service 'ghost'" in str(result.exception)
+        assert "path=host:port route table grammar is removed" in str(result.exception)
+
+    def test_a_claim_without_its_port_label_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        bundle_text = "services:\n  api:\n    image: demo/api:1\n    labels:\n      boatyard/route: /*\n"
+
+        result, _, _ = self._invoke(monkeypatch, tmp_path, [], bundle_text=bundle_text)
+
+        assert result.exit_code != 0
+        assert "carries no boatyard/port label" in str(result.exception)
+
+    def test_a_claim_with_a_malformed_port_label_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        bundle_text = (
+            "services:\n  api:\n    image: demo/api:1\n"
+            "    labels:\n      boatyard/route: /*\n      boatyard/port: eight\n"
+        )
+
+        result, _, _ = self._invoke(monkeypatch, tmp_path, [], bundle_text=bundle_text)
+
+        assert result.exit_code != 0
+        assert "boatyard/port 'eight' must be a literal port" in str(result.exception)
+
+    def test_two_services_claiming_one_path_refuse(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        bundle_text = (
+            "services:\n"
+            "  one:\n"
+            "    image: demo/one:1\n"
+            "    annotations:\n      boatyard/route: /x/*\n      boatyard/port: '8000'\n"
+            "  two:\n"
+            "    image: demo/two:1\n"
+            "    annotations:\n      boatyard/route: /x/*\n      boatyard/port: '8001'\n"
+        )
+
+        result, _, _ = self._invoke(monkeypatch, tmp_path, [], bundle_text=bundle_text)
+
+        assert result.exit_code != 0
+        assert "the path /x/* is claimed by both one and two" in str(result.exception)
 
     def test_a_committed_lock_without_the_bundle_records_refuses(self, tmp_path: Path) -> None:
         _write_repo(tmp_path, ref_services={"livekit": {"ref": "oci://ghcr.io/org/repo/livekit:0.4.0-dev.3"}})

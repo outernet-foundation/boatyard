@@ -269,19 +269,26 @@ def _write_lock(
     )
 
 
-def _write_bundle_output(root: Path, name: str, services: list[str], environment: dict[str, str] | None = None) -> Path:
+def _write_bundle_output(
+    root: Path,
+    name: str,
+    services: list[str],
+    environment: dict[str, str] | None = None,
+    claims: dict[str, tuple[str, int]] | None = None,
+) -> Path:
     path = root / "stack" / "generated" / "compose" / f"compose.{name}.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
+    service_stanzas: dict[str, dict[str, Any]] = {}
+    for service in services:
+        stanza: dict[str, Any] = {"image": f"demo/{service}:1"}
+        if environment is not None:
+            stanza["environment"] = dict(environment)
+        if claims is not None and service in claims:
+            claim_path, claim_port = claims[service]
+            stanza["annotations"] = {"boatyard/route": claim_path, "boatyard/port": str(claim_port)}
+        service_stanzas[service] = stanza
     path.write_text(
-        yaml.safe_dump({
-            "services": {
-                service: {
-                    "image": f"demo/{service}:1",
-                    **({"environment": dict(environment)} if environment is not None else {}),
-                }
-                for service in services
-            },
-        }),
+        yaml.safe_dump({"services": service_stanzas}),
         encoding="utf-8",
     )
     return path
@@ -477,7 +484,6 @@ def _write_consumer_tree(
                     "options": {
                         "keycloak": {
                             "ref": KEYCLOAK_REF,
-                            "routes": [{"path": "/auth/*", "upstream": "keycloak:8080", "strip_prefix": True}],
                         }
                     },
                 },
@@ -486,10 +492,6 @@ def _write_consumer_tree(
                         "cuda": {"workloads": ["api.yaml"], "vars": {"TORCH_DEVICE": "cuda"}},
                         "rocm": {"workloads": ["api.yaml"], "vars": {"TORCH_DEVICE": "rocm"}},
                     },
-                    "routes": [
-                        {"path": "/grafana/*", "upstream": "grafana:3000"},
-                        {"path": "/*", "upstream": "api:8000"},
-                    ],
                 },
                 "livekit": {
                     "ref": LIVEKIT_REF,
@@ -503,13 +505,19 @@ def _write_consumer_tree(
     _write_lock(
         root,
         bundles={
-            "AUTH_KEYCLOAK_BUNDLE": dict(AUTH_KEYCLOAK_BUNDLE_ENTRY),
+            "AUTH_KEYCLOAK_BUNDLE": {
+                **dict(AUTH_KEYCLOAK_BUNDLE_ENTRY),
+                "routes": [{"path": "/auth/*", "upstream": "keycloak:8080", "strip_prefix": True}],
+            },
             "LIVEKIT_BUNDLE": dict(LIVEKIT_BUNDLE_ENTRY),
         },
     )
     rendered_environment = api_environment if bundle_environment is None else bundle_environment
-    cuda = _write_bundle_output(root, "placeframe-cuda", ["api", "grafana"], environment=rendered_environment)
-    _write_bundle_output(root, "placeframe-rocm", ["api", "grafana"], environment=rendered_environment)
+    claims = {"api": ("/*", 8000), "grafana": ("/grafana/*", 3000)}
+    cuda = _write_bundle_output(
+        root, "placeframe-cuda", ["api", "grafana"], environment=rendered_environment, claims=claims
+    )
+    _write_bundle_output(root, "placeframe-rocm", ["api", "grafana"], environment=rendered_environment, claims=claims)
     _write_workload(root, "api.yaml", "api", environment=api_environment)
     values: dict[str, object] = {"public_host": "192.168.8.10", "public_port": 58080}
     if bundles is not None:
@@ -575,7 +583,7 @@ class TestSelectionLaw:
             spy.bundle_command("demo-two-cuda")
         )
 
-    def test_zero_selection_is_legal_when_bare_entries_and_routes_carry_the_assembly(
+    def test_zero_selection_is_legal_when_bare_entries_and_lock_records_carry_the_assembly(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         _write_config(
@@ -587,13 +595,20 @@ class TestSelectionLaw:
                 "services": {
                     "livekit": {
                         "ref": LIVEKIT_REF,
-                        "routes": [{"path": "/*", "upstream": "livekit:8000"}],
                         "ports": [{"service": "livekit", "published": 6178, "target": 6178}],
                     }
                 },
             },
         )
-        _write_lock(tmp_path, bundles={"LIVEKIT_BUNDLE": dict(LIVEKIT_BUNDLE_ENTRY)})
+        _write_lock(
+            tmp_path,
+            bundles={
+                "LIVEKIT_BUNDLE": {
+                    **dict(LIVEKIT_BUNDLE_ENTRY),
+                    "routes": [{"path": "/*", "upstream": "livekit:8000"}],
+                }
+            },
+        )
         _write_values_file(tmp_path, {})
         spy = UpSpy().spy_up(monkeypatch)
         monkeypatch.chdir(tmp_path)
@@ -619,7 +634,6 @@ class TestSelectionLaw:
                         "options": {
                             "cuda": {
                                 "workloads": ["api.yaml"],
-                                "routes": [{"path": "/*", "upstream": "api:8000"}],
                             }
                         }
                     }
@@ -868,19 +882,19 @@ class TestUpValidation:
         monkeypatch.chdir(tmp_path)
         return runner.invoke(app, ["up"])
 
-    def test_a_local_route_upstream_absent_from_the_output_refuses(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_a_local_claim_composes_from_its_own_stanza(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        # The local bundle's routes adopt from its own claim labels; the caddyfile carries
+        # the derived specificity order with the catch-all last.
         _write_consumer_tree(tmp_path)
-        _write_bundle_output(tmp_path, "placeframe-cuda", ["api"])
+        spy = UpSpy().spy_up(monkeypatch)
+        monkeypatch.chdir(tmp_path)
 
-        result = self._invoke_up(tmp_path, monkeypatch)
+        result = runner.invoke(app, ["up"])
 
-        assert result.exit_code != 0
-        assert isinstance(result.exception, ValueError)
-        message = str(result.exception)
-        assert "services entry 'placeframe-cuda'" in message
-        assert "'/grafana/*' references 'grafana'" in message
+        assert result.exit_code == 0, result.output
+        content = spy.gateway["configs"]["boatyard-gateway-caddyfile"]["content"]
+        assert "\thandle /grafana/* {\n\t\treverse_proxy placeframe-cuda-grafana:3000\n\t}" in content
+        assert content.rstrip().endswith("\thandle {\n\t\treverse_proxy placeframe-cuda-api:8000\n\t}\n}")
 
     def test_a_local_port_owner_absent_from_the_output_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _write_bundle_output(tmp_path, "placeframe-cuda", ["api"])
@@ -999,9 +1013,7 @@ class TestUpValidation:
 
 
 class TestSharedNames:
-    def test_two_selected_outputs_sharing_a_service_name_namespace_apart(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
+    def _shared_config(self, tmp_path: Path) -> None:
         _write_config(
             tmp_path,
             {
@@ -1010,20 +1022,21 @@ class TestSharedNames:
                 "gateway_port": 8080,
                 "repository": "ghcr.io/org/demo",
                 "services": {
-                    "left": {
-                        "options": {
-                            "a": {"workloads": ["api.yaml"], "routes": [{"path": "/*", "upstream": "api:8000"}]}
-                        }
-                    },
+                    "left": {"options": {"a": {"workloads": ["api.yaml"]}}},
                     "right": {"options": {"b": {"workloads": ["api.yaml"]}}},
                 },
             },
         )
         _write_lock(tmp_path)
-        _write_bundle_output(tmp_path, "left-a", ["api"])
+        _write_bundle_output(tmp_path, "left-a", ["api"], claims={"api": ("/*", 8000)})
         _write_bundle_output(tmp_path, "right-b", ["api"])
         _write_workload(tmp_path, "api.yaml", "api")
         _write_values_file(tmp_path, {"bundles": ["left-a", "right-b"]})
+
+    def test_two_selected_outputs_sharing_a_service_name_namespace_apart(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        self._shared_config(tmp_path)
         spy = UpSpy().spy_up(monkeypatch)
         monkeypatch.chdir(tmp_path)
 
@@ -1037,28 +1050,7 @@ class TestSharedNames:
         assert "reverse_proxy left-a-api:8000" in content
 
     def test_the_same_overlap_stays_legal_at_down(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        _write_config(
-            tmp_path,
-            {
-                "project_name": "demo",
-                "platforms": ["linux/amd64"],
-                "gateway_port": 8080,
-                "repository": "ghcr.io/org/demo",
-                "services": {
-                    "left": {
-                        "options": {
-                            "a": {"workloads": ["api.yaml"], "routes": [{"path": "/*", "upstream": "api:8000"}]}
-                        }
-                    },
-                    "right": {"options": {"b": {"workloads": ["api.yaml"]}}},
-                },
-            },
-        )
-        _write_lock(tmp_path)
-        _write_bundle_output(tmp_path, "left-a", ["api"])
-        _write_bundle_output(tmp_path, "right-b", ["api"])
-        _write_workload(tmp_path, "api.yaml", "api")
-        _write_values_file(tmp_path, {"bundles": ["left-a", "right-b"]})
+        self._shared_config(tmp_path)
         recorder = HandoffRecorder()
         monkeypatch.setattr(down, "bash", recorder.run)
         monkeypatch.setattr(down, "bash_check", _bash_check_true)

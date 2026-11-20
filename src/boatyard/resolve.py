@@ -16,6 +16,7 @@ from boatyard.models.config_file import (
     PublishedPort,
     Route,
     Slot,
+    artifact_service_names,
     artifact_slots,
     bundle_lock_key,
     compose_bundle_output_path,
@@ -44,7 +45,7 @@ class BundleProject(NamedTuple):
     bundle_path: Path | None
     pinned_reference: str | None
     services: list[str]
-    effective_routes: list[Route]
+    routes: list[Route]
     effective_ports: list[PublishedPort]
     container_names: list[str]
     held_services: list[str]
@@ -195,8 +196,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
             bundle_path = paths[name]
             pinned_reference = None
 
-        # If config declarations exist, they replace the adopted set wholesale
-        effective_routes = list(row.effective_routes) if row.effective_routes else adopted_routes
+        # If config port declarations exist, they replace the adopted set wholesale
         effective_ports = list(row.effective_ports) if row.effective_ports else adopted_ports
 
         bundles.append(
@@ -206,7 +206,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
                 bundle_path=bundle_path,
                 pinned_reference=pinned_reference,
                 services=adopted_services,
-                effective_routes=effective_routes,
+                routes=adopted_routes,
                 effective_ports=effective_ports,
                 container_names=adopted_container_names,
                 held_services=adopted_held_services,
@@ -248,22 +248,23 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
     # Raise if an artifact references a service it does not define
     for bundle in bundles:
         if bundle.bundle_path is None:
-            continue
-        service_names = refuse_unresolved_references(
-            bundle.entry_name, bundle.effective_routes, bundle.effective_ports, [texts[bundle.entry_name]]
-        )
+            # A remote winner's adopted routes must reference its locked service set
+            service_names = set(bundle.services)
+        else:
+            service_names = artifact_service_names([texts[bundle.entry_name]])
+        refuse_unresolved_references(bundle.entry_name, bundle.routes, bundle.effective_ports, service_names)
 
         # If the bundle defines the reserved gateway service, refuse
         if GATEWAY_SERVICE_NAME in service_names:
             raise ValueError(
-                f"{bundle.bundle_path.as_posix()}: the included bundle defines the reserved service "
-                f"{GATEWAY_SERVICE_NAME!r}"
+                f"{bundle.bundle_path.as_posix() if bundle.bundle_path is not None else bundle.pinned_reference}: "
+                f"the included bundle defines the reserved service {GATEWAY_SERVICE_NAME!r}"
             )
 
     # Validate the combined declarations across winners
     path_claims: dict[str, str] = {}
     for bundle in bundles:
-        for route in bundle.effective_routes:
+        for route in bundle.routes:
             # If two winners claim one route path, refuse
             if route.path in path_claims:
                 raise ValueError(
@@ -271,13 +272,6 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
                     f"and {bundle.entry_name}"
                 )
             path_claims[route.path] = bundle.entry_name
-
-    # Require the selected auth option to carry exactly one effective route
-    for row in service_entries:
-        if row.name in winners and row.auth:
-            selected = next(bundle for bundle in bundles if bundle.entry_name == row.name)
-            if len(selected.effective_routes) != 1:
-                raise ValueError(f"{source}: the selected auth option {row.name!r} carries exactly one effective route")
 
     # If routes exist but no gateway is declared, refuse
     if path_claims and config.gateway_port is None:
@@ -346,10 +340,13 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
         parts = PLACEHOLDER.split(hand[name])
         env[name] = "".join(part if index % 2 == 0 else env[part] for index, part in enumerate(parts))
 
-    # If a gateway is declared, plan it over the winners' routes
+    # If a gateway is declared, plan it over the winners' routes in specificity order
     gateway = None
     if config.gateway_port is not None:
-        routes = [(bundle.entry_name, route) for bundle in bundles for route in bundle.effective_routes]
+        routes = sorted(
+            ((bundle.entry_name, route) for bundle in bundles for route in bundle.routes),
+            key=lambda pair: route_specificity(pair[1]),
+        )
         gateway = GatewayPlan(
             port=values.gateway_port if values.gateway_port is not None else config.gateway_port,
             public_face=public_face,
@@ -402,6 +399,13 @@ def _minted(config: ConfigFile, values: ValuesFile) -> dict[str, str]:
 
 def _in_assembly(row: FlattenedServiceEntry, choices: dict[str, str]) -> bool:
     return row.option is None or row.option == choices.get(row.root)
+
+
+def route_specificity(route: Route) -> tuple[int, int, str]:
+    # Longest concrete prefix first, an exact path before its own wildcard, then the spelling for determinism
+    wildcard = route.path.endswith("/*")
+    concrete = route.path.removesuffix("/*")
+    return (-len(concrete), 1 if wildcard else 0, route.path)
 
 
 def _entry_env(env: dict[str, str], shas_by_root: dict[Path, dict[str, str]], sources: BundleSources) -> None:

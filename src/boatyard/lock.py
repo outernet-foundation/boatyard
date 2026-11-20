@@ -16,6 +16,7 @@ from boatyard.models.config_file import (
     PublishedPort,
     Route,
     ConfigFile,
+    artifact_service_names,
     artifact_slots,
     bundle_lock_key,
     chart_lock_key,
@@ -33,8 +34,10 @@ from boatyard.models.workload import (
     AUTOSTART_ANNOTATION,
     PUBLISH_PORT_ANNOTATION,
     ROUTE_ANNOTATION,
+    ROUTE_PORT_ANNOTATION,
     parse_publish_port_annotation,
     parse_route_annotation,
+    parse_route_port_annotation,
 )
 from boatyard.temp import SHA256_DIGEST_REGEX
 from boatyard.yaml import Yaml, is_list, is_mapping, load_yaml_model
@@ -129,8 +132,8 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
 
         # Record the bundle's lock entry
         texts = OciArtifactManifest.fetch_compose_texts(pinned)
-        refuse_unresolved_references(name, entry.routes, entry.ports, texts)
         records = extract_bundle_records(texts)
+        refuse_unresolved_references(name, records.routes, entry.ports, artifact_service_names(texts))
         if GATEWAY_SERVICE_NAME in records.services:
             raise ValueError(f"{pinned}: the included bundle defines the reserved service {GATEWAY_SERVICE_NAME!r}")
         bundles[key] = ConfigLockBundle(
@@ -280,19 +283,32 @@ def extract_bundle_records(texts: list[str]) -> BundleRecords:
     # Read the routes and ports from the annotations
     routes: list[Route] = []
     ports: list[PublishedPort] = []
+    route_owners: dict[str, str] = {}
     for service_name, _stanza, service_annotations in stanzas:
         if service_annotations.get(AUTOSTART_ANNOTATION) == "false":
             held_services.add(service_name)
         route_value = service_annotations.get(ROUTE_ANNOTATION)
         if route_value is not None:
-            for route in parse_route_annotation(route_value):
-                upstream = route.upstream.partition(":")[0]
-                if upstream not in services:
-                    raise ValueError(
-                        f"{ROUTE_ANNOTATION}: the route {route.path} references the service {upstream!r}, "
-                        f"which the bundle defines no stanza for"
-                    )
-                routes.append(Route(path=route.path, upstream=route.upstream, strip_prefix=route.strip_prefix))
+            claim = parse_route_annotation(route_value)
+            port_value = service_annotations.get(ROUTE_PORT_ANNOTATION)
+            if port_value is None:
+                raise ValueError(
+                    f"{ROUTE_ANNOTATION}: the claim on the service {service_name!r} carries no "
+                    f"{ROUTE_PORT_ANNOTATION} label; re-render the bundle with the claims grammar"
+                )
+            if claim.path in route_owners:
+                raise ValueError(
+                    f"{ROUTE_ANNOTATION}: the path {claim.path} is claimed by both {route_owners[claim.path]} "
+                    f"and {service_name}"
+                )
+            route_owners[claim.path] = service_name
+            routes.append(
+                Route(
+                    path=claim.path,
+                    upstream=f"{service_name}:{parse_route_port_annotation(port_value)}",
+                    strip_prefix=claim.strip_prefix,
+                )
+            )
         publish_value = service_annotations.get(PUBLISH_PORT_ANNOTATION)
         if publish_value is not None:
             ports.extend(

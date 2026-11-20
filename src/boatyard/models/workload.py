@@ -20,11 +20,14 @@ DOCKERFILE_ANNOTATION = "boatyard/dockerfile"
 AUTOSTART_ANNOTATION = "boatyard/autostart"
 LOCK_ANNOTATION = "boatyard/lock"
 ROUTE_ANNOTATION = "boatyard/route"
+ROUTE_PORT_ANNOTATION = "boatyard/port"
 PUBLISH_PORT_ANNOTATION = "boatyard/publish-port"
 
 ROUTE_PATH_PATTERN = re.compile(r"(?:/\*|/(?:[^/\s*]+(?:/[^/\s*]+)*)?(?:/\*)?)")
 
-ROUTE_UPSTREAM_PATTERN = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*:[0-9]+")
+ROUTE_PORT_NAME_PATTERN = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*")
+
+ROUTE_PATH_EXPORT_SUFFIX = "ROUTE_PATH"
 
 PUBLISH_PORT_PROTOCOLS: tuple[Literal["tcp", "udp"], ...] = ("tcp", "udp")
 
@@ -39,6 +42,7 @@ class WorkloadDocument(BaseModel):
     metadata: WorkloadMetadata = Field(default_factory=_default_metadata)
     containers: dict[str, WorkloadContainer] = Field(default_factory=dict)
     resources: dict[str, WorkloadResource] = Field(default_factory=dict)
+    service: WorkloadService | None = None
 
     @classmethod
     def parse(cls, raw: Yaml, file_name: str) -> Self:
@@ -63,7 +67,7 @@ class WorkloadDocument(BaseModel):
 
         route = annotations.get(ROUTE_ANNOTATION)
         if route is not None:
-            parse_route_annotation(route)
+            resolve_route_port(parse_route_annotation(route), self.service_ports)
 
         publish_port = annotations.get(PUBLISH_PORT_ANNOTATION)
         if publish_port is not None:
@@ -121,9 +125,20 @@ class WorkloadDocument(BaseModel):
         return annotation.split(",") if annotation is not None else []
 
     @property
-    def routes(self) -> list[WorkloadRoute]:
+    def service_ports(self) -> dict[str, int | WorkloadPortSpec]:
+        return self.service.ports if self.service is not None else {}
+
+    @property
+    def resolved_route(self) -> ResolvedRoute | None:
         annotation = self.metadata.annotations.get(ROUTE_ANNOTATION)
-        return parse_route_annotation(annotation) if annotation is not None else []
+        if annotation is None:
+            return None
+        claim = parse_route_annotation(annotation)
+        return ResolvedRoute(
+            path=claim.path,
+            port=resolve_route_port(claim, self.service_ports),
+            strip_prefix=claim.strip_prefix,
+        )
 
     @property
     def published_ports(self) -> list[WorkloadPublishedPort]:
@@ -216,6 +231,19 @@ class WorkloadResource(BaseModel):
     type: str
 
 
+class WorkloadPortSpec(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    port: int
+    target_port: int | None = Field(default=None, alias="targetPort")
+
+
+class WorkloadService(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    ports: dict[str, int | WorkloadPortSpec] = Field(default_factory=dict)
+
+
 class WorkloadProbe(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -245,9 +273,15 @@ class LoadedWorkload(NamedTuple):
         return cls(path.name, text, raw, document)
 
 
-class WorkloadRoute(NamedTuple):
+class RouteClaim(NamedTuple):
     path: str
-    upstream: str
+    port_name: str | None
+    strip_prefix: bool = False
+
+
+class ResolvedRoute(NamedTuple):
+    path: str
+    port: int
     strip_prefix: bool = False
 
 
@@ -288,29 +322,67 @@ def select_provisioner_files(
     return [(name, selected[name]) for name in sorted(selected)]
 
 
-def parse_route_annotation(value: str) -> list[WorkloadRoute]:
-    routes: list[WorkloadRoute] = []
-    for entry in value.split(","):
-        if not entry or entry != entry.strip():
-            raise ValueError(f"{ROUTE_ANNOTATION} entry {entry!r} must be non-empty and unpadded")
-        if entry == "strip":
-            if not routes:
-                raise ValueError(f"{ROUTE_ANNOTATION} entry 'strip' attaches to no preceding route")
-            if not routes[-1].path.endswith("/*"):
-                raise ValueError(f"{ROUTE_ANNOTATION}: strip requires the path to end in /* ({routes[-1].path})")
-            routes[-1] = routes[-1]._replace(strip_prefix=True)
-            continue
-        path, separator, upstream = entry.partition("=")
-        if not separator:
-            raise ValueError(f"{ROUTE_ANNOTATION} entry {entry!r} must be a path=host:port pair")
-        if ROUTE_PATH_PATTERN.fullmatch(path) is None:
+def parse_route_annotation(value: str) -> RouteClaim:
+    entries = value.split(",")
+    strip_prefix = False
+    if entries[-1].strip() == "strip":
+        strip_prefix = True
+        entries = entries[:-1]
+    if len(entries) != 1:
+        raise ValueError(f"{ROUTE_ANNOTATION} claims exactly one path, plus an optional ', strip' entry")
+    claim = entries[0]
+    if not claim or claim != claim.strip():
+        raise ValueError(f"{ROUTE_ANNOTATION} entry {claim!r} must be non-empty and unpadded")
+    if "=" in claim:
+        raise ValueError(
+            f"{ROUTE_ANNOTATION} entry {claim!r}: the path=host:port route table grammar is removed; "
+            "claim one path, with an optional @port-name qualifier and an optional ', strip' entry"
+        )
+    path, separator, port_name = claim.partition("@")
+    if ROUTE_PATH_PATTERN.fullmatch(path) is None:
+        raise ValueError(f"{ROUTE_ANNOTATION} path {path!r} must be a /-rooted segment chain, optionally wildcarded")
+    if separator and ROUTE_PORT_NAME_PATTERN.fullmatch(port_name) is None:
+        raise ValueError(f"{ROUTE_ANNOTATION} port qualifier {port_name!r} must be a plain port name")
+    if strip_prefix and not path.endswith("/*"):
+        raise ValueError(f"{ROUTE_ANNOTATION}: strip requires the path to end in /* ({path})")
+    return RouteClaim(path=path, port_name=port_name if separator else None, strip_prefix=strip_prefix)
+
+
+def resolve_route_port(claim: RouteClaim, ports: dict[str, int | WorkloadPortSpec]) -> int:
+    if not ports:
+        raise ValueError(
+            f"{ROUTE_ANNOTATION} claims {claim.path} but the workload declares no service.ports stanza; "
+            "add the listen port the claim resolves against"
+        )
+    if claim.port_name is None:
+        if len(ports) != 1:
             raise ValueError(
-                f"{ROUTE_ANNOTATION} path {path!r} must be a /-rooted segment chain, optionally wildcarded"
+                f"{ROUTE_ANNOTATION} claims {claim.path} with no port qualifier but service.ports declares "
+                f"several ({', '.join(sorted(ports))}); name one with the @ qualifier"
             )
-        if ROUTE_UPSTREAM_PATTERN.fullmatch(upstream) is None:
-            raise ValueError(f"{ROUTE_ANNOTATION} upstream {upstream!r} must be a service name and a literal port")
-        routes.append(WorkloadRoute(path=path, upstream=upstream))
-    return routes
+        return listen_port(next(iter(ports.values())))
+    if claim.port_name not in ports:
+        raise ValueError(
+            f"{ROUTE_ANNOTATION} port qualifier @{claim.port_name} names no service.ports entry "
+            f"({', '.join(sorted(ports))})"
+        )
+    return listen_port(ports[claim.port_name])
+
+
+def listen_port(spec: int | WorkloadPortSpec) -> int:
+    if isinstance(spec, WorkloadPortSpec):
+        return spec.target_port if spec.target_port is not None else spec.port
+    return spec
+
+
+def parse_route_port_annotation(value: str) -> int:
+    if value.isdigit() and 1 <= int(value) <= 65535:
+        return int(value)
+    raise ValueError(f"{ROUTE_PORT_ANNOTATION} {value!r} must be a literal port in the range 1-65535")
+
+
+def route_path_export_name(workload_name: str) -> str:
+    return workload_name.upper().replace("-", "_") + "_" + ROUTE_PATH_EXPORT_SUFFIX
 
 
 def parse_publish_port_annotation(value: str) -> list[WorkloadPublishedPort]:

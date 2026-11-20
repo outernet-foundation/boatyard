@@ -860,7 +860,6 @@ class TestServices:
                         "options": {
                             "keycloak": {
                                 "ref": "oci://ghcr.io/org/repo/keycloak:0.3.1",
-                                "routes": [{"path": "/auth/*", "upstream": "keycloak:8080", "strip_prefix": True}],
                             }
                         },
                     },
@@ -869,11 +868,9 @@ class TestServices:
                             "cuda": {"workloads": ["api.yaml"], "vars": {"GPU_VARIANT": "cuda"}},
                             "rocm": {"workloads": ["api.yaml"], "vars": {"GPU_VARIANT": "rocm"}},
                         },
-                        "routes": [{"path": "/*", "upstream": "api:8000"}],
                     },
                     "livekit": {
                         "ref": "oci://ghcr.io/org/repo/livekit:" + SHA_TAG,
-                        "routes": [{"path": "/livekit-token/*", "upstream": "livekit-token:8000"}],
                         "ports": [
                             {
                                 "service": "livekit",
@@ -928,7 +925,7 @@ class TestServices:
                 "requires": ">=0.1",
                 "repository": "ghcr.io/org/repo",
                 "project_name": "example",
-                "services": {"neither": {"routes": [{"path": "/*", "upstream": "api:8000"}]}},
+                "services": {"neither": {"vars": {"FOO": "bar"}}},
             },
         )
 
@@ -1094,7 +1091,6 @@ class TestServices:
                 "services": {
                     "livekit": {
                         "ref": "oci://ghcr.io/org/repo/livekit:" + SHA_TAG,
-                        "routes": [{"path": "/*", "upstream": "livekit:8000"}],
                     }
                 },
             },
@@ -1178,20 +1174,7 @@ class TestAuthGroup:
             "services": {"auth": {"options": options}},
         }
 
-    def test_an_auth_option_with_exactly_one_route_loads(self, tmp_path: Path) -> None:
-        write_config(
-            tmp_path,
-            self._auth_config({
-                "keycloak": {
-                    "ref": "oci://ghcr.io/org/repo/keycloak:0.3.1",
-                    "routes": [{"path": "/auth/*", "upstream": "keycloak:8080", "strip_prefix": True}],
-                }
-            }),
-        )
-
-        assert ConfigFile.load(tmp_path / "boatyard.yml") is not None
-
-    def test_an_auth_option_without_an_authored_route_loads(self, tmp_path: Path) -> None:
+    def test_an_auth_option_loads_with_no_route_vocabulary(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,
             self._auth_config({"keycloak": {"ref": "oci://ghcr.io/org/repo/keycloak:0.3.1"}}),
@@ -1199,21 +1182,18 @@ class TestAuthGroup:
 
         assert ConfigFile.load(tmp_path / "boatyard.yml") is not None
 
-    def test_an_auth_option_with_two_routes_refuses(self, tmp_path: Path) -> None:
+    def test_an_auth_option_declaring_routes_refuses_the_dead_key(self, tmp_path: Path) -> None:
         write_config(
             tmp_path,
             self._auth_config({
                 "keycloak": {
                     "ref": "oci://ghcr.io/org/repo/keycloak:0.3.1",
-                    "routes": [
-                        {"path": "/auth/*", "upstream": "keycloak:8080"},
-                        {"path": "/auth2/*", "upstream": "keycloak:8080"},
-                    ],
+                    "routes": [],
                 }
             }),
         )
 
-        with pytest.raises(ValidationError, match="at most one route"):
+        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
             ConfigFile.load(tmp_path / "boatyard.yml")
 
     def test_a_bare_entry_named_auth_refuses(self, tmp_path: Path) -> None:
@@ -1231,22 +1211,76 @@ class TestAuthGroup:
 
 
 class TestWorkloadLensAnnotations:
-    def _document(self, annotations: dict[str, Yaml]) -> WorkloadDocument:
+    def _document(self, annotations: dict[str, Yaml], service: Yaml = None) -> WorkloadDocument:
         raw: dict[str, Yaml] = {"metadata": {"name": "api", "annotations": annotations}, "containers": {}}
+        if service is not None:
+            raw["service"] = service
         return WorkloadDocument.parse(raw, "api.yaml")
 
-    def test_multiple_routes_parse_in_order(self) -> None:
-        document = self._document({"boatyard/route": "/grafana/*=grafana:3000,/*=api:8000"})
+    def test_a_claim_resolves_the_single_declared_port(self) -> None:
+        document = self._document({"boatyard/route": "/auth/*"}, {"ports": {"web": 8080}})
 
-        assert document.routes == [
-            ("/grafana/*", "grafana:3000", False),
-            ("/*", "api:8000", False),
-        ]
+        assert document.resolved_route == ("/auth/*", 8080, False)
 
-    def test_strip_attaches_to_the_preceding_route(self) -> None:
-        document = self._document({"boatyard/route": "/auth/*=keycloak:8080,strip"})
+    def test_the_mapping_port_form_resolves_the_target_port(self) -> None:
+        document = self._document({"boatyard/route": "/auth/*"}, {"ports": {"web": {"port": 8080, "targetPort": 8081}}})
 
-        assert document.routes == [("/auth/*", "keycloak:8080", True)]
+        assert document.resolved_route == ("/auth/*", 8081, False)
+
+    def test_strip_attaches_to_the_claim(self) -> None:
+        document = self._document({"boatyard/route": "/auth/*, strip"}, {"ports": {"web": 8080}})
+
+        assert document.resolved_route == ("/auth/*", 8080, True)
+
+    def test_the_port_qualifier_names_the_declared_port(self) -> None:
+        document = self._document({"boatyard/route": "/auth/*@admin"}, {"ports": {"web": 8080, "admin": 9090}})
+
+        assert document.resolved_route == ("/auth/*", 9090, False)
+
+    def test_a_claim_without_ports_refuses_naming_the_stanza(self) -> None:
+        with pytest.raises(ValidationError, match=r"claims /auth/\*.*declares no service\.ports stanza"):
+            self._document({"boatyard/route": "/auth/*"})
+
+    def test_several_ports_without_a_qualifier_refuse_naming_the_qualifier(self) -> None:
+        with pytest.raises(ValidationError, match=r"no port qualifier.*name one with the @ qualifier"):
+            self._document({"boatyard/route": "/auth/*"}, {"ports": {"web": 8080, "admin": 9090}})
+
+    def test_a_qualifier_naming_no_declared_port_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"@ghost names no service\.ports entry"):
+            self._document({"boatyard/route": "/auth/*@ghost"}, {"ports": {"web": 8080}})
+
+    def test_the_old_route_table_grammar_refuses_naming_the_claim_form(self) -> None:
+        with pytest.raises(ValidationError, match=r"path=host:port route table grammar is removed"):
+            self._document({"boatyard/route": "/grafana/*=grafana:3000"}, {"ports": {"web": 8080}})
+
+    def test_two_claim_entries_refuse(self) -> None:
+        with pytest.raises(ValidationError, match=r"claims exactly one path"):
+            self._document({"boatyard/route": "/a/*,/b/*"}, {"ports": {"web": 8080}})
+
+    def test_strip_without_a_wildcard_path_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"strip requires the path to end in /\*"):
+            self._document({"boatyard/route": "/auth, strip"}, {"ports": {"web": 8080}})
+
+    def test_strip_as_the_sole_entry_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"claims exactly one path"):
+            self._document({"boatyard/route": "strip"}, {"ports": {"web": 8080}})
+
+    def test_padded_and_empty_entries_refuse(self) -> None:
+        for value in ("", " /x/*", "/x/* ,strip"):
+            with pytest.raises(ValidationError, match="non-empty and unpadded"):
+                self._document({"boatyard/route": value}, {"ports": {"web": 8080}})
+
+    @pytest.mark.parametrize(
+        "path",
+        ["grafana/*", "//grafana/*", "/grafana//x", "/*/*", "/grafana /x", "grafana", "/grafana*", "/*grafana"],
+    )
+    def test_malformed_paths_refuse(self, path: str) -> None:
+        with pytest.raises(ValidationError, match="must be a /-rooted segment chain"):
+            self._document({"boatyard/route": path}, {"ports": {"web": 8080}})
+
+    def test_plain_and_wildcard_paths_load(self) -> None:
+        for path in ("/*", "/livekit-token/*", "/grafana"):
+            assert self._document({"boatyard/route": path}, {"ports": {"web": 8080}}).resolved_route is not None
 
     def test_a_bad_protocol_refuses(self) -> None:
         with pytest.raises(ValidationError, match=r"protocol 'sctp' must be one of"):
@@ -1255,31 +1289,6 @@ class TestWorkloadLensAnnotations:
     def test_an_out_of_range_port_refuses(self) -> None:
         with pytest.raises(ValidationError, match=r"port '65536' outside 1-65535"):
             self._document({"boatyard/publish-port": "6178:65536"})
-
-    def test_strip_without_a_wildcard_path_refuses(self) -> None:
-        with pytest.raises(ValidationError, match=r"strip requires the path to end in /\*"):
-            self._document({"boatyard/route": "/auth=keycloak:8080,strip"})
-
-    def test_strip_as_the_first_token_refuses(self) -> None:
-        with pytest.raises(ValidationError, match=r"'strip' attaches to no preceding route"):
-            self._document({"boatyard/route": "strip"})
-
-    def test_padded_and_empty_entries_refuse(self) -> None:
-        for value in ("", " /x/*=x:1", "/x/*=x:1,"):
-            with pytest.raises(ValidationError, match="non-empty and unpadded"):
-                self._document({"boatyard/route": value})
-
-    def test_inner_padding_refuses_on_the_grammar(self) -> None:
-        with pytest.raises(ValidationError, match=r"must be a service name and a literal port"):
-            self._document({"boatyard/route": "/x/*= x:1"})
-
-    def test_a_malformed_route_path_refuses(self) -> None:
-        with pytest.raises(ValidationError, match=r"must be a /-rooted segment chain"):
-            self._document({"boatyard/route": "grafana/*=grafana:3000"})
-
-    def test_a_malformed_route_upstream_refuses(self) -> None:
-        with pytest.raises(ValidationError, match=r"must be a service name and a literal port"):
-            self._document({"boatyard/route": "/*=grafana:three"})
 
     def test_published_ports_parse_with_defaults_and_protocols(self) -> None:
         document = self._document({"boatyard/publish-port": "6178:6178,5957:5957/udp"})
@@ -1292,129 +1301,6 @@ class TestWorkloadLensAnnotations:
     def test_a_pairless_publish_port_entry_refuses(self) -> None:
         with pytest.raises(ValidationError, match=r"must be a published:target pair"):
             self._document({"boatyard/publish-port": "6178"})
-
-
-class TestRoutes:
-    def _routed(self, routes: list[object]) -> dict[str, object]:
-        return {
-            "requires": ">=0.1",
-            "project_name": "example",
-            "gateway_port": 8080,
-            "platforms": EDGE_PLATFORMS,
-            "services": {"livekit": {"ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG, "routes": routes}},
-        }
-
-    def test_edge_wide_path_uniqueness_refuses_duplicates(self, tmp_path: Path) -> None:
-        write_config(
-            tmp_path,
-            {
-                "requires": ">=0.1",
-                "project_name": "example",
-                "gateway_port": 8080,
-                "services": {
-                    "one": {
-                        "options": {
-                            "a": {
-                                "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
-                                "routes": [{"path": "/x/*", "upstream": "x:1"}],
-                            }
-                        },
-                    },
-                    "two": {
-                        "options": {
-                            "b": {
-                                "ref": "oci://ghcr.io/org/repo/y:" + SHA_TAG,
-                                "routes": [{"path": "/x/*", "upstream": "y:1"}],
-                            }
-                        },
-                    },
-                },
-            },
-        )
-
-        with pytest.raises(ValidationError, match=r"route path /x/\* is already declared at services\.one\.options\.a"):
-            ConfigFile.load(tmp_path / "boatyard.yml")
-
-    @pytest.mark.parametrize(
-        "path",
-        ["grafana/*", "//grafana/*", "/grafana//x", "/*/*", "/grafana /x", "grafana", "/grafana*", "/*grafana"],
-    )
-    def test_malformed_paths_refuse(self, path: str, tmp_path: Path) -> None:
-        write_config(tmp_path, self._routed([{"path": path, "upstream": "api:8000"}]))
-
-        with pytest.raises(ValidationError, match="must be a /-rooted segment chain"):
-            ConfigFile.load(tmp_path / "boatyard.yml")
-
-    def test_plain_and_wildcard_paths_load(self, tmp_path: Path) -> None:
-        write_config(
-            tmp_path,
-            self._routed([
-                {"path": "/*", "upstream": "api:8000"},
-                {"path": "/livekit-token/*", "upstream": "livekit-token:8000"},
-            ]),
-        )
-
-        config = ConfigFile.load(tmp_path / "boatyard.yml")
-
-        assert config is not None
-
-    def test_an_upstream_without_a_literal_port_refuses(self, tmp_path: Path) -> None:
-        write_config(tmp_path, self._routed([{"path": "/*", "upstream": "api:eight"}]))
-
-        with pytest.raises(ValidationError, match="a service name and a literal port"):
-            ConfigFile.load(tmp_path / "boatyard.yml")
-
-    def test_strip_prefix_on_a_non_wildcard_path_refuses(self, tmp_path: Path) -> None:
-        write_config(
-            tmp_path,
-            self._routed([{"path": "/grafana", "upstream": "grafana:3000", "strip_prefix": True}]),
-        )
-
-        with pytest.raises(ValidationError, match="must end in /\\*"):
-            ConfigFile.load(tmp_path / "boatyard.yml")
-
-    def test_a_raw_route_loads(self, tmp_path: Path) -> None:
-        write_config(
-            tmp_path,
-            self._routed([{"path": "/x/*", "upstream": "x:1", "raw": 'respond "hi" 200'}]),
-        )
-
-        config = ConfigFile.load(tmp_path / "boatyard.yml")
-
-        assert config is not None
-
-    def test_routes_without_a_gateway_refuse(self, tmp_path: Path) -> None:
-        write_config(
-            tmp_path,
-            {
-                "requires": ">=0.1",
-                "project_name": "example",
-                "services": {
-                    "livekit": {
-                        "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
-                        "routes": [{"path": "/*", "upstream": "x:1"}],
-                    },
-                },
-            },
-        )
-
-        with pytest.raises(ValidationError, match="routes require a gateway declaration"):
-            ConfigFile.load(tmp_path / "boatyard.yml")
-
-    def test_group_level_routes_without_a_gateway_refuse_before_the_fan(self, tmp_path: Path) -> None:
-        write_config(
-            tmp_path,
-            {
-                "requires": ">=0.1",
-                "project_name": "example",
-                "repository": "ghcr.io/org/example",
-                "platforms": ["linux/amd64"],
-                "services": {"livekit": {"workloads": ["api.yaml"], "routes": [{"path": "/*", "upstream": "x:1"}]}},
-            },
-        )
-
-        with pytest.raises(ValidationError, match="routes require a gateway declaration"):
-            ConfigFile.load(tmp_path / "boatyard.yml")
 
 
 class TestGatewayKey:
@@ -1446,7 +1332,6 @@ class TestGatewayKey:
                 "services": {
                     "livekit": {
                         "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
-                        "routes": [{"path": "/*", "upstream": "livekit:8000"}],
                     }
                 },
             },
@@ -1464,7 +1349,6 @@ class TestGatewayKey:
                 "services": {
                     "livekit": {
                         "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
-                        "routes": [{"path": "/*", "upstream": "livekit:8000"}],
                     }
                 },
             },
@@ -1491,7 +1375,6 @@ class TestPorts:
             self._ports_config({
                 "livekit": {
                     "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
-                    "routes": [{"path": "/*", "upstream": "livekit:8000"}],
                     "ports": [
                         {"service": "livekit", "published": 6178, "target": 6178},
                         {"service": "livekit", "published": 6179, "target": 6179, "protocol": "udp"},
@@ -1516,7 +1399,6 @@ class TestPorts:
             self._ports_config({
                 "livekit": {
                     "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
-                    "routes": [{"path": "/*", "upstream": "livekit:8000"}],
                     "ports": [{"service": "livekit", "published": 6179, "target": 6179}],
                 }
             }),
@@ -1535,7 +1417,6 @@ class TestPorts:
             self._ports_config({
                 "livekit": {
                     "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
-                    "routes": [{"path": "/*", "upstream": "livekit:8000"}],
                     "ports": [{"service": "livekit", "published": 65536, "target": 6179}],
                 }
             }),
@@ -1550,7 +1431,6 @@ class TestPorts:
             self._ports_config({
                 "livekit": {
                     "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
-                    "routes": [{"path": "/*", "upstream": "livekit:8000"}],
                     "ports": ["6179/6179/udp"],
                 }
             }),
@@ -1567,7 +1447,6 @@ class TestPorts:
                 "tunnel": {"options": None, "ports": [{"service": "ngrok", "published": 4040, "target": 4040}]},
                 "livekit": {
                     "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
-                    "routes": [{"path": "/*", "upstream": "livekit:8000"}],
                 },
             }),
         )
@@ -1594,7 +1473,6 @@ class TestPorts:
                 },
                 "livekit": {
                     "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
-                    "routes": [{"path": "/*", "upstream": "livekit:8000"}],
                 },
             }),
         )
@@ -1609,7 +1487,6 @@ class TestPorts:
             self._ports_config({
                 "livekit": {
                     "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
-                    "routes": [{"path": "/*", "upstream": "livekit:8000"}],
                     "ports": [{"service": "livekit", "published": "eight", "target": 5678}],
                 }
             }),
@@ -1624,7 +1501,6 @@ class TestPorts:
             self._ports_config({
                 "livekit": {
                     "ref": "oci://ghcr.io/org/repo/x:" + SHA_TAG,
-                    "routes": [{"path": "/*", "upstream": "livekit:8000"}],
                     "ports": [{"service": "livekit", "published": "6179", "target": 6179}],
                 }
             }),

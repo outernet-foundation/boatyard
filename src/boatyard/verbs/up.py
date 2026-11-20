@@ -284,30 +284,25 @@ def render_gateway_document(plan: AssemblyPlan, auth_entries: set[str]) -> str:
                 "networks": {shared_network_name: None},
             }
         },
-        "configs": {GATEWAY_CONFIG_NAME: {"content": double_dollars(render_caddyfile(plan, gateway, auth_entries))}},
+        "configs": {GATEWAY_CONFIG_NAME: {"content": double_dollars(render_caddyfile(gateway, auth_entries))}},
     }
     return yaml.safe_dump(document, sort_keys=False, default_flow_style=False)
 
 
-def render_caddyfile(plan: AssemblyPlan, gateway: GatewayPlan, auth_entries: set[str]) -> str:
-    # Render one handle block per route in declaration order
+def render_caddyfile(gateway: GatewayPlan, auth_entries: set[str]) -> str:
+    # Render one handle block per route in the gateway plan's specificity order
     lines = [f":{EDGE_LISTEN_PORT} {{"]
-    for bundle, index, route in (
-        (bundle, index, route) for bundle in plan.bundles for index, route in enumerate(bundle.effective_routes)
-    ):
-        upstream = f"{bundle.entry_name}-{route.upstream}"
+    rendered_entries: set[str] = set()
+    for entry_name, route in gateway.routes:
+        upstream = f"{entry_name}-{route.upstream}"
         opener = (
             ("\thandle_path" if route.strip_prefix else "\thandle")
             + ("" if route.path == "/*" else f" {route.path}")
             + " {"
         )
-        # If the route carries a raw stanza, emit it verbatim
-        if route.raw is not None:
-            lines.extend((opener, *["\t\t" + line for line in route.raw.splitlines()], "\t}"))
-            continue
 
-        # If this is the auth route's first block, bake the public face as literals
-        if bundle.entry_name in auth_entries and index == 0 and gateway.public_face is not None:
+        # If this is an auth entry's first block, bake the public face as literals
+        if entry_name in auth_entries and entry_name not in rendered_entries and gateway.public_face is not None:
             face = gateway.public_face
             lines.extend((
                 opener,
@@ -319,8 +314,10 @@ def render_caddyfile(plan: AssemblyPlan, gateway: GatewayPlan, auth_entries: set
                 ],
                 "\t}",
             ))
+            rendered_entries.add(entry_name)
             continue
 
+        rendered_entries.add(entry_name)
         lines.extend((opener, *[f"\t\treverse_proxy {upstream}"], "\t}"))
     lines.append("}")
     return "\n".join(lines) + "\n"
