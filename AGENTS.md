@@ -42,6 +42,13 @@ Design intent and silent-failure traps, one fact per bullet.
   file-sourced configs, score's bind inlining) is doubled via `double_dollars` in
   `models/config_file.py` — the one home. Text outside a compose document (k8s manifests) never
   doubles.
+- Bind sources are namespaced, and the compose pass keys on the shape: a repo-relative source
+  is a repo file whose content is inlined as a `configs.content` entry, and an absolute source
+  is an authored host mount that rides through to the artifact untouched — compose's own
+  meaning of the two path forms (project-relative vs host), not a heuristic. The strip removes
+  exactly the inlinable set; blanket-stripping silently deletes authored host mounts. Artifact
+  hermeticity is therefore zero un-authored host references, not zero binds; consumers audit
+  the survivors.
 - Consumed facts are walked from generated output, never re-derived from sources: the mint
   list (`secrets.txt`) is the k8s rendering's consumed secret refs (no secret vocabulary is
   authored anywhere; a compose-only rendering mints an empty list), and a local entry's values
