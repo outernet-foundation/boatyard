@@ -20,11 +20,7 @@ def is_list(value: object) -> TypeIs[list[Yaml]]:
 def load_yaml(path: Path) -> object:
     # Strict load: refuse duplicate keys, coerce an empty document to the empty mapping
     source = path.as_posix()
-    text = path.read_text(encoding="utf-8")
-    document_node = yaml.SafeLoader(text).get_single_node()
-    if document_node is not None:
-        _reject_duplicate_keys(document_node, source)
-    loaded = yaml.safe_load(text)
+    loaded = parse_yaml_text(path.read_text(encoding="utf-8"), source)
     return {} if loaded is None else loaded
 
 
@@ -32,6 +28,13 @@ def load_yaml_model[ModelT: BaseModel](
     model: type[ModelT], path: Path, context: dict[str, object] | None = None
 ) -> ModelT:
     return model.model_validate(load_yaml(path), context=context)
+
+
+def parse_yaml_text(text: str, source: str) -> Yaml:
+    document_node = yaml.SafeLoader(text).get_single_node()
+    if document_node is not None:
+        _reject_duplicate_keys(document_node, source)
+    return yaml.safe_load(text)
 
 
 def _reject_duplicate_keys(node: yaml.Node, source: str) -> None:

@@ -21,7 +21,7 @@ def down(
     config = ConfigFile.load(root / DEFAULT_CONFIG_PATH)
 
     # Config only: every declared entry names a candidate project, selected or not, and the
-    # bare project name also removes any legacy single-project assembly.
+    # bare project name removes the un-suffixed project.
     candidates = [*(f"{config.project_name}-{row.name}" for row in config.service_entries), config.project_name]
     # Project and entry names match ^[a-z][a-z0-9-]*$; only the directory needs quoting
     project_directory = quote_command_token(str(root))

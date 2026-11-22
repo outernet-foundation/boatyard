@@ -40,8 +40,8 @@ def _write_repo(
         (score / f"{service}.yaml").write_text(
             "metadata:\n"
             f"  name: {service}\n"
-            "  annotations:\n"
-            f"    boatyard/dockerfile: {service}=workloads/{service}/Dockerfile\n"
+            "boatyard:\n"
+            f"  dockerfile:\n    {service}: workloads/{service}/Dockerfile\n"
             "containers:\n"
             f"  {service}: {{}}\n",
             encoding="utf-8",

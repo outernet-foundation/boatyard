@@ -17,9 +17,11 @@ MONITOR_PINNED = f"ghcr.io/org/monitor:1.0.0@{FAKE_DIGEST}"
 WORKLOAD = """\
 metadata:
   name: api
-  annotations:
-    boatyard/consumer-interpolated: /etc/rathole/client.toml
-    boatyard/lock: api=LOKI_IMAGE
+boatyard:
+  consumer_interpolated:
+    - /etc/rathole/client.toml
+  lock:
+    api: LOKI_IMAGE
 containers:
   api:
     environment:

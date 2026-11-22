@@ -255,8 +255,8 @@ def _write_built_images(root: Path) -> None:
     (score / "localizer.yaml").write_text(
         "metadata:\n"
         "  name: localizer\n"
-        "  annotations:\n"
-        "    boatyard/dockerfile: localizer=workloads/localizer/Dockerfile\n"
+        "boatyard:\n"
+        "  dockerfile:\n    localizer: workloads/localizer/Dockerfile\n"
         "containers:\n"
         "  localizer: {}\n",
         encoding="utf-8",
@@ -973,20 +973,21 @@ class TestBundleRecording:
             "  api:\n"
             "    image: demo/api:1\n"
             "    annotations:\n"
-            "      boatyard/route: /*\n"
-            "      boatyard/port: '8000'\n"
+            "      boatyard/route-path: /*\n"
+            "      boatyard/route-port: '8000'\n"
             "  grafana:\n"
             "    image: demo/grafana:1\n"
             "    annotations:\n"
-            "      boatyard/route: /grafana/*, strip\n"
-            "      boatyard/port: '3000'\n"
+            "      boatyard/route-path: /grafana/*\n"
+            "      boatyard/route-port: '3000'\n"
+            "      boatyard/route-strip: 'true'\n"
             "    container_name: demo-grafana\n"
             "  livekit:\n"
             "    image: demo/livekit:1\n"
             "    labels:\n"
             "      boatyard/publish-port: 6178:6178,5957:5957/udp\n"
-            "      boatyard/route: /livekit/*\n"
-            "      boatyard/port: '7880'\n"
+            "      boatyard/route-path: /livekit/*\n"
+            "      boatyard/route-port: '7880'\n"
         )
 
         result, _, _ = self._invoke(monkeypatch, tmp_path, [], bundle_text=bundle_text)
@@ -1005,42 +1006,55 @@ class TestBundleRecording:
         ]
         assert entry["container_names"] == ["grafana"]
 
-    def test_the_old_grammar_label_refuses_adoption(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        bundle_text = "services:\n  api:\n    image: demo/api:1\n    labels:\n      boatyard/route: /*=api:8000\n"
+    def test_an_unknown_stanza_label_refuses_adoption(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        bundle_text = "services:\n  api:\n    image: demo/api:1\n    labels:\n      boatyard/weight: '5'\n"
 
         result, _, _ = self._invoke(monkeypatch, tmp_path, [], bundle_text=bundle_text)
 
         assert result.exit_code != 0
-        assert "path=host:port route table grammar is removed" in str(result.exception)
+        assert "carries the unknown label 'boatyard/weight'" in str(result.exception)
+        assert "the boatyard/* stanza labels are" in str(result.exception)
 
     def test_a_claim_without_its_port_label_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        bundle_text = "services:\n  api:\n    image: demo/api:1\n    labels:\n      boatyard/route: /*\n"
+        bundle_text = "services:\n  api:\n    image: demo/api:1\n    labels:\n      boatyard/route-path: /*\n"
 
         result, _, _ = self._invoke(monkeypatch, tmp_path, [], bundle_text=bundle_text)
 
         assert result.exit_code != 0
-        assert "carries no boatyard/port label" in str(result.exception)
+        assert "carries no boatyard/route-port label" in str(result.exception)
 
     def test_a_claim_with_a_malformed_port_label_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         bundle_text = (
             "services:\n  api:\n    image: demo/api:1\n"
-            "    labels:\n      boatyard/route: /*\n      boatyard/port: eight\n"
+            "    labels:\n      boatyard/route-path: /*\n      boatyard/route-port: eight\n"
         )
 
         result, _, _ = self._invoke(monkeypatch, tmp_path, [], bundle_text=bundle_text)
 
         assert result.exit_code != 0
-        assert "boatyard/port 'eight' must be a literal port" in str(result.exception)
+        assert "boatyard/route-port 'eight' must be a literal port" in str(result.exception)
+
+    def test_a_claim_with_a_malformed_strip_label_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        bundle_text = (
+            "services:\n  api:\n    image: demo/api:1\n"
+            "    labels:\n      boatyard/route-path: /*\n      boatyard/route-port: '8000'\n"
+            "      boatyard/route-strip: yes-please\n"
+        )
+
+        result, _, _ = self._invoke(monkeypatch, tmp_path, [], bundle_text=bundle_text)
+
+        assert result.exit_code != 0
+        assert "boatyard/route-strip 'yes-please' must spell 'true' or 'false'" in str(result.exception)
 
     def test_two_services_claiming_one_path_refuse(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         bundle_text = (
             "services:\n"
             "  one:\n"
             "    image: demo/one:1\n"
-            "    annotations:\n      boatyard/route: /x/*\n      boatyard/port: '8000'\n"
+            "    annotations:\n      boatyard/route-path: /x/*\n      boatyard/route-port: '8000'\n"
             "  two:\n"
             "    image: demo/two:1\n"
-            "    annotations:\n      boatyard/route: /x/*\n      boatyard/port: '8001'\n"
+            "    annotations:\n      boatyard/route-path: /x/*\n      boatyard/route-port: '8001'\n"
         )
 
         result, _, _ = self._invoke(monkeypatch, tmp_path, [], bundle_text=bundle_text)
@@ -1094,6 +1108,25 @@ def test_extract_bundle_records_holds_services_marked_no_autostart() -> None:
     records = extract_bundle_records([text])
 
     assert records.held_services == ["livekit"]
+
+
+def test_extract_bundle_records_parses_the_publish_label_into_port_records() -> None:
+    from boatyard.lock import extract_bundle_records
+
+    text = (
+        "services:\n"
+        "  livekit:\n"
+        "    image: demo/livekit:1\n"
+        "    labels:\n"
+        "      boatyard/publish-port: 6178:6178/tcp,5957:5957/udp\n"
+    )
+
+    records = extract_bundle_records([text])
+
+    assert [(port.service, port.published, port.target, port.protocol) for port in records.ports] == [
+        ("livekit", 6178, 6178, "tcp"),
+        ("livekit", 5957, 5957, "udp"),
+    ]
 
 
 def _skip_crane_install() -> None:
