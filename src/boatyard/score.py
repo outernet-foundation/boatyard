@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import shlex
@@ -27,6 +28,8 @@ from boatyard.models.config_file import (
 )
 from boatyard.models.image import dockerfile_stem
 from boatyard.models.workload import (
+    PROBE_TIMING_ANNOTATION,
+    PROBE_TIMING_FIELDS,
     PUBLISH_PORT_LABEL,
     LISTENERS_LABEL,
     ROUTE_PATH_LABEL,
@@ -364,7 +367,34 @@ def injected_workload(config: ConfigFile, workload: LoadedWorkload, variable_val
                 reference = compose_image_reference(config.repository, image, tag, variant)
             containers[container]["image"] = reference
         rewrite_listener_references(containers, workload)
+        timings = strip_probe_timing(containers, workload)
+        if timings:
+            annotations = tool.setdefault("metadata", {}).setdefault("annotations", {})
+            annotations[PROBE_TIMING_ANNOTATION] = json.dumps(timings, separators=(",", ":"))
     return tool
+
+
+def strip_probe_timing(containers: dict[str, Any], workload: LoadedWorkload) -> dict[str, dict[str, int]]:
+    # Score's own schema refuses timing fields on probes, so the k8s-style spellings ride the
+    # probe-timing annotation instead, keyed by container; readiness timing wins over liveness
+    # because the healthcheck template converts the readiness probe first
+    timings: dict[str, dict[str, int]] = {}
+    for name, container in workload.document.containers.items():
+        entry = containers[name]
+        collected: dict[str, int] = {}
+        for probe, block in (
+            ("readinessProbe", container.readiness_probe),
+            ("livenessProbe", container.liveness_probe),
+        ):
+            if block is None:
+                continue
+            for field in PROBE_TIMING_FIELDS:
+                entry[probe].pop(field, None)
+            if not collected:
+                collected = block.timing()
+        if collected:
+            timings[name] = collected
+    return timings
 
 
 def rewrite_listener_references(containers: dict[str, Any], workload: LoadedWorkload) -> None:

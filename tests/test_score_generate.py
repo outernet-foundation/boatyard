@@ -1002,9 +1002,11 @@ def test_the_bash_http_spell_uses_the_slash_port_spelling() -> None:
     assert "/dev/tcp/127.0.0.1:{{ .port }}" not in text
 
 
-def test_the_healthcheck_template_derives_its_timing_from_the_probe_fields() -> None:
+def test_the_healthcheck_template_derives_its_timing_from_the_probe_annotation() -> None:
     text = (files("boatyard") / "score_patch_templates" / "probe-adapter-healthchecks.tpl").read_text(encoding="utf-8")
 
+    assert 'dig "metadata" "annotations" "boatyard/probe-timing" "{}" $workload | fromJson' in text
+    assert "dig $containerName (dict) $timings" in text
     assert 'dig "periodSeconds" 5' in text
     assert 'dig "initialDelaySeconds" 5' in text
     assert 'dig "timeoutSeconds" 5' in text
@@ -1038,7 +1040,7 @@ PROBE_TIMING_WORKLOAD = (
 )
 
 
-def test_the_expanded_workload_copy_carries_the_authored_probe_timing(
+def test_authored_probe_timing_rides_the_annotation_and_never_the_probe(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True, exist_ok=True)
@@ -1059,13 +1061,25 @@ def test_the_expanded_workload_copy_carries_the_authored_probe_timing(
     )
 
     document = yaml.safe_load(recorder.workload_contents["api.yaml"])
-    assert document["containers"]["api"]["readinessProbe"] == {
-        "httpGet": {"path": "/health", "port": 8081},
-        "initialDelaySeconds": 30,
-        "periodSeconds": 10,
-        "timeoutSeconds": 2,
-        "failureThreshold": 6,
-    }
+    # Score's own schema refuses timing fields on probes, so none may survive into the tool copy
+    assert document["containers"]["api"]["readinessProbe"] == {"httpGet": {"path": "/health", "port": 8081}}
+    assert document["metadata"]["annotations"]["boatyard/probe-timing"] == (
+        '{"api":{"initialDelaySeconds":30,"periodSeconds":10,"timeoutSeconds":2,"failureThreshold":6}}'
+    )
+
+
+def test_below_floor_probe_timing_refuses() -> None:
+    with pytest.raises(ValidationError, match="probe timing must be one or more"):
+        parse_workload(
+            {
+                "metadata": {"name": "api"},
+                "listeners": {"web": 8080},
+                "containers": {
+                    "api": {"readinessProbe": {"httpGet": {"path": "/h", "port": "web"}, "periodSeconds": 0}}
+                },
+            },
+            "api.yaml",
+        )
 
 
 PROVISIONER_WITH_SERVICES = """

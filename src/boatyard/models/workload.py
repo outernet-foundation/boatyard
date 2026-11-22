@@ -28,6 +28,12 @@ GPU_ANNOTATION = "boatyard/gpu"
 # The host socket bind for container-controlling workloads (the compose rendering only)
 DOCKER_SOCKET_ANNOTATION = "boatyard/docker-socket"
 
+# The per-container probe timing (JSON) the lens spells for the healthcheck template — score's
+# own schema refuses timing fields on probes, so the k8s-style spellings never reach the tools
+PROBE_TIMING_ANNOTATION = "boatyard/probe-timing"
+
+PROBE_TIMING_FIELDS = ("initialDelaySeconds", "periodSeconds", "timeoutSeconds", "failureThreshold")
+
 # The closed boatyard/* label vocabulary the bundle-record extraction accepts off a rendered stanza
 STANZA_LABELS = (
     ROUTE_PATH_LABEL,
@@ -40,6 +46,7 @@ STANZA_LABELS = (
     AUTOSTART_ANNOTATION,
     GPU_ANNOTATION,
     DOCKER_SOCKET_ANNOTATION,
+    PROBE_TIMING_ANNOTATION,
 )
 
 SCALAR_ANNOTATIONS = (
@@ -374,6 +381,36 @@ class WorkloadProbe(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     http_get: WorkloadHttpGet | None = Field(default=None, alias="httpGet")
+    initial_delay_seconds: int | None = Field(default=None, alias="initialDelaySeconds")
+    period_seconds: int | None = Field(default=None, alias="periodSeconds")
+    timeout_seconds: int | None = Field(default=None, alias="timeoutSeconds")
+    failure_threshold: int | None = Field(default=None, alias="failureThreshold")
+
+    @field_validator("initial_delay_seconds")
+    @classmethod
+    def _require_delay_floor(cls, value: int | None) -> int | None:
+        if value is not None and value < 0:
+            raise ValueError("initialDelaySeconds must be zero or more")
+        return value
+
+    @field_validator("period_seconds", "timeout_seconds", "failure_threshold")
+    @classmethod
+    def _require_one_floor(cls, value: int | None) -> int | None:
+        if value is not None and value < 1:
+            raise ValueError("probe timing must be one or more")
+        return value
+
+    def timing(self) -> dict[str, int]:
+        return {
+            field: getattr(self, spelling)
+            for field, spelling in (
+                ("initialDelaySeconds", "initial_delay_seconds"),
+                ("periodSeconds", "period_seconds"),
+                ("timeoutSeconds", "timeout_seconds"),
+                ("failureThreshold", "failure_threshold"),
+            )
+            if getattr(self, spelling) is not None
+        }
 
 
 class WorkloadHttpGet(BaseModel):
