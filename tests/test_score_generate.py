@@ -1387,13 +1387,14 @@ WORKLOAD_WITH_LIVENESS = """
 metadata:
   name: api
   annotations:
+    boatyard/container-ports: health=5678
     boatyard/lock: api=API_IMAGE
 containers:
   api:
     livenessProbe:
       httpGet:
         path: /health
-        port: 5678
+        port: health
 """
 
 WORKLOAD_WITH_READINESS = """
@@ -1401,26 +1402,28 @@ metadata:
   name: api
   annotations:
     boatyard/probe-adapter: python-urllib
+    boatyard/container-ports: health=5678
     boatyard/lock: api=API_IMAGE
 containers:
   api:
     readinessProbe:
       httpGet:
         path: /ready
-        port: 5678
+        port: health
 """
 
 WORKLOAD_WITH_UNADAPTED_READINESS = """
 metadata:
   name: api
   annotations:
+    boatyard/container-ports: health=5678
     boatyard/lock: api=API_IMAGE
 containers:
   api:
     readinessProbe:
       httpGet:
         path: /ready
-        port: 5678
+        port: health
 """
 
 
@@ -1458,6 +1461,194 @@ def test_unknown_probe_adapter_values_refuse(tmp_path: Path, monkeypatch: pytest
 
     with pytest.raises(ValidationError, match=r"supported adapters"):
         _bundle_config(tmp_path)
+
+
+WORKLOAD_PROBE_BARE_SERVICE_PORT = """
+metadata:
+  name: api
+  annotations:
+    boatyard/lock: api=API_IMAGE
+service:
+  ports:
+    web: 5678
+containers:
+  api:
+    readinessProbe:
+      httpGet:
+        path: /ready
+        port: web
+"""
+
+WORKLOAD_PROBE_TARGET_SERVICE_PORT = """
+metadata:
+  name: api
+  annotations:
+    boatyard/probe-adapter: python-urllib
+    boatyard/lock: api=API_IMAGE
+service:
+  ports:
+    web:
+      port: 80
+      targetPort: 9090
+containers:
+  api:
+    readinessProbe:
+      httpGet:
+        path: /ready
+        port: web
+"""
+
+WORKLOAD_PROBE_CONTAINER_PORT = """
+metadata:
+  name: api
+  annotations:
+    boatyard/container-ports: mgmt=9000
+    boatyard/lock: api=API_IMAGE
+containers:
+  api:
+    livenessProbe:
+      httpGet:
+        path: /health
+        port: mgmt
+"""
+
+
+def test_probe_listener_names_resolve_over_both_service_port_shapes() -> None:
+    for fixture, resolved in ((WORKLOAD_PROBE_BARE_SERVICE_PORT, 5678), (WORKLOAD_PROBE_TARGET_SERVICE_PORT, 9090)):
+        document = WorkloadDocument.parse(yaml.safe_load(fixture), "api.yaml")
+
+        assert document.listener_ports == {"web": resolved}
+
+
+def test_probe_listener_names_resolve_the_container_ports_annotation() -> None:
+    document = WorkloadDocument.parse(yaml.safe_load(WORKLOAD_PROBE_CONTAINER_PORT), "api.yaml")
+
+    assert document.listener_ports == {"mgmt": 9000}
+
+
+def test_literal_probe_ports_refuse() -> None:
+    with pytest.raises(ValidationError, match=r"probe ports are listener names"):
+        WorkloadDocument.parse(
+            {
+                "metadata": {"name": "api", "annotations": {"boatyard/lock": "api=API_IMAGE"}},
+                "service": {"ports": {"web": 5678}},
+                "containers": {"api": {"livenessProbe": {"httpGet": {"path": "/health", "port": 5678}}}},
+            },
+            "api.yaml",
+        )
+
+
+def test_a_probe_without_a_port_refuses() -> None:
+    with pytest.raises(ValidationError, match=r"declares no port"):
+        WorkloadDocument.parse(
+            {
+                "metadata": {"name": "api", "annotations": {"boatyard/lock": "api=API_IMAGE"}},
+                "service": {"ports": {"web": 5678}},
+                "containers": {"api": {"livenessProbe": {"httpGet": {"path": "/health"}}}},
+            },
+            "api.yaml",
+        )
+
+
+def test_unknown_probe_listener_names_refuse_listing_the_declared_listeners() -> None:
+    with pytest.raises(ValidationError, match=r"names no declared listener \(mgmt, web\)"):
+        WorkloadDocument.parse(
+            {
+                "metadata": {
+                    "name": "api",
+                    "annotations": {"boatyard/container-ports": "mgmt=9000", "boatyard/lock": "api=API_IMAGE"},
+                },
+                "service": {"ports": {"web": 5678}},
+                "containers": {"api": {"livenessProbe": {"httpGet": {"path": "/health", "port": "admin"}}}},
+            },
+            "api.yaml",
+        )
+
+
+def test_malformed_container_ports_values_refuse() -> None:
+    malformed = (
+        ("", "comma-separated list of name=port pairs"),
+        ("mgmt =9000", "unpadded name=port pair"),
+        ("mgmt9000", "unpadded name=port pair"),
+        ("mgmt=0", "range 1-65535"),
+        ("mgmt=65536", "range 1-65535"),
+        ("mgmt=9000,mgmt=9001", "names the listener 'mgmt' twice"),
+    )
+    for value, message in malformed:
+        with pytest.raises(ValidationError, match=message):
+            WorkloadDocument.parse(
+                {
+                    "metadata": {"name": "api", "annotations": {"boatyard/container-ports": value}},
+                    "containers": {},
+                },
+                "api.yaml",
+            )
+
+
+def test_a_container_ports_name_a_service_port_declares_refuses() -> None:
+    with pytest.raises(ValidationError, match=r"listener 'web' that service\.ports already declares"):
+        WorkloadDocument.parse(
+            {
+                "metadata": {
+                    "name": "api",
+                    "annotations": {"boatyard/container-ports": "web=9000", "boatyard/lock": "api=API_IMAGE"},
+                },
+                "service": {"ports": {"web": 5678}},
+                "containers": {"api": {}},
+            },
+            "api.yaml",
+        )
+
+
+def test_the_compose_rendering_receives_the_resolved_probe_port(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "stack" / "score").mkdir(parents=True)
+    (tmp_path / "stack" / "score" / "api.yaml").write_text(WORKLOAD_PROBE_TARGET_SERVICE_PORT, encoding="utf-8")
+    recorder = WorkloadContentsRecorder()
+    monkeypatch.setattr(score_module, "bash", recorder.run)
+    config = _generated_config(
+        tmp_path,
+        ["api.yaml"],
+        repository="ghcr.io/org/repo",
+        project_name="example",
+        platforms=["linux/amd64"],
+        services={"core": {"options": {"main": {"workloads": ["api.yaml"]}}}},
+    )
+
+    score_compose_module.generate_compose(
+        config,
+        _lock_for_images({"API_IMAGE": "ghcr.io/org/api:1@" + DIGEST, **ALPINE_LOCK}),
+    )
+
+    assert "port: 9090\n" in recorder.workload_contents["api.yaml"]
+    assert "port: web\n" not in recorder.workload_contents["api.yaml"]
+
+
+WORKLOAD_PROBE_DOCKERFILE_PORT = (
+    "metadata:\n"
+    "  name: api\n"
+    "  annotations:\n"
+    "    boatyard/dockerfile: api=workloads/api/Dockerfile\n"
+    "    boatyard/container-ports: mgmt=9000\n"
+    "containers:\n"
+    "  api:\n"
+    "    livenessProbe:\n"
+    "      httpGet:\n"
+    "        path: /health\n"
+    "        port: mgmt\n"
+)
+
+
+def test_the_k8s_rendering_receives_the_resolved_probe_port(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_pins(tmp_path, {"API_SHA": PINNED_TAG})
+    recorder = _pins_k8s_recorder(monkeypatch, tmp_path, WORKLOAD_PROBE_DOCKERFILE_PORT)
+    config, k8s = _pinned_config(tmp_path)
+
+    generate_k8s(config, k8s, LockFile.model_validate({}), local=False)
+
+    assert "port: 9000\n" in recorder.workload_contents["api.yaml"]
+    assert "port: mgmt\n" not in recorder.workload_contents["api.yaml"]
 
 
 def test_workload_resources_parse_typed() -> None:

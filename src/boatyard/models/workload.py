@@ -22,6 +22,7 @@ LOCK_ANNOTATION = "boatyard/lock"
 ROUTE_ANNOTATION = "boatyard/route"
 ROUTE_PORT_ANNOTATION = "boatyard/port"
 PUBLISH_PORT_ANNOTATION = "boatyard/publish-port"
+CONTAINER_PORTS_ANNOTATION = "boatyard/container-ports"
 
 ROUTE_PATH_PATTERN = re.compile(r"(?:/\*|/(?:[^/\s*]+(?:/[^/\s*]+)*)?(?:/\*)?)")
 
@@ -68,6 +69,37 @@ class WorkloadDocument(BaseModel):
         route = annotations.get(ROUTE_ANNOTATION)
         if route is not None:
             resolve_route_port(parse_route_annotation(route), self.service_ports)
+
+        listeners = self.listener_ports
+        for name, container in self.containers.items():
+            for probe, block in (
+                ("readinessProbe", container.readiness_probe),
+                ("livenessProbe", container.liveness_probe),
+            ):
+                if block is None or block.http_get is None:
+                    continue
+                http_get = block.http_get
+                if not is_mapping(http_get):
+                    raise ValueError(f"the container {name!r} {probe} httpGet must be a mapping")
+                if "port" not in http_get:
+                    raise ValueError(
+                        f"the container {name!r} {probe} httpGet declares no port; name a service.ports "
+                        f"entry or a {CONTAINER_PORTS_ANNOTATION} listener"
+                    )
+                port = http_get["port"]
+                match port:
+                    case str():
+                        if port not in listeners:
+                            raise ValueError(
+                                f"the container {name!r} {probe} httpGet port {port!r} names no declared "
+                                f"listener ({', '.join(sorted(listeners))})"
+                            )
+                    case _:
+                        raise ValueError(
+                            f"the container {name!r} {probe} httpGet port {port!r}: the literal-port grammar "
+                            f"is removed; probe ports are listener names, so name a service.ports entry or "
+                            f"a {CONTAINER_PORTS_ANNOTATION} listener"
+                        )
 
         publish_port = annotations.get(PUBLISH_PORT_ANNOTATION)
         if publish_port is not None:
@@ -127,6 +159,23 @@ class WorkloadDocument(BaseModel):
     @property
     def service_ports(self) -> dict[str, int | WorkloadPortSpec]:
         return self.service.ports if self.service is not None else {}
+
+    @property
+    def listener_ports(self) -> dict[str, int]:
+        # The names a probe port may reference: the service.ports listen ports plus the
+        # deliberately-not-service listeners the container-ports annotation declares
+        listeners = {name: listen_port(spec) for name, spec in self.service_ports.items()}
+        annotation = self.metadata.annotations.get(CONTAINER_PORTS_ANNOTATION)
+        if annotation is None:
+            return listeners
+        declared = parse_container_ports_annotation(annotation)
+        collisions = sorted(listeners.keys() & declared.keys())
+        if collisions:
+            raise ValueError(
+                f"{CONTAINER_PORTS_ANNOTATION} names the listener {collisions[0]!r} that service.ports already declares"
+            )
+        listeners.update(declared)
+        return listeners
 
     @property
     def resolved_route(self) -> ResolvedRoute | None:
@@ -379,6 +428,25 @@ def parse_route_port_annotation(value: str) -> int:
     if value.isdigit() and 1 <= int(value) <= 65535:
         return int(value)
     raise ValueError(f"{ROUTE_PORT_ANNOTATION} {value!r} must be a literal port in the range 1-65535")
+
+
+def parse_container_ports_annotation(value: str) -> dict[str, int]:
+    if not value.strip():
+        raise ValueError(f"{CONTAINER_PORTS_ANNOTATION} must be a non-empty comma-separated list of name=port pairs")
+    ports: dict[str, int] = {}
+    for entry in value.split(","):
+        name, separator, port = entry.partition("=")
+        padded = name != name.strip() or port != port.strip()
+        if not separator or padded or not name or not port:
+            raise ValueError(f"{CONTAINER_PORTS_ANNOTATION} entry {entry!r} must be an unpadded name=port pair")
+        if not port.isdigit() or not 1 <= int(port) <= 65535:
+            raise ValueError(
+                f"{CONTAINER_PORTS_ANNOTATION} entry {entry!r} must carry a literal port in the range 1-65535"
+            )
+        if name in ports:
+            raise ValueError(f"{CONTAINER_PORTS_ANNOTATION} names the listener {name!r} twice")
+        ports[name] = int(port)
+    return ports
 
 
 def route_path_export_name(workload_name: str) -> str:

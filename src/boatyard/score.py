@@ -268,7 +268,9 @@ def claimed_service_stanza(name: str, stanza: Yaml, source: str) -> Yaml:
 
 def injected_workload(config: ConfigFile, workload: LoadedWorkload, variable_values: dict[str, str]) -> Yaml:
     # The image reference is composed from the container's declared source and injected
-    # before score sees the document; it is never authored in the workload file.
+    # before score sees the document; it is never authored in the workload file. Probe
+    # ports ride the same pass: authored as listener names, rewritten to the resolved
+    # port so both renderings hand the score tools the integer.
     sources = workload.document.container_sources()
     if not sources:
         return workload.raw
@@ -310,7 +312,27 @@ def injected_workload(config: ConfigFile, workload: LoadedWorkload, variable_val
         if not is_mapping(entry):
             raise ValueError(f"{workload.file_name}: containers.{container} must be a mapping")
         entry["image"] = reference
+    rewrite_probe_ports(containers, workload)
     return document
+
+
+def rewrite_probe_ports(containers: dict[str, Yaml], workload: LoadedWorkload) -> None:
+    # The lens already refused every probe port that is not a declared listener name, so
+    # the rewrite is a plain substitution over the validated documents
+    listeners = workload.document.listener_ports
+    for entry in containers.values():
+        if not is_mapping(entry):
+            continue
+        for probe in ("readinessProbe", "livenessProbe"):
+            block = entry.get(probe)
+            if not is_mapping(block):
+                continue
+            http_get = block.get("httpGet")
+            if not is_mapping(http_get):
+                continue
+            port = http_get.get("port")
+            if isinstance(port, str):
+                http_get["port"] = listeners[port]
 
 
 def dump_yaml(value: Yaml) -> str:
