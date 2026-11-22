@@ -38,13 +38,22 @@ Design intent and silent-failure traps, one fact per bullet.
   entry set plus the bare project name, removing the shared network last.
 - The `boatyard-gateway` service does no token validation; re-protection is a bundle-shipped
   oauth2-proxy sidecar treaty.
-- Routes are path claims the serving surface authors: a workload's `boatyard/route: /auth/*`
-  (an optional `@port-name` qualifier when `service.ports` declares several, an optional
-  `, strip` entry) or a provisioner service stanza's `route:`/`port:` keys, which the compile
-  pass re-spells as the same annotations. The upstream is derived — the declaring service at
-  its `service.ports` listen port (`targetPort` else `port`) — so the rendered stanza carries
-  the claim verbatim plus a `boatyard/port` annotation, and adoption composes the two into
-  route records; nothing hand-copies an upstream.
+- `listeners:` is a workload's one port inventory — `name: port`, or `{port: <int>,
+  internal: true}` for an in-container port that never rides the service surface — and every
+  port reference names an entry: route claims, probe `httpGet.port`s, and
+  `${listeners.<name>.port}` variables. The generation seam derives `service.ports` from the
+  non-internal listeners, rewrites the names to their integers, and composes the score tools'
+  document from the lens without the `listeners:` and `boatyard:` blocks, so a port integer is
+  authored exactly once and every reference is resolvable from the file itself.
+- Routes are claims the serving surface authors against that inventory: a workload's
+  `boatyard: {route: {path: /auth/*, port: http, strip: true}}` — the port names a
+  non-internal listener — or a provisioner stanza's `route: {path, port, strip}` mapping, the
+  port a literal or a whole-string `{{ .State.* }}` template. The compile pass resolves the
+  port and spells the claim as the rendered stanza's `boatyard/route-path`,
+  `boatyard/route-port`, and `boatyard/route-strip` labels — the interchange the bundle-record
+  extraction reads back into route records; nothing hand-copies an upstream, and the
+  `boatyard/*` stanza-label vocabulary is closed — the extraction refuses any label outside
+  it.
 - The gateway table is compiler output: it orders by path specificity (longest concrete
   prefix first, the `/*` catch-all last), and each claiming workload exports
   `<WORKLOAD>_ROUTE_PATH` (the claim's concrete path) into every rendering's tool env —
@@ -69,15 +78,18 @@ Design intent and silent-failure traps, one fact per bullet.
   declares (group-level `workloads:`; a closure declaring no axis or two axes refuses) or authors
   it (`options:`); the axis lives on the local `base_images` entry — the one spelling across
   the Dockerfile ARG and the k8s selection, never re-described by hand.
-- Plain score-compose silently drops `httpGet` probes; boatyard's lens makes the omission loud
+- Plain score-compose silently drops `httpGet` probes; boatyard makes the omission loud
   instead via the workload's `boatyard/probe-adapter` annotation.
-- Substrate needs live in workload files as `boatyard/*` annotations — `boatyard.yml`
-  holds no per-workload runtime fact. The gpu annotation (`"true"`) is substrate only
+- Substrate needs live in workload files — scalar facts as `boatyard/*` annotations, compound
+  facts (routes, publishes, container sources, interpolation targets) in the `boatyard:` block —
+  and `boatyard.yml` holds no per-workload runtime fact. The gpu annotation (`"true"`) is
+  substrate only
   and the patch templates are its reader; start behavior is a separate annotation —
   `boatyard/autostart: "false"` leaves the container created-stopped instead of
   started by `up`, on any service, gpu or not, recorded in the bundle records as
   held services (lock-time for remote bundles, resolve-time for local and override
-  bundles). The lens is `WorkloadDocument.parse(raw, file_name)`.
+  bundles). The lens is `WorkloadDocument.model_validate(raw, context={"source": path.name})`
+  inside `ConfigFile.load`.
 
 ## Commands
 
@@ -91,8 +103,8 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
 - `extra="forbid"` everywhere in pydantic models; per-field shape in `field_validator`s,
   cross-field shape in one `model_validator(mode="after")` per model.
 - Every `load()` takes a full path. YAML kinds go through `load_yaml_model` (`yaml.py` strict load);
-  the image set derives inside `ConfigFile.load` over the declared dockerfile edges (workload
-  source annotations, provisioner markers, local entries); `LockFile.load(path, config)` reads a
+  the image set derives inside `ConfigFile.load` over the declared dockerfile edges (the
+  boatyard block's container sources, provisioner markers, local entries); `LockFile.load(path, config)` reads a
   missing lock as the empty lock.
 - Every pydantic-modeled file kind owns exactly one module in `models/` (boatyard.yml, the lock,
   values, pins, workloads, the pyproject lens). Each module's types run root down, root
@@ -101,8 +113,8 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
   `image`/`workload`/`pyproject` ← `config_file` ← `lock_file` ← `lock`.
 - Nothing is caught only to be re-raised as a different exception; guards and third-party
   exceptions surface raw with full traceback; `typer.BadParameter` owns the CLI-flag layer.
-- The build set is the closure over declared edges — workload source annotations, provisioner
-  `dockerfile:` markers, local `base_images` entries — computed inside `ConfigFile` load, never
+- The build set is the closure over declared edges — the boatyard block's container sources,
+  provisioner `dockerfile:` markers, local `base_images` entries — computed inside `ConfigFile` load, never
   authored in config and never walked from the tree; a Dockerfile nothing declares is silently
   not built, like an unlisted score file. Every workload file loads exactly once per
   `ConfigFile.load` — one lens serves the declared edges, the derived variants, and both renderings;
@@ -120,8 +132,8 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
   key and reference grammar.
 - `models/k8s_pins.py` — pins parsing.
 - `models/pyproject.py` — the toolchain-pin lens over the consumer repo's pyproject.toml.
-- `models/workload.py` — the workload-file lens (`WorkloadDocument`), the workload loader and
-  the compose-surface probe-adapter check, plus provisioner-file selection.
+- `models/workload.py` — the workload-file lens (`WorkloadDocument`: the `listeners:` inventory
+  and `boatyard:` block) plus provisioner-file selection.
 - `models/image.py` — the image and local-base models, the Dockerfile parse, and the tree-tag
   sha machinery.
 - `resolve.py` — the `resolve(config, lock, values)` fold answering the assembly plan
