@@ -303,6 +303,31 @@ def test_values_lock_markers_resolve_after_includes(tmp_path: Path, monkeypatch:
     assert resolved["image"]["digest"] == DIGEST
 
 
+def test_values_with_workload_fact_markers_resolve_into_the_tempdir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "stack" / "score").mkdir(parents=True)
+    (tmp_path / "stack" / "score" / "api.yaml").write_text(
+        "metadata:\n"
+        "  name: api\n"
+        "boatyard:\n"
+        "  route:\n"
+        "    path: /auth/*\n"
+        "    port: web\n"
+        "listeners:\n"
+        "  web: 8081\n"
+        "containers: {}\n",
+        encoding="utf-8",
+    )
+    _write_values(tmp_path, "auth:\n  port: {listener: api.web}\n  path: {route: api}\n")
+    config = _generated_config(tmp_path, ["api.yaml"], k8s={"workloads": ["api.yaml"], "charts": {"loki": CHART_REF}})
+
+    helm = _generate_with_chart(monkeypatch, tmp_path, config, LOCK_IMAGES)
+
+    resolved = yaml.safe_load(helm.values_contents[0])
+    assert resolved["auth"] == {"port": "8081", "path": "/auth"}
+
+
 def _offline_tool_ensure(monkeypatch: pytest.MonkeyPatch, on_path: str | None, version_output: str = "") -> list[str]:
     commands: list[str] = []
 
@@ -1282,104 +1307,6 @@ def test_the_expanded_workload_copy_derives_service_ports_from_the_listeners(
     assert "boatyard" not in document
 
 
-LISTENER_INVENTORY_WORKLOAD = (
-    "metadata:\n"
-    "  name: api\n"
-    "boatyard:\n"
-    "  lock:\n"
-    "    api: API_IMAGE\n"
-    "listeners:\n"
-    "  web: 8081\n"
-    "  sidecar-admin: 9090\n"
-    "  debug:\n"
-    "    port: 8082\n"
-    "    internal: true\n"
-    "containers:\n"
-    "  api: {}\n"
-)
-
-LISTENER_INVENTORY_GENERATED = "services:\n  api-api:\n    image: ghcr.io/org/api:1\n"
-
-
-def _generate_listening_workload(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    entry_vars: dict[str, str] | None = None,
-) -> WorkloadContentsRecorder:
-    (tmp_path / "stack" / "score").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "stack" / "score" / "api.yaml").write_text(LISTENER_INVENTORY_WORKLOAD, encoding="utf-8")
-    recorder = WorkloadContentsRecorder(LISTENER_INVENTORY_GENERATED)
-    monkeypatch.setattr(score_module, "bash", recorder.run)
-    entry: dict[str, object] = {"workloads": ["api.yaml"]}
-    if entry_vars is not None:
-        entry["vars"] = entry_vars
-    config = _generated_config(
-        tmp_path,
-        ["api.yaml"],
-        repository="ghcr.io/org/repo",
-        project_name="example",
-        platforms=["linux/amd64"],
-        services={"core": {"options": {"main": entry}}},
-    )
-    score_compose_module.generate_compose(
-        config,
-        _lock_for_images({"API_IMAGE": "ghcr.io/org/api:1@" + DIGEST, **ALPINE_LOCK}),
-    )
-    return recorder
-
-
-def test_the_listener_port_exports_ride_the_tool_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    recorder = _generate_listening_workload(monkeypatch, tmp_path)
-
-    generate_env = recorder.command_envs["score-compose generate"]
-    assert generate_env is not None
-    assert generate_env["API_LISTENER_WEB"] == "8081"
-    assert generate_env["API_LISTENER_SIDECAR_ADMIN"] == "9090"
-    assert recorder.command_envs["score-compose init"] == generate_env
-
-
-def test_an_internal_listener_spells_no_export(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    recorder = _generate_listening_workload(monkeypatch, tmp_path)
-
-    generate_env = recorder.command_envs["score-compose generate"]
-    assert generate_env is not None
-    assert "API_LISTENER_DEBUG" not in generate_env
-
-
-def test_two_listening_workloads_spelling_one_export_refuse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    (tmp_path / "stack" / "score").mkdir(parents=True)
-    for name in ("api", "API"):
-        (tmp_path / "stack" / "score" / f"{name}.yaml").write_text(
-            LISTENER_INVENTORY_WORKLOAD.replace("  name: api\n", f"  name: {name}\n"),
-            encoding="utf-8",
-        )
-    recorder = WorkloadContentsRecorder("services: {}\n")
-    monkeypatch.setattr(score_module, "bash", recorder.run)
-    config = _generated_config(
-        tmp_path,
-        ["API.yaml", "api.yaml"],
-        repository="ghcr.io/org/repo",
-        project_name="example",
-        platforms=["linux/amd64"],
-        services={"core": {"options": {"main": {"workloads": ["API.yaml", "api.yaml"]}}}},
-    )
-
-    with pytest.raises(ValueError, match=r"API\.yaml and api\.yaml spell one listener port export API_LISTENER_WEB"):
-        score_compose_module.generate_compose(
-            config,
-            _lock_for_images({"API_IMAGE": "ghcr.io/org/api:1@" + DIGEST, **ALPINE_LOCK}),
-        )
-
-
-def test_a_listener_port_export_colliding_with_an_authored_value_refuses(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    with pytest.raises(
-        ValueError, match=r"the listener port export API_LISTENER_WEB collides with an authored rendering value"
-    ):
-        _generate_listening_workload(monkeypatch, tmp_path, entry_vars={"API_LISTENER_WEB": "7000"})
-
-
 RICH_SEAM_WORKLOAD = """\
 apiVersion: score.dev/v1b1
 metadata:
@@ -1526,10 +1453,10 @@ def test_provisioner_claims_translate_into_labels_under_the_string_form(
 
 
 def _invoke_claiming_provisioner(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, provisioner: str
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, provisioner: str, workload: str | None = None
 ) -> CompiledProvisionersRecorder:
     sources = {
-        "stack/score/api.yaml": _workload_referencing("config", "api"),
+        "stack/score/api.yaml": _workload_referencing("config", "api") if workload is None else workload,
         "stack/score/compose/config.yaml": provisioner,
     }
     for relative, text in sources.items():
@@ -1754,6 +1681,159 @@ def test_a_templated_provisioner_route_port_refuses_a_missing_state_key(
       route:
         path: /grafana/*
         port: "{{ .State.admin_port }}"
+""",
+        )
+
+
+FACT_BEARING_WORKLOAD = (
+    "metadata:\n"
+    "  name: api\n"
+    "resources:\n"
+    "  config:\n"
+    "    type: example-config\n"
+    "boatyard:\n"
+    "  route:\n"
+    "    path: /auth/*\n"
+    "    port: web\n"
+    "listeners:\n"
+    "  web: 8081\n"
+    "  sidecar.admin: 9090\n"
+    "  debug:\n"
+    "    port: 8082\n"
+    "    internal: true\n"
+    "containers: {}\n"
+)
+
+PROVISIONER_WITH_FACT_MARKERS = """
+- uri: template://example/config
+  type: example-config
+  services:
+    grafana:
+      image: ${EXAMPLE_IMAGE:?err}
+      route:
+        path: /grafana/*
+        port: 3000
+      variables:
+        PORT: {listener: api.sidecar.admin}
+        AUTH_PATH: {route: api}
+"""
+
+
+def test_workload_fact_markers_resolve_into_the_compiled_services(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder = _invoke_claiming_provisioner(monkeypatch, tmp_path, PROVISIONER_WITH_FACT_MARKERS, FACT_BEARING_WORKLOAD)
+
+    [document] = recorder.compiled
+    [entry] = document
+    assert isinstance(entry, dict)
+    services_text = entry["services"]
+    assert isinstance(services_text, str)
+    grafana = yaml.safe_load(services_text)["grafana"]
+    assert grafana["variables"] == {"PORT": "9090", "AUTH_PATH": "/auth"}
+    assert grafana["annotations"] == {"boatyard/route-path": "/grafana/*", "boatyard/route-port": "3000"}
+
+
+def test_a_listener_marker_without_a_workload_separator_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with pytest.raises(
+        ValueError, match=r"compose/config\.yaml: listener 'api' must spell <workload>\.<listener-name>"
+    ):
+        _invoke_claiming_provisioner(
+            monkeypatch,
+            tmp_path,
+            """
+- uri: template://example/config
+  type: example-config
+  outputs:
+    port: {listener: api}
+""",
+            FACT_BEARING_WORKLOAD,
+        )
+
+
+def test_a_listener_marker_naming_an_unknown_workload_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ValueError, match=r"compose/config\.yaml: listener 'ghost\.web' names no workload document"):
+        _invoke_claiming_provisioner(
+            monkeypatch,
+            tmp_path,
+            """
+- uri: template://example/config
+  type: example-config
+  outputs:
+    port: {listener: ghost.web}
+""",
+            FACT_BEARING_WORKLOAD,
+        )
+
+
+def test_a_listener_marker_naming_an_undeclared_listener_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"compose/config\.yaml: listener 'api\.admin' names no declared listener.*debug, sidecar\.admin, web",
+    ):
+        _invoke_claiming_provisioner(
+            monkeypatch,
+            tmp_path,
+            """
+- uri: template://example/config
+  type: example-config
+  outputs:
+    port: {listener: api.admin}
+""",
+            FACT_BEARING_WORKLOAD,
+        )
+
+
+def test_a_listener_marker_naming_an_internal_listener_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(
+        ValueError, match=r"compose/config\.yaml: listener 'api\.debug' is internal and never rides the service surface"
+    ):
+        _invoke_claiming_provisioner(
+            monkeypatch,
+            tmp_path,
+            """
+- uri: template://example/config
+  type: example-config
+  outputs:
+    port: {listener: api.debug}
+""",
+            FACT_BEARING_WORKLOAD,
+        )
+
+
+def test_a_route_marker_naming_an_unknown_workload_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ValueError, match=r"compose/config\.yaml: route 'ghost' names no workload document"):
+        _invoke_claiming_provisioner(
+            monkeypatch,
+            tmp_path,
+            """
+- uri: template://example/config
+  type: example-config
+  outputs:
+    path: {route: ghost}
+""",
+            FACT_BEARING_WORKLOAD,
+        )
+
+
+def test_a_route_marker_on_a_workload_without_a_route_claim_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with pytest.raises(
+        ValueError, match=r"compose/config\.yaml: route 'api' names a workload that declares no route claim"
+    ):
+        _invoke_claiming_provisioner(
+            monkeypatch,
+            tmp_path,
+            """
+- uri: template://example/config
+  type: example-config
+  outputs:
+    path: {route: api}
 """,
         )
 

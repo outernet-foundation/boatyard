@@ -8,6 +8,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict
 
 from boatyard.models.image import Image, dockerfile_stem, require_dockerfile_spelling
+from boatyard.models.workload import LoadedWorkload
 from boatyard.yaml import Yaml, is_list, is_mapping, parse_yaml_text
 
 TEXT_MARKER = "include"
@@ -16,6 +17,9 @@ LOCK_MARKER = "lock"
 LOCK_IMAGE_MARKER = "lock-image"
 LOCK_MARKERS = (LOCK_MARKER, LOCK_IMAGE_MARKER)
 DOCKERFILE_MARKER = "dockerfile"
+LISTENER_MARKER = "listener"
+ROUTE_MARKER = "route"
+WORKLOAD_FACT_MARKERS = (LISTENER_MARKER, ROUTE_MARKER)
 IMAGE_FIELD = "image"
 IMAGE_SLOT_PATTERN = re.compile(r"\$\{|{{")
 
@@ -34,6 +38,8 @@ class MarkerContext(NamedTuple):
     ancestors: tuple[Path, ...] = ()
     repository: str | None = None
     builds: Mapping[str, Image] | None = None
+    # The rendering's workload documents keyed by file stem
+    workloads: Mapping[str, LoadedWorkload] | None = None
 
 
 class ImageReference(NamedTuple):
@@ -50,6 +56,16 @@ def compose_image_reference(repository: str, image: Image, tag: str, variant: st
 
 def env_slot(name: str) -> str:
     return f'{{{{ env "{name}" }}}}'
+
+
+def workload_documents(workloads: list[LoadedWorkload]) -> dict[str, LoadedWorkload]:
+    documents: dict[str, LoadedWorkload] = {}
+    for workload in workloads:
+        stem = Path(workload.file_name).stem
+        if stem in documents:
+            raise ValueError(f"the workloads {documents[stem].file_name} and {workload.file_name} share one file stem")
+        documents[stem] = workload
+    return documents
 
 
 def resolve_markers(node: Yaml, context: MarkerContext) -> Yaml:
@@ -70,11 +86,11 @@ def expand_includes(node: Yaml, context: MarkerContext) -> Yaml:
                 # Splice in the included structure
                 case [(marker, value)] if marker == YAML_MARKER:
                     expanded = include_yaml(value, context)
-                # Leave markers whole for the lock pass to consume or refuse; only lock-image
-                # takes a mapping value, non-string lock/dockerfile values are workload grammar
-                case [(marker, value)] if (marker in LOCK_MARKERS or marker == DOCKERFILE_MARKER) and (
-                    isinstance(value, str) or marker == LOCK_IMAGE_MARKER
-                ):
+                # Leave markers whole for the lock pass to consume or refuse. Only lock-image
+                # takes a mapping value, and a non-string route value spells a service claim
+                case [(marker, value)] if (
+                    marker in LOCK_MARKERS or marker == DOCKERFILE_MARKER or marker in WORKLOAD_FACT_MARKERS
+                ) and (isinstance(value, str) or marker == LOCK_IMAGE_MARKER):
                     expanded = node
                 # Resolve plain mappings child by child
                 case entries:
@@ -145,8 +161,14 @@ def resolve_locks(node: Yaml, context: MarkerContext) -> Yaml:
                 # Compose the built-image reference from the declared dockerfile
                 case [(marker, value)] if marker == DOCKERFILE_MARKER and isinstance(value, str):
                     resolved = dockerfile_reference(value, context)
-                # Refuse literal images, then resolve plain mappings child by child; non-string
-                # lock/dockerfile values are workload-grammar blocks, not markers
+                # Spell the referenced listener as its workload's port
+                case [(marker, value)] if marker == LISTENER_MARKER and isinstance(value, str):
+                    resolved = listener_port(value, context)
+                # Spell the referenced workload's route claim as its concrete path
+                case [(marker, value)] if marker == ROUTE_MARKER and isinstance(value, str):
+                    resolved = route_path(value, context)
+                # Refuse literal images and resolve plain mappings child by child. A non-string
+                # value here is workload grammar or a service claim, never a marker
                 case entries:
                     _check_literal_image(node, context.source)
                     resolved = {key: resolve_locks(child, context) for key, child in entries}
@@ -176,6 +198,42 @@ def dockerfile_reference(value: str, context: MarkerContext) -> str:
 
     variant = env_slot(image.axis) if image.axis is not None else None
     return compose_image_reference(context.repository, image, env_slot(image.sha_env), variant)
+
+
+def listener_port(value: str, context: MarkerContext) -> str:
+    # Split at the first dot because listener names may carry dots and file stems never do
+    workload_name, separator, listener_name = value.partition(".")
+    if not separator:
+        raise ValueError(f"{context.source}: listener {value!r} must spell <workload>.<listener-name>")
+    workload = referenced_workload(workload_name, LISTENER_MARKER, value, context)
+    listeners = workload.document.listeners
+    if listener_name not in listeners:
+        raise ValueError(
+            f"{context.source}: listener {value!r} names no declared listener ({', '.join(sorted(listeners))})"
+        )
+    spec = listeners[listener_name]
+    if not isinstance(spec, int) and spec.internal:
+        raise ValueError(f"{context.source}: listener {value!r} is internal and never rides the service surface")
+    port = spec if isinstance(spec, int) else spec.port
+    return str(port)
+
+
+def route_path(value: str, context: MarkerContext) -> str:
+    workload = referenced_workload(value, ROUTE_MARKER, value, context)
+    resolved = workload.document.resolved_route
+    if resolved is None:
+        raise ValueError(f"{context.source}: route {value!r} names a workload that declares no route claim")
+    # Drop the wildcard tail so the value spells the concrete path the route path exports carry
+    return resolved.path.removesuffix("/*")
+
+
+def referenced_workload(name: str, marker: str, reference: str, context: MarkerContext) -> LoadedWorkload:
+    if context.workloads is None:
+        raise ValueError(f"{context.source}: {marker} markers resolve against the rendering's workload documents")
+    workload = context.workloads.get(name)
+    if workload is None:
+        raise ValueError(f"{context.source}: {marker} {reference!r} names no workload document")
+    return workload
 
 
 def declared_dockerfile_paths(node: Yaml) -> list[str]:

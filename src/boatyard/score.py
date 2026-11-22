@@ -110,8 +110,8 @@ def render_score(
     config: ConfigFile,
     substrate: Substrate,
     workloads: list[LoadedWorkload],
+    documents: dict[str, LoadedWorkload],
     route_exports: dict[str, str],
-    listener_exports: dict[str, str],
     variable_values: dict[str, str],
     images: dict[str, str],
     templates: list[str],
@@ -126,16 +126,11 @@ def render_score(
     project_name = None if substrate == "k8s" else config.project_name
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    # The lock images join as bindings underneath the caller's values, and each export
-    # family refuses any key the authored surface already spells
-    for family, exports in (("route path", route_exports), ("listener port", listener_exports)):
-        collisions = sorted(set(exports) & ({*images, *variable_values}))
-        if collisions:
-            raise ValueError(f"the {family} export {collisions[0]} collides with an authored rendering value")
-    crossed = sorted(set(route_exports) & set(listener_exports))
-    if crossed:
-        raise ValueError(f"the route path export {crossed[0]} collides with the listener port export {crossed[0]}")
-    variable_values = {**images, **variable_values, **route_exports, **listener_exports}
+    # The lock images join as bindings underneath the caller's values
+    collisions = sorted(set(route_exports) & ({*images, *variable_values}))
+    if collisions:
+        raise ValueError(f"the route path export {collisions[0]} collides with an authored rendering value")
+    variable_values = {**images, **variable_values, **route_exports}
 
     with (
         as_file(files("boatyard") / PATCH_TEMPLATES_DIR) as builtin_templates,
@@ -154,6 +149,7 @@ def render_score(
                 source=name,
                 repository=config.repository,
                 builds=config.images,
+                workloads=documents,
             )
             compiled_entries: list[Yaml] = []
             for entry in entries:
@@ -237,24 +233,6 @@ def route_path_exports(workloads: list[LoadedWorkload]) -> dict[str, str]:
             )
         exports[name] = resolved.path.removesuffix("/*")
         owners[name] = workload.file_name
-    return exports
-
-
-def listener_port_exports(workloads: list[LoadedWorkload]) -> dict[str, str]:
-    # One <WORKLOAD>_LISTENER_<NAME> export per non-internal listener, riding the same tool
-    # env the route path exports ride; internal listeners never ride the service surface
-    exports: dict[str, str] = {}
-    owners: dict[str, str] = {}
-    for workload in workloads:
-        prefix = Path(workload.file_name).stem.upper().replace("-", "_") + "_LISTENER_"
-        for listener_name, port in workload.document.routable_listener_ports.items():
-            name = prefix + listener_name.upper().replace("-", "_")
-            if name in exports:
-                raise ValueError(
-                    f"the workloads {owners[name]} and {workload.file_name} spell one listener port export {name}"
-                )
-            exports[name] = str(port)
-            owners[name] = workload.file_name
     return exports
 
 
