@@ -1282,6 +1282,104 @@ def test_the_expanded_workload_copy_derives_service_ports_from_the_listeners(
     assert "boatyard" not in document
 
 
+LISTENER_INVENTORY_WORKLOAD = (
+    "metadata:\n"
+    "  name: api\n"
+    "boatyard:\n"
+    "  lock:\n"
+    "    api: API_IMAGE\n"
+    "listeners:\n"
+    "  web: 8081\n"
+    "  sidecar-admin: 9090\n"
+    "  debug:\n"
+    "    port: 8082\n"
+    "    internal: true\n"
+    "containers:\n"
+    "  api: {}\n"
+)
+
+LISTENER_INVENTORY_GENERATED = "services:\n  api-api:\n    image: ghcr.io/org/api:1\n"
+
+
+def _generate_listening_workload(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    entry_vars: dict[str, str] | None = None,
+) -> WorkloadContentsRecorder:
+    (tmp_path / "stack" / "score").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "stack" / "score" / "api.yaml").write_text(LISTENER_INVENTORY_WORKLOAD, encoding="utf-8")
+    recorder = WorkloadContentsRecorder(LISTENER_INVENTORY_GENERATED)
+    monkeypatch.setattr(score_module, "bash", recorder.run)
+    entry: dict[str, object] = {"workloads": ["api.yaml"]}
+    if entry_vars is not None:
+        entry["vars"] = entry_vars
+    config = _generated_config(
+        tmp_path,
+        ["api.yaml"],
+        repository="ghcr.io/org/repo",
+        project_name="example",
+        platforms=["linux/amd64"],
+        services={"core": {"options": {"main": entry}}},
+    )
+    score_compose_module.generate_compose(
+        config,
+        _lock_for_images({"API_IMAGE": "ghcr.io/org/api:1@" + DIGEST, **ALPINE_LOCK}),
+    )
+    return recorder
+
+
+def test_the_listener_port_exports_ride_the_tool_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    recorder = _generate_listening_workload(monkeypatch, tmp_path)
+
+    generate_env = recorder.command_envs["score-compose generate"]
+    assert generate_env is not None
+    assert generate_env["API_LISTENER_WEB"] == "8081"
+    assert generate_env["API_LISTENER_SIDECAR_ADMIN"] == "9090"
+    assert recorder.command_envs["score-compose init"] == generate_env
+
+
+def test_an_internal_listener_spells_no_export(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    recorder = _generate_listening_workload(monkeypatch, tmp_path)
+
+    generate_env = recorder.command_envs["score-compose generate"]
+    assert generate_env is not None
+    assert "API_LISTENER_DEBUG" not in generate_env
+
+
+def test_two_listening_workloads_spelling_one_export_refuse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "stack" / "score").mkdir(parents=True)
+    for name in ("api", "API"):
+        (tmp_path / "stack" / "score" / f"{name}.yaml").write_text(
+            LISTENER_INVENTORY_WORKLOAD.replace("  name: api\n", f"  name: {name}\n"),
+            encoding="utf-8",
+        )
+    recorder = WorkloadContentsRecorder("services: {}\n")
+    monkeypatch.setattr(score_module, "bash", recorder.run)
+    config = _generated_config(
+        tmp_path,
+        ["API.yaml", "api.yaml"],
+        repository="ghcr.io/org/repo",
+        project_name="example",
+        platforms=["linux/amd64"],
+        services={"core": {"options": {"main": {"workloads": ["API.yaml", "api.yaml"]}}}},
+    )
+
+    with pytest.raises(ValueError, match=r"API\.yaml and api\.yaml spell one listener port export API_LISTENER_WEB"):
+        score_compose_module.generate_compose(
+            config,
+            _lock_for_images({"API_IMAGE": "ghcr.io/org/api:1@" + DIGEST, **ALPINE_LOCK}),
+        )
+
+
+def test_a_listener_port_export_colliding_with_an_authored_value_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with pytest.raises(
+        ValueError, match=r"the listener port export API_LISTENER_WEB collides with an authored rendering value"
+    ):
+        _generate_listening_workload(monkeypatch, tmp_path, entry_vars={"API_LISTENER_WEB": "7000"})
+
+
 RICH_SEAM_WORKLOAD = """\
 apiVersion: score.dev/v1b1
 metadata:
