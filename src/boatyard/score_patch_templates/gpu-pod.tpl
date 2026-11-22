@@ -1,5 +1,5 @@
-# GPU pod plumbing for workloads marked boatyard/gpu, ported from the
-# infra Pulumi prior art: runtimeClassName nvidia, the GPU nodeSelector, and one
+# GPU pod plumbing for workloads marked boatyard/gpu:
+# runtimeClassName nvidia, the GPU nodeSelector, and one
 # nvidia.com/gpu per container. Score has no GPU concept, so the annotation on
 # the workload file is the single declaration and this template computes every
 # patch target — nothing is keyed on hardcoded service names. The runtime class,

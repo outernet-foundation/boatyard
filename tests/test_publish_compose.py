@@ -244,8 +244,8 @@ class TestPublishComposeVerb:
         (score / "livekit-token.yaml").write_text(
             "metadata:\n"
             "  name: livekit-token\n"
-            "  annotations:\n"
-            "    boatyard/dockerfile: livekit-token=workloads/livekit-token/Dockerfile\n"
+            "boatyard:\n"
+            "  dockerfile:\n    livekit-token: workloads/livekit-token/Dockerfile\n"
             "containers:\n"
             "  livekit-token: {}\n",
             encoding="utf-8",

@@ -48,8 +48,17 @@ def _generated_config(tmp_path: Path, workload_names: list[str], **sections: obj
     config = _root_config(**sections)
     config.root = tmp_path
     score_dir = tmp_path / "stack" / "score"
-    config.workloads = {name: LoadedWorkload.load(score_dir / name, None) for name in workload_names}
+    config.workloads = {name: load_workload(score_dir / name) for name in workload_names}
     return config
+
+
+def load_workload(path: Path) -> LoadedWorkload:
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return LoadedWorkload(path.name, parse_workload(raw, path.name))
+
+
+def parse_workload(raw: Yaml, file_name: str) -> WorkloadDocument:
+    return WorkloadDocument.model_validate(raw, context={"source": file_name})
 
 
 def test_tool_pin_defaults_live_on_the_root_model() -> None:
@@ -332,7 +341,7 @@ class TestMarkerSubstrateResolution:
     def _compose_seam(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, platforms: list[str]) -> str:
         (tmp_path / "stack" / "score").mkdir(parents=True)
         (tmp_path / "stack" / "score" / "api.yaml").write_text(
-            "metadata:\n  name: api\n  annotations:\n    boatyard/lock: api=LOKI_IMAGE\ncontainers:\n  api: {}\n",
+            "metadata:\n  name: api\nboatyard:\n  lock:\n    api: LOKI_IMAGE\ncontainers:\n  api: {}\n",
             encoding="utf-8",
         )
         loki_platforms = {
@@ -502,8 +511,8 @@ def _generate_compose(
     (tmp_path / "stack" / "score" / f"{workload}.yaml").write_text(
         "metadata:\n"
         f"  name: {workload}\n"
-        "  annotations:\n"
-        f"    boatyard/lock: {container_name}=ALPINE_IMAGE\n"
+        "boatyard:\n"
+        f"  lock:\n    {container_name}: ALPINE_IMAGE\n"
         "containers:\n"
         f"  {container_name}: {{}}\n",
         encoding="utf-8",
@@ -638,7 +647,7 @@ def test_generate_compose_renames_the_barrier_and_keeps_its_references_bare(
 def test_generate_compose_barrier_names_are_one_global_slot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "api.yaml").write_text(
-        "metadata:\n  name: api\n  annotations:\n    boatyard/lock: api=API_IMAGE\ncontainers:\n  api: {}\n",
+        "metadata:\n  name: api\nboatyard:\n  lock:\n    api: API_IMAGE\ncontainers:\n  api: {}\n",
         encoding="utf-8",
     )
     (tmp_path / "stack" / "score" / "edge.yaml").write_text(
@@ -692,20 +701,18 @@ class WorkloadContentsRecorder:
             output.write_text(rendered, encoding="utf-8")
 
 
-LOCK_ANNOTATION_API = (
-    "metadata:\n  name: api\n  annotations:\n    boatyard/lock: api=LOCK_KEY\ncontainers:\n  api: {}\n"
-)
+LOCK_SOURCE_API = "metadata:\n  name: api\nboatyard:\n  lock:\n    api: LOCK_KEY\ncontainers:\n  api: {}\n"
 
 
-def _lock_annotation_workload(key: str) -> str:
-    return LOCK_ANNOTATION_API.replace("LOCK_KEY", key)
+def _lock_source_workload(key: str) -> str:
+    return LOCK_SOURCE_API.replace("LOCK_KEY", key)
 
 
-def test_workload_lock_annotations_inject_the_locked_reference_into_the_rendered_copy(
+def test_workload_lock_sources_inject_the_locked_reference_into_the_rendered_copy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
-    (tmp_path / "stack" / "score" / "api.yaml").write_text(_lock_annotation_workload("API_IMAGE"), encoding="utf-8")
+    (tmp_path / "stack" / "score" / "api.yaml").write_text(_lock_source_workload("API_IMAGE"), encoding="utf-8")
     recorder = WorkloadContentsRecorder()
     monkeypatch.setattr(score_module, "bash", recorder.run)
     config = _generated_config(
@@ -725,31 +732,8 @@ def test_workload_lock_annotations_inject_the_locked_reference_into_the_rendered
     assert f"image: {MIRROR_PREFIX}/ghcr.io/org/api@sha256:{'a' * 64}\n" in recorder.workload_contents["api.yaml"]
 
 
-def test_workload_lock_annotation_with_no_lock_entry_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    (tmp_path / "stack" / "score").mkdir(parents=True)
-    (tmp_path / "stack" / "score" / "api.yaml").write_text(_lock_annotation_workload("API_IMAGE"), encoding="utf-8")
-    recorder = WorkloadContentsRecorder()
-    monkeypatch.setattr(score_module, "bash", recorder.run)
-    config = _generated_config(
-        tmp_path,
-        ["api.yaml"],
-        repository="ghcr.io/org/repo",
-        project_name="example",
-        platforms=["linux/amd64"],
-        services={"core": {"options": {"main": {"workloads": ["api.yaml"]}}}},
-    )
-
-    with pytest.raises(ValueError, match=r"api\.yaml: containers\.api: API_IMAGE names no lock entry"):
-        score_compose_module.generate_compose(config, _lock_for_images(ALPINE_LOCK))
-
-
-DOCKERFILE_ANNOTATION_API = (
-    "metadata:\n"
-    "  name: api\n"
-    "  annotations:\n"
-    "    boatyard/dockerfile: api=workloads/api/Dockerfile\n"
-    "containers:\n"
-    "  api: {}\n"
+DOCKERFILE_SOURCE_API = (
+    "metadata:\n  name: api\nboatyard:\n  dockerfile:\n    api: workloads/api/Dockerfile\ncontainers:\n  api: {}\n"
 )
 
 
@@ -762,7 +746,7 @@ def _generate_compose_with_derived_images(
     generated: str | None = None,
 ) -> tuple[WorkloadContentsRecorder, str]:
     (tmp_path / "stack" / "score").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "stack" / "score" / "api.yaml").write_text(DOCKERFILE_ANNOTATION_API, encoding="utf-8")
+    (tmp_path / "stack" / "score" / "api.yaml").write_text(DOCKERFILE_SOURCE_API, encoding="utf-8")
     variant_fragment = (
         ""
         if image is None or image.axis is None or entry_vars is None or image.axis not in entry_vars
@@ -792,7 +776,7 @@ def _generate_compose_with_derived_images(
     return recorder, output.read_text(encoding="utf-8")
 
 
-def test_workload_dockerfile_annotations_inject_the_composed_tree_slot(
+def test_workload_dockerfile_sources_inject_the_composed_tree_slot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     recorder, artifact = _generate_compose_with_derived_images(monkeypatch, tmp_path)
@@ -850,10 +834,8 @@ def _generate_compose_multi(
     (tmp_path / "stack" / "score").mkdir(parents=True)
     for workload_name, containers in workload_containers.items():
         document: dict[str, object] = {
-            "metadata": {
-                "name": workload_name,
-                "annotations": {"boatyard/lock": ",".join(f"{name}=ALPINE_IMAGE" for name in containers)},
-            },
+            "metadata": {"name": workload_name},
+            "boatyard": {"lock": dict.fromkeys(containers, "ALPINE_IMAGE")},
             "containers": {name: {} for name in containers},
         }
         path = tmp_path / "stack" / "score" / f"{workload_name}.yaml"
@@ -1008,8 +990,9 @@ PROVISIONER_WITH_CLAIM = """
   services:
     grafana:
       image: ${EXAMPLE_IMAGE:?err}
-      route: /grafana/*
-      port: 3000
+      route:
+        path: /grafana/*
+        port: 3000
 """
 
 PROVISIONER_WITHOUT_SERVICES = """
@@ -1122,25 +1105,43 @@ def test_provisioners_register_by_resource_type_closure(tmp_path: Path, monkeypa
     assert [Path(token).name for token in provisioners] == ["config.yaml", "state.yaml"]
 
 
+def test_a_provisioner_file_with_duplicate_keys_refuses_at_load(tmp_path: Path) -> None:
+    (tmp_path / "stack" / "score" / "compose").mkdir(parents=True)
+    (tmp_path / "stack" / "score" / "api.yaml").write_text(_workload_referencing("config", "api"), encoding="utf-8")
+    (tmp_path / "stack" / "score" / "compose" / "config.yaml").write_text(
+        "- uri: template://example/config\n  type: example-config\n  type: example-config\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"compose/config\.yaml: line 3: duplicate key 'type'"):
+        _bundle_config(tmp_path)
+
+
 ROUTE_CLAIM_WORKLOAD = (
     "metadata:\n"
     "  name: api\n"
-    "  annotations:\n"
-    "    boatyard/route: /auth/*@web, strip\n"
-    "    boatyard/lock: api=API_IMAGE\n"
-    "service:\n"
-    "  ports:\n"
-    "    web:\n"
-    "      port: 8080\n"
-    "      targetPort: 8081\n"
-    "    admin:\n"
-    "      port: 9090\n"
+    "boatyard:\n"
+    "  route:\n"
+    "    path: /auth/*\n"
+    "    port: web\n"
+    "    strip: true\n"
+    "  lock:\n"
+    "    api: API_IMAGE\n"
+    "listeners:\n"
+    "  web: 8081\n"
+    "  admin: 9090\n"
     "containers:\n"
     "  api: {}\n"
 )
 
 ROUTE_CLAIM_GENERATED = (
-    "services:\n  api-api:\n    image: ghcr.io/org/api:1\n    annotations:\n      boatyard/route: /auth/*@web, strip\n"
+    "services:\n"
+    "  api-api:\n"
+    "    image: ghcr.io/org/api:1\n"
+    "    annotations:\n"
+    "      boatyard/route-path: /auth/*\n"
+    "      boatyard/route-port: '8081'\n"
+    "      boatyard/route-strip: 'true'\n"
 )
 
 
@@ -1168,15 +1169,16 @@ def _generate_claiming_workload(
     return recorder
 
 
-def test_a_workload_claim_spells_the_derived_port_annotation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_workload_claim_carries_the_resolved_route_labels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _generate_claiming_workload(monkeypatch, tmp_path, ROUTE_CLAIM_GENERATED)
 
     document = yaml.safe_load(
         (tmp_path / "stack" / "generated" / "compose" / "compose.core-main.yaml").read_text(encoding="utf-8")
     )
     assert document["services"]["api"]["annotations"] == {
-        "boatyard/route": "/auth/*@web, strip",
-        "boatyard/port": "8081",
+        "boatyard/route-path": "/auth/*",
+        "boatyard/route-port": "8081",
+        "boatyard/route-strip": "true",
     }
 
 
@@ -1193,7 +1195,7 @@ def test_the_route_path_export_crosses_bundle_boundaries(tmp_path: Path, monkeyp
     (tmp_path / "stack" / "score").mkdir(parents=True, exist_ok=True)
     (tmp_path / "stack" / "score" / "api.yaml").write_text(ROUTE_CLAIM_WORKLOAD, encoding="utf-8")
     (tmp_path / "stack" / "score" / "aux.yaml").write_text(
-        "metadata:\n  name: aux\n  annotations:\n    boatyard/lock: aux=AUX_IMAGE\ncontainers:\n  aux: {}\n",
+        "metadata:\n  name: aux\nboatyard:\n  lock:\n    aux: AUX_IMAGE\ncontainers:\n  aux: {}\n",
         encoding="utf-8",
     )
     recorder = WorkloadContentsRecorder(
@@ -1256,13 +1258,143 @@ def test_two_claiming_workloads_spelling_one_export_refuse(tmp_path: Path, monke
         )
 
 
-def test_the_expanded_workload_copy_carries_the_claim_verbatim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_expanded_workload_copy_carries_the_resolved_route_labels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     recorder = _generate_claiming_workload(monkeypatch, tmp_path, ROUTE_CLAIM_GENERATED)
 
-    assert "boatyard/route: /auth/*@web, strip\n" in recorder.workload_contents["api.yaml"]
+    assert "boatyard/route-path: /auth/*\n" in recorder.workload_contents["api.yaml"]
+    assert "boatyard/route-port: '8081'\n" in recorder.workload_contents["api.yaml"]
+    assert "boatyard/route-strip: 'true'\n" in recorder.workload_contents["api.yaml"]
 
 
-def test_provisioner_claims_translate_into_annotations_under_the_string_form(
+def test_the_expanded_workload_copy_derives_service_ports_from_the_listeners(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder = _generate_claiming_workload(monkeypatch, tmp_path, ROUTE_CLAIM_GENERATED)
+    expanded = recorder.workload_contents["api.yaml"]
+
+    document = yaml.safe_load(expanded)
+    assert document["service"] == {
+        "ports": {"web": {"port": 8081, "targetPort": 8081}, "admin": {"port": 9090, "targetPort": 9090}}
+    }
+    assert "listeners" not in document
+    assert "boatyard" not in document
+
+
+RICH_SEAM_WORKLOAD = """\
+apiVersion: score.dev/v1b1
+metadata:
+  name: api
+  annotations:
+    boatyard/gpu: "true"
+boatyard:
+  route:
+    path: /auth/*
+    port: web
+    strip: true
+  lock:
+    api: API_IMAGE
+listeners:
+  web: 8081
+  admin:
+    port: 9090
+  mgmt:
+    port: 9000
+    internal: true
+resources:
+  db:
+    type: example-db
+containers:
+  api:
+    command: ["/bin/sh"]
+    args: ["-c", "serve"]
+    files:
+      /etc/api/config.yaml:
+        content: |
+          key: ${FOO}
+    variables:
+      SERVICE_PORT: ${listeners.admin.port}
+      RETRIES: 3
+    readinessProbe:
+      httpGet:
+        path: /ready
+        port: web
+"""
+
+
+def test_the_seam_composes_the_tool_document_from_the_lens() -> None:
+    workload = LoadedWorkload("api.yaml", parse_workload(yaml.safe_load(RICH_SEAM_WORKLOAD), "api.yaml"))
+
+    tool = score_module.injected_workload(
+        _root_config(),
+        workload,
+        {"API_IMAGE": "ghcr.io/org/api:1@" + DIGEST},
+    )
+
+    assert tool == {
+        "apiVersion": "score.dev/v1b1",
+        "metadata": {
+            "name": "api",
+            "annotations": {
+                "boatyard/gpu": "true",
+                "boatyard/route-path": "/auth/*",
+                "boatyard/route-port": "8081",
+                "boatyard/route-strip": "true",
+            },
+        },
+        "resources": {"db": {"type": "example-db"}},
+        "containers": {
+            "api": {
+                "command": ["/bin/sh"],
+                "args": ["-c", "serve"],
+                "image": "ghcr.io/org/api:1@" + DIGEST,
+                "files": {"/etc/api/config.yaml": {"content": "key: ${FOO}\n"}},
+                "variables": {"SERVICE_PORT": "9090", "RETRIES": 3},
+                "readinessProbe": {"httpGet": {"path": "/ready", "port": 8081}},
+            }
+        },
+        "service": {"ports": {"web": {"port": 8081, "targetPort": 8081}, "admin": {"port": 9090, "targetPort": 9090}}},
+    }
+
+
+def test_internal_listeners_leave_the_derived_service_ports(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "stack" / "score").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "stack" / "score" / "api.yaml").write_text(
+        "metadata:\n"
+        "  name: api\n"
+        "boatyard:\n"
+        "  lock:\n    api: API_IMAGE\n"
+        "listeners:\n"
+        "  web: 8080\n"
+        "  mgmt:\n"
+        "    port: 9000\n"
+        "    internal: true\n"
+        "containers:\n"
+        "  api: {}\n",
+        encoding="utf-8",
+    )
+    recorder = WorkloadContentsRecorder()
+    monkeypatch.setattr(score_module, "bash", recorder.run)
+    config = _generated_config(
+        tmp_path,
+        ["api.yaml"],
+        repository="ghcr.io/org/repo",
+        project_name="example",
+        platforms=["linux/amd64"],
+        services={"core": {"options": {"main": {"workloads": ["api.yaml"]}}}},
+    )
+
+    score_compose_module.generate_compose(
+        config,
+        _lock_for_images({"API_IMAGE": "ghcr.io/org/api:1@" + DIGEST, **ALPINE_LOCK}),
+    )
+
+    document = yaml.safe_load(recorder.workload_contents["api.yaml"])
+    assert document["service"] == {"ports": {"web": {"port": 8080, "targetPort": 8080}}}
+
+
+def test_provisioner_claims_translate_into_labels_under_the_string_form(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     sources = {
@@ -1290,7 +1422,7 @@ def test_provisioner_claims_translate_into_annotations_under_the_string_form(
     assert yaml.safe_load(services_text) == {
         "grafana": {
             "image": "${EXAMPLE_IMAGE:?err}",
-            "annotations": {"boatyard/route": "/grafana/*", "boatyard/port": "3000"},
+            "annotations": {"boatyard/route-path": "/grafana/*", "boatyard/route-port": "3000"},
         }
     }
 
@@ -1317,7 +1449,7 @@ def _invoke_claiming_provisioner(
 
 
 def test_a_provisioner_route_without_its_port_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    with pytest.raises(ValueError, match=r"services\.grafana: route: requires the port: key"):
+    with pytest.raises(ValidationError, match=r"port\n.*Field required"):
         _invoke_claiming_provisioner(
             monkeypatch,
             tmp_path,
@@ -1327,7 +1459,8 @@ def test_a_provisioner_route_without_its_port_refuses(tmp_path: Path, monkeypatc
   services:
     grafana:
       image: ${EXAMPLE_IMAGE:?err}
-      route: /grafana/*
+      route:
+        path: /grafana/*
 """,
         )
 
@@ -1348,8 +1481,8 @@ def test_a_provisioner_port_without_a_route_refuses(tmp_path: Path, monkeypatch:
         )
 
 
-def test_a_provisioner_claim_port_qualifier_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    with pytest.raises(ValueError, match=r"takes no @port qualifier"):
+def test_a_provisioner_claim_with_a_qualified_path_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ValidationError, match=r"route path .* must be a /-rooted segment chain"):
         _invoke_claiming_provisioner(
             monkeypatch,
             tmp_path,
@@ -1359,16 +1492,17 @@ def test_a_provisioner_claim_port_qualifier_refuses(tmp_path: Path, monkeypatch:
   services:
     grafana:
       image: ${EXAMPLE_IMAGE:?err}
-      route: /grafana/*@web
-      port: 3000
+      route:
+        path: /grafana/*@web
+        port: 3000
 """,
         )
 
 
-def test_a_provisioner_stanza_annotating_the_claim_directly_refuses(
+def test_a_provisioner_stanza_annotating_the_labels_directly_refuses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    with pytest.raises(ValueError, match=r"annotates boatyard/route directly"):
+    with pytest.raises(ValueError, match=r"annotates boatyard/route-path directly"):
         _invoke_claiming_provisioner(
             monkeypatch,
             tmp_path,
@@ -1378,10 +1512,29 @@ def test_a_provisioner_stanza_annotating_the_claim_directly_refuses(
   services:
     grafana:
       image: ${EXAMPLE_IMAGE:?err}
-      route: /grafana/*
-      port: 3000
+      route:
+        path: /grafana/*
+        port: 3000
       annotations:
-        boatyard/route: /grafana/*
+        boatyard/route-path: /grafana/*
+""",
+        )
+
+
+def test_a_boolean_provisioner_route_port_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ValidationError, match=r"route\.port must be an integer, not a boolean"):
+        _invoke_claiming_provisioner(
+            monkeypatch,
+            tmp_path,
+            """
+- uri: template://example/config
+  type: example-config
+  services:
+    grafana:
+      image: ${EXAMPLE_IMAGE:?err}
+      route:
+        path: /grafana/*
+        port: true
 """,
         )
 
@@ -1394,8 +1547,9 @@ PROVISIONER_WITH_TEMPLATED_CLAIM = """
   services:
     grafana:
       image: ${EXAMPLE_IMAGE:?err}
-      route: /grafana/*
-      port: "{{ .State.grafana_port }}"
+      route:
+        path: /grafana/*
+        port: "{{ .State.grafana_port }}"
       healthcheck:
         test:
           [
@@ -1410,7 +1564,7 @@ PROVISIONER_WITH_TEMPLATED_CLAIM = """
 """
 
 
-def test_a_templated_provisioner_route_port_renders_into_the_annotation(
+def test_a_templated_provisioner_route_port_renders_into_the_label(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     recorder = _invoke_claiming_provisioner(monkeypatch, tmp_path, PROVISIONER_WITH_TEMPLATED_CLAIM)
@@ -1422,8 +1576,7 @@ def test_a_templated_provisioner_route_port_renders_into_the_annotation(
     assert isinstance(services_text, str)
     grafana = yaml.safe_load(services_text)["grafana"]
     assert "route" not in grafana
-    assert "port" not in grafana
-    assert grafana["annotations"] == {"boatyard/route": "/grafana/*", "boatyard/port": "3000"}
+    assert grafana["annotations"] == {"boatyard/route-path": "/grafana/*", "boatyard/route-port": "3000"}
 
 
 def test_the_healthcheck_templating_the_same_state_key_rides_through(
@@ -1438,7 +1591,7 @@ def test_the_healthcheck_templating_the_same_state_key_rides_through(
     assert isinstance(services_text, str)
     grafana = yaml.safe_load(services_text)["grafana"]
     assert grafana["healthcheck"]["test"][-1] == "http://localhost:{{ .State.grafana_port }}/health"
-    assert grafana["annotations"]["boatyard/port"] == "3000"
+    assert grafana["annotations"]["boatyard/route-port"] == "3000"
 
 
 def test_a_templated_provisioner_route_port_refuses_a_non_integer_render(
@@ -1456,8 +1609,9 @@ def test_a_templated_provisioner_route_port_refuses_a_non_integer_render(
   services:
     grafana:
       image: ${EXAMPLE_IMAGE:?err}
-      route: /grafana/*
-      port: "{{ .State.grafana_port }}"
+      route:
+        path: /grafana/*
+        port: "{{ .State.grafana_port }}"
 """,
         )
 
@@ -1477,8 +1631,9 @@ def test_a_templated_provisioner_route_port_refuses_an_out_of_range_render(
   services:
     grafana:
       image: ${EXAMPLE_IMAGE:?err}
-      route: /grafana/*
-      port: "{{ .State.grafana_port }}"
+      route:
+        path: /grafana/*
+        port: "{{ .State.grafana_port }}"
 """,
         )
 
@@ -1498,8 +1653,9 @@ def test_a_templated_provisioner_route_port_refuses_a_missing_state_key(
   services:
     grafana:
       image: ${EXAMPLE_IMAGE:?err}
-      route: /grafana/*
-      port: "{{ .State.admin_port }}"
+      route:
+        path: /grafana/*
+        port: "{{ .State.admin_port }}"
 """,
         )
 
@@ -1507,9 +1663,13 @@ def test_a_templated_provisioner_route_port_refuses_a_missing_state_key(
 WORKLOAD_WITH_LIVENESS = """
 metadata:
   name: api
-  annotations:
-    boatyard/container-ports: health=5678
-    boatyard/lock: api=API_IMAGE
+boatyard:
+  lock:
+    api: API_IMAGE
+listeners:
+  health:
+    port: 5678
+    internal: true
 containers:
   api:
     livenessProbe:
@@ -1523,8 +1683,13 @@ metadata:
   name: api
   annotations:
     boatyard/probe-adapter: python-urllib
-    boatyard/container-ports: health=5678
-    boatyard/lock: api=API_IMAGE
+boatyard:
+  lock:
+    api: API_IMAGE
+listeners:
+  health:
+    port: 5678
+    internal: true
 containers:
   api:
     readinessProbe:
@@ -1536,9 +1701,13 @@ containers:
 WORKLOAD_WITH_UNADAPTED_READINESS = """
 metadata:
   name: api
-  annotations:
-    boatyard/container-ports: health=5678
-    boatyard/lock: api=API_IMAGE
+boatyard:
+  lock:
+    api: API_IMAGE
+listeners:
+  health:
+    port: 5678
+    internal: true
 containers:
   api:
     readinessProbe:
@@ -1584,14 +1753,14 @@ def test_unknown_probe_adapter_values_refuse(tmp_path: Path, monkeypatch: pytest
         _bundle_config(tmp_path)
 
 
-WORKLOAD_PROBE_BARE_SERVICE_PORT = """
+WORKLOAD_PROBE_BARE_LISTENER = """
 metadata:
   name: api
-  annotations:
-    boatyard/lock: api=API_IMAGE
-service:
-  ports:
-    web: 5678
+boatyard:
+  lock:
+    api: API_IMAGE
+listeners:
+  web: 5678
 containers:
   api:
     readinessProbe:
@@ -1600,17 +1769,17 @@ containers:
         port: web
 """
 
-WORKLOAD_PROBE_TARGET_SERVICE_PORT = """
+WORKLOAD_PROBE_MAPPING_LISTENER = """
 metadata:
   name: api
   annotations:
     boatyard/probe-adapter: python-urllib
-    boatyard/lock: api=API_IMAGE
-service:
-  ports:
-    web:
-      port: 80
-      targetPort: 9090
+boatyard:
+  lock:
+    api: API_IMAGE
+listeners:
+  web:
+    port: 9090
 containers:
   api:
     readinessProbe:
@@ -1619,12 +1788,16 @@ containers:
         port: web
 """
 
-WORKLOAD_PROBE_CONTAINER_PORT = """
+WORKLOAD_PROBE_INTERNAL_LISTENER = """
 metadata:
   name: api
-  annotations:
-    boatyard/container-ports: mgmt=9000
-    boatyard/lock: api=API_IMAGE
+boatyard:
+  lock:
+    api: API_IMAGE
+listeners:
+  mgmt:
+    port: 9000
+    internal: true
 containers:
   api:
     livenessProbe:
@@ -1634,25 +1807,37 @@ containers:
 """
 
 
-def test_probe_listener_names_resolve_over_both_service_port_shapes() -> None:
-    for fixture, resolved in ((WORKLOAD_PROBE_BARE_SERVICE_PORT, 5678), (WORKLOAD_PROBE_TARGET_SERVICE_PORT, 9090)):
-        document = WorkloadDocument.parse(yaml.safe_load(fixture), "api.yaml")
+def test_probe_listener_names_resolve_over_both_listener_shapes() -> None:
+    for fixture, resolved in ((WORKLOAD_PROBE_BARE_LISTENER, 5678), (WORKLOAD_PROBE_MAPPING_LISTENER, 9090)):
+        document = parse_workload(yaml.safe_load(fixture), "api.yaml")
 
         assert document.listener_ports == {"web": resolved}
 
 
-def test_probe_listener_names_resolve_the_container_ports_annotation() -> None:
-    document = WorkloadDocument.parse(yaml.safe_load(WORKLOAD_PROBE_CONTAINER_PORT), "api.yaml")
+def test_probe_listener_names_resolve_internal_listeners() -> None:
+    document = parse_workload(yaml.safe_load(WORKLOAD_PROBE_INTERNAL_LISTENER), "api.yaml")
 
     assert document.listener_ports == {"mgmt": 9000}
 
 
+def test_internal_listeners_leave_the_routable_inventory() -> None:
+    document = parse_workload(
+        yaml.safe_load(
+            "metadata:\n  name: api\nlisteners:\n  web: 8080\n  mgmt:\n    port: 9000\n    internal: true\n"
+        ),
+        "api.yaml",
+    )
+
+    assert document.routable_listener_ports == {"web": 8080}
+
+
 def test_literal_probe_ports_refuse() -> None:
     with pytest.raises(ValidationError, match=r"probe ports are listener names"):
-        WorkloadDocument.parse(
+        parse_workload(
             {
-                "metadata": {"name": "api", "annotations": {"boatyard/lock": "api=API_IMAGE"}},
-                "service": {"ports": {"web": 5678}},
+                "metadata": {"name": "api"},
+                "boatyard": {"lock": {"api": "API_IMAGE"}},
+                "listeners": {"web": 5678},
                 "containers": {"api": {"livenessProbe": {"httpGet": {"path": "/health", "port": 5678}}}},
             },
             "api.yaml",
@@ -1661,10 +1846,11 @@ def test_literal_probe_ports_refuse() -> None:
 
 def test_a_probe_without_a_port_refuses() -> None:
     with pytest.raises(ValidationError, match=r"declares no port"):
-        WorkloadDocument.parse(
+        parse_workload(
             {
-                "metadata": {"name": "api", "annotations": {"boatyard/lock": "api=API_IMAGE"}},
-                "service": {"ports": {"web": 5678}},
+                "metadata": {"name": "api"},
+                "boatyard": {"lock": {"api": "API_IMAGE"}},
+                "listeners": {"web": 5678},
                 "containers": {"api": {"livenessProbe": {"httpGet": {"path": "/health"}}}},
             },
             "api.yaml",
@@ -1673,47 +1859,46 @@ def test_a_probe_without_a_port_refuses() -> None:
 
 def test_unknown_probe_listener_names_refuse_listing_the_declared_listeners() -> None:
     with pytest.raises(ValidationError, match=r"names no declared listener \(mgmt, web\)"):
-        WorkloadDocument.parse(
+        parse_workload(
             {
-                "metadata": {
-                    "name": "api",
-                    "annotations": {"boatyard/container-ports": "mgmt=9000", "boatyard/lock": "api=API_IMAGE"},
-                },
-                "service": {"ports": {"web": 5678}},
+                "metadata": {"name": "api"},
+                "boatyard": {"lock": {"api": "API_IMAGE"}},
+                "listeners": {"web": 5678, "mgmt": {"port": 9000, "internal": True}},
                 "containers": {"api": {"livenessProbe": {"httpGet": {"path": "/health", "port": "admin"}}}},
             },
             "api.yaml",
         )
 
 
-def test_malformed_container_ports_values_refuse() -> None:
-    malformed = (
-        ("", "comma-separated list of name=port pairs"),
-        ("mgmt =9000", "unpadded name=port pair"),
-        ("mgmt9000", "unpadded name=port pair"),
-        ("mgmt=0", "range 1-65535"),
-        ("mgmt=65536", "range 1-65535"),
-        ("mgmt=9000,mgmt=9001", "names the listener 'mgmt' twice"),
-    )
-    for value, message in malformed:
+def test_malformed_listener_specs_refuse() -> None:
+    malformed: list[tuple[dict[str, Yaml], str]] = [
+        ({"web": 0}, "outside 1-65535"),
+        ({"web": 65536}, "outside 1-65535"),
+        ({"web": {"port": 9000, "unknown": True}}, "Extra inputs are not permitted"),
+        ({"bad name!": 9000}, "must be a plain name"),
+    ]
+    for listeners, message in malformed:
         with pytest.raises(ValidationError, match=message):
-            WorkloadDocument.parse(
-                {
-                    "metadata": {"name": "api", "annotations": {"boatyard/container-ports": value}},
-                    "containers": {},
-                },
-                "api.yaml",
-            )
+            parse_workload({"metadata": {"name": "api"}, "listeners": listeners}, "api.yaml")
 
 
-def test_a_container_ports_name_a_service_port_declares_refuses() -> None:
-    with pytest.raises(ValidationError, match=r"listener 'web' that service\.ports already declares"):
-        WorkloadDocument.parse(
+def test_boolean_listener_ports_refuse() -> None:
+    malformed: list[tuple[dict[str, Yaml], str]] = [
+        ({"web": True}, r"the listener 'web' port must be an integer, not a boolean"),
+        ({"web": {"port": True}}, r"listeners\.port must be an integer, not a boolean"),
+    ]
+    for listeners, message in malformed:
+        with pytest.raises(ValidationError, match=message):
+            parse_workload({"metadata": {"name": "api"}, "listeners": listeners}, "api.yaml")
+
+
+def test_an_authored_service_stanza_refuses() -> None:
+    with pytest.raises(ValidationError, match=r"service: is compiler output derived from listeners:"):
+        parse_workload(
             {
-                "metadata": {
-                    "name": "api",
-                    "annotations": {"boatyard/container-ports": "web=9000", "boatyard/lock": "api=API_IMAGE"},
-                },
+                "metadata": {"name": "api"},
+                "boatyard": {"lock": {"api": "API_IMAGE"}},
+                "listeners": {"web": 5678},
                 "service": {"ports": {"web": 5678}},
                 "containers": {"api": {}},
             },
@@ -1721,11 +1906,40 @@ def test_a_container_ports_name_a_service_port_declares_refuses() -> None:
         )
 
 
+def test_removed_and_unknown_boatyard_annotations_refuse() -> None:
+    for key, value in (
+        ("boatyard/route", "/auth/*"),
+        ("boatyard/container-ports", "mgmt=9000"),
+        ("boatyard/dockerfile", "api=workloads/api/Dockerfile"),
+        ("boatyard/typo", "whatever"),
+    ):
+        with pytest.raises(ValidationError, match=r"is not a workload annotation.*boatyard: block"):
+            parse_workload(
+                {
+                    "metadata": {"name": "api", "annotations": {key: value}},
+                    "containers": {},
+                },
+                "api.yaml",
+            )
+
+
+def test_the_gpu_annotation_parses() -> None:
+    document = parse_workload(
+        {
+            "metadata": {"name": "api", "annotations": {"boatyard/gpu": "true"}},
+            "containers": {},
+        },
+        "api.yaml",
+    )
+
+    assert document.metadata.annotations == {"boatyard/gpu": "true"}
+
+
 def test_the_compose_rendering_receives_the_resolved_probe_port(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
-    (tmp_path / "stack" / "score" / "api.yaml").write_text(WORKLOAD_PROBE_TARGET_SERVICE_PORT, encoding="utf-8")
+    (tmp_path / "stack" / "score" / "api.yaml").write_text(WORKLOAD_PROBE_MAPPING_LISTENER, encoding="utf-8")
     recorder = WorkloadContentsRecorder()
     monkeypatch.setattr(score_module, "bash", recorder.run)
     config = _generated_config(
@@ -1749,9 +1963,13 @@ def test_the_compose_rendering_receives_the_resolved_probe_port(
 WORKLOAD_PROBE_DOCKERFILE_PORT = (
     "metadata:\n"
     "  name: api\n"
-    "  annotations:\n"
-    "    boatyard/dockerfile: api=workloads/api/Dockerfile\n"
-    "    boatyard/container-ports: mgmt=9000\n"
+    "boatyard:\n"
+    "  dockerfile:\n"
+    "    api: workloads/api/Dockerfile\n"
+    "listeners:\n"
+    "  mgmt:\n"
+    "    port: 9000\n"
+    "    internal: true\n"
     "containers:\n"
     "  api:\n"
     "    livenessProbe:\n"
@@ -1772,43 +1990,46 @@ def test_the_k8s_rendering_receives_the_resolved_probe_port(tmp_path: Path, monk
     assert "port: mgmt\n" not in recorder.workload_contents["api.yaml"]
 
 
-WORKLOAD_VARIABLES_BARE_SERVICE_PORT = """
+WORKLOAD_VARIABLES_BARE_LISTENER = """
 metadata:
   name: api
-  annotations:
-    boatyard/lock: api=API_IMAGE
-service:
-  ports:
-    web: 5678
+boatyard:
+  lock:
+    api: API_IMAGE
+listeners:
+  web: 5678
 containers:
   api:
     variables:
       SERVICE_PORT: ${listeners.web.port}
 """
 
-WORKLOAD_VARIABLES_TARGET_SERVICE_PORT = """
+WORKLOAD_VARIABLES_MAPPING_LISTENER = """
 apiVersion: score.dev/v1b1
 metadata:
   name: api
-  annotations:
-    boatyard/lock: api=API_IMAGE
-service:
-  ports:
-    web:
-      port: 80
-      targetPort: 9090
+boatyard:
+  lock:
+    api: API_IMAGE
+listeners:
+  web:
+    port: 9090
 containers:
   api:
     variables:
       SERVICE_PORT: ${listeners.web.port}
 """
 
-WORKLOAD_VARIABLES_CONTAINER_PORT = """
+WORKLOAD_VARIABLES_INTERNAL_LISTENER = """
 metadata:
   name: api
-  annotations:
-    boatyard/container-ports: mgmt=9000
-    boatyard/lock: api=API_IMAGE
+boatyard:
+  lock:
+    api: API_IMAGE
+listeners:
+  mgmt:
+    port: 9000
+    internal: true
 containers:
   api:
     variables:
@@ -1816,31 +2037,28 @@ containers:
 """
 
 
-def test_listener_variable_references_resolve_over_both_service_port_shapes() -> None:
+def test_listener_variable_references_resolve_over_both_listener_shapes() -> None:
     for fixture, resolved in (
-        (WORKLOAD_VARIABLES_BARE_SERVICE_PORT, 5678),
-        (WORKLOAD_VARIABLES_TARGET_SERVICE_PORT, 9090),
+        (WORKLOAD_VARIABLES_BARE_LISTENER, 5678),
+        (WORKLOAD_VARIABLES_MAPPING_LISTENER, 9090),
     ):
-        document = WorkloadDocument.parse(yaml.safe_load(fixture), "api.yaml")
+        document = parse_workload(yaml.safe_load(fixture), "api.yaml")
 
         assert document.listener_ports == {"web": resolved}
 
 
-def test_listener_variable_references_resolve_the_container_ports_annotation() -> None:
-    document = WorkloadDocument.parse(yaml.safe_load(WORKLOAD_VARIABLES_CONTAINER_PORT), "api.yaml")
+def test_listener_variable_references_resolve_internal_listeners() -> None:
+    document = parse_workload(yaml.safe_load(WORKLOAD_VARIABLES_INTERNAL_LISTENER), "api.yaml")
 
     assert document.listener_ports == {"mgmt": 9000}
 
 
 def test_unknown_listener_variable_names_refuse_listing_the_declared_listeners() -> None:
     with pytest.raises(ValidationError, match=r"names no declared listener \(mgmt, web\)"):
-        WorkloadDocument.parse(
+        parse_workload(
             {
-                "metadata": {
-                    "name": "api",
-                    "annotations": {"boatyard/container-ports": "mgmt=9000", "boatyard/lock": "api=API_IMAGE"},
-                },
-                "service": {"ports": {"web": 5678}},
+                "metadata": {"name": "api", "boatyard": {"lock": {"api": "API_IMAGE"}}},
+                "listeners": {"web": 5678, "mgmt": {"port": 9000, "internal": True}},
                 "containers": {"api": {"variables": {"SERVICE_PORT": "${listeners.admin.port}"}}},
             },
             "api.yaml",
@@ -1851,10 +2069,10 @@ def test_malformed_listener_variable_paths_refuse() -> None:
     malformed = ("${listeners.web}", "${listeners.web.port.extra}", "${listeners.web.hostname}")
     for value in malformed:
         with pytest.raises(ValidationError, match=r"must be \$\{listeners\.<listener>\.port\}"):
-            WorkloadDocument.parse(
+            parse_workload(
                 {
-                    "metadata": {"name": "api", "annotations": {"boatyard/lock": "api=API_IMAGE"}},
-                    "service": {"ports": {"web": 5678}},
+                    "metadata": {"name": "api", "boatyard": {"lock": {"api": "API_IMAGE"}}},
+                    "listeners": {"web": 5678},
                     "containers": {"api": {"variables": {"SERVICE_PORT": value}}},
                 },
                 "api.yaml",
@@ -1865,7 +2083,7 @@ def test_the_compose_rendering_receives_the_resolved_listener_variable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
-    (tmp_path / "stack" / "score" / "api.yaml").write_text(WORKLOAD_VARIABLES_TARGET_SERVICE_PORT, encoding="utf-8")
+    (tmp_path / "stack" / "score" / "api.yaml").write_text(WORKLOAD_VARIABLES_MAPPING_LISTENER, encoding="utf-8")
     recorder = WorkloadContentsRecorder()
     monkeypatch.setattr(score_module, "bash", recorder.run)
     config = _generated_config(
@@ -1889,9 +2107,13 @@ def test_the_compose_rendering_receives_the_resolved_listener_variable(
 WORKLOAD_VARIABLES_DOCKERFILE_PORT = (
     "metadata:\n"
     "  name: api\n"
-    "  annotations:\n"
-    "    boatyard/dockerfile: api=workloads/api/Dockerfile\n"
-    "    boatyard/container-ports: mgmt=9000\n"
+    "boatyard:\n"
+    "  dockerfile:\n"
+    "    api: workloads/api/Dockerfile\n"
+    "listeners:\n"
+    "  mgmt:\n"
+    "    port: 9000\n"
+    "    internal: true\n"
     "containers:\n"
     "  api:\n"
     "    variables:\n"
@@ -1912,14 +2134,14 @@ def test_the_k8s_rendering_receives_the_resolved_listener_variable(
     assert "${listeners." not in recorder.workload_contents["api.yaml"]
 
 
-WORKLOAD_LEGACY_SELF_PORT = """
+WORKLOAD_SELF_PORT_RESOURCE = """
 metadata:
   name: api
-  annotations:
-    boatyard/lock: api=API_IMAGE
-service:
-  ports:
-    web: 8000
+boatyard:
+  lock:
+    api: API_IMAGE
+listeners:
+  web: 8000
 resources:
   self-port:
     type: service-port
@@ -1934,11 +2156,9 @@ containers:
 """
 
 
-def test_the_legacy_self_port_resource_idiom_rides_through_unchanged(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_the_self_port_resource_idiom_rides_through_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
-    (tmp_path / "stack" / "score" / "api.yaml").write_text(WORKLOAD_LEGACY_SELF_PORT, encoding="utf-8")
+    (tmp_path / "stack" / "score" / "api.yaml").write_text(WORKLOAD_SELF_PORT_RESOURCE, encoding="utf-8")
     recorder = WorkloadContentsRecorder()
     monkeypatch.setattr(score_module, "bash", recorder.run)
     config = _generated_config(
@@ -1966,8 +2186,9 @@ WORKLOAD_IDIOM_SELF_PORT = (
     "apiVersion: score.dev/v1b1\n"
     "metadata:\n"
     "  name: idiom\n"
-    "  annotations:\n"
-    "    boatyard/lock: idiom=API_IMAGE\n"
+    "boatyard:\n"
+    "  lock:\n"
+    "    idiom: API_IMAGE\n"
     "resources:\n"
     "  self-port:\n"
     "    type: service-port\n"
@@ -1985,7 +2206,7 @@ def test_listener_variable_ports_render_as_the_self_port_idiom_renders(
     _skip_unless_pinned_score_compose()
     score_dir = tmp_path / "stack" / "score"
     (score_dir / "compose").mkdir(parents=True)
-    (score_dir / "api.yaml").write_text(WORKLOAD_VARIABLES_TARGET_SERVICE_PORT, encoding="utf-8")
+    (score_dir / "api.yaml").write_text(WORKLOAD_VARIABLES_MAPPING_LISTENER, encoding="utf-8")
     (score_dir / "idiom.yaml").write_text(WORKLOAD_IDIOM_SELF_PORT, encoding="utf-8")
     (score_dir / "compose" / "self-port.yaml").write_text(SELF_PORT_PROVISIONER, encoding="utf-8")
     config = _generated_config(
@@ -2010,37 +2231,31 @@ def test_listener_variable_ports_render_as_the_self_port_idiom_renders(
 
 
 def test_workload_resources_parse_typed() -> None:
-    document = WorkloadDocument.parse(
-        {"resources": {"db": {"type": "example-db"}}, "metadata": {"name": "api"}}, "api.yaml"
-    )
+    document = parse_workload({"resources": {"db": {"type": "example-db"}}, "metadata": {"name": "api"}}, "api.yaml")
 
     assert document.resources["db"].type == "example-db"
 
 
 DOCKERFILE_SOURCES_API: dict[str, Yaml] = {
-    "metadata": {
-        "name": "api",
-        "annotations": {"boatyard/dockerfile": "api=workloads/api/Dockerfile"},
-    },
+    "metadata": {"name": "api"},
+    "boatyard": {"dockerfile": {"api": "workloads/api/Dockerfile"}},
     "containers": {"api": {}},
 }
 
 
-class TestSourceAnnotations:
+class TestContainerSources:
     def test_container_sources_exposes_the_declared_edges(self) -> None:
-        document = WorkloadDocument.parse(DOCKERFILE_SOURCES_API, "api.yaml")
+        document = parse_workload(DOCKERFILE_SOURCES_API, "api.yaml")
 
         assert document.container_sources() == {"api": ("dockerfile", "workloads/api/Dockerfile")}
 
     def test_lock_sources_parse_beside_dockerfile_sources(self) -> None:
-        document = WorkloadDocument.parse(
+        document = parse_workload(
             {
-                "metadata": {
-                    "name": "api",
-                    "annotations": {
-                        "boatyard/dockerfile": "api=workloads/api/Dockerfile",
-                        "boatyard/lock": "sidecar=KEYCLOAK_IMAGE",
-                    },
+                "metadata": {"name": "api"},
+                "boatyard": {
+                    "dockerfile": {"api": "workloads/api/Dockerfile"},
+                    "lock": {"sidecar": "KEYCLOAK_IMAGE"},
                 },
                 "containers": {"api": {}, "sidecar": {}},
             },
@@ -2053,71 +2268,47 @@ class TestSourceAnnotations:
         }
 
     def test_a_container_without_a_source_refuses(self) -> None:
-        with pytest.raises(ValidationError, match=r"container 'sidecar' carries no source annotation"):
-            WorkloadDocument.parse(
+        with pytest.raises(ValidationError, match=r"container 'sidecar' carries no source in the boatyard block"):
+            parse_workload(
                 {
-                    "metadata": {
-                        "name": "api",
-                        "annotations": {"boatyard/dockerfile": "api=workloads/api/Dockerfile"},
-                    },
+                    "metadata": {"name": "api"},
+                    "boatyard": {"dockerfile": {"api": "workloads/api/Dockerfile"}},
                     "containers": {"api": {}, "sidecar": {}},
                 },
                 "api.yaml",
             )
 
-    def test_both_annotations_naming_one_container_refuse(self) -> None:
-        with pytest.raises(ValidationError, match=r"container 'api' is named by both"):
-            WorkloadDocument.parse(
+    def test_both_source_maps_naming_one_container_refuse(self) -> None:
+        with pytest.raises(ValidationError, match=r"container 'api' is named by both dockerfile and lock"):
+            parse_workload(
                 {
-                    "metadata": {
-                        "name": "api",
-                        "annotations": {
-                            "boatyard/dockerfile": "api=workloads/api/Dockerfile",
-                            "boatyard/lock": "api=KEYCLOAK_IMAGE",
-                        },
+                    "metadata": {"name": "api"},
+                    "boatyard": {
+                        "dockerfile": {"api": "workloads/api/Dockerfile"},
+                        "lock": {"api": "KEYCLOAK_IMAGE"},
                     },
                     "containers": {"api": {}},
                 },
                 "api.yaml",
             )
 
-    def test_an_annotation_naming_no_container_refuses(self) -> None:
-        with pytest.raises(ValidationError, match=r"name no container 'ghost'"):
-            WorkloadDocument.parse(
+    def test_a_source_map_naming_no_container_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"names no container 'ghost'"):
+            parse_workload(
                 {
-                    "metadata": {
-                        "name": "api",
-                        "annotations": {"boatyard/lock": "ghost=KEYCLOAK_IMAGE"},
-                    },
+                    "metadata": {"name": "api"},
+                    "boatyard": {"lock": {"ghost": "KEYCLOAK_IMAGE"}},
                     "containers": {},
                 },
                 "api.yaml",
             )
 
-    def test_padded_or_pairless_entries_refuse(self) -> None:
-        for value in ("", "  ", "api =workloads/api/Dockerfile", "workloads/api/Dockerfile", "api=a,b"):
-            with pytest.raises(ValidationError, match="container=source"):
-                WorkloadDocument.parse(
-                    {
-                        "metadata": {
-                            "name": "api",
-                            "annotations": {"boatyard/dockerfile": value},
-                        },
-                        "containers": {},
-                    },
-                    "api.yaml",
-                )
-
-    def test_one_container_named_twice_refuses(self) -> None:
-        with pytest.raises(ValidationError, match=r"names the container 'api' twice"):
-            WorkloadDocument.parse(
+    def test_an_empty_source_value_refuses(self) -> None:
+        with pytest.raises(ValidationError):
+            parse_workload(
                 {
-                    "metadata": {
-                        "name": "api",
-                        "annotations": {
-                            "boatyard/dockerfile": "api=workloads/api/Dockerfile,api=workloads/other/Dockerfile"
-                        },
-                    },
+                    "metadata": {"name": "api"},
+                    "boatyard": {"dockerfile": {"api": ""}},
                     "containers": {"api": {}},
                 },
                 "api.yaml",
@@ -2126,7 +2317,7 @@ class TestSourceAnnotations:
 
 def test_workload_resources_without_a_type_refuse() -> None:
     with pytest.raises(ValidationError, match=r"resources\.db\.type"):
-        WorkloadDocument.parse({"resources": {"db": {"id": "main"}}, "metadata": {"name": "api"}}, "api.yaml")
+        parse_workload({"resources": {"db": {"id": "main"}}, "metadata": {"name": "api"}}, "api.yaml")
 
 
 def test_adapted_probe_bearing_workloads_register_the_healthcheck_template(
@@ -2214,11 +2405,7 @@ def test_a_workload_name_mismatching_the_file_stem_refuses(tmp_path: Path, monke
 def test_consumer_interpolated_names_must_match_declared_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "api.yaml").write_text(
-        "metadata:\n"
-        "  name: api\n"
-        "  annotations:\n"
-        "    boatyard/consumer-interpolated: /etc/rathole/client.toml\n"
-        "containers: {}\n",
+        "metadata:\n  name: api\nboatyard:\n  consumer_interpolated:\n    - /etc/rathole/client.toml\ncontainers: {}\n",
         encoding="utf-8",
     )
 
@@ -2229,9 +2416,11 @@ def test_consumer_interpolated_names_must_match_declared_files(tmp_path: Path, m
 WORKLOAD_WITH_INTERPOLATED_FILE = """\
 metadata:
   name: rathole-client
-  annotations:
-    boatyard/consumer-interpolated: /etc/rathole/client.toml
-    boatyard/lock: rathole-client=ALPINE_IMAGE
+boatyard:
+  consumer_interpolated:
+    - /etc/rathole/client.toml
+  lock:
+    rathole-client: ALPINE_IMAGE
 containers:
   rathole-client:
     files:
@@ -2369,7 +2558,7 @@ def test_k8s_instance_suffixes_are_preseeded_deterministically(tmp_path: Path, m
 
 PINNED_TAG = "tree-" + "e" * 40
 LOCAL_TAG = "tree-" + "f" * 40
-SHA_WORKLOAD = DOCKERFILE_ANNOTATION_API
+SHA_WORKLOAD = DOCKERFILE_SOURCE_API
 
 
 def _pins_k8s_recorder(
@@ -2425,8 +2614,10 @@ def test_k8s_generation_refuses_a_workload_sha_slot_no_pin_covers(
     workload = (
         "metadata:\n"
         "  name: api\n"
-        "  annotations:\n"
-        "    boatyard/dockerfile: api=workloads/api/Dockerfile,sidecar=workloads/worker/Dockerfile\n"
+        "boatyard:\n"
+        "  dockerfile:\n"
+        "    api: workloads/api/Dockerfile\n"
+        "    sidecar: workloads/worker/Dockerfile\n"
         "containers:\n"
         "  api: {}\n"
         "  sidecar: {}\n"
@@ -2454,8 +2645,9 @@ ISSUER_PROVISIONER = (
 WORKLOAD_WITH_ISSUER = (
     "metadata:\n"
     "  name: api\n"
-    "  annotations:\n"
-    "    boatyard/dockerfile: api=workloads/api/Dockerfile\n"
+    "boatyard:\n"
+    "  dockerfile:\n"
+    "    api: workloads/api/Dockerfile\n"
     "resources:\n"
     "  issuer:\n"
     "    type: example-issuer\n"
@@ -2642,7 +2834,7 @@ def test_variable_placeholders_refuse_or_stay_escaped(tmp_path: Path) -> None:
 def _verb_repo(tmp_path: Path) -> None:
     (tmp_path / "stack" / "score").mkdir(parents=True)
     (tmp_path / "stack" / "score" / "api.yaml").write_text(
-        "metadata:\n  name: api\n  annotations:\n    boatyard/lock: api=LOKI_IMAGE\ncontainers:\n  api: {}\n",
+        "metadata:\n  name: api\nboatyard:\n  lock:\n    api: LOKI_IMAGE\ncontainers:\n  api: {}\n",
         encoding="utf-8",
     )
     (tmp_path / "boatyard.lock.yml").write_text(

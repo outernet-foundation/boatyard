@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import os
 import re
 import shlex
@@ -9,6 +8,7 @@ from hashlib import sha256
 from importlib.resources import as_file, files
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 
 import yaml
 from bashrun.bash import bash
@@ -27,12 +27,14 @@ from boatyard.models.config_file import (
 )
 from boatyard.models.image import dockerfile_stem
 from boatyard.models.workload import (
-    ROUTE_ANNOTATION,
-    ROUTE_PORT_ANNOTATION,
+    PUBLISH_PORT_LABEL,
+    ROUTE_PATH_LABEL,
+    ROUTE_PORT_LABEL,
+    ROUTE_STRIP_LABEL,
     LoadedWorkload,
+    RouteClaim,
     listener_port_reference,
-    parse_route_annotation,
-    route_path_export_name,
+    require_port_range,
     select_provisioner_files,
 )
 from boatyard.yaml import Yaml, is_mapping, load_yaml_model
@@ -45,9 +47,23 @@ SECRETS_OUTPUT = Path("stack/generated/secrets.txt")
 STRING_FORM_FIELDS = ("state", "outputs", "volumes", "services", "manifests")
 
 PROVISIONER_ROUTE_KEY = "route"
-PROVISIONER_PORT_KEY = "port"
 
 STATE_TEMPLATE_PATTERN = re.compile(r"\{\{\s*\.State\.([a-zA-Z0-9_.-]+)\s*\}\}")
+
+
+class ProvisionerRouteClaim(RouteClaim):
+    # The stanza-surface spelling: a literal port or a whole-value {{ .State.<name> }} template
+    port: str | int
+
+    @field_validator("port", mode="before")
+    @classmethod
+    def _refuse_boolean_port(cls, value: Yaml) -> Yaml:
+        # Pydantic coerces True to the int 1 before the literal-or-template resolution runs
+        match value:
+            case bool():
+                raise ValueError("route.port must be an integer, not a boolean")
+            case _:
+                return value
 
 
 class AuthoredProvisioner(BaseModel):
@@ -104,7 +120,6 @@ def render_score(
     root = config.root
     score_dir = root / config.score_dir
     tool = f"score-{substrate}"
-    rendering = substrate
     # Run both tools in the output directory because both write their state dir into the cwd
     working_dir = output.parent
     project_name = None if substrate == "k8s" else config.project_name
@@ -121,7 +136,7 @@ def render_score(
         ExitStack() as stack,
     ):
         # Select the rendering's provisioner files that declare a referenced type
-        selected = select_provisioner_files(score_dir, rendering, workloads)
+        selected = select_provisioner_files(score_dir, substrate, workloads)
 
         # Compile the selected provisioners into a per-run tempdir under score_dir
         paths: list[Path] = []
@@ -138,12 +153,11 @@ def render_score(
             for entry in entries:
                 resolved = resolve_markers(entry, context)
                 resolved = translate_service_claims(resolved, name)
-                AuthoredProvisioner.model_validate(resolved)
-                if is_mapping(resolved):
-                    compiled_entries.append({
-                        key: dump_yaml(value) if key in STRING_FORM_FIELDS and value is not None else value
-                        for key, value in resolved.items()
-                    })
+                provisioner = AuthoredProvisioner.model_validate(resolved)
+                compiled_entries.append({
+                    key: dump_yaml(value) if key in STRING_FORM_FIELDS and value is not None else value
+                    for key, value in provisioner.model_dump(exclude_unset=True).items()
+                })
             target = directory / name
             target.parent.mkdir(parents=True, exist_ok=True)
             write_file(target, dump_yaml(compiled_entries))
@@ -177,6 +191,7 @@ def render_score(
 
         # Expand each workload's ${NAME} slots into per-run copies
         copies_directory = Path(stack.enter_context(TemporaryDirectory()))
+        expanded_paths: list[str] = []
 
         for workload in workloads:
             expanded = dump_yaml(injected_workload(config, workload, variable_values))
@@ -191,10 +206,12 @@ def render_score(
                     "the service shas, or the image lock"
                 )
 
-            (copies_directory / workload.file_name).write_text(expanded, "utf-8")
+            copy_path = copies_directory / workload.file_name
+            copy_path.write_text(expanded, "utf-8")
+            expanded_paths.append(copy_path.as_posix())
 
         # Run generate over the expanded copies
-        rendered = " ".join((copies_directory / workload.file_name).as_posix() for workload in workloads)
+        rendered = " ".join(expanded_paths)
         bash(f"{tool} generate {rendered} --output {output.as_posix()}", cwd=working_dir, env=variable_values)
 
 
@@ -207,7 +224,7 @@ def route_path_exports(workloads: list[LoadedWorkload]) -> dict[str, str]:
         resolved = workload.document.resolved_route
         if resolved is None:
             continue
-        name = route_path_export_name(Path(workload.file_name).stem)
+        name = Path(workload.file_name).stem.upper().replace("-", "_") + "_ROUTE_PATH"
         if name in exports:
             raise ValueError(
                 f"the workloads {owners[name]} and {workload.file_name} spell one route path export {name}"
@@ -232,164 +249,141 @@ def translate_service_claims(entry: Yaml, source: str) -> Yaml:
 
 
 def claimed_service_stanza(name: str, stanza: Yaml, source: str, state: Yaml) -> Yaml:
-    if not is_mapping(stanza) or (PROVISIONER_ROUTE_KEY not in stanza and PROVISIONER_PORT_KEY not in stanza):
+    if not is_mapping(stanza):
         return stanza
-    route_value = stanza.get(PROVISIONER_ROUTE_KEY)
-    port_value = stanza.get(PROVISIONER_PORT_KEY)
     site = f"{source}: services.{name}"
-    if route_value is None:
-        raise ValueError(f"{site}: {PROVISIONER_PORT_KEY}: rides a {PROVISIONER_ROUTE_KEY}: claim")
-    match route_value:
-        case str():
-            pass
-        case _:
-            raise ValueError(f"{site}: {PROVISIONER_ROUTE_KEY}: takes the claim grammar as a string")
-    claim = parse_route_annotation(route_value)
-    if claim.port_name is not None:
-        raise ValueError(
-            f"{site}: {PROVISIONER_ROUTE_KEY}: takes no @port qualifier; {PROVISIONER_PORT_KEY}: names the listen port"
-        )
-    if port_value is None:
-        raise ValueError(
-            f"{site}: {PROVISIONER_ROUTE_KEY}: requires the {PROVISIONER_PORT_KEY}: key naming the listen port"
-        )
-    port = provisioner_route_port(port_value, state, site)
+    if PROVISIONER_ROUTE_KEY not in stanza:
+        # score-compose silently drops unknown service keys, so a port spelling without its
+        # route claim would vanish; the pairing is refused here instead
+        if "port" in stanza:
+            raise ValueError(f"{site}: port: rides a route: claim")
+        return stanza
+    claim_value = stanza[PROVISIONER_ROUTE_KEY]
+    if not is_mapping(claim_value):
+        raise ValueError(f"{site}: route: takes the claim as a mapping (path, port, strip)")
+    claim = ProvisionerRouteClaim.model_validate(dict(claim_value))
+    port = provisioner_route_port(claim.port, state, site)
     annotations = stanza.get("annotations")
     if annotations is not None and not is_mapping(annotations):
         raise ValueError(f"{site}: annotations: must be a mapping")
     spelled = dict(annotations) if annotations is not None else {}
-    for annotation in (ROUTE_ANNOTATION, ROUTE_PORT_ANNOTATION):
-        if annotation in spelled:
-            raise ValueError(f"{site}: annotates {annotation} directly; declare {PROVISIONER_ROUTE_KEY}: instead")
-    spelled[ROUTE_ANNOTATION] = route_value
-    spelled[ROUTE_PORT_ANNOTATION] = str(port)
+    for label in (ROUTE_PATH_LABEL, ROUTE_PORT_LABEL, ROUTE_STRIP_LABEL):
+        if label in spelled:
+            raise ValueError(f"{site}: annotates {label} directly; declare route: instead")
+    spelled[ROUTE_PATH_LABEL] = claim.path
+    spelled[ROUTE_PORT_LABEL] = str(port)
+    if claim.strip:
+        spelled[ROUTE_STRIP_LABEL] = "true"
     return {
-        **{key: value for key, value in stanza.items() if key not in (PROVISIONER_ROUTE_KEY, PROVISIONER_PORT_KEY)},
+        **{key: value for key, value in stanza.items() if key != PROVISIONER_ROUTE_KEY},
         "annotations": spelled,
     }
 
 
-def provisioner_route_port(value: Yaml, state: Yaml, site: str) -> int:
-    # A literal int rides through; a string is one {{ .State.<name> }} template rendered
+def provisioner_route_port(value: str | int, state: Yaml, site: str) -> int:
+    # A literal port rides through; a string is one {{ .State.<name> }} template rendered
     # against the provisioner's own state (the state the templating engine resolves the
-    # stanza's other templates against), so the port annotation carries the integer
-    shapes = f"{site}: {PROVISIONER_PORT_KEY}: must be a literal port in the range 1-65535 or a {{{{ .State.<name> }}}} template"
+    # stanza's other templates against), so the port label carries the integer
+    shapes = f"{site}: route.port: must be a literal port in the range 1-65535 or a {{{{ .State.<name> }}}} template"
     match value:
-        case bool():
-            raise ValueError(shapes)
         case int():
-            if not 1 <= value <= 65535:
-                raise ValueError(shapes)
-            return value
+            return require_port_range(value, f"{site}: route.port")
         case str():
             pass
-        case _:
-            raise ValueError(shapes)
     template = STATE_TEMPLATE_PATTERN.fullmatch(value)
     if template is None:
         raise ValueError(shapes)
     resolved: Yaml = state
     for segment in template.group(1).split("."):
         if not is_mapping(resolved) or segment not in resolved:
-            raise ValueError(f"{site}: {PROVISIONER_PORT_KEY}: {value!r} names no entry the state declares")
+            raise ValueError(f"{site}: route.port: {value!r} names no entry the state declares")
         resolved = resolved[segment]
     rendered = str(resolved)
     if not rendered.isdigit() or not 1 <= int(rendered) <= 65535:
-        raise ValueError(
-            f"{site}: {PROVISIONER_PORT_KEY}: {value!r} renders to {rendered!r}, not a port in the range 1-65535"
-        )
+        raise ValueError(f"{site}: route.port: {value!r} renders to {rendered!r}, not a port in the range 1-65535")
     return int(rendered)
 
 
 def injected_workload(config: ConfigFile, workload: LoadedWorkload, variable_values: dict[str, str]) -> Yaml:
-    # The image reference is composed from the container's declared source and injected
-    # before score sees the document; it is never authored in the workload file. Probe
-    # ports and listener references in container variables ride the same pass: authored
-    # as listener names, rewritten to the resolved port so both renderings hand the
-    # score tools the concrete value.
-    sources = workload.document.container_sources()
-    if not sources:
-        return workload.raw
-    document = copy.deepcopy(workload.raw)
-    containers = document["containers"]
-    if not is_mapping(containers):
-        raise ValueError(f"{workload.file_name}: containers must be a mapping")
-    for container, (kind, value) in sources.items():
-        if kind == "lock":
-            reference = variable_values.get(value)
-            if reference is None:
-                raise ValueError(f"{workload.file_name}: containers.{container}: {value} names no lock entry")
-        else:
-            stem = dockerfile_stem(value)
-            image = config.images.get(stem)
-            if image is None:
-                raise ValueError(
-                    f"{workload.file_name}: containers.{container}: the dockerfile {value!r} names no image in the build set"
-                )
-            if config.repository is None:
-                raise ValueError(
-                    f"{workload.file_name}: containers.{container}: repository is required by the build set"
-                )
-            variant = None
-            if image.axis is not None:
-                variant = variable_values.get(image.axis)
-                if variant is None:
+    # The authored blocks are boatyard's grammar; the seam composes the tools' standalone document
+    # from the lens instead: service.ports derives from the non-internal listeners, the resolved
+    # claim and publish set ride metadata.annotations as the interchange labels the tools copy
+    # onto the rendered stanza, the image reference composes from the container's declared
+    # source, and probe and variable listener names rewrite to their ports.
+    document = workload.document
+    tool = document.model_dump(by_alias=True, exclude_unset=True, exclude={"boatyard", "listeners"})
+    routable = document.routable_listener_ports
+    if routable:
+        tool["service"] = {"ports": {name: {"port": port, "targetPort": port} for name, port in routable.items()}}
+
+    block = document.boatyard
+    labels: dict[str, str] = {}
+    resolved = document.resolved_route
+    if resolved is not None:
+        labels[ROUTE_PATH_LABEL] = resolved.path
+        labels[ROUTE_PORT_LABEL] = str(resolved.port)
+        if resolved.strip_prefix:
+            labels[ROUTE_STRIP_LABEL] = "true"
+    if block is not None and block.publish:
+        labels[PUBLISH_PORT_LABEL] = ",".join(
+            f"{entry.published}:{entry.target}/{entry.protocol}" for entry in block.publish
+        )
+    if labels:
+        metadata = tool.setdefault("metadata", {})
+        annotations = metadata.setdefault("annotations", {})
+        annotations.update(labels)
+
+    if document.containers:
+        containers = tool["containers"]
+        sources = document.container_sources()
+        for container, (kind, value) in sources.items():
+            if kind == "lock":
+                reference = variable_values[value]
+            else:
+                stem = dockerfile_stem(value)
+                image = config.images[stem]
+                if config.repository is None:
+                    raise ValueError(
+                        f"{workload.file_name}: containers.{container}: repository is required by the build set"
+                    )
+                variant = variable_values.get(image.axis) if image.axis is not None else None
+                if image.axis is not None and variant is None:
                     raise ValueError(
                         f"{workload.file_name}: containers.{container}: {image.name} carries the axis "
                         f"{image.axis}, which this rendering selects no value for"
                     )
-            tag = variable_values.get(image.sha_env)
-            if tag is None:
-                raise ValueError(
-                    f"{workload.file_name}: containers.{container}: {image.sha_env} names no tree tag in this rendering"
-                )
-            reference = compose_image_reference(config.repository, image, tag, variant)
-        entry = containers[container]
-        if not is_mapping(entry):
-            raise ValueError(f"{workload.file_name}: containers.{container} must be a mapping")
-        entry["image"] = reference
-    rewrite_probe_ports(containers, workload)
-    rewrite_listener_variables(containers, workload)
-    return document
+                tag = variable_values[image.sha_env]
+                reference = compose_image_reference(config.repository, image, tag, variant)
+            containers[container]["image"] = reference
+        rewrite_listener_references(containers, workload)
+    return tool
 
 
-def rewrite_probe_ports(containers: dict[str, Yaml], workload: LoadedWorkload) -> None:
-    # The lens already refused every probe port that is not a declared listener name, so
-    # the rewrite is a plain substitution over the validated documents
+def rewrite_listener_references(containers: dict[str, Any], workload: LoadedWorkload) -> None:
+    # The lens already refused every probe port and ${listeners.<name>.port} reference that
+    # names no declared listener, so the rewrites are plain substitutions over the dumped
+    # document keyed by the validated container shapes; the variable port lands as a string
+    # because the score schemas type variables as strings and the old self-port resource
+    # idiom rendered the string form
     listeners = workload.document.listener_ports
-    for entry in containers.values():
-        if not is_mapping(entry):
-            continue
-        for probe in ("readinessProbe", "livenessProbe"):
-            block = entry.get(probe)
-            if not is_mapping(block):
+    for name, container in workload.document.containers.items():
+        entry = containers[name]
+        for probe, block in (
+            ("readinessProbe", container.readiness_probe),
+            ("livenessProbe", container.liveness_probe),
+        ):
+            if block is None or block.http_get is None:
                 continue
-            http_get = block.get("httpGet")
-            if not is_mapping(http_get):
-                continue
-            port = http_get.get("port")
-            if isinstance(port, str):
-                http_get["port"] = listeners[port]
-
-
-def rewrite_listener_variables(containers: dict[str, Yaml], workload: LoadedWorkload) -> None:
-    # The lens already refused every ${listeners.<name>.port} reference that names no
-    # declared listener, so the rewrite is a plain substitution over the validated
-    # documents; the port lands as a string because the score schemas type variables
-    # as strings and the old self-port resource idiom rendered the string form
-    listeners = workload.document.listener_ports
-    for entry in containers.values():
-        if not is_mapping(entry):
-            continue
-        variables = entry.get("variables")
-        if not is_mapping(variables):
+            entry[probe]["httpGet"]["port"] = listeners[block.http_get.port]
+        variables = container.variables
+        if variables is None:
             continue
         for key, value in variables.items():
             if not isinstance(value, str):
                 continue
-            name = listener_port_reference(value)
-            if name is not None:
-                variables[key] = str(listeners[name])
+            listener = listener_port_reference(value)
+            if listener is not None:
+                entry["variables"][key] = str(listeners[listener])
 
 
 def dump_yaml(value: Yaml) -> str:

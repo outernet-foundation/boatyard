@@ -32,8 +32,8 @@ def _write_image(root: Path, name: str, text: str = "ARG PY_IMAGE\nFROM ${PY_IMA
     (score / f"{name}.yaml").write_text(
         "metadata:\n"
         f"  name: {name}\n"
-        "  annotations:\n"
-        f"    boatyard/dockerfile: {name}=workloads/{name}/Dockerfile\n"
+        "boatyard:\n"
+        f"  dockerfile:\n    {name}: workloads/{name}/Dockerfile\n"
         "containers:\n"
         f"  {name}: {{}}\n",
         encoding="utf-8",

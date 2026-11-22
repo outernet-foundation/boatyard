@@ -32,12 +32,12 @@ from boatyard.models.lock_file import (
 )
 from boatyard.models.workload import (
     AUTOSTART_ANNOTATION,
-    PUBLISH_PORT_ANNOTATION,
-    ROUTE_ANNOTATION,
-    ROUTE_PORT_ANNOTATION,
-    parse_publish_port_annotation,
-    parse_route_annotation,
-    parse_route_port_annotation,
+    PUBLISH_PORT_LABEL,
+    ROUTE_PATH_LABEL,
+    ROUTE_PATH_PATTERN,
+    ROUTE_PORT_LABEL,
+    ROUTE_STRIP_LABEL,
+    STANZA_LABELS,
 )
 from boatyard.temp import SHA256_DIGEST_REGEX
 from boatyard.yaml import Yaml, is_list, is_mapping, load_yaml_model
@@ -280,46 +280,67 @@ def extract_bundle_records(texts: list[str]) -> BundleRecords:
             _collect_declared_ports(declared_ports, service_name, stanza.get("ports"))
             stanzas.append((service_name, stanza, stanza_annotations(stanza)))
 
-    # Read the routes and ports from the annotations
+    # Read the routes and ports from the interchange labels
     routes: list[Route] = []
     ports: list[PublishedPort] = []
     route_owners: dict[str, str] = {}
     for service_name, _stanza, service_annotations in stanzas:
         if service_annotations.get(AUTOSTART_ANNOTATION) == "false":
             held_services.add(service_name)
-        route_value = service_annotations.get(ROUTE_ANNOTATION)
-        if route_value is not None:
-            claim = parse_route_annotation(route_value)
-            port_value = service_annotations.get(ROUTE_PORT_ANNOTATION)
-            if port_value is None:
+        unknown = sorted(key for key in service_annotations if key.startswith("boatyard/") and key not in STANZA_LABELS)
+        if unknown:
+            raise ValueError(
+                f"the service {service_name!r} carries the unknown label {unknown[0]!r}; the boatyard/* "
+                f"stanza labels are {list(STANZA_LABELS)}"
+            )
+        route_path = service_annotations.get(ROUTE_PATH_LABEL)
+        if route_path is not None:
+            if ROUTE_PATH_PATTERN.fullmatch(route_path) is None:
                 raise ValueError(
-                    f"{ROUTE_ANNOTATION}: the claim on the service {service_name!r} carries no "
-                    f"{ROUTE_PORT_ANNOTATION} label; re-render the bundle with the claims grammar"
+                    f"{ROUTE_PATH_LABEL} {route_path!r} must be a /-rooted segment chain, optionally wildcarded as /*"
                 )
-            if claim.path in route_owners:
+            route_port = service_annotations.get(ROUTE_PORT_LABEL)
+            if route_port is None:
                 raise ValueError(
-                    f"{ROUTE_ANNOTATION}: the path {claim.path} is claimed by both {route_owners[claim.path]} "
+                    f"{ROUTE_PATH_LABEL}: the claim on the service {service_name!r} carries no {ROUTE_PORT_LABEL} label"
+                )
+            strip_value = service_annotations.get(ROUTE_STRIP_LABEL)
+            if strip_value is not None and strip_value not in ("true", "false"):
+                raise ValueError(f"{ROUTE_STRIP_LABEL} {strip_value!r} must spell 'true' or 'false'")
+            if route_path in route_owners:
+                raise ValueError(
+                    f"{ROUTE_PATH_LABEL}: the path {route_path} is claimed by both {route_owners[route_path]} "
                     f"and {service_name}"
                 )
-            route_owners[claim.path] = service_name
+            route_owners[route_path] = service_name
+            if not route_port.isdigit() or not 1 <= int(route_port) <= 65535:
+                raise ValueError(f"{ROUTE_PORT_LABEL} {route_port!r} must be a literal port in the range 1-65535")
             routes.append(
                 Route(
-                    path=claim.path,
-                    upstream=f"{service_name}:{parse_route_port_annotation(port_value)}",
-                    strip_prefix=claim.strip_prefix,
+                    path=route_path,
+                    upstream=f"{service_name}:{int(route_port)}",
+                    strip_prefix=strip_value == "true",
                 )
             )
-        publish_value = service_annotations.get(PUBLISH_PORT_ANNOTATION)
+        publish_value = service_annotations.get(PUBLISH_PORT_LABEL)
         if publish_value is not None:
-            ports.extend(
-                PublishedPort(
-                    service=service_name,
-                    published=published_port.published,
-                    target=published_port.target,
-                    protocol=published_port.protocol,
+            for entry in publish_value.split(","):
+                if not entry or entry != entry.strip():
+                    raise ValueError(f"{PUBLISH_PORT_LABEL} entry {entry!r} must be non-empty and unpadded")
+                ports_text, protocol_separator, protocol = entry.partition("/")
+                if not protocol_separator:
+                    protocol = "tcp"
+                published_text, port_separator, target_text = ports_text.partition(":")
+                if not port_separator or not published_text.isdigit() or not target_text.isdigit():
+                    raise ValueError(f"{PUBLISH_PORT_LABEL} entry {entry!r} must be a published:target port pair")
+                ports.append(
+                    PublishedPort.model_validate({
+                        "service": service_name,
+                        "published": int(published_text),
+                        "target": int(target_text),
+                        "protocol": protocol,
+                    })
                 )
-                for published_port in parse_publish_port_annotation(publish_value)
-            )
     return BundleRecords(
         services=services,
         routes=routes,

@@ -26,7 +26,7 @@ from boatyard.models.config_file import (
 )
 from boatyard.models.lock_file import LockFile
 from boatyard.models.values_file import ValuesFile
-from boatyard.models.workload import ROUTE_PORT_ANNOTATION, LoadedWorkload, require_compose_probe_adapters
+from boatyard.models.workload import PROBE_ADAPTER_ANNOTATION, LoadedWorkload
 from boatyard.paths import VALUES_FILE
 from boatyard.yaml import Yaml, load_yaml_model
 from boatyard.score import (
@@ -146,9 +146,21 @@ def generate_compose(config: ConfigFile, lock: LockFile) -> list[Path]:
     rendered_workload_names = {
         workload_name for _name, entry in config.local_service_entries() for workload_name in entry.workloads
     }
-    require_compose_probe_adapters([
-        config.workloads[workload_name] for workload_name in sorted(rendered_workload_names)
-    ])
+    # Plain score-compose silently drops httpGet probes; the k8s rendering renders probes
+    # natively, so an httpGet without the adapter annotation refuses here
+    for workload in [config.workloads[workload_name] for workload_name in sorted(rendered_workload_names)]:
+        if workload.document.metadata.annotations.get(PROBE_ADAPTER_ANNOTATION) is not None:
+            continue
+        for container in workload.document.containers.values():
+            for probe, block in (
+                ("readinessProbe", container.readiness_probe),
+                ("livenessProbe", container.liveness_probe),
+            ):
+                if block is not None and block.http_get is not None:
+                    raise ValueError(
+                        f"{workload.file_name}: a {probe} httpGet requires {PROBE_ADAPTER_ANNOTATION} "
+                        "(the compose rendering)"
+                    )
     # Route path exports are assembly-wide facts, not per-entry: a provisioner in
     # one bundle templates a claim authored in another (grafana's OAuth URLs spell
     # keycloak's claim path), so every rendering's env carries every claim.
@@ -230,13 +242,6 @@ def generate_compose(config: ConfigFile, lock: LockFile) -> list[Path]:
             claim_sites[collapsed_name] = site
             document.services[collapsed_name] = service
 
-            # Spell the resolved claim's port as the derived label the rendered form adopts
-            resolved_route = workload.document.resolved_route if workload is not None else None
-            if resolved_route is not None:
-                annotations = dict(service.annotations or {})
-                annotations[ROUTE_PORT_ANNOTATION] = str(resolved_route.port)
-                service.annotations = annotations
-
             # Inline every repo-relative bind volume as a top-level configs entry;
             # absolute-source binds are authored host mounts and stay in place
             bind_volumes = service.strip_bind_volumes()
@@ -259,7 +264,12 @@ def generate_compose(config: ConfigFile, lock: LockFile) -> list[Path]:
 
                 # Double every $ except on targets the workload declared consumer-interpolated
                 text = path.read_text(encoding="utf-8")
-                if workload and bind_volume.target not in workload.document.consumer_interpolated_targets:
+                consumer_interpolated = (
+                    workload.document.boatyard.consumer_interpolated
+                    if workload is not None and workload.document.boatyard is not None
+                    else []
+                )
+                if workload is not None and bind_volume.target not in consumer_interpolated:
                     text = double_dollars(text)
 
                 document.configs[path.name] = ComposeConfig(content=text)

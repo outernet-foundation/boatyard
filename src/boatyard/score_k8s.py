@@ -24,7 +24,7 @@ from boatyard.models.lock_file import LockFile
 from boatyard.models.workload import select_provisioner_files
 from boatyard.markers import MarkerContext, resolve_markers, declared_dockerfile_paths
 from boatyard.paths import K8S_PINS_PATH
-from boatyard.yaml import Yaml, is_list, is_mapping
+from boatyard.yaml import Yaml, is_list, is_mapping, parse_yaml_text
 from boatyard.score import (
     dump_yaml,
     render_score,
@@ -113,7 +113,7 @@ def generate_k8s(
                 values_path,
                 dump_yaml(
                     resolve_markers(
-                        yaml.safe_load(path.read_text(encoding="utf-8")),
+                        parse_yaml_text(path.read_text(encoding="utf-8"), path.as_posix()),
                         MarkerContext(config.root, index_images, path.as_posix()),
                     )
                 ),

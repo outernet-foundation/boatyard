@@ -90,10 +90,8 @@ def write_dockerfile_workload(tmp_path: Path, file_name: str) -> None:
     score = tmp_path / "stack" / "score"
     score.mkdir(parents=True, exist_ok=True)
     document: dict[str, object] = {
-        "metadata": {
-            "name": stem,
-            "annotations": {"boatyard/dockerfile": f"{stem}=workloads/{stem}/Dockerfile"},
-        },
+        "metadata": {"name": stem},
+        "boatyard": {"dockerfile": {stem: f"workloads/{stem}/Dockerfile"}},
         "containers": {stem: {}},
     }
     (score / file_name).write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
@@ -166,6 +164,23 @@ def test_load_rejects_duplicate_keys(tmp_path: Path) -> None:
     (tmp_path / "boatyard.yml").write_text('requires: ">=0.1"\nrequires: ">=0.2"\n', encoding="utf-8")
 
     with pytest.raises(ValueError, match=r"boatyard\.yml: line 2: duplicate key 'requires'"):
+        ConfigFile.load(tmp_path / "boatyard.yml")
+
+
+def test_load_rejects_duplicate_workload_keys(tmp_path: Path) -> None:
+    write_config(
+        tmp_path,
+        {
+            "requires": ">=0.1",
+            "repository": "ghcr.io/org/repo",
+            "services": {"core": {"workloads": ["api.yaml"]}},
+        },
+    )
+    score = tmp_path / "stack" / "score"
+    score.mkdir(parents=True)
+    (score / "api.yaml").write_text("metadata:\n  name: api\nmetadata:\n  name: api\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"api\.yaml: line 3: duplicate key 'metadata'"):
         ConfigFile.load(tmp_path / "boatyard.yml")
 
 
@@ -251,8 +266,8 @@ class TestVariants:
         (score / "gpu.yaml").write_text(
             "metadata:\n"
             "  name: gpu\n"
-            "  annotations:\n"
-            "    boatyard/dockerfile: gpu=workloads/gpu/Dockerfile\n"
+            "boatyard:\n"
+            "  dockerfile:\n    gpu: workloads/gpu/Dockerfile\n"
             "containers:\n"
             "  gpu: {}\n",
             encoding="utf-8",
@@ -326,8 +341,8 @@ class TestVariants:
             (score / f"{stem}.yaml").write_text(
                 "metadata:\n"
                 f"  name: {stem}\n"
-                "  annotations:\n"
-                f"    boatyard/dockerfile: {stem}=workloads/{stem}/Dockerfile\n"
+                "boatyard:\n"
+                f"  dockerfile:\n    {stem}: workloads/{stem}/Dockerfile\n"
                 "containers:\n"
                 f"  {stem}: {{}}\n",
                 encoding="utf-8",
@@ -413,8 +428,8 @@ class TestVariants:
         (score / "localizer.yaml").write_text(
             "metadata:\n"
             "  name: localizer\n"
-            "  annotations:\n"
-            "    boatyard/dockerfile: localizer=workloads/localizer/Dockerfile\n"
+            "boatyard:\n"
+            "  dockerfile:\n    localizer: workloads/localizer/Dockerfile\n"
             "containers:\n"
             "  localizer: {}\n",
             encoding="utf-8",
@@ -1210,65 +1225,55 @@ class TestAuthGroup:
             ConfigFile.load(tmp_path / "boatyard.yml")
 
 
-class TestWorkloadLensAnnotations:
-    def _document(self, annotations: dict[str, Yaml], service: Yaml = None) -> WorkloadDocument:
-        raw: dict[str, Yaml] = {"metadata": {"name": "api", "annotations": annotations}, "containers": {}}
-        if service is not None:
-            raw["service"] = service
-        return WorkloadDocument.parse(raw, "api.yaml")
+class TestWorkloadLensClaims:
+    def _document(self, listeners: Yaml = None, route: Yaml = None, publish: Yaml = None) -> WorkloadDocument:
+        raw: dict[str, Yaml] = {"metadata": {"name": "api"}, "containers": {}}
+        if listeners is not None:
+            raw["listeners"] = listeners
+        block: dict[str, Yaml] = {}
+        if route is not None:
+            block["route"] = route
+        if publish is not None:
+            block["publish"] = publish
+        if block:
+            raw["boatyard"] = block
+        return WorkloadDocument.model_validate(raw, context={"source": "api.yaml"})
 
-    def test_a_claim_resolves_the_single_declared_port(self) -> None:
-        document = self._document({"boatyard/route": "/auth/*"}, {"ports": {"web": 8080}})
+    def test_a_claim_resolves_the_named_listener(self) -> None:
+        document = self._document({"web": 8080}, route={"path": "/auth/*", "port": "web"})
 
         assert document.resolved_route == ("/auth/*", 8080, False)
 
-    def test_the_mapping_port_form_resolves_the_target_port(self) -> None:
-        document = self._document({"boatyard/route": "/auth/*"}, {"ports": {"web": {"port": 8080, "targetPort": 8081}}})
-
-        assert document.resolved_route == ("/auth/*", 8081, False)
-
     def test_strip_attaches_to_the_claim(self) -> None:
-        document = self._document({"boatyard/route": "/auth/*, strip"}, {"ports": {"web": 8080}})
+        document = self._document({"web": 8080}, route={"path": "/auth/*", "port": "web", "strip": True})
 
         assert document.resolved_route == ("/auth/*", 8080, True)
 
-    def test_the_port_qualifier_names_the_declared_port(self) -> None:
-        document = self._document({"boatyard/route": "/auth/*@admin"}, {"ports": {"web": 8080, "admin": 9090}})
+    def test_a_literal_route_port_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"Input should be a valid string"):
+            self._document({"web": 8080}, route={"path": "/auth/*", "port": 8080})
 
-        assert document.resolved_route == ("/auth/*", 9090, False)
+        with pytest.raises(ValidationError, match=r"names no non-internal listener"):
+            self._document({"web": 8080}, route={"path": "/auth/*", "port": "admin"})
 
-    def test_a_claim_without_ports_refuses_naming_the_stanza(self) -> None:
-        with pytest.raises(ValidationError, match=r"claims /auth/\*.*declares no service\.ports stanza"):
-            self._document({"boatyard/route": "/auth/*"})
+    def test_a_route_port_naming_an_internal_listener_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"names no non-internal listener \(web\)"):
+            self._document(
+                {"web": 8080, "mgmt": {"port": 9000, "internal": True}},
+                route={"path": "/auth/*", "port": "mgmt"},
+            )
 
-    def test_several_ports_without_a_qualifier_refuse_naming_the_qualifier(self) -> None:
-        with pytest.raises(ValidationError, match=r"no port qualifier.*name one with the @ qualifier"):
-            self._document({"boatyard/route": "/auth/*"}, {"ports": {"web": 8080, "admin": 9090}})
+    def test_a_route_port_naming_no_declared_listener_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"names no non-internal listener \(web\)"):
+            self._document({"web": 8080}, route={"path": "/auth/*", "port": "admin"})
 
-    def test_a_qualifier_naming_no_declared_port_refuses(self) -> None:
-        with pytest.raises(ValidationError, match=r"@ghost names no service\.ports entry"):
-            self._document({"boatyard/route": "/auth/*@ghost"}, {"ports": {"web": 8080}})
-
-    def test_the_old_route_table_grammar_refuses_naming_the_claim_form(self) -> None:
-        with pytest.raises(ValidationError, match=r"path=host:port route table grammar is removed"):
-            self._document({"boatyard/route": "/grafana/*=grafana:3000"}, {"ports": {"web": 8080}})
-
-    def test_two_claim_entries_refuse(self) -> None:
-        with pytest.raises(ValidationError, match=r"claims exactly one path"):
-            self._document({"boatyard/route": "/a/*,/b/*"}, {"ports": {"web": 8080}})
+    def test_a_claim_without_listeners_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"names no non-internal listener"):
+            self._document(route={"path": "/auth/*", "port": "web"})
 
     def test_strip_without_a_wildcard_path_refuses(self) -> None:
         with pytest.raises(ValidationError, match=r"strip requires the path to end in /\*"):
-            self._document({"boatyard/route": "/auth, strip"}, {"ports": {"web": 8080}})
-
-    def test_strip_as_the_sole_entry_refuses(self) -> None:
-        with pytest.raises(ValidationError, match=r"claims exactly one path"):
-            self._document({"boatyard/route": "strip"}, {"ports": {"web": 8080}})
-
-    def test_padded_and_empty_entries_refuse(self) -> None:
-        for value in ("", " /x/*", "/x/* ,strip"):
-            with pytest.raises(ValidationError, match="non-empty and unpadded"):
-                self._document({"boatyard/route": value}, {"ports": {"web": 8080}})
+            self._document({"web": 8080}, route={"path": "/auth", "port": "web", "strip": True})
 
     @pytest.mark.parametrize(
         "path",
@@ -1276,31 +1281,42 @@ class TestWorkloadLensAnnotations:
     )
     def test_malformed_paths_refuse(self, path: str) -> None:
         with pytest.raises(ValidationError, match="must be a /-rooted segment chain"):
-            self._document({"boatyard/route": path}, {"ports": {"web": 8080}})
+            self._document({"web": 8080}, route={"path": path, "port": "web"})
 
     def test_plain_and_wildcard_paths_load(self) -> None:
         for path in ("/*", "/livekit-token/*", "/grafana"):
-            assert self._document({"boatyard/route": path}, {"ports": {"web": 8080}}).resolved_route is not None
+            assert self._document({"web": 8080}, route={"path": path, "port": "web"}).resolved_route is not None
 
-    def test_a_bad_protocol_refuses(self) -> None:
-        with pytest.raises(ValidationError, match=r"protocol 'sctp' must be one of"):
-            self._document({"boatyard/publish-port": "6178:6178/sctp"})
+    def test_an_unknown_claim_key_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"Extra inputs are not permitted"):
+            self._document({"web": 8080}, route={"path": "/auth/*", "port": "web", "qualifier": "x"})
 
-    def test_an_out_of_range_port_refuses(self) -> None:
-        with pytest.raises(ValidationError, match=r"port '65536' outside 1-65535"):
-            self._document({"boatyard/publish-port": "6178:65536"})
+    def test_publish_specs_parse_with_defaults_and_protocols(self) -> None:
+        document = self._document(
+            {"web": 8080},
+            publish=[{"published": 6178, "target": 6178}, {"published": 5957, "target": 5957, "protocol": "udp"}],
+        )
 
-    def test_published_ports_parse_with_defaults_and_protocols(self) -> None:
-        document = self._document({"boatyard/publish-port": "6178:6178,5957:5957/udp"})
-
-        assert document.published_ports == [
+        assert document.boatyard is not None
+        assert [(port.published, port.target, port.protocol) for port in document.boatyard.publish] == [
             (6178, 6178, "tcp"),
             (5957, 5957, "udp"),
         ]
 
-    def test_a_pairless_publish_port_entry_refuses(self) -> None:
-        with pytest.raises(ValidationError, match=r"must be a published:target pair"):
-            self._document({"boatyard/publish-port": "6178"})
+    def test_an_out_of_range_publish_port_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"outside 1-65535"):
+            self._document({"web": 8080}, publish=[{"published": 6178, "target": 65536}])
+
+    def test_a_boolean_publish_port_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"publish\.published must be an integer, not a boolean"):
+            self._document({"web": 8080}, publish=[{"published": True, "target": 6178}])
+
+        with pytest.raises(ValidationError, match=r"publish\.target must be an integer, not a boolean"):
+            self._document({"web": 8080}, publish=[{"published": 6178, "target": True}])
+
+    def test_a_bad_publish_protocol_refuses(self) -> None:
+        with pytest.raises(ValidationError, match=r"Input should be 'tcp' or 'udp'"):
+            self._document({"web": 8080}, publish=[{"published": 6178, "target": 6178, "protocol": "sctp"}])
 
 
 class TestGatewayKey:
@@ -1687,8 +1703,8 @@ class TestImageDerivation:
         (score / "keycloak.yaml").write_text(
             "metadata:\n"
             "  name: keycloak\n"
-            "  annotations:\n"
-            "    boatyard/lock: keycloak=KEYCLOAK_IMAGE\n"
+            "boatyard:\n"
+            "  lock:\n    keycloak: KEYCLOAK_IMAGE\n"
             "containers:\n"
             "  keycloak: {}\n",
             encoding="utf-8",
@@ -1717,12 +1733,7 @@ class TestImageDerivation:
         score = tmp_path / "stack" / "score"
         score.mkdir(parents=True, exist_ok=True)
         (score / "gpu.yaml").write_text(
-            "metadata:\n"
-            "  name: gpu\n"
-            "  annotations:\n"
-            "    boatyard/lock: gpu=NEURAL_NETWORKS_BASE\n"
-            "containers:\n"
-            "  gpu: {}\n",
+            "metadata:\n  name: gpu\nboatyard:\n  lock:\n    gpu: NEURAL_NETWORKS_BASE\ncontainers:\n  gpu: {}\n",
             encoding="utf-8",
         )
         write_config(

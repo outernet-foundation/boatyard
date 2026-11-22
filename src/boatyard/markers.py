@@ -8,7 +8,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict
 
 from boatyard.models.image import Image, dockerfile_stem, require_dockerfile_spelling
-from boatyard.yaml import Yaml, is_list, is_mapping
+from boatyard.yaml import Yaml, is_list, is_mapping, parse_yaml_text
 
 TEXT_MARKER = "include"
 YAML_MARKER = "include-yaml"
@@ -92,7 +92,7 @@ def include_yaml(value: Yaml, context: MarkerContext) -> Yaml:
     path = included_path(value, YAML_MARKER, context)
 
     try:
-        parsed = yaml.safe_load(path.read_text(encoding="utf-8"))
+        parsed = parse_yaml_text(path.read_text(encoding="utf-8"), path.as_posix())
     except yaml.YAMLError as error:
         raise ValueError(f"{context.source}: include {value!r} is not valid YAML: {error}") from error
 

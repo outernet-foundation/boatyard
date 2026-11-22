@@ -35,8 +35,8 @@ def _derive(
         (score / f"{name}.yaml").write_text(
             "metadata:\n"
             f"  name: {name}\n"
-            "  annotations:\n"
-            f"    boatyard/dockerfile: {name}=workloads/{name}/Dockerfile\n"
+            "boatyard:\n"
+            f"  dockerfile:\n    {name}: workloads/{name}/Dockerfile\n"
             "containers:\n"
             f"  {name}: {{}}\n",
             encoding="utf-8",
@@ -65,16 +65,15 @@ def _derive(
 
 
 def _images_from_sources(tmp_path: Path, sources: dict[str, str]) -> dict[str, Image]:
-    # One workload whose annotations declare every container=dockerfile edge directly.
-    annotation = ",".join(f"{container}={dockerfile}" for container, dockerfile in sources.items())
+    # One workload whose boatyard block declares every container=dockerfile edge directly.
+    source_map = "".join(f"    {container}: {dockerfile}\n" for container, dockerfile in sources.items())
     score = tmp_path / "stack" / "score"
     score.mkdir(parents=True, exist_ok=True)
     (score / "sourced.yaml").write_text(
         "metadata:\n"
         "  name: sourced\n"
-        "  annotations:\n"
-        f"    boatyard/dockerfile: {annotation}\n"
-        "containers:\n" + "".join(f"  {container}: {{}}\n" for container in sources),
+        "boatyard:\n"
+        "  dockerfile:\n" + source_map + "containers:\n" + "".join(f"  {container}: {{}}\n" for container in sources),
         encoding="utf-8",
     )
     payload: dict[str, Any] = {

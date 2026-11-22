@@ -285,7 +285,7 @@ def _write_bundle_output(
             stanza["environment"] = dict(environment)
         if claims is not None and service in claims:
             claim_path, claim_port = claims[service]
-            stanza["annotations"] = {"boatyard/route": claim_path, "boatyard/port": str(claim_port)}
+            stanza["annotations"] = {"boatyard/route-path": claim_path, "boatyard/route-port": str(claim_port)}
         service_stanzas[service] = stanza
     path.write_text(
         yaml.safe_dump({"services": service_stanzas}),
@@ -319,8 +319,8 @@ def _write_producer(
                 (producer_score / f"{service}.yaml").write_text(
                     "metadata:\n"
                     f"  name: {service}\n"
-                    "  annotations:\n"
-                    f"    boatyard/dockerfile: {service}=workloads/{service}/Dockerfile\n"
+                    "boatyard:\n"
+                    f"  dockerfile:\n    {service}: workloads/{service}/Dockerfile\n"
                     "containers:\n"
                     f"  {service}: {{}}\n",
                     encoding="utf-8",
@@ -1255,8 +1255,8 @@ class TestLockEnvSynthesis:
         (score / "api.yaml").write_text(
             "metadata:\n"
             "  name: api\n"
-            "  annotations:\n"
-            "    boatyard/dockerfile: api=workloads/api/Dockerfile\n"
+            "boatyard:\n"
+            "  dockerfile:\n    api: workloads/api/Dockerfile\n"
             "containers:\n"
             "  api: {}\n",
             encoding="utf-8",

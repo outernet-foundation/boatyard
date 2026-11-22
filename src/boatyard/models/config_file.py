@@ -23,14 +23,16 @@ from pydantic import (
 )
 import yaml
 
+from boatyard.markers import declared_dockerfile_paths
 from boatyard.models.pyproject import PYPROJECT_PATH, PyprojectToml
 from boatyard.models.image import Image, LocalBaseEntry, dockerfile_stem, parse_dockerfile
 from boatyard.models.workload import (
     ROUTE_PATH_PATTERN,
     LoadedWorkload,
+    WorkloadDocument,
 )
 from boatyard.temp import PLATFORM_PATTERN, SHA256_DIGEST_REGEX
-from boatyard.yaml import Yaml, is_mapping, load_yaml_model
+from boatyard.yaml import Yaml, is_mapping, load_yaml_model, parse_yaml_text
 
 DEV_SENTINEL = "0.0.0.dev0"
 
@@ -472,18 +474,38 @@ def _derive(config: ConfigFile, root: Path) -> None:
         if isinstance(reference, str):
             config.base_images[name] = TEMPLATE_KEY_PATTERN.sub(partial(_resolve_template_key, pins), reference)
 
-    # Load each workload file exactly once
+    # Load each workload file exactly once; every lock-sourced container must name a remote
+    # base_images key
     score_dir = root / config.score_dir
     local_names = set(config.local_workload_names())
     k8s_names = set(config.k8s.workloads) if config.k8s is not None else set[str]()
-    config.workloads = {
-        name: LoadedWorkload.load(score_dir / name, remote_bases) for name in sorted(local_names | k8s_names)
-    }
+    workloads: dict[str, LoadedWorkload] = {}
+    for name in sorted(local_names | k8s_names):
+        path = score_dir / name
+        if not path.is_file():
+            raise ValueError(f"{path.as_posix()}: the workload file is required")
+        raw = parse_yaml_text(path.read_text(encoding="utf-8"), path.as_posix())
+        if not is_mapping(raw):
+            raise ValueError(f"{path.as_posix()}: a workload file is a mapping")
+        document = WorkloadDocument.model_validate(raw, context={"source": path.name})
+        for container, (kind, value) in document.container_sources().items():
+            if kind == "lock" and value not in remote_bases:
+                raise ValueError(f"{path.name} container {container!r}: {value!r} names no remote base_images key")
+        workloads[name] = LoadedWorkload(path.name, document)
+    config.workloads = workloads
 
-    # Derive the build set as the closure over declared edges
-    declared = [
-        path for workload in config.workloads.values() for path in workload.document.declared_dockerfiles(score_dir)
-    ]
+    # Derive the build set as the closure over declared edges: each workload's container-source
+    # dockerfiles and provisioner markers, plus the local base entries' dockerfiles
+    declared: list[str] = []
+    for workload in config.workloads.values():
+        for kind, value in workload.document.container_sources().values():
+            if kind == "dockerfile":
+                declared.append(value)
+        for rendering in ("compose", "k8s"):
+            for _name, entries in workload.document.provisioners(score_dir, rendering):
+                declared.extend(
+                    path for entry in entries if is_mapping(entry) for path in declared_dockerfile_paths(entry)
+                )
     edges = sorted([*declared, *(entry.dockerfile for entry in local_bases.values())], key=dockerfile_stem)
     by_name = {name: list(paths) for name, paths in groupby(edges, key=dockerfile_stem)}
     for name, paths in by_name.items():
@@ -537,9 +559,10 @@ def _derive(config: ConfigFile, root: Path) -> None:
             continue
         variants_by_axis: dict[str, list[str]] = {}
         image_names = {
-            image_name
+            dockerfile_stem(value)
             for workload_name in member.workloads
-            for image_name in config.workloads[workload_name].document.dockerfile_stems
+            for kind, value in config.workloads[workload_name].document.container_sources().values()
+            if kind == "dockerfile"
         }
         for image_name in image_names:
             image = config.images.get(image_name)
