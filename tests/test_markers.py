@@ -25,6 +25,22 @@ DIGEST = "sha256:" + "a" * 64
 ALLOY = "ghcr.io/outernet-foundation/mirror/docker.io/grafana/alloy:v1.9.0@" + DIGEST
 LOKI = "ghcr.io/outernet-foundation/mirror/docker.io/grafana/loki:3.5.0@" + DIGEST
 
+API_WORKLOAD = """metadata:
+  name: api
+listeners:
+  http: 8080
+boatyard:
+  dockerfile:
+    api: workloads/api/Dockerfile
+"""
+
+SIDECAR_WORKLOAD = """metadata:
+  name: sidecar
+boatyard:
+  lock:
+    sidecar: REMOTE_BASE_KEY
+"""
+
 
 def write_repo(tree: dict[str, str], root: Path) -> None:
     for name, content in tree.items():
@@ -168,9 +184,12 @@ def test_unknown_lock_entry_is_a_loud_error_naming_the_source() -> None:
         )
 
 
-def test_non_string_lock_marker_value_is_a_loud_error() -> None:
-    with pytest.raises(ValueError, match="name string"):
-        resolve_markers({"image": {"lock": ["ALLOY"]}}, MarkerContext(Path(), {"ALLOY_IMAGE": ALLOY}, "k8s.yaml"))
+def test_mapping_valued_lock_block_is_plain_data() -> None:
+    node: Any = {"boatyard": {"lock": {"api": "REMOTE_BASE_KEY"}}}
+
+    resolved = resolve_markers(node, MarkerContext(Path(), {"REMOTE_BASE_KEY": ALLOY}, "k8s.yaml"))
+
+    assert resolved == node
 
 
 def test_marker_with_extra_keys_is_plain_data_under_lock_resolution() -> None:
@@ -346,12 +365,48 @@ def test_dockerfile_marker_naming_no_build_set_image_refuses() -> None:
         )
 
 
-def test_dockerfile_marker_with_a_non_string_value_refuses() -> None:
-    with pytest.raises(ValueError, match="path string"):
-        resolve_markers(
-            {"image": {"dockerfile": ["workloads/postgres/Dockerfile"]}},
-            _provisioner_context(),
-        )
+def test_mapping_valued_dockerfile_block_is_plain_data() -> None:
+    node: Any = {"boatyard": {"dockerfile": {"api": "workloads/api/Dockerfile"}}}
+
+    resolved = resolve_markers(node, _provisioner_context())
+
+    assert resolved == node
+
+
+def test_workload_dockerfile_block_spliced_into_provisioner_state_is_carried_verbatim(tmp_path: Path) -> None:
+    write_repo({"workloads/api.yaml": API_WORKLOAD}, tmp_path)
+
+    resolved = resolve_markers(
+        {
+            "uri": "template://example/config",
+            "type": "example-config",
+            "state": {"include-yaml": "workloads/api.yaml"},
+        },
+        MarkerContext(tmp_path, {}, "postgres.yaml", repository="ghcr.io/org/repo", builds={}),
+    )
+
+    assert resolved == {
+        "uri": "template://example/config",
+        "type": "example-config",
+        "state": yaml.safe_load(API_WORKLOAD),
+    }
+
+
+def test_workload_lock_block_spliced_into_provisioner_state_is_carried_verbatim(tmp_path: Path) -> None:
+    write_repo({"workloads/sidecar.yaml": SIDECAR_WORKLOAD}, tmp_path)
+
+    resolved = resolve_markers(
+        {"state": {"include-yaml": "workloads/sidecar.yaml"}},
+        MarkerContext(
+            tmp_path,
+            {"REMOTE_BASE_KEY": ALLOY},
+            "postgres.yaml",
+            repository="ghcr.io/org/repo",
+            builds={},
+        ),
+    )
+
+    assert resolved == {"state": yaml.safe_load(SIDECAR_WORKLOAD)}
 
 
 def test_declared_dockerfile_paths_walks_provisioner_entries() -> None:
@@ -371,3 +426,13 @@ def test_declared_dockerfile_paths_leaves_lock_markers_alone() -> None:
     entries: Any = [{"services": {"loki": {"image": {"lock": "LOKI_IMAGE"}}}}]
 
     assert declared_dockerfile_paths(entries) == []
+
+
+def test_declared_dockerfile_paths_ignores_spliced_workload_dockerfile_blocks() -> None:
+    entries: Any = [
+        {"uri": "template://example/config", "type": "example-config", "state": {"include-yaml": "workloads/api.yaml"}},
+        {"state": yaml.safe_load(API_WORKLOAD)},
+        {"services": {"pf-postgres": {"image": {"dockerfile": "workloads/postgres/Dockerfile"}}}},
+    ]
+
+    assert declared_dockerfile_paths(entries) == ["workloads/postgres/Dockerfile"]
