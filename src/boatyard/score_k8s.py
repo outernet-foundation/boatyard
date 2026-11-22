@@ -27,6 +27,7 @@ from boatyard.paths import K8S_PINS_PATH
 from boatyard.yaml import Yaml, is_list, is_mapping, parse_yaml_text
 from boatyard.score import (
     dump_yaml,
+    listener_port_exports,
     render_score,
     route_path_exports,
     split_documents,
@@ -86,6 +87,7 @@ def generate_k8s(
         substrate="k8s",
         workloads=workloads,
         route_exports=route_path_exports(list(config.workloads.values())),
+        listener_exports=listener_port_exports(list(config.workloads.values())),
         variable_values={
             STORAGE_CLASS_VAR: LOCAL_STORAGE_CLASS if local else CLOUD_STORAGE_CLASS,
             **k8s.vars,

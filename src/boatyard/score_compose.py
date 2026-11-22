@@ -31,6 +31,7 @@ from boatyard.paths import VALUES_FILE
 from boatyard.yaml import Yaml, load_yaml_model
 from boatyard.score import (
     dump_yaml,
+    listener_port_exports,
     render_score,
     route_path_exports,
     write_file,
@@ -161,10 +162,11 @@ def generate_compose(config: ConfigFile, lock: LockFile) -> list[Path]:
                         f"{workload.file_name}: a {probe} httpGet requires {PROBE_ADAPTER_ANNOTATION} "
                         "(the compose rendering)"
                     )
-    # Route path exports are assembly-wide facts, not per-entry: a provisioner in
-    # one bundle templates a claim authored in another (grafana's OAuth URLs spell
-    # keycloak's claim path), so every rendering's env carries every claim.
+    # Route path and listener port exports are assembly-wide facts, not per-entry: a
+    # provisioner in one bundle templates a fact authored in another (grafana's OAuth URLs
+    # spell keycloak's claim path), so every rendering's env carries every export.
     route_exports = route_path_exports(list(config.workloads.values()))
+    listener_exports = listener_port_exports(list(config.workloads.values()))
     outputs: list[Path] = []
     for name, entry in config.local_service_entries():
         workloads = [config.workloads[workload_name] for workload_name in entry.workloads]
@@ -180,6 +182,7 @@ def generate_compose(config: ConfigFile, lock: LockFile) -> list[Path]:
             substrate="compose",
             workloads=workloads,
             route_exports=route_exports,
+            listener_exports=listener_exports,
             variable_values={**sentinels, **entry.vars},
             templates=[
                 HEALTHCHECK_TEMPLATE,
