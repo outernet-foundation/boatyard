@@ -70,8 +70,11 @@ def expand_includes(node: Yaml, context: MarkerContext) -> Yaml:
                 # Splice in the included structure
                 case [(marker, value)] if marker == YAML_MARKER:
                     expanded = include_yaml(value, context)
-                # Leave lock and dockerfile markers whole for the lock pass to consume or refuse
-                case [(marker, _)] if marker in LOCK_MARKERS or marker == DOCKERFILE_MARKER:
+                # Leave markers whole for the lock pass to consume or refuse; only lock-image
+                # takes a mapping value, non-string lock/dockerfile values are workload grammar
+                case [(marker, value)] if (marker in LOCK_MARKERS or marker == DOCKERFILE_MARKER) and (
+                    isinstance(value, str) or marker == LOCK_IMAGE_MARKER
+                ):
                     expanded = node
                 # Resolve plain mappings child by child
                 case entries:
@@ -134,15 +137,16 @@ def resolve_locks(node: Yaml, context: MarkerContext) -> Yaml:
         case dict():
             match tuple(node.items()):
                 # Substitute the full locked reference as one string
-                case [(marker, value)] if marker == LOCK_MARKER:
+                case [(marker, value)] if marker == LOCK_MARKER and isinstance(value, str):
                     resolved = locked_reference(value, context)
                 # Split the locked reference into chart fields
                 case [(marker, value)] if marker == LOCK_IMAGE_MARKER:
                     resolved = lock_image_fields(value, context.images, context.source)
                 # Compose the built-image reference from the declared dockerfile
-                case [(marker, value)] if marker == DOCKERFILE_MARKER:
+                case [(marker, value)] if marker == DOCKERFILE_MARKER and isinstance(value, str):
                     resolved = dockerfile_reference(value, context)
-                # Refuse literal images, then resolve plain mappings child by child
+                # Refuse literal images, then resolve plain mappings child by child; non-string
+                # lock/dockerfile values are workload-grammar blocks, not markers
                 case entries:
                     _check_literal_image(node, context.source)
                     resolved = {key: resolve_locks(child, context) for key, child in entries}
@@ -153,35 +157,22 @@ def resolve_locks(node: Yaml, context: MarkerContext) -> Yaml:
     return resolved
 
 
-def locked_reference(value: Yaml, context: MarkerContext) -> str:
-    match value:
-        case str() if value in context.images:
-            reference = context.images[value]
-        case str():
-            raise ValueError(f"{context.source}: lock entry {value!r} does not exist in the image lock")
-        case _:
-            raise ValueError(f"{context.source}: lock takes a lock-entry name string, not {type(value).__name__}")
+def locked_reference(value: str, context: MarkerContext) -> str:
+    if value not in context.images:
+        raise ValueError(f"{context.source}: lock entry {value!r} does not exist in the image lock")
 
-    return reference
+    return context.images[value]
 
 
-def dockerfile_reference(value: Yaml, context: MarkerContext) -> str:
-    match value:
-        case str():
-            path = value
-        case _:
-            raise ValueError(
-                f"{context.source}: dockerfile takes a repo-root-relative path string, not {type(value).__name__}"
-            )
-
+def dockerfile_reference(value: str, context: MarkerContext) -> str:
     if context.repository is None or context.builds is None:
         raise ValueError(
             f"{context.source}: dockerfile: is a provisioner-manifest marker; chart values take lock:/lock-image: only"
         )
 
-    image = context.builds.get(dockerfile_stem(path))
+    image = context.builds.get(dockerfile_stem(value))
     if image is None:
-        raise ValueError(f"{context.source}: dockerfile {path!r} names no image in the build set")
+        raise ValueError(f"{context.source}: dockerfile {value!r} names no image in the build set")
 
     variant = env_slot(image.axis) if image.axis is not None else None
     return compose_image_reference(context.repository, image, env_slot(image.sha_env), variant)
@@ -192,12 +183,12 @@ def declared_dockerfile_paths(node: Yaml) -> list[str]:
         return [path for item in node for path in declared_dockerfile_paths(item)]
     if not is_mapping(node):
         return []
-    if len(node) == 1 and DOCKERFILE_MARKER in node:
-        value = node[DOCKERFILE_MARKER]
-        if not isinstance(value, str):
-            raise ValueError(f"dockerfile takes a repo-root-relative path string, not {type(value).__name__}")
-        require_dockerfile_spelling(value)
-        return [value]
+    # A string value is a declared edge; a mapping is the boatyard block's container map
+    # (workload grammar) and contributes no edge
+    declared = node.get(DOCKERFILE_MARKER) if len(node) == 1 else None
+    if isinstance(declared, str):
+        require_dockerfile_spelling(declared)
+        return [declared]
     return [path for child in node.values() for path in declared_dockerfile_paths(child)]
 
 
