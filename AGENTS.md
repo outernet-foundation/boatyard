@@ -84,7 +84,11 @@ Design intent and silent-failure traps, one fact per bullet.
   it (`options:`); the axis lives on the local `base_images` entry — the one spelling across
   the Dockerfile ARG and the k8s selection, never re-described by hand.
 - Plain score-compose silently drops `httpGet` probes; boatyard makes the omission loud
-  instead via the workload's `boatyard/probe-adapter` annotation.
+  instead via the workload's `boatyard/probe-adapter` annotation. Probe timing
+  (`initialDelaySeconds` and siblings) authors k8s-style on the probe but never reaches the
+  tools — score's schema refuses the fields — so the lens strips them and spells the
+  JSON `boatyard/probe-timing` annotation the healthcheck template derives the compose
+  timing from.
 - Substrate needs live in workload files — scalar facts as `boatyard/*` annotations, compound
   facts (routes, publishes, container sources, interpolation targets) in the `boatyard:` block —
   and `boatyard.yml` holds no per-workload runtime fact. The gpu annotation (`"true"`) is
