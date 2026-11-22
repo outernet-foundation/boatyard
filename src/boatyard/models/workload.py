@@ -28,6 +28,10 @@ ROUTE_PATH_PATTERN = re.compile(r"(?:/\*|/(?:[^/\s*]+(?:/[^/\s*]+)*)?(?:/\*)?)")
 
 ROUTE_PORT_NAME_PATTERN = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*")
 
+LISTENER_REFERENCE_PREFIX = "${listeners."
+
+LISTENER_PORT_LOOKUP = "port"
+
 ROUTE_PATH_EXPORT_SUFFIX = "ROUTE_PATH"
 
 PUBLISH_PORT_PROTOCOLS: tuple[Literal["tcp", "udp"], ...] = ("tcp", "udp")
@@ -100,6 +104,25 @@ class WorkloadDocument(BaseModel):
                             f"is removed; probe ports are listener names, so name a service.ports entry or "
                             f"a {CONTAINER_PORTS_ANNOTATION} listener"
                         )
+
+            variables = container.model_extra.get("variables") if container.model_extra is not None else None
+            if not is_mapping(variables):
+                continue
+            for key, value in variables.items():
+                if not isinstance(value, str) or not value.startswith(LISTENER_REFERENCE_PREFIX):
+                    continue
+                listener = listener_port_reference(value)
+                if listener is None:
+                    raise ValueError(
+                        f"the container {name!r} variables {key} value {value!r} must be "
+                        f"${{listeners.<listener>.{LISTENER_PORT_LOOKUP}}} naming a service.ports entry "
+                        f"or a {CONTAINER_PORTS_ANNOTATION} listener"
+                    )
+                if listener not in listeners:
+                    raise ValueError(
+                        f"the container {name!r} variables {key} value {value!r} names no declared "
+                        f"listener ({', '.join(sorted(listeners))})"
+                    )
 
         publish_port = annotations.get(PUBLISH_PORT_ANNOTATION)
         if publish_port is not None:
@@ -447,6 +470,16 @@ def parse_container_ports_annotation(value: str) -> dict[str, int]:
             raise ValueError(f"{CONTAINER_PORTS_ANNOTATION} names the listener {name!r} twice")
         ports[name] = int(port)
     return ports
+
+
+def listener_port_reference(value: str) -> str | None:
+    # The whole-value grammar ${listeners.<name>.port}; None names any other spelling
+    if not value.startswith(LISTENER_REFERENCE_PREFIX) or not value.endswith("}"):
+        return None
+    name, separator, lookup = value[len(LISTENER_REFERENCE_PREFIX) : -1].partition(".")
+    if not separator or not name or lookup != LISTENER_PORT_LOOKUP:
+        return None
+    return name
 
 
 def route_path_export_name(workload_name: str) -> str:

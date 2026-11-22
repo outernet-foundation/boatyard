@@ -30,6 +30,7 @@ from boatyard.models.workload import (
     ROUTE_ANNOTATION,
     ROUTE_PORT_ANNOTATION,
     LoadedWorkload,
+    listener_port_reference,
     parse_route_annotation,
     route_path_export_name,
     select_provisioner_files,
@@ -269,8 +270,9 @@ def claimed_service_stanza(name: str, stanza: Yaml, source: str) -> Yaml:
 def injected_workload(config: ConfigFile, workload: LoadedWorkload, variable_values: dict[str, str]) -> Yaml:
     # The image reference is composed from the container's declared source and injected
     # before score sees the document; it is never authored in the workload file. Probe
-    # ports ride the same pass: authored as listener names, rewritten to the resolved
-    # port so both renderings hand the score tools the integer.
+    # ports and listener references in container variables ride the same pass: authored
+    # as listener names, rewritten to the resolved port so both renderings hand the
+    # score tools the concrete value.
     sources = workload.document.container_sources()
     if not sources:
         return workload.raw
@@ -313,6 +315,7 @@ def injected_workload(config: ConfigFile, workload: LoadedWorkload, variable_val
             raise ValueError(f"{workload.file_name}: containers.{container} must be a mapping")
         entry["image"] = reference
     rewrite_probe_ports(containers, workload)
+    rewrite_listener_variables(containers, workload)
     return document
 
 
@@ -333,6 +336,26 @@ def rewrite_probe_ports(containers: dict[str, Yaml], workload: LoadedWorkload) -
             port = http_get.get("port")
             if isinstance(port, str):
                 http_get["port"] = listeners[port]
+
+
+def rewrite_listener_variables(containers: dict[str, Yaml], workload: LoadedWorkload) -> None:
+    # The lens already refused every ${listeners.<name>.port} reference that names no
+    # declared listener, so the rewrite is a plain substitution over the validated
+    # documents; the port lands as a string because the score schemas type variables
+    # as strings and the old self-port resource idiom rendered the string form
+    listeners = workload.document.listener_ports
+    for entry in containers.values():
+        if not is_mapping(entry):
+            continue
+        variables = entry.get("variables")
+        if not is_mapping(variables):
+            continue
+        for key, value in variables.items():
+            if not isinstance(value, str):
+                continue
+            name = listener_port_reference(value)
+            if name is not None:
+                variables[key] = str(listeners[name])
 
 
 def dump_yaml(value: Yaml) -> str:
