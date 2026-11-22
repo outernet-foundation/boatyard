@@ -952,6 +952,7 @@ class TestRenderedNameClaims:
 SHIPPED_TEMPLATES = {
     "probe-adapter-healthchecks.tpl",
     "restart.tpl",
+    "docker-socket.tpl",
     "gpu-cuda.tpl",
     "gpu-rocm.tpl",
     "gpu-pod.tpl",
@@ -1104,7 +1105,7 @@ def test_barrier_pin_stays_unregistered_without_provisioner_services(
         },
     )
 
-    assert templates == [["probe-adapter-healthchecks.tpl", "restart.tpl"]]
+    assert templates == [["probe-adapter-healthchecks.tpl", "restart.tpl", "docker-socket.tpl"]]
 
 
 def test_provisioners_register_by_resource_type_closure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2113,6 +2114,18 @@ def test_the_gpu_annotation_parses() -> None:
     assert document.metadata.annotations == {"boatyard/gpu": "true"}
 
 
+def test_the_docker_socket_annotation_parses() -> None:
+    document = parse_workload(
+        {
+            "metadata": {"name": "api", "annotations": {"boatyard/docker-socket": "true"}},
+            "containers": {},
+        },
+        "api.yaml",
+    )
+
+    assert document.metadata.annotations == {"boatyard/docker-socket": "true"}
+
+
 def test_the_compose_rendering_receives_the_resolved_probe_port(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2512,7 +2525,7 @@ def test_adapted_probe_bearing_workloads_register_the_healthcheck_template(
         generated=API_SERVICE_RENDERING,
     )
 
-    assert templates == [["probe-adapter-healthchecks.tpl", "restart.tpl"]]
+    assert templates == [["probe-adapter-healthchecks.tpl", "restart.tpl", "docker-socket.tpl"]]
 
 
 def test_restart_values_outside_the_compose_enum_refuse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2539,7 +2552,7 @@ def test_restart_annotation_with_an_enum_value_passes(tmp_path: Path, monkeypatc
         },
     )
 
-    assert templates == [["probe-adapter-healthchecks.tpl", "restart.tpl"]]
+    assert templates == [["probe-adapter-healthchecks.tpl", "restart.tpl", "docker-socket.tpl"]]
 
 
 def test_bare_literal_workload_image_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2692,8 +2705,8 @@ def test_gpu_compose_templates_register_per_the_renderings_variant(
     templates = _compose_init_templates(monkeypatch, tmp_path, config, {}, {})
 
     assert templates == [
-        ["probe-adapter-healthchecks.tpl", "restart.tpl", "gpu-cuda.tpl"],
-        ["probe-adapter-healthchecks.tpl", "restart.tpl", "gpu-rocm.tpl"],
+        ["probe-adapter-healthchecks.tpl", "restart.tpl", "docker-socket.tpl", "gpu-cuda.tpl"],
+        ["probe-adapter-healthchecks.tpl", "restart.tpl", "docker-socket.tpl", "gpu-rocm.tpl"],
     ]
 
 

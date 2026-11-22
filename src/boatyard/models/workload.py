@@ -23,6 +23,9 @@ PUBLISH_PORT_LABEL = "boatyard/publish-port"
 
 GPU_ANNOTATION = "boatyard/gpu"
 
+# The host socket bind for container-controlling workloads (the compose rendering only)
+DOCKER_SOCKET_ANNOTATION = "boatyard/docker-socket"
+
 # The closed boatyard/* label vocabulary the bundle-record extraction accepts off a rendered stanza
 STANZA_LABELS = (
     ROUTE_PATH_LABEL,
@@ -33,9 +36,16 @@ STANZA_LABELS = (
     RESTART_ANNOTATION,
     AUTOSTART_ANNOTATION,
     GPU_ANNOTATION,
+    DOCKER_SOCKET_ANNOTATION,
 )
 
-SCALAR_ANNOTATIONS = (PROBE_ADAPTER_ANNOTATION, RESTART_ANNOTATION, AUTOSTART_ANNOTATION, GPU_ANNOTATION)
+SCALAR_ANNOTATIONS = (
+    PROBE_ADAPTER_ANNOTATION,
+    RESTART_ANNOTATION,
+    AUTOSTART_ANNOTATION,
+    GPU_ANNOTATION,
+    DOCKER_SOCKET_ANNOTATION,
+)
 
 ROUTE_PATH_PATTERN = re.compile(r"(?:/\*|/(?:[^/\s*]+(?:/[^/\s*]+)*)?(?:/\*)?)")
 

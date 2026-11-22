@@ -1110,6 +1110,21 @@ def test_extract_bundle_records_holds_services_marked_no_autostart() -> None:
     assert records.held_services == ["livekit"]
 
 
+def test_extract_bundle_records_accepts_the_docker_socket_label() -> None:
+    from boatyard.lock import extract_bundle_records
+
+    text = (
+        "services:\n"
+        "  orchestrator:\n"
+        "    image: demo/orchestrator:1\n"
+        '    annotations:\n      boatyard/docker-socket: "true"\n'
+    )
+
+    records = extract_bundle_records([text])
+
+    assert records.services == ["orchestrator"]
+
+
 def test_extract_bundle_records_parses_the_publish_label_into_port_records() -> None:
     from boatyard.lock import extract_bundle_records
 
