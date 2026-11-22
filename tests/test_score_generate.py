@@ -1295,7 +1295,9 @@ def test_provisioner_claims_translate_into_annotations_under_the_string_form(
     }
 
 
-def _invoke_claiming_provisioner(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, provisioner: str) -> None:
+def _invoke_claiming_provisioner(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, provisioner: str
+) -> CompiledProvisionersRecorder:
     sources = {
         "stack/score/api.yaml": _workload_referencing("config", "api"),
         "stack/score/compose/config.yaml": provisioner,
@@ -1311,6 +1313,7 @@ def _invoke_claiming_provisioner(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
         config,
         _lock_for_images({"EXAMPLE_IMAGE": "ghcr.io/org/example:1@" + DIGEST, **ALPINE_LOCK}),
     )
+    return recorder
 
 
 def test_a_provisioner_route_without_its_port_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1379,6 +1382,124 @@ def test_a_provisioner_stanza_annotating_the_claim_directly_refuses(
       port: 3000
       annotations:
         boatyard/route: /grafana/*
+""",
+        )
+
+
+PROVISIONER_WITH_TEMPLATED_CLAIM = """
+- uri: template://example/config
+  type: example-config
+  state:
+    grafana_port: 3000
+  services:
+    grafana:
+      image: ${EXAMPLE_IMAGE:?err}
+      route: /grafana/*
+      port: "{{ .State.grafana_port }}"
+      healthcheck:
+        test:
+          [
+            "CMD",
+            "wget",
+            "--quiet",
+            "--tries=1",
+            "--output-document=-",
+            "http://localhost:{{ .State.grafana_port }}/health",
+          ]
+        interval: 5s
+"""
+
+
+def test_a_templated_provisioner_route_port_renders_into_the_annotation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder = _invoke_claiming_provisioner(monkeypatch, tmp_path, PROVISIONER_WITH_TEMPLATED_CLAIM)
+
+    [document] = recorder.compiled
+    [entry] = document
+    assert isinstance(entry, dict)
+    services_text = entry["services"]
+    assert isinstance(services_text, str)
+    grafana = yaml.safe_load(services_text)["grafana"]
+    assert "route" not in grafana
+    assert "port" not in grafana
+    assert grafana["annotations"] == {"boatyard/route": "/grafana/*", "boatyard/port": "3000"}
+
+
+def test_the_healthcheck_templating_the_same_state_key_rides_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder = _invoke_claiming_provisioner(monkeypatch, tmp_path, PROVISIONER_WITH_TEMPLATED_CLAIM)
+
+    [document] = recorder.compiled
+    [entry] = document
+    assert isinstance(entry, dict)
+    services_text = entry["services"]
+    assert isinstance(services_text, str)
+    grafana = yaml.safe_load(services_text)["grafana"]
+    assert grafana["healthcheck"]["test"][-1] == "http://localhost:{{ .State.grafana_port }}/health"
+    assert grafana["annotations"]["boatyard/port"] == "3000"
+
+
+def test_a_templated_provisioner_route_port_refuses_a_non_integer_render(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with pytest.raises(ValueError, match=r"renders to 'not-a-port', not a port in the range 1-65535"):
+        _invoke_claiming_provisioner(
+            monkeypatch,
+            tmp_path,
+            """
+- uri: template://example/config
+  type: example-config
+  state:
+    grafana_port: not-a-port
+  services:
+    grafana:
+      image: ${EXAMPLE_IMAGE:?err}
+      route: /grafana/*
+      port: "{{ .State.grafana_port }}"
+""",
+        )
+
+
+def test_a_templated_provisioner_route_port_refuses_an_out_of_range_render(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with pytest.raises(ValueError, match=r"renders to '70000', not a port in the range 1-65535"):
+        _invoke_claiming_provisioner(
+            monkeypatch,
+            tmp_path,
+            """
+- uri: template://example/config
+  type: example-config
+  state:
+    grafana_port: 70000
+  services:
+    grafana:
+      image: ${EXAMPLE_IMAGE:?err}
+      route: /grafana/*
+      port: "{{ .State.grafana_port }}"
+""",
+        )
+
+
+def test_a_templated_provisioner_route_port_refuses_a_missing_state_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with pytest.raises(ValueError, match=r"names no entry the state declares"):
+        _invoke_claiming_provisioner(
+            monkeypatch,
+            tmp_path,
+            """
+- uri: template://example/config
+  type: example-config
+  state:
+    grafana_port: 3000
+  services:
+    grafana:
+      image: ${EXAMPLE_IMAGE:?err}
+      route: /grafana/*
+      port: "{{ .State.admin_port }}"
 """,
         )
 
@@ -1649,6 +1770,243 @@ def test_the_k8s_rendering_receives_the_resolved_probe_port(tmp_path: Path, monk
 
     assert "port: 9000\n" in recorder.workload_contents["api.yaml"]
     assert "port: mgmt\n" not in recorder.workload_contents["api.yaml"]
+
+
+WORKLOAD_VARIABLES_BARE_SERVICE_PORT = """
+metadata:
+  name: api
+  annotations:
+    boatyard/lock: api=API_IMAGE
+service:
+  ports:
+    web: 5678
+containers:
+  api:
+    variables:
+      SERVICE_PORT: ${listeners.web.port}
+"""
+
+WORKLOAD_VARIABLES_TARGET_SERVICE_PORT = """
+apiVersion: score.dev/v1b1
+metadata:
+  name: api
+  annotations:
+    boatyard/lock: api=API_IMAGE
+service:
+  ports:
+    web:
+      port: 80
+      targetPort: 9090
+containers:
+  api:
+    variables:
+      SERVICE_PORT: ${listeners.web.port}
+"""
+
+WORKLOAD_VARIABLES_CONTAINER_PORT = """
+metadata:
+  name: api
+  annotations:
+    boatyard/container-ports: mgmt=9000
+    boatyard/lock: api=API_IMAGE
+containers:
+  api:
+    variables:
+      SERVICE_PORT: ${listeners.mgmt.port}
+"""
+
+
+def test_listener_variable_references_resolve_over_both_service_port_shapes() -> None:
+    for fixture, resolved in (
+        (WORKLOAD_VARIABLES_BARE_SERVICE_PORT, 5678),
+        (WORKLOAD_VARIABLES_TARGET_SERVICE_PORT, 9090),
+    ):
+        document = WorkloadDocument.parse(yaml.safe_load(fixture), "api.yaml")
+
+        assert document.listener_ports == {"web": resolved}
+
+
+def test_listener_variable_references_resolve_the_container_ports_annotation() -> None:
+    document = WorkloadDocument.parse(yaml.safe_load(WORKLOAD_VARIABLES_CONTAINER_PORT), "api.yaml")
+
+    assert document.listener_ports == {"mgmt": 9000}
+
+
+def test_unknown_listener_variable_names_refuse_listing_the_declared_listeners() -> None:
+    with pytest.raises(ValidationError, match=r"names no declared listener \(mgmt, web\)"):
+        WorkloadDocument.parse(
+            {
+                "metadata": {
+                    "name": "api",
+                    "annotations": {"boatyard/container-ports": "mgmt=9000", "boatyard/lock": "api=API_IMAGE"},
+                },
+                "service": {"ports": {"web": 5678}},
+                "containers": {"api": {"variables": {"SERVICE_PORT": "${listeners.admin.port}"}}},
+            },
+            "api.yaml",
+        )
+
+
+def test_malformed_listener_variable_paths_refuse() -> None:
+    malformed = ("${listeners.web}", "${listeners.web.port.extra}", "${listeners.web.hostname}")
+    for value in malformed:
+        with pytest.raises(ValidationError, match=r"must be \$\{listeners\.<listener>\.port\}"):
+            WorkloadDocument.parse(
+                {
+                    "metadata": {"name": "api", "annotations": {"boatyard/lock": "api=API_IMAGE"}},
+                    "service": {"ports": {"web": 5678}},
+                    "containers": {"api": {"variables": {"SERVICE_PORT": value}}},
+                },
+                "api.yaml",
+            )
+
+
+def test_the_compose_rendering_receives_the_resolved_listener_variable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "stack" / "score").mkdir(parents=True)
+    (tmp_path / "stack" / "score" / "api.yaml").write_text(WORKLOAD_VARIABLES_TARGET_SERVICE_PORT, encoding="utf-8")
+    recorder = WorkloadContentsRecorder()
+    monkeypatch.setattr(score_module, "bash", recorder.run)
+    config = _generated_config(
+        tmp_path,
+        ["api.yaml"],
+        repository="ghcr.io/org/repo",
+        project_name="example",
+        platforms=["linux/amd64"],
+        services={"core": {"options": {"main": {"workloads": ["api.yaml"]}}}},
+    )
+
+    score_compose_module.generate_compose(
+        config,
+        _lock_for_images({"API_IMAGE": "ghcr.io/org/api:1@" + DIGEST, **ALPINE_LOCK}),
+    )
+
+    assert "SERVICE_PORT: '9090'\n" in recorder.workload_contents["api.yaml"]
+    assert "${listeners." not in recorder.workload_contents["api.yaml"]
+
+
+WORKLOAD_VARIABLES_DOCKERFILE_PORT = (
+    "metadata:\n"
+    "  name: api\n"
+    "  annotations:\n"
+    "    boatyard/dockerfile: api=workloads/api/Dockerfile\n"
+    "    boatyard/container-ports: mgmt=9000\n"
+    "containers:\n"
+    "  api:\n"
+    "    variables:\n"
+    "      SERVICE_PORT: ${listeners.mgmt.port}\n"
+)
+
+
+def test_the_k8s_rendering_receives_the_resolved_listener_variable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_pins(tmp_path, {"API_SHA": PINNED_TAG})
+    recorder = _pins_k8s_recorder(monkeypatch, tmp_path, WORKLOAD_VARIABLES_DOCKERFILE_PORT)
+    config, k8s = _pinned_config(tmp_path)
+
+    generate_k8s(config, k8s, LockFile.model_validate({}), local=False)
+
+    assert "SERVICE_PORT: '9000'\n" in recorder.workload_contents["api.yaml"]
+    assert "${listeners." not in recorder.workload_contents["api.yaml"]
+
+
+WORKLOAD_LEGACY_SELF_PORT = """
+metadata:
+  name: api
+  annotations:
+    boatyard/lock: api=API_IMAGE
+service:
+  ports:
+    web: 8000
+resources:
+  self-port:
+    type: service-port
+    id: api-web
+    params:
+      workload: api
+      port: web
+containers:
+  api:
+    variables:
+      SERVICE_PORT: ${resources.self-port.port}
+"""
+
+
+def test_the_legacy_self_port_resource_idiom_rides_through_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "stack" / "score").mkdir(parents=True)
+    (tmp_path / "stack" / "score" / "api.yaml").write_text(WORKLOAD_LEGACY_SELF_PORT, encoding="utf-8")
+    recorder = WorkloadContentsRecorder()
+    monkeypatch.setattr(score_module, "bash", recorder.run)
+    config = _generated_config(
+        tmp_path,
+        ["api.yaml"],
+        repository="ghcr.io/org/repo",
+        project_name="example",
+        platforms=["linux/amd64"],
+        services={"core": {"options": {"main": {"workloads": ["api.yaml"]}}}},
+    )
+
+    score_compose_module.generate_compose(
+        config,
+        _lock_for_images({"API_IMAGE": "ghcr.io/org/api:1@" + DIGEST, **ALPINE_LOCK}),
+    )
+
+    assert "SERVICE_PORT: ${resources.self-port.port}\n" in recorder.workload_contents["api.yaml"]
+
+
+SELF_PORT_PROVISIONER = (
+    "- uri: template://example/self-port\n  type: service-port\n  state:\n    port: 9090\n  outputs:\n    port: 9090\n"
+)
+
+WORKLOAD_IDIOM_SELF_PORT = (
+    "apiVersion: score.dev/v1b1\n"
+    "metadata:\n"
+    "  name: idiom\n"
+    "  annotations:\n"
+    "    boatyard/lock: idiom=API_IMAGE\n"
+    "resources:\n"
+    "  self-port:\n"
+    "    type: service-port\n"
+    "    id: idiom-main\n"
+    "containers:\n"
+    "  idiom:\n"
+    "    variables:\n"
+    "      SERVICE_PORT: ${resources.self-port.port}\n"
+)
+
+
+def test_listener_variable_ports_render_as_the_self_port_idiom_renders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _skip_unless_pinned_score_compose()
+    score_dir = tmp_path / "stack" / "score"
+    (score_dir / "compose").mkdir(parents=True)
+    (score_dir / "api.yaml").write_text(WORKLOAD_VARIABLES_TARGET_SERVICE_PORT, encoding="utf-8")
+    (score_dir / "idiom.yaml").write_text(WORKLOAD_IDIOM_SELF_PORT, encoding="utf-8")
+    (score_dir / "compose" / "self-port.yaml").write_text(SELF_PORT_PROVISIONER, encoding="utf-8")
+    config = _generated_config(
+        tmp_path,
+        ["api.yaml", "idiom.yaml"],
+        repository="ghcr.io/org/repo",
+        project_name="example",
+        platforms=["linux/amd64"],
+        services={"core": {"options": {"main": {"workloads": ["api.yaml", "idiom.yaml"]}}}},
+    )
+
+    score_compose_module.generate_compose(
+        config,
+        _lock_for_images({"API_IMAGE": "ghcr.io/org/api:1@" + DIGEST, **ALPINE_LOCK}),
+    )
+
+    document = yaml.safe_load(
+        (tmp_path / "stack" / "generated" / "compose" / "compose.core-main.yaml").read_text(encoding="utf-8")
+    )
+    assert document["services"]["api"]["environment"] == {"SERVICE_PORT": "9090"}
+    assert document["services"]["idiom"]["environment"] == {"SERVICE_PORT": "9090"}
 
 
 def test_workload_resources_parse_typed() -> None:
