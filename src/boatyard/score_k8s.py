@@ -22,12 +22,11 @@ from boatyard.models.image import dockerfile_stem
 from boatyard.models.k8s_pins import load_pins
 from boatyard.models.lock_file import LockFile
 from boatyard.models.workload import select_provisioner_files
-from boatyard.markers import MarkerContext, resolve_markers, declared_dockerfile_paths
+from boatyard.markers import MarkerContext, resolve_markers, declared_dockerfile_paths, workload_documents
 from boatyard.paths import K8S_PINS_PATH
 from boatyard.yaml import Yaml, is_list, is_mapping, parse_yaml_text
 from boatyard.score import (
     dump_yaml,
-    listener_port_exports,
     render_score,
     route_path_exports,
     split_documents,
@@ -81,13 +80,14 @@ def generate_k8s(
     }
 
     output_path = config.root / (config.k8s_local_output if local else config.k8s_output)
+    documents = workload_documents(list(config.workloads.values()))
 
     render_score(
         config,
         substrate="k8s",
         workloads=workloads,
+        documents=documents,
         route_exports=route_path_exports(list(config.workloads.values())),
-        listener_exports=listener_port_exports(list(config.workloads.values())),
         variable_values={
             STORAGE_CLASS_VAR: LOCAL_STORAGE_CLASS if local else CLOUD_STORAGE_CLASS,
             **k8s.vars,
@@ -116,7 +116,7 @@ def generate_k8s(
                 dump_yaml(
                     resolve_markers(
                         parse_yaml_text(path.read_text(encoding="utf-8"), path.as_posix()),
-                        MarkerContext(config.root, index_images, path.as_posix()),
+                        MarkerContext(config.root, index_images, path.as_posix(), workloads=documents),
                     )
                 ),
             )
