@@ -47,6 +47,8 @@ STRING_FORM_FIELDS = ("state", "outputs", "volumes", "services", "manifests")
 PROVISIONER_ROUTE_KEY = "route"
 PROVISIONER_PORT_KEY = "port"
 
+STATE_TEMPLATE_PATTERN = re.compile(r"\{\{\s*\.State\.([a-zA-Z0-9_.-]+)\s*\}\}")
+
 
 class AuthoredProvisioner(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -224,11 +226,12 @@ def translate_service_claims(entry: Yaml, source: str) -> Yaml:
     services_value = entry.get("services")
     if not is_mapping(services_value):
         return entry
-    services = {name: claimed_service_stanza(name, stanza, source) for name, stanza in services_value.items()}
+    state = entry.get("state")
+    services = {name: claimed_service_stanza(name, stanza, source, state) for name, stanza in services_value.items()}
     return {**entry, "services": services}
 
 
-def claimed_service_stanza(name: str, stanza: Yaml, source: str) -> Yaml:
+def claimed_service_stanza(name: str, stanza: Yaml, source: str, state: Yaml) -> Yaml:
     if not is_mapping(stanza) or (PROVISIONER_ROUTE_KEY not in stanza and PROVISIONER_PORT_KEY not in stanza):
         return stanza
     route_value = stanza.get(PROVISIONER_ROUTE_KEY)
@@ -250,8 +253,7 @@ def claimed_service_stanza(name: str, stanza: Yaml, source: str) -> Yaml:
         raise ValueError(
             f"{site}: {PROVISIONER_ROUTE_KEY}: requires the {PROVISIONER_PORT_KEY}: key naming the listen port"
         )
-    if isinstance(port_value, bool) or not isinstance(port_value, int) or not 1 <= port_value <= 65535:
-        raise ValueError(f"{site}: {PROVISIONER_PORT_KEY}: must be a literal port in the range 1-65535")
+    port = provisioner_route_port(port_value, state, site)
     annotations = stanza.get("annotations")
     if annotations is not None and not is_mapping(annotations):
         raise ValueError(f"{site}: annotations: must be a mapping")
@@ -260,11 +262,43 @@ def claimed_service_stanza(name: str, stanza: Yaml, source: str) -> Yaml:
         if annotation in spelled:
             raise ValueError(f"{site}: annotates {annotation} directly; declare {PROVISIONER_ROUTE_KEY}: instead")
     spelled[ROUTE_ANNOTATION] = route_value
-    spelled[ROUTE_PORT_ANNOTATION] = str(port_value)
+    spelled[ROUTE_PORT_ANNOTATION] = str(port)
     return {
         **{key: value for key, value in stanza.items() if key not in (PROVISIONER_ROUTE_KEY, PROVISIONER_PORT_KEY)},
         "annotations": spelled,
     }
+
+
+def provisioner_route_port(value: Yaml, state: Yaml, site: str) -> int:
+    # A literal int rides through; a string is one {{ .State.<name> }} template rendered
+    # against the provisioner's own state (the state the templating engine resolves the
+    # stanza's other templates against), so the port annotation carries the integer
+    shapes = f"{site}: {PROVISIONER_PORT_KEY}: must be a literal port in the range 1-65535 or a {{{{ .State.<name> }}}} template"
+    match value:
+        case bool():
+            raise ValueError(shapes)
+        case int():
+            if not 1 <= value <= 65535:
+                raise ValueError(shapes)
+            return value
+        case str():
+            pass
+        case _:
+            raise ValueError(shapes)
+    template = STATE_TEMPLATE_PATTERN.fullmatch(value)
+    if template is None:
+        raise ValueError(shapes)
+    resolved: Yaml = state
+    for segment in template.group(1).split("."):
+        if not is_mapping(resolved) or segment not in resolved:
+            raise ValueError(f"{site}: {PROVISIONER_PORT_KEY}: {value!r} names no entry the state declares")
+        resolved = resolved[segment]
+    rendered = str(resolved)
+    if not rendered.isdigit() or not 1 <= int(rendered) <= 65535:
+        raise ValueError(
+            f"{site}: {PROVISIONER_PORT_KEY}: {value!r} renders to {rendered!r}, not a port in the range 1-65535"
+        )
+    return int(rendered)
 
 
 def injected_workload(config: ConfigFile, workload: LoadedWorkload, variable_values: dict[str, str]) -> Yaml:

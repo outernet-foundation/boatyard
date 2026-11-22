@@ -1295,7 +1295,9 @@ def test_provisioner_claims_translate_into_annotations_under_the_string_form(
     }
 
 
-def _invoke_claiming_provisioner(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, provisioner: str) -> None:
+def _invoke_claiming_provisioner(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, provisioner: str
+) -> CompiledProvisionersRecorder:
     sources = {
         "stack/score/api.yaml": _workload_referencing("config", "api"),
         "stack/score/compose/config.yaml": provisioner,
@@ -1311,6 +1313,7 @@ def _invoke_claiming_provisioner(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
         config,
         _lock_for_images({"EXAMPLE_IMAGE": "ghcr.io/org/example:1@" + DIGEST, **ALPINE_LOCK}),
     )
+    return recorder
 
 
 def test_a_provisioner_route_without_its_port_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1379,6 +1382,124 @@ def test_a_provisioner_stanza_annotating_the_claim_directly_refuses(
       port: 3000
       annotations:
         boatyard/route: /grafana/*
+""",
+        )
+
+
+PROVISIONER_WITH_TEMPLATED_CLAIM = """
+- uri: template://example/config
+  type: example-config
+  state:
+    grafana_port: 3000
+  services:
+    grafana:
+      image: ${EXAMPLE_IMAGE:?err}
+      route: /grafana/*
+      port: "{{ .State.grafana_port }}"
+      healthcheck:
+        test:
+          [
+            "CMD",
+            "wget",
+            "--quiet",
+            "--tries=1",
+            "--output-document=-",
+            "http://localhost:{{ .State.grafana_port }}/health",
+          ]
+        interval: 5s
+"""
+
+
+def test_a_templated_provisioner_route_port_renders_into_the_annotation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder = _invoke_claiming_provisioner(monkeypatch, tmp_path, PROVISIONER_WITH_TEMPLATED_CLAIM)
+
+    [document] = recorder.compiled
+    [entry] = document
+    assert isinstance(entry, dict)
+    services_text = entry["services"]
+    assert isinstance(services_text, str)
+    grafana = yaml.safe_load(services_text)["grafana"]
+    assert "route" not in grafana
+    assert "port" not in grafana
+    assert grafana["annotations"] == {"boatyard/route": "/grafana/*", "boatyard/port": "3000"}
+
+
+def test_the_healthcheck_templating_the_same_state_key_rides_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder = _invoke_claiming_provisioner(monkeypatch, tmp_path, PROVISIONER_WITH_TEMPLATED_CLAIM)
+
+    [document] = recorder.compiled
+    [entry] = document
+    assert isinstance(entry, dict)
+    services_text = entry["services"]
+    assert isinstance(services_text, str)
+    grafana = yaml.safe_load(services_text)["grafana"]
+    assert grafana["healthcheck"]["test"][-1] == "http://localhost:{{ .State.grafana_port }}/health"
+    assert grafana["annotations"]["boatyard/port"] == "3000"
+
+
+def test_a_templated_provisioner_route_port_refuses_a_non_integer_render(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with pytest.raises(ValueError, match=r"renders to 'not-a-port', not a port in the range 1-65535"):
+        _invoke_claiming_provisioner(
+            monkeypatch,
+            tmp_path,
+            """
+- uri: template://example/config
+  type: example-config
+  state:
+    grafana_port: not-a-port
+  services:
+    grafana:
+      image: ${EXAMPLE_IMAGE:?err}
+      route: /grafana/*
+      port: "{{ .State.grafana_port }}"
+""",
+        )
+
+
+def test_a_templated_provisioner_route_port_refuses_an_out_of_range_render(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with pytest.raises(ValueError, match=r"renders to '70000', not a port in the range 1-65535"):
+        _invoke_claiming_provisioner(
+            monkeypatch,
+            tmp_path,
+            """
+- uri: template://example/config
+  type: example-config
+  state:
+    grafana_port: 70000
+  services:
+    grafana:
+      image: ${EXAMPLE_IMAGE:?err}
+      route: /grafana/*
+      port: "{{ .State.grafana_port }}"
+""",
+        )
+
+
+def test_a_templated_provisioner_route_port_refuses_a_missing_state_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with pytest.raises(ValueError, match=r"names no entry the state declares"):
+        _invoke_claiming_provisioner(
+            monkeypatch,
+            tmp_path,
+            """
+- uri: template://example/config
+  type: example-config
+  state:
+    grafana_port: 3000
+  services:
+    grafana:
+      image: ${EXAMPLE_IMAGE:?err}
+      route: /grafana/*
+      port: "{{ .State.admin_port }}"
 """,
         )
 
