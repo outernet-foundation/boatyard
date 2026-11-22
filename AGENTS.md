@@ -44,7 +44,12 @@ Design intent and silent-failure traps, one fact per bullet.
   `${listeners.<name>.port}` variables. The generation seam derives `service.ports` from the
   non-internal listeners, rewrites the names to their integers, and composes the score tools'
   document from the lens without the `listeners:` and `boatyard:` blocks, so a port integer is
-  authored exactly once and every reference is resolvable from the file itself.
+  authored exactly once and every reference is resolvable from the file itself. The rendered
+  stanza carries the whole inventory — internal listeners included — as the
+  `boatyard/listeners` interchange label the bundle-record extraction reads back, and a config
+  `ports:` entry may target a listener by name (`target: {listener: <name>}`), resolved at
+  resolve against the bundle's records; internal listeners are legal targets there because a
+  host publish reaches the container port without the service surface.
 - Routes are claims the serving surface authors against that inventory: a workload's
   `boatyard: {route: {path: /auth/*, port: http, strip: true}}` — the port names a
   non-internal listener — or a provisioner stanza's `route: {path, port, strip}` mapping, the
@@ -84,7 +89,10 @@ Design intent and silent-failure traps, one fact per bullet.
   facts (routes, publishes, container sources, interpolation targets) in the `boatyard:` block —
   and `boatyard.yml` holds no per-workload runtime fact. The gpu annotation (`"true"`) is
   substrate only
-  and the patch templates are its reader; start behavior is a separate annotation —
+  and the patch templates are its reader; the docker-socket annotation (`"true"`, compose
+  rendering only) binds `/var/run/docker.sock` for container-controlling workloads — score's
+  workload spec carries no volume grammar, so the bind rides the same patch-template seam;
+  start behavior is a separate annotation —
   `boatyard/autostart: "false"` leaves the container created-stopped instead of
   started by `up`, on any service, gpu or not, recorded in the bundle records as
   held services (lock-time for remote bundles, resolve-time for local and override
