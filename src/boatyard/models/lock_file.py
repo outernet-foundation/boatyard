@@ -159,6 +159,7 @@ class ConfigLockBundle(BaseModel):
     container_names: list[str]
     held_services: list[str] = Field(default_factory=list)
     declared_ports: dict[str, list[tuple[int, int, str]]] = Field(default_factory=dict)
+    listeners: dict[str, dict[str, int]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _require_digest_pin(self, info: ValidationInfo) -> Self:

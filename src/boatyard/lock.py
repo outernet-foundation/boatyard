@@ -32,6 +32,7 @@ from boatyard.models.lock_file import (
 )
 from boatyard.models.workload import (
     AUTOSTART_ANNOTATION,
+    LISTENERS_LABEL,
     PUBLISH_PORT_LABEL,
     ROUTE_PATH_LABEL,
     ROUTE_PATH_PATTERN,
@@ -107,6 +108,7 @@ class BundleRecords(NamedTuple):
     container_names: list[str]
     held_services: list[str]
     declared_ports: dict[str, list[tuple[int, int, str]]]
+    listeners: dict[str, dict[str, int]]
 
 
 def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) -> LockFile:
@@ -145,6 +147,7 @@ def relock(config: ConfigFile, *, upgrade: bool = False, check: bool = False) ->
             container_names=records.container_names,
             held_services=records.held_services,
             declared_ports=records.declared_ports,
+            listeners=records.listeners,
         )
 
     # Refuse committed entries for local base_images keys
@@ -283,6 +286,7 @@ def extract_bundle_records(texts: list[str]) -> BundleRecords:
     # Read the routes and ports from the interchange labels
     routes: list[Route] = []
     ports: list[PublishedPort] = []
+    listeners: dict[str, dict[str, int]] = {}
     route_owners: dict[str, str] = {}
     for service_name, _stanza, service_annotations in stanzas:
         if service_annotations.get(AUTOSTART_ANNOTATION) == "false":
@@ -293,6 +297,9 @@ def extract_bundle_records(texts: list[str]) -> BundleRecords:
                 f"the service {service_name!r} carries the unknown label {unknown[0]!r}; the boatyard/* "
                 f"stanza labels are {list(STANZA_LABELS)}"
             )
+        listeners_value = service_annotations.get(LISTENERS_LABEL)
+        if listeners_value is not None:
+            _collect_listeners(listeners, service_name, listeners_value)
         route_path = service_annotations.get(ROUTE_PATH_LABEL)
         if route_path is not None:
             if ROUTE_PATH_PATTERN.fullmatch(route_path) is None:
@@ -348,6 +355,7 @@ def extract_bundle_records(texts: list[str]) -> BundleRecords:
         container_names=sorted(container_names),
         held_services=sorted(held_services),
         declared_ports=declared_ports,
+        listeners=listeners,
     )
 
 
@@ -358,6 +366,15 @@ def stanza_annotations(stanza: dict[str, Yaml]) -> dict[str, str]:
         if is_mapping(value):
             annotations.update({str(name): str(item) for name, item in value.items()})
     return annotations
+
+
+def _collect_listeners(collected: dict[str, dict[str, int]], service_name: str, value: str) -> None:
+    for entry in value.split(","):
+        # Split at the last colon: listener names may carry dots but never a colon
+        name, separator, port_text = entry.rpartition(":")
+        if not separator or not name or not port_text.isdigit() or not 1 <= int(port_text) <= 65535:
+            raise ValueError(f"{LISTENERS_LABEL} entry {entry!r} must be a listener-name:port pair")
+        collected.setdefault(service_name, {})[name] = int(port_text)
 
 
 def _collect_declared_ports(

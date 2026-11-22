@@ -388,12 +388,18 @@ class Route(BaseModel):
         return self
 
 
+class ListenerPortReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    listener: str
+
+
 class PublishedPort(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     service: str
     published: PortNumber
-    target: PortNumber
+    target: PortNumber | ListenerPortReference
     protocol: Literal["tcp", "udp"] = "tcp"
     host_ip: str | None = None
 

@@ -1433,6 +1433,7 @@ def test_the_seam_composes_the_tool_document_from_the_lens() -> None:
                 "boatyard/route-path": "/auth/*",
                 "boatyard/route-port": "8081",
                 "boatyard/route-strip": "true",
+                "boatyard/listeners": "web:8081,admin:9090,mgmt:9000",
             },
         },
         "resources": {"db": {"type": "example-db"}},

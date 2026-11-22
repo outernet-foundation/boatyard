@@ -20,6 +20,8 @@ ROUTE_PATH_LABEL = "boatyard/route-path"
 ROUTE_PORT_LABEL = "boatyard/route-port"
 ROUTE_STRIP_LABEL = "boatyard/route-strip"
 PUBLISH_PORT_LABEL = "boatyard/publish-port"
+# The comma-joined name:port inventory a config ports entry resolves its target against
+LISTENERS_LABEL = "boatyard/listeners"
 
 GPU_ANNOTATION = "boatyard/gpu"
 
@@ -32,6 +34,7 @@ STANZA_LABELS = (
     ROUTE_PORT_LABEL,
     ROUTE_STRIP_LABEL,
     PUBLISH_PORT_LABEL,
+    LISTENERS_LABEL,
     PROBE_ADAPTER_ANNOTATION,
     RESTART_ANNOTATION,
     AUTOSTART_ANNOTATION,
