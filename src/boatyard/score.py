@@ -28,6 +28,7 @@ from boatyard.models.config_file import (
 from boatyard.models.image import dockerfile_stem
 from boatyard.models.workload import (
     PUBLISH_PORT_LABEL,
+    LISTENERS_LABEL,
     ROUTE_PATH_LABEL,
     ROUTE_PORT_LABEL,
     ROUTE_STRIP_LABEL,
@@ -330,6 +331,11 @@ def injected_workload(config: ConfigFile, workload: LoadedWorkload, variable_val
         labels[PUBLISH_PORT_LABEL] = ",".join(
             f"{entry.published}:{entry.target}/{entry.protocol}" for entry in block.publish
         )
+    # The full inventory, internal listeners included: a config ports entry targets a container
+    # port, which a host publish reaches without the service surface
+    inventory = document.listener_ports
+    if inventory:
+        labels[LISTENERS_LABEL] = ",".join(f"{name}:{port}" for name, port in inventory.items())
     if labels:
         metadata = tool.setdefault("metadata", {})
         annotations = metadata.setdefault("annotations", {})

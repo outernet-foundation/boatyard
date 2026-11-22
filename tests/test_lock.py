@@ -1110,6 +1110,21 @@ def test_extract_bundle_records_holds_services_marked_no_autostart() -> None:
     assert records.held_services == ["livekit"]
 
 
+def test_extract_bundle_records_accepts_the_docker_socket_label() -> None:
+    from boatyard.lock import extract_bundle_records
+
+    text = (
+        "services:\n"
+        "  orchestrator:\n"
+        "    image: demo/orchestrator:1\n"
+        '    annotations:\n      boatyard/docker-socket: "true"\n'
+    )
+
+    records = extract_bundle_records([text])
+
+    assert records.services == ["orchestrator"]
+
+
 def test_extract_bundle_records_parses_the_publish_label_into_port_records() -> None:
     from boatyard.lock import extract_bundle_records
 
@@ -1127,6 +1142,37 @@ def test_extract_bundle_records_parses_the_publish_label_into_port_records() -> 
         ("livekit", 6178, 6178, "tcp"),
         ("livekit", 5957, 5957, "udp"),
     ]
+
+
+def test_extract_bundle_records_parses_the_listeners_label_into_inventories() -> None:
+    from boatyard.lock import extract_bundle_records
+
+    text = (
+        "services:\n"
+        "  livekit:\n"
+        "    image: demo/livekit:1\n"
+        "    annotations:\n"
+        "      boatyard/listeners: http:8000,debug.py:5678\n"
+    )
+
+    records = extract_bundle_records([text])
+
+    assert records.listeners == {"livekit": {"http": 8000, "debug.py": 5678}}
+
+
+def test_a_malformed_listeners_label_refuses() -> None:
+    from boatyard.lock import extract_bundle_records
+
+    text = (
+        "services:\n"
+        "  livekit:\n"
+        "    image: demo/livekit:1\n"
+        "    annotations:\n"
+        "      boatyard/listeners: http-eight-thousand\n"
+    )
+
+    with pytest.raises(ValueError, match="must be a listener-name:port pair"):
+        extract_bundle_records([text])
 
 
 def _skip_crane_install() -> None:

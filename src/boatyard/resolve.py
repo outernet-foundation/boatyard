@@ -13,6 +13,7 @@ from boatyard.models.config_file import (
     ConfigFile,
     FlattenedServiceEntry,
     Image,
+    ListenerPortReference,
     PublishedPort,
     Route,
     Slot,
@@ -50,6 +51,7 @@ class BundleProject(NamedTuple):
     container_names: list[str]
     held_services: list[str]
     declared_ports: dict[str, list[tuple[int, int, str]]]
+    listeners: dict[str, dict[str, int]]
 
 
 class PublicFace(NamedTuple):
@@ -182,6 +184,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
             adopted_container_names = list(locked.container_names)
             adopted_held_services = list(locked.held_services)
             adopted_declared_ports = dict(locked.declared_ports)
+            adopted_listeners = dict(locked.listeners)
             bundle_path = None
             pinned_reference = locked.reference
         else:
@@ -193,11 +196,15 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
             adopted_container_names = records.container_names
             adopted_held_services = records.held_services
             adopted_declared_ports = records.declared_ports
+            adopted_listeners = records.listeners
             bundle_path = paths[name]
             pinned_reference = None
 
         # If config port declarations exist, they replace the adopted set wholesale
         effective_ports = list(row.effective_ports) if row.effective_ports else adopted_ports
+
+        # Listener-referenced targets resolve against the bundle's declared inventories
+        effective_ports = [_resolve_port_target(name, port, adopted_listeners) for port in effective_ports]
 
         bundles.append(
             BundleProject(
@@ -211,6 +218,7 @@ def resolve(config: ConfigFile, lock: LockFile, values: ValuesFile) -> AssemblyP
                 container_names=adopted_container_names,
                 held_services=adopted_held_services,
                 declared_ports=adopted_declared_ports,
+                listeners=adopted_listeners,
             )
         )
 
@@ -406,6 +414,31 @@ def route_specificity(route: Route) -> tuple[int, int, str]:
     wildcard = route.path.endswith("/*")
     concrete = route.path.removesuffix("/*")
     return (-len(concrete), 1 if wildcard else 0, route.path)
+
+
+def _resolve_port_target(
+    entry_name: str,
+    port: PublishedPort,
+    listeners: dict[str, dict[str, int]],
+) -> PublishedPort:
+    # A bare listener name resolves against the port's own service, an inventory the rendered
+    # stanza carries as the listeners interchange label — internal listeners included, because
+    # a host publish targets the container port without the service surface
+    if not isinstance(port.target, ListenerPortReference):
+        return port
+    reference = port.target.listener
+    inventory = listeners.get(port.service)
+    if inventory is None:
+        raise ValueError(
+            f"services entry {entry_name!r}: the port on {port.service!r} targets listener {reference!r}, "
+            f"but the bundle carries no listener inventory for that service"
+        )
+    if reference not in inventory:
+        raise ValueError(
+            f"services entry {entry_name!r}: the port on {port.service!r} targets listener {reference!r}, "
+            f"which the service does not declare ({', '.join(sorted(inventory))})"
+        )
+    return port.model_copy(update={"target": inventory[reference]})
 
 
 def _entry_env(env: dict[str, str], shas_by_root: dict[Path, dict[str, str]], sources: BundleSources) -> None:

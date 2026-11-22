@@ -952,6 +952,7 @@ class TestRenderedNameClaims:
 SHIPPED_TEMPLATES = {
     "probe-adapter-healthchecks.tpl",
     "restart.tpl",
+    "docker-socket.tpl",
     "gpu-cuda.tpl",
     "gpu-rocm.tpl",
     "gpu-pod.tpl",
@@ -999,6 +1000,72 @@ def test_the_bash_http_spell_uses_the_slash_port_spelling() -> None:
 
     assert "/dev/tcp/127.0.0.1/{{ .port }}" in text
     assert "/dev/tcp/127.0.0.1:{{ .port }}" not in text
+
+
+def test_the_healthcheck_template_derives_its_timing_from_the_probe_fields() -> None:
+    text = (files("boatyard") / "score_patch_templates" / "probe-adapter-healthchecks.tpl").read_text(encoding="utf-8")
+
+    assert 'dig "periodSeconds" 5' in text
+    assert 'dig "initialDelaySeconds" 5' in text
+    assert 'dig "timeoutSeconds" 5' in text
+    assert 'dig "failureThreshold" 3' in text
+    assert "interval: {{ $interval }}s" in text
+    assert "start_period: {{ $startPeriod }}s" in text
+    assert "timeout: {{ $timeout }}s" in text
+    assert "retries: {{ $retries }}" in text
+
+
+PROBE_TIMING_WORKLOAD = (
+    "metadata:\n"
+    "  name: api\n"
+    "  annotations:\n"
+    "    boatyard/probe-adapter: python-urllib\n"
+    "boatyard:\n"
+    "  lock:\n"
+    "    api: API_IMAGE\n"
+    "listeners:\n"
+    "  web: 8081\n"
+    "containers:\n"
+    "  api:\n"
+    "    readinessProbe:\n"
+    "      httpGet:\n"
+    "        path: /health\n"
+    "        port: web\n"
+    "      initialDelaySeconds: 30\n"
+    "      periodSeconds: 10\n"
+    "      timeoutSeconds: 2\n"
+    "      failureThreshold: 6\n"
+)
+
+
+def test_the_expanded_workload_copy_carries_the_authored_probe_timing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "stack" / "score").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "stack" / "score" / "api.yaml").write_text(PROBE_TIMING_WORKLOAD, encoding="utf-8")
+    recorder = WorkloadContentsRecorder(API_SERVICE_RENDERING)
+    monkeypatch.setattr(score_module, "bash", recorder.run)
+    config = _generated_config(
+        tmp_path,
+        ["api.yaml"],
+        repository="ghcr.io/org/repo",
+        project_name="example",
+        platforms=["linux/amd64"],
+        services={"core": {"options": {"main": {"workloads": ["api.yaml"]}}}},
+    )
+    score_compose_module.generate_compose(
+        config,
+        _lock_for_images({"API_IMAGE": "ghcr.io/org/api:1@" + DIGEST, **ALPINE_LOCK}),
+    )
+
+    document = yaml.safe_load(recorder.workload_contents["api.yaml"])
+    assert document["containers"]["api"]["readinessProbe"] == {
+        "httpGet": {"path": "/health", "port": 8081},
+        "initialDelaySeconds": 30,
+        "periodSeconds": 10,
+        "timeoutSeconds": 2,
+        "failureThreshold": 6,
+    }
 
 
 PROVISIONER_WITH_SERVICES = """
@@ -1104,7 +1171,7 @@ def test_barrier_pin_stays_unregistered_without_provisioner_services(
         },
     )
 
-    assert templates == [["probe-adapter-healthchecks.tpl", "restart.tpl"]]
+    assert templates == [["probe-adapter-healthchecks.tpl", "restart.tpl", "docker-socket.tpl"]]
 
 
 def test_provisioners_register_by_resource_type_closure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1366,6 +1433,7 @@ def test_the_seam_composes_the_tool_document_from_the_lens() -> None:
                 "boatyard/route-path": "/auth/*",
                 "boatyard/route-port": "8081",
                 "boatyard/route-strip": "true",
+                "boatyard/listeners": "web:8081,admin:9090,mgmt:9000",
             },
         },
         "resources": {"db": {"type": "example-db"}},
@@ -2113,6 +2181,18 @@ def test_the_gpu_annotation_parses() -> None:
     assert document.metadata.annotations == {"boatyard/gpu": "true"}
 
 
+def test_the_docker_socket_annotation_parses() -> None:
+    document = parse_workload(
+        {
+            "metadata": {"name": "api", "annotations": {"boatyard/docker-socket": "true"}},
+            "containers": {},
+        },
+        "api.yaml",
+    )
+
+    assert document.metadata.annotations == {"boatyard/docker-socket": "true"}
+
+
 def test_the_compose_rendering_receives_the_resolved_probe_port(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2512,7 +2592,7 @@ def test_adapted_probe_bearing_workloads_register_the_healthcheck_template(
         generated=API_SERVICE_RENDERING,
     )
 
-    assert templates == [["probe-adapter-healthchecks.tpl", "restart.tpl"]]
+    assert templates == [["probe-adapter-healthchecks.tpl", "restart.tpl", "docker-socket.tpl"]]
 
 
 def test_restart_values_outside_the_compose_enum_refuse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2539,7 +2619,7 @@ def test_restart_annotation_with_an_enum_value_passes(tmp_path: Path, monkeypatc
         },
     )
 
-    assert templates == [["probe-adapter-healthchecks.tpl", "restart.tpl"]]
+    assert templates == [["probe-adapter-healthchecks.tpl", "restart.tpl", "docker-socket.tpl"]]
 
 
 def test_bare_literal_workload_image_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2692,8 +2772,8 @@ def test_gpu_compose_templates_register_per_the_renderings_variant(
     templates = _compose_init_templates(monkeypatch, tmp_path, config, {}, {})
 
     assert templates == [
-        ["probe-adapter-healthchecks.tpl", "restart.tpl", "gpu-cuda.tpl"],
-        ["probe-adapter-healthchecks.tpl", "restart.tpl", "gpu-rocm.tpl"],
+        ["probe-adapter-healthchecks.tpl", "restart.tpl", "docker-socket.tpl", "gpu-cuda.tpl"],
+        ["probe-adapter-healthchecks.tpl", "restart.tpl", "docker-socket.tpl", "gpu-rocm.tpl"],
     ]
 
 

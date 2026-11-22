@@ -42,6 +42,7 @@ TOOL = "score-compose"
 
 HEALTHCHECK_TEMPLATE = "probe-adapter-healthchecks.tpl"
 RESTART_TEMPLATE = "restart.tpl"
+DOCKER_SOCKET_TEMPLATE = "docker-socket.tpl"
 GPU_COMPOSE_TEMPLATES = {"cuda": "gpu-cuda.tpl", "rocm": "gpu-rocm.tpl"}
 
 
@@ -187,6 +188,7 @@ def generate_compose(config: ConfigFile, lock: LockFile) -> list[Path]:
             templates=[
                 HEALTHCHECK_TEMPLATE,
                 RESTART_TEMPLATE,
+                DOCKER_SOCKET_TEMPLATE,
                 *(
                     GPU_COMPOSE_TEMPLATES[value]
                     for variable, value in entry.vars.items()

@@ -276,6 +276,7 @@ def _resolve_tree(
     lock_livekit_routes: list[dict[str, object]] | None = None,
     lock_livekit_ports: list[dict[str, object]] | None = None,
     lock_livekit_slots: dict[str, object] | None = None,
+    lock_livekit_listeners: dict[str, dict[str, int]] | None = None,
     values_extra: dict[str, object] | None = None,
 ):
     livekit_entry: dict[str, object] = {"ref": LIVEKIT_REF}
@@ -302,6 +303,8 @@ def _resolve_tree(
     }
     if lock_livekit_slots is not None:
         livekit_bundle["slots"] = lock_livekit_slots
+    if lock_livekit_listeners is not None:
+        livekit_bundle["listeners"] = lock_livekit_listeners
     lock_images: dict[str, object] = {}
     tmp_path.joinpath(*LOCK_PATH.parts).write_text(
         yaml.safe_dump({
@@ -828,6 +831,40 @@ class TestAdoption:
 
         [bundle] = plan.bundles
         assert [(port.service, port.published) for port in bundle.effective_ports] == [("livekit", 6178)]
+
+    def test_a_listener_referenced_target_resolves_from_the_locked_inventory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        plan = _resolve_tree(
+            tmp_path,
+            monkeypatch,
+            livekit_ports=[{"service": "livekit", "published": 6178, "target": {"listener": "http"}}],
+            lock_livekit_listeners={"livekit": {"http": 8000, "debug": 5678}},
+        )
+
+        [bundle] = plan.bundles
+        assert [(port.service, port.published, port.target) for port in bundle.effective_ports] == [
+            ("livekit", 6178, 8000)
+        ]
+
+    def test_a_listener_target_without_an_inventory_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        with pytest.raises(ValueError, match="carries no listener inventory for that service"):
+            _resolve_tree(
+                tmp_path,
+                monkeypatch,
+                livekit_ports=[{"service": "livekit", "published": 6178, "target": {"listener": "http"}}],
+            )
+
+    def test_an_unknown_listener_target_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        with pytest.raises(ValueError, match="'metrics', which the service does not declare"):
+            _resolve_tree(
+                tmp_path,
+                monkeypatch,
+                livekit_ports=[{"service": "livekit", "published": 6178, "target": {"listener": "metrics"}}],
+                lock_livekit_listeners={"livekit": {"http": 8000}},
+            )
 
     def test_an_unknown_values_ports_service_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         with pytest.raises(ValueError, match="are services of no selected bundle"):

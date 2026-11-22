@@ -4,23 +4,33 @@
 # class closes that drift for workloads declaring a probe adapter
 # (boatyard/probe-adapter): it converts the workload's readinessProbe,
 # else livenessProbe, into a compose healthcheck against the computed
-# <workload>-<container> service name. The adapter picks the exec spell the
-# image runtime can run — python-urllib (python-based workloads shipping
-# neither wget nor curl) or bash-http (workloads whose image ships bash and
-# nothing else, spelling HTTP over /dev/tcp); a workload declaring an httpGet
-# probe without the adapter refuses at generation (devkit code — templates are
-# data).
+# <workload>-<container> service name. The timing derives from the same
+# probe's authored fields — periodSeconds→interval,
+# initialDelaySeconds→start_period, timeoutSeconds→timeout,
+# failureThreshold→retries — defaulting to 5s/5s/5s/3 when unauthored, so
+# one probe spell drives both renderings' timing. The adapter picks the exec
+# spell the image runtime can run — python-urllib (python-based workloads
+# shipping neither wget nor curl) or bash-http (workloads whose image ships
+# bash and nothing else, spelling HTTP over /dev/tcp); a workload declaring
+# an httpGet probe without the adapter refuses at generation (devkit code —
+# templates are data).
 {{- $matched := false }}
 {{- range $workloadName, $workload := .Workloads }}
 {{- $adapter := dig "metadata" "annotations" "boatyard/probe-adapter" "" $workload }}
 {{- if or (eq $adapter "python-urllib") (eq $adapter "bash-http") }}
 {{- range $containerName, $container := $workload.containers }}
+{{- $probeBlock := $container.readinessProbe }}
 {{- $probe := $container.readinessProbe.httpGet }}
 {{- if not $probe }}
+{{- $probeBlock = $container.livenessProbe }}
 {{- $probe = $container.livenessProbe.httpGet }}
 {{- end }}
 {{- with $probe }}
 {{- $matched = true }}
+{{- $interval := dig "periodSeconds" 5 $probeBlock }}
+{{- $startPeriod := dig "initialDelaySeconds" 5 $probeBlock }}
+{{- $timeout := dig "timeoutSeconds" 5 $probeBlock }}
+{{- $retries := dig "failureThreshold" 3 $probeBlock }}
 - op: set
   path: services.{{ $workloadName }}-{{ $containerName }}.healthcheck
   value:
@@ -41,10 +51,10 @@
         "exec 3<>/dev/tcp/127.0.0.1/{{ .port }} && printf 'GET {{ .path }} HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && read -r status <&3 && case $$status in *200*) exit 0;; *) exit 1;; esac",
       ]
     {{- end }}
-    interval: 5s
-    start_period: 5s
-    timeout: 5s
-    retries: 3
+    interval: {{ $interval }}s
+    start_period: {{ $startPeriod }}s
+    timeout: {{ $timeout }}s
+    retries: {{ $retries }}
   description: Healthcheck from httpGet probe for {{ $workloadName }}-{{ $containerName }}
 {{- end }}
 {{- end }}

@@ -20,8 +20,13 @@ ROUTE_PATH_LABEL = "boatyard/route-path"
 ROUTE_PORT_LABEL = "boatyard/route-port"
 ROUTE_STRIP_LABEL = "boatyard/route-strip"
 PUBLISH_PORT_LABEL = "boatyard/publish-port"
+# The comma-joined name:port inventory a config ports entry resolves its target against
+LISTENERS_LABEL = "boatyard/listeners"
 
 GPU_ANNOTATION = "boatyard/gpu"
+
+# The host socket bind for container-controlling workloads (the compose rendering only)
+DOCKER_SOCKET_ANNOTATION = "boatyard/docker-socket"
 
 # The closed boatyard/* label vocabulary the bundle-record extraction accepts off a rendered stanza
 STANZA_LABELS = (
@@ -29,13 +34,21 @@ STANZA_LABELS = (
     ROUTE_PORT_LABEL,
     ROUTE_STRIP_LABEL,
     PUBLISH_PORT_LABEL,
+    LISTENERS_LABEL,
     PROBE_ADAPTER_ANNOTATION,
     RESTART_ANNOTATION,
     AUTOSTART_ANNOTATION,
     GPU_ANNOTATION,
+    DOCKER_SOCKET_ANNOTATION,
 )
 
-SCALAR_ANNOTATIONS = (PROBE_ADAPTER_ANNOTATION, RESTART_ANNOTATION, AUTOSTART_ANNOTATION, GPU_ANNOTATION)
+SCALAR_ANNOTATIONS = (
+    PROBE_ADAPTER_ANNOTATION,
+    RESTART_ANNOTATION,
+    AUTOSTART_ANNOTATION,
+    GPU_ANNOTATION,
+    DOCKER_SOCKET_ANNOTATION,
+)
 
 ROUTE_PATH_PATTERN = re.compile(r"(?:/\*|/(?:[^/\s*]+(?:/[^/\s*]+)*)?(?:/\*)?)")
 
