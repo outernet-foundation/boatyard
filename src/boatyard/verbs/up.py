@@ -12,6 +12,7 @@ import yaml
 from bashrun.bash import CalledProcessError, bash, bash_check
 
 from boatyard.build import run_build
+from boatyard.compose import install_compose
 from boatyard.crane import install_crane
 from boatyard.lock import OciArtifactManifest
 from boatyard.models.config_file import (
@@ -175,12 +176,13 @@ def _run_compose(
     arguments: list[str],
 ) -> None:
     # Spell the one compose invocation; the scrub defeats env-file precedence
+    install_compose()
     root = plan.config.root
     quoted_arguments = [quote_command_token(argument) for argument in arguments]
     files_argument = "".join(f" -f {quote_command_token(str(compose_file))}" for compose_file in compose_files)
     scrub = "".join(f" -u {quote_command_token(name)}" for name in sorted(set(plan.env)))
     prefix = (
-        f"docker compose -p {quote_command_token(project_name)}{files_argument} "
+        f"docker-compose -p {quote_command_token(project_name)}{files_argument} "
         f"--project-directory {quote_command_token(str(root))} --env-file {quote_command_token(str(env_file))}"
     )
     # If not on Windows, prefix the env scrub

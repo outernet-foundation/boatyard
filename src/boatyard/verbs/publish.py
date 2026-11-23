@@ -11,6 +11,7 @@ import typer
 from bashrun.bash import bash, bash_output
 
 from boatyard.models.config_file import ConfigFile, compose_bundle_output_path, env_lock_slot, env_tree_slot
+from boatyard.compose import install_compose
 from boatyard.crane import install_crane
 from boatyard.models.lock_file import LOCK_PATH, LockFile
 from boatyard.paths import DEFAULT_CONFIG_PATH
@@ -110,9 +111,10 @@ def publish_compose(
             finalize_baked(baked_path, repository)
 
             # Publish once under the sha tag and alias the branch tag.
+            install_compose()
             sha_reference = f"{repository}/{bundle_name}:{sha}"
             print(f"Publish {sha_reference}")
-            bash(f"docker compose -f {shlex.quote(str(baked_path))} publish {shlex.quote(sha_reference)} --yes")
+            bash(f"docker-compose -f {shlex.quote(str(baked_path))} publish {shlex.quote(sha_reference)} --yes")
             branch_reference = f"{repository}/{bundle_name}:{branch_tag}"
             print(f"Tag {branch_reference}")
             bash(f"crane tag {shlex.quote(sha_reference)} {shlex.quote(branch_tag)}")
