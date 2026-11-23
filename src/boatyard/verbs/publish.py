@@ -79,7 +79,6 @@ def publish_compose(
     registry_host = repository.partition("/")[0]
     print(f"Login to {registry_host}")
     bash(f"docker login {shlex.quote(registry_host)} -u {shlex.quote(username)} --password-stdin", stdin_text=token)
-    install_compose()
     install_crane()
 
     sha = bash_output("git rev-parse HEAD").strip()
@@ -112,6 +111,7 @@ def publish_compose(
             finalize_baked(baked_path, repository)
 
             # Publish once under the sha tag and alias the branch tag.
+            install_compose()
             sha_reference = f"{repository}/{bundle_name}:{sha}"
             print(f"Publish {sha_reference}")
             bash(f"docker-compose -f {shlex.quote(str(baked_path))} publish {shlex.quote(sha_reference)} --yes")

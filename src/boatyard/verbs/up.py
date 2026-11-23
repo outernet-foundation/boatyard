@@ -60,7 +60,6 @@ def up(
     # If the values file is missing, refuse
     if not (root / VALUES_FILE).exists():
         raise ValueError(f"{VALUES_FILE.as_posix()} is required")
-    install_compose()
     lock = LockFile.load(config.root / LOCK_PATH, config)
     config_values = ValuesFile.load(root / VALUES_FILE)
 
@@ -177,6 +176,7 @@ def _run_compose(
     arguments: list[str],
 ) -> None:
     # Spell the one compose invocation; the scrub defeats env-file precedence
+    install_compose()
     root = plan.config.root
     quoted_arguments = [quote_command_token(argument) for argument in arguments]
     files_argument = "".join(f" -f {quote_command_token(str(compose_file))}" for compose_file in compose_files)
