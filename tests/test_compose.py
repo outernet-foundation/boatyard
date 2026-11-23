@@ -1,16 +1,17 @@
 import platform
 import re
-import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
-from bashrun.bash import CalledProcessError, bash, bash_check, bash_output
+from bashrun.bash import CalledProcessError, bash_output
 from typer.testing import CliRunner
 
+from boatyard import compose as compose_module
 from boatyard.cli import app
+from boatyard.compose import COMPOSE_VERSION, compose_binary
 from boatyard.models.image import Image
 from boatyard.verbs import down, up
 from boatyard.models.lock_file import LOCK_PATH
@@ -47,7 +48,7 @@ AUTH_KEYCLOAK_BUNDLE_ENTRY = {
 }
 EDGE_BASE_URL_LINE = "EDGE_BASE_URL=http://boatyard-gateway:8443\n"
 BARRIER_MINT_LINE = "BOATYARD_BARRIER_IMAGE=docker.io/library/alpine:3.20\n"
-PINNED_COMPOSE_VERSION = "5.6.1"
+PINNED_COMPOSE_VERSION = COMPOSE_VERSION.removeprefix("v")
 
 ASSEMBLY_ARGUMENT_PATTERN = re.compile(r"-f (\S*boatyard-gateway-\S+\.yaml)")
 LOCK_ENV_ARGUMENT_PATTERN = re.compile(r"(\S*boatyard-env-\S+\.env)")
@@ -109,6 +110,7 @@ class UpSpy:
     def spy_up(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(up, "bash", self.run)
         monkeypatch.setattr(up, "bash_check", _bash_check_true)
+        monkeypatch.setattr(up, "install_compose", lambda: None)
         monkeypatch.setattr(up, "install_crane", lambda: None)
         monkeypatch.setattr(up, "OciArtifactManifest", self.artifacts)
         return self
@@ -125,47 +127,13 @@ class UpSpy:
 runner = CliRunner()
 
 
-COMPOSE_CACHE_DIRECTORY = Path.home() / ".cache" / "boatyard" / "compose"
-
-
-def _cached_compose_binary() -> str:
-    # The exact compose binary the include-merge assertions run against, cached
-    # under ~/.cache/boatyard so one download serves every run. The download
-    # lands on a partial name and renames into place only after its version
-    # output checks out — a killed or corrupt download never poisons the cache.
-    architecture = {"x86_64": "x86_64", "aarch64": "aarch64"}[platform.machine()]
-    directory = COMPOSE_CACHE_DIRECTORY / f"v{PINNED_COMPOSE_VERSION}" / architecture
-    binary = directory / "docker-compose"
-    if binary.is_file() and bash_check(f"{binary} version"):
-        return str(binary)
-    directory.mkdir(parents=True, exist_ok=True)
-    partial = directory / "docker-compose.partial"
-    release = (
-        "https://github.com/docker/compose/releases/download/"
-        f"v{PINNED_COMPOSE_VERSION}/docker-compose-linux-{architecture}"
-    )
-    bash(f"curl -fsSL {release} -o {partial}")
-    partial.chmod(0o755)
-    if PINNED_COMPOSE_VERSION not in bash_output(f"{partial} version"):
-        raise ValueError(f"{partial}: the downloaded binary does not report version {PINNED_COMPOSE_VERSION}")
-    partial.replace(binary)
-    return str(binary)
-
-
-@pytest.fixture(scope="session")
-def pinned_compose() -> str:
-    return _cached_compose_binary()
-
-
 def _patch_compose_shell(monkeypatch: pytest.MonkeyPatch, cache: Path, version_output: str | None = None) -> list[str]:
-    # Record every shell call _cached_compose_binary makes against a fake cache
-    # directory; the curl stub materializes the downloaded file so the promote
-    # path runs for real.
+    # Record every shell call compose_binary makes against a fake cache directory;
+    # the curl stub materializes the downloaded file so the promote path runs for real.
     commands: list[str] = []
     resolved_version = (
         version_output if version_output is not None else f"Docker Compose version v{PINNED_COMPOSE_VERSION}\n"
     )
-    module = sys.modules[__name__]
 
     def record(command: str) -> None:
         commands.append(command)
@@ -185,11 +153,16 @@ def _patch_compose_shell(monkeypatch: pytest.MonkeyPatch, cache: Path, version_o
         commands.append(command)
         return resolved_version
 
-    monkeypatch.setattr(module, "bash", record)
-    monkeypatch.setattr(module, "bash_check", probe)
-    monkeypatch.setattr(module, "bash_output", output)
-    monkeypatch.setattr(module, "COMPOSE_CACHE_DIRECTORY", cache)
+    monkeypatch.setattr(compose_module, "bash", record)
+    monkeypatch.setattr(compose_module, "bash_check", probe)
+    monkeypatch.setattr(compose_module, "bash_output", output)
+    monkeypatch.setattr(compose_module, "COMPOSE_CACHE_DIRECTORY", cache)
     return commands
+
+
+@pytest.fixture(scope="session")
+def pinned_compose() -> str:
+    return str(compose_binary())
 
 
 def _write_config(root: Path, sections: dict[str, Any] | None = None) -> None:
@@ -1054,15 +1027,16 @@ class TestSharedNames:
         recorder = HandoffRecorder()
         monkeypatch.setattr(down, "bash", recorder.run)
         monkeypatch.setattr(down, "bash_check", _bash_check_true)
+        monkeypatch.setattr(down, "install_compose", lambda: None)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["down"])
 
         assert result.exit_code == 0, result.output
         assert recorder.commands == [
-            f"docker compose -p demo-left-a --project-directory {tmp_path} down --remove-orphans",
-            f"docker compose -p demo-right-b --project-directory {tmp_path} down --remove-orphans",
-            f"docker compose -p demo --project-directory {tmp_path} down --remove-orphans",
+            f"docker-compose -p demo-left-a --project-directory {tmp_path} down --remove-orphans",
+            f"docker-compose -p demo-right-b --project-directory {tmp_path} down --remove-orphans",
+            f"docker-compose -p demo --project-directory {tmp_path} down --remove-orphans",
             "docker network rm demo-shared",
         ]
 
@@ -1073,6 +1047,7 @@ class TestDownTeardown:
         recorder = HandoffRecorder()
         monkeypatch.setattr(down, "bash", recorder.run)
         monkeypatch.setattr(down, "bash_check", _bash_check_true)
+        monkeypatch.setattr(down, "install_compose", lambda: None)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["down"])
@@ -1080,7 +1055,7 @@ class TestDownTeardown:
         assert result.exit_code == 0, result.output
         assert len(recorder.commands) == 6
         for command in recorder.commands[:5]:
-            assert command.startswith("docker compose -p ")
+            assert command.startswith("docker-compose -p ")
             assert " -f " not in command
             assert "--env-file" not in command
             assert command.endswith("down --remove-orphans")
@@ -1095,6 +1070,7 @@ class TestDownTeardown:
             recorder = HandoffRecorder()
             monkeypatch.setattr(down, "bash", recorder.run)
             monkeypatch.setattr(down, "bash_check", _bash_check_true)
+            monkeypatch.setattr(down, "install_compose", lambda: None)
             monkeypatch.chdir(tree)
 
             result = runner.invoke(app, ["down"])
@@ -1109,6 +1085,7 @@ class TestDownTeardown:
         recorder = HandoffRecorder()
         monkeypatch.setattr(down, "bash", recorder.run)
         monkeypatch.setattr(down, "bash_check", _bash_check_true)
+        monkeypatch.setattr(down, "install_compose", lambda: None)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["down", "--volumes"])
@@ -1132,14 +1109,15 @@ class TestDownTeardown:
         recorder = HandoffRecorder()
         monkeypatch.setattr(down, "bash", recorder.run)
         monkeypatch.setattr(down, "bash_check", _bash_check_false)
+        monkeypatch.setattr(down, "install_compose", lambda: None)
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["down"])
 
         assert result.exit_code == 0, result.output
         assert recorder.commands == [
-            f"docker compose -p demo-ext --project-directory {tmp_path} down --remove-orphans",
-            f"docker compose -p demo --project-directory {tmp_path} down --remove-orphans",
+            f"docker-compose -p demo-ext --project-directory {tmp_path} down --remove-orphans",
+            f"docker-compose -p demo --project-directory {tmp_path} down --remove-orphans",
         ]
 
 
@@ -1458,19 +1436,19 @@ class TestBundleOverrides:
             (
                 "env -u BOATYARD_BARRIER_IMAGE -u EDGE_BASE_URL -u PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE "
                 "-u PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE "
-                "docker compose -p demo-placeframe-cuda -f PRODUCER -f OVERRIDE "
+                "docker-compose -p demo-placeframe-cuda -f PRODUCER -f OVERRIDE "
                 "--project-directory ROOT --env-file LOCKENV up --pull missing -d --no-start"
             ),
             (
                 "env -u BOATYARD_BARRIER_IMAGE -u EDGE_BASE_URL -u PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE "
                 "-u PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE "
-                "docker compose -p demo-placeframe-cuda -f PRODUCER -f OVERRIDE "
+                "docker-compose -p demo-placeframe-cuda -f PRODUCER -f OVERRIDE "
                 "--project-directory ROOT --env-file LOCKENV start api grafana"
             ),
             (
                 "env -u BOATYARD_BARRIER_IMAGE -u EDGE_BASE_URL -u PLACEFRAME_CUDA__BOATYARD_LOCK__ALPINE_IMAGE "
                 "-u PLACEFRAME_CUDA__BOATYARD_LOCK__LOKI_IMAGE "
-                "docker compose -p demo -f GATEWAY --project-directory ROOT --env-file LOCKENV up --pull missing -d"
+                "docker-compose -p demo -f GATEWAY --project-directory ROOT --env-file LOCKENV up --pull missing -d"
             ),
         ]
         assert spy.env_content == (
@@ -1762,9 +1740,9 @@ class TestPinnedComposeCache:
         binary.write_bytes(b"fake-binary")
         commands = _patch_compose_shell(monkeypatch, cache)
 
-        resolved = _cached_compose_binary()
+        resolved = compose_binary()
 
-        assert resolved == str(binary)
+        assert resolved == binary
         assert commands == []
 
     def test_a_missing_binary_downloads_validates_and_promotes(
@@ -1773,10 +1751,10 @@ class TestPinnedComposeCache:
         cache = tmp_path / "cache"
         commands = _patch_compose_shell(monkeypatch, cache)
 
-        resolved = _cached_compose_binary()
+        resolved = compose_binary()
 
         binary = cache / f"v{PINNED_COMPOSE_VERSION}" / platform.machine() / "docker-compose"
-        assert resolved == str(binary)
+        assert resolved == binary
         assert binary.is_file()
         assert not (binary.parent / "docker-compose.partial").exists()
         assert len([command for command in commands if command.startswith("curl ")]) == 1
@@ -1788,7 +1766,7 @@ class TestPinnedComposeCache:
         commands = _patch_compose_shell(monkeypatch, cache, version_output="Docker Compose version v0.0.0\n")
 
         with pytest.raises(ValueError, match="does not report version"):
-            _cached_compose_binary()
+            compose_binary()
 
         binary = cache / f"v{PINNED_COMPOSE_VERSION}" / platform.machine() / "docker-compose"
         assert not binary.exists()

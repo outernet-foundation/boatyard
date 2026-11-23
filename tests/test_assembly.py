@@ -212,6 +212,7 @@ def _invoke_up(
     monkeypatch.setattr(up, "bash", spy.run)
     monkeypatch.setattr(up, "bash_check", _bash_check_true)
     monkeypatch.setattr(up, "install_crane", lambda: None)
+    monkeypatch.setattr(up, "install_compose", lambda: None)
     monkeypatch.setattr(
         up,
         "OciArtifactManifest",
@@ -481,6 +482,7 @@ class TestOverrideDocument:
         monkeypatch.setattr(up, "bash", declared_spy.run)
         monkeypatch.setattr(up, "bash_check", _bash_check_true)
         monkeypatch.setattr(up, "install_crane", lambda: None)
+        monkeypatch.setattr(up, "install_compose", lambda: None)
         monkeypatch.setattr(up, "OciArtifactManifest", StubArtifacts({LIVEKIT_PINNED: [declaring]}))
 
         result = runner.invoke(app, ["up"])
@@ -503,6 +505,7 @@ class TestOverrideDocument:
         monkeypatch.setattr(up, "bash", spy.run)
         monkeypatch.setattr(up, "bash_check", _bash_check_true)
         monkeypatch.setattr(up, "install_crane", lambda: None)
+        monkeypatch.setattr(up, "install_compose", lambda: None)
         monkeypatch.setattr(up, "OciArtifactManifest", StubArtifacts({LIVEKIT_PINNED: [LIVEKIT_TEXT]}))
 
         result = runner.invoke(app, ["up"])
@@ -526,19 +529,19 @@ class TestUpProjects:
         [bundle_create, bundle_start, gateway_command] = spy.commands
         assert bundle_create.startswith(
             "env -u BOATYARD_BARRIER_IMAGE -u EDGE_BASE_URL -u PUBLIC_HOST -u PUBLIC_PORT -u PUBLIC_SCHEME "
-            "-u PUBLIC_URL -u PUBLIC_URL_PATH docker compose -p edge-demo-livekit -f "
+            "-u PUBLIC_URL -u PUBLIC_URL_PATH docker-compose -p edge-demo-livekit -f "
         )
         assert "boatyard-bundle-" in bundle_create
         assert "boatyard-override-" in bundle_create
         assert bundle_create.endswith("up --pull missing -d --no-start")
         assert bundle_start.startswith(
             "env -u BOATYARD_BARRIER_IMAGE -u EDGE_BASE_URL -u PUBLIC_HOST -u PUBLIC_PORT -u PUBLIC_SCHEME "
-            "-u PUBLIC_URL -u PUBLIC_URL_PATH docker compose -p edge-demo-livekit -f "
+            "-u PUBLIC_URL -u PUBLIC_URL_PATH docker-compose -p edge-demo-livekit -f "
         )
         assert bundle_start.endswith("start livekit")
         assert gateway_command.startswith(
             "env -u BOATYARD_BARRIER_IMAGE -u EDGE_BASE_URL -u PUBLIC_HOST -u PUBLIC_PORT -u PUBLIC_SCHEME "
-            "-u PUBLIC_URL -u PUBLIC_URL_PATH docker compose -p edge-demo -f "
+            "-u PUBLIC_URL -u PUBLIC_URL_PATH docker-compose -p edge-demo -f "
         )
         assert "boatyard-gateway-" in gateway_command
         assert gateway_command.endswith("up --pull missing -d")
@@ -555,6 +558,7 @@ class TestUpProjects:
         monkeypatch.setattr(up, "bash", spy.run)
         monkeypatch.setattr(up, "bash_check", _bash_check_true)
         monkeypatch.setattr(up, "install_crane", lambda: None)
+        monkeypatch.setattr(up, "install_compose", lambda: None)
         monkeypatch.setattr(up, "OciArtifactManifest", StubArtifacts({LIVEKIT_PINNED: [LIVEKIT_TEXT]}))
 
         result = runner.invoke(app, ["up"])
@@ -596,6 +600,7 @@ class TestUpProjects:
         monkeypatch.setattr(up, "bash", spy.run)
         monkeypatch.setattr(up, "bash_check", _bash_check_true)
         monkeypatch.setattr(up, "install_crane", lambda: None)
+        monkeypatch.setattr(up, "install_compose", lambda: None)
         monkeypatch.setattr(up, "OciArtifactManifest", StubArtifacts({LIVEKIT_PINNED: [text]}))
 
         result = runner.invoke(app, ["up"])
@@ -617,6 +622,7 @@ class TestUpProjects:
                 raise CalledProcessError(1, command)
 
         monkeypatch.setattr(up, "bash", fail_from_second)
+        monkeypatch.setattr(up, "install_compose", lambda: None)
 
         result = runner.invoke(app, ["up"])
 
@@ -669,6 +675,7 @@ class TestUpProjects:
         monkeypatch.setattr(up, "bash", spy.run)
         monkeypatch.setattr(up, "bash_check", _bash_check_true)
         monkeypatch.setattr(up, "install_crane", lambda: None)
+        monkeypatch.setattr(up, "install_compose", lambda: None)
         monkeypatch.setattr(up, "OciArtifactManifest", StubArtifacts({LIVEKIT_PINNED: [LIVEKIT_TEXT]}))
 
         result = runner.invoke(app, ["up"])
@@ -684,6 +691,7 @@ class TestDownLoop:
         commands: list[str] = []
         monkeypatch.setattr(down, "bash", commands.append)
         monkeypatch.setattr(down, "bash_check", _bash_check_true)
+        monkeypatch.setattr(down, "install_compose", lambda: None)
 
         result = runner.invoke(app, ["down", *arguments])
 
@@ -694,9 +702,9 @@ class TestDownLoop:
         commands = self._invoke_down(tmp_path, monkeypatch)
 
         assert commands == [
-            f"docker compose -p edge-demo-auth-keycloak --project-directory {tmp_path} down --remove-orphans",
-            f"docker compose -p edge-demo-livekit --project-directory {tmp_path} down --remove-orphans",
-            f"docker compose -p edge-demo --project-directory {tmp_path} down --remove-orphans",
+            f"docker-compose -p edge-demo-auth-keycloak --project-directory {tmp_path} down --remove-orphans",
+            f"docker-compose -p edge-demo-livekit --project-directory {tmp_path} down --remove-orphans",
+            f"docker-compose -p edge-demo --project-directory {tmp_path} down --remove-orphans",
             "docker network rm edge-demo-shared",
         ]
 
@@ -710,7 +718,7 @@ class TestDownLoop:
         commands = self._invoke_down(tmp_path, monkeypatch)
 
         assert commands[-1] == "docker network rm edge-demo-shared"
-        assert all(command.startswith("docker compose") for command in commands[:-1])
+        assert all(command.startswith("docker-compose") for command in commands[:-1])
 
 
 class TestRenderCaddyfile:

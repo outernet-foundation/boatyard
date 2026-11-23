@@ -79,6 +79,7 @@ def _invoke_publishing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Publi
     monkeypatch.setenv("REGISTRY_USERNAME", "publisher")
     monkeypatch.setenv("REGISTRY_TOKEN", "secret")
     monkeypatch.setattr(publish_verb, "bash", recorder.run)
+    monkeypatch.setattr(publish_verb, "install_compose", lambda: None)
     monkeypatch.setattr(crane, "bash", recorder.run)
     monkeypatch.setattr(publish_verb, "bash_output", _command_output)
     monkeypatch.setattr(Image, "compute_sha", _livekit_tree_sha)
@@ -293,7 +294,7 @@ class TestPublishComposeVerb:
 
         assert result.exit_code == 0, result.output
         assert recorder.commands[0].startswith("docker login ghcr.io -u publisher")
-        publish_commands = [command for command in recorder.commands if command.startswith("docker compose")]
+        publish_commands = [command for command in recorder.commands if command.startswith("docker-compose")]
         assert len(publish_commands) == 1
         assert f"publish {REPOSITORY}/livekit-tier:{FAKE_SHA} --yes" in publish_commands[0]
         tag_commands = [command for command in recorder.commands if command.startswith("crane tag")]
@@ -395,7 +396,7 @@ class TestBundleMode:
         result = runner.invoke(app, ["publish-compose", "--bundle", "core-cuda"])
 
         assert result.exit_code == 0, result.output
-        publish_commands = [command for command in recorder.commands if command.startswith("docker compose")]
+        publish_commands = [command for command in recorder.commands if command.startswith("docker-compose")]
         assert len(publish_commands) == 1
         assert f"publish {REPOSITORY}/core-cuda:{FAKE_SHA} --yes" in publish_commands[0]
         assert [command for command in recorder.commands if command.startswith("crane tag")] == [
@@ -412,7 +413,7 @@ class TestBundleMode:
         result = runner.invoke(app, ["publish-compose"])
 
         assert result.exit_code == 0, result.output
-        publish_commands = [command for command in recorder.commands if command.startswith("docker compose")]
+        publish_commands = [command for command in recorder.commands if command.startswith("docker-compose")]
         assert len(publish_commands) == 3
         published = [command.split("publish ")[1].rsplit(":", 1)[0] for command in publish_commands]
         assert published == [
