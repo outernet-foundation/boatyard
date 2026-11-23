@@ -29,6 +29,10 @@ Design intent and silent-failure traps, one fact per bullet.
   (the barrier rides the global `BOATYARD_BARRIER_IMAGE` slot, minted at resolve; the
   gateway document renders its pin literally); boatyard hosting its own mirror retires the
   exception.
+- The compose CLI is pinned and cached per user (`compose.py`), and every verb invokes the
+  standalone `docker-compose` spelling after `install_compose()` puts it on PATH — shelling
+  the host's `docker compose` plugin would make interpolation and artifact behavior vary by
+  machine.
 - Substrate split: compose renderings bake the lock's per-platform manifests (the exact bytes
   one machine runs); k8s renderings bake the index form (kubelet resolves per node).
   `helm template` is a renderer, never a deployer.
@@ -158,6 +162,7 @@ Quick loop: `uv run pytest`, `uv run ruff check`. Full gate:
   rendering / k8s rendering / generation verb.
 - `publish.py` — publish preparation.
 - `crane.py` — pinned crane installer.
+- `compose.py` — pinned compose installer.
 - `paths.py` — consumer-repo document paths.
 - `temp.py` — shared digest/platform/tree-tag regex spellings and the platform quoting
   helper for bashrun command tokens.
